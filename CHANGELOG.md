@@ -10,4 +10,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Created repository
 
-[Unreleased]: https://github.com/szmyd/HomeObject/compare/...HEAD
+[Unreleased]: https://github.com/eBay/HomeObject/compare/...HEAD

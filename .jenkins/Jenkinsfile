@@ -1,0 +1,122 @@
+pipeline {
+    agent { label 'sds-builder-2204' }
+
+    environment {
+        ARTIFACTORY_PASS = credentials('ARTIFACTORY_PASS')
+        CONAN_USER = 'oss'
+        TARGET_BRANCH = 'main'
+        STABLE_BRANCH = 'stable/v*'
+    }
+
+    stages {
+        stage('Adjust Tag for Master/PR') {
+            when { not {
+                branch "${STABLE_BRANCH}"
+            } }
+            steps {
+                script {
+                    sh(script: "sed -Ei 's, version = .*\"([[:digit:]]+\\.[[:digit:]]+\\.[[:digit:]]+).*, version = \"\\1-${env.BUILD_NUMBER}\",' conanfile.py")
+                    BUILD_MISSING = "--build missing"
+                }
+            }
+        }
+        stage('Adjust for Testing/Stable') {
+            when {
+                branch "${STABLE_BRANCH}"
+            }
+            steps {
+                script {
+                    BUILD_MISSING = ""
+                }
+            }
+        }
+
+        stage('Get Version') {
+            steps {
+                script {
+                    PROJECT = sh(script: "grep -m 1 'name =' conanfile.py | awk '{print \$3}' | tr -d '\n' | tr -d '\"'", returnStdout: true)
+                    VER = sh(script: "grep -m 1 ' version =' conanfile.py | awk '{print \$3}' | tr -d '\n' | tr -d '\"'", returnStdout: true)
+                    CONAN_CHANNEL = sh(script: "echo ${BRANCH_NAME} | sed -E 's,(\\w+-?\\d*)/.*,\\1,' | sed -E 's,-,_,' | tr -d '\n'", returnStdout: true)
+                    TAG = "${VER}@${CONAN_USER}/${CONAN_CHANNEL}"
+                    slackSend color: '#0063D1', channel: '#sds-ci', message: "*${PROJECT}/${TAG}* is building."
+                }
+            }
+        }
+
+        stage('Tag Stable Build') {
+            when { branch "${STABLE_BRANCH}" }
+            steps {
+                script {
+                    TAG = "${VER}@"
+                }
+            }
+        }
+
+/* Commented out until unit tests are available
+        stage('Coverage') {
+            when { not {
+                branch "${STABLE_BRANCH}"
+            } }
+
+            stages {
+                stage("Adjust Sonar Branch") {
+                    when {
+                        not {
+                            branch "${TARGET_BRANCH}"
+                        }
+                    }
+                    steps {
+                        sh "echo \"sonar.branch.target=${TARGET_BRANCH}\" >> sonar-project.properties"
+                    }
+                }
+                stage("Code Coverage") {
+                    steps {
+                        slackSend channel: '#sds-ci', message: "*${PROJECT}:${TAG}* is undergoing Code Coverage."
+                        sh """echo \"sonar.branch.name=${BRANCH_NAME}\" >> sonar-project.properties
+                              conan install -o sisl:prerelease=True -pr debug ${BUILD_MISSING} -o ${PROJECT}:coverage=True .
+                              build-wrapper-linux-x86-64 --out-dir /tmp/sonar conan build .
+                              find . -name \"*.gcno\" -exec gcov {} \\;"""
+                        withSonarQubeEnv('sds-sonar')  {
+                            sh "sonar-scanner -Dsonar.projectBaseDir=. -Dsonar.projectVersion=\"${VER}\""
+                        }
+                    }
+                }
+                stage("Quality Gate") {
+                    steps {
+                        timeout(time: 5, unit: 'MINUTES') {
+                            waitForQualityGate abortPipeline: false
+                        }
+                    }
+                }
+            }
+        }
+*/
+
+        stage("Compile") {
+            steps {
+                sh """conan create ${BUILD_MISSING} -o sisl:testing=False -o iomgr:testing=off -o homestore:testing=off -o home_replication:testing=False -o sisl:prerelease=True -pr debug . ${PROJECT}/${TAG} ;
+                      conan create ${BUILD_MISSING} -o sisl:testing=False -o iomgr:testing=off -o homestore:testing=off -o home_replication:testing=False -o sisl:prerelease=True -pr test . ${PROJECT}/${TAG} ;
+                      conan create ${BUILD_MISSING} -o sisl:testing=False -o iomgr:testing=off -o homestore:testing=off -o home_replication:testing=False -o sisl:prerelease=False -pr test . ${PROJECT}/${TAG} ;"""
+            }
+        }
+
+        stage("Deploy") {
+            when {
+                expression { !(env.BRANCH_NAME =~ /PR-/) }
+            }
+            steps {
+                sh "conan user -r ebay-local -p ${ARTIFACTORY_PASS} _service_sds"
+                sh "conan upload ${PROJECT}/${TAG} -c --all -r ebay-local"
+            }
+        }
+    }
+
+    post {
+        failure {
+            slackSend color: '#E43237', channel: '#sds-ci', message: "*${PROJECT}/${TAG}* has had a failure : ${BUILD_URL}"
+        }
+        success {
+            slackSend color: '#85B717', channel: '#sds-ci', message: "*${PROJECT}/${TAG}* has completed."
+        }
+    }
+}

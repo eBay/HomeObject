@@ -60,7 +60,9 @@ set (REALLY_NO_OPTIMIZATION_FLAGS "${REALLY_NO_OPTIMIZATION_FLAGS} -fno-tree-slp
 set (REALLY_NO_OPTIMIZATION_FLAGS "${REALLY_NO_OPTIMIZATION_FLAGS} -fthreadsafe-statics"                )# Slightly smaller in code that doesn't need to be TS.
 
 set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${REALLY_NO_OPTIMIZATION_FLAGS}")
-if (${BUILD_COVERAGE})
-  include (cmake/CodeCoverage.cmake)
-  APPEND_COVERAGE_COMPILER_FLAGS()
+if (DEFINED BUILD_COVERAGE)
+  if (${BUILD_COVERAGE})
+    include (cmake/CodeCoverage.cmake)
+    APPEND_COVERAGE_COMPILER_FLAGS()
+  endif ()
 endif ()

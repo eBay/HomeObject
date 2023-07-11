@@ -9,11 +9,11 @@ required_conan_version = ">=1.50.0"
 
 class HomeObjectConan(ConanFile):
     name = "homeobject"
-    version = "0.0.7"
-    homepage = "https://github.com/szmyd/HomeObject"
+    version = "0.0.1"
+    homepage = "https://github.com/eBay/HomeObject"
     description = "Blob Store built on HomeReplication"
     topics = ("ebay")
-    url = "https://github.com/szmyd/HomeObject"
+    url = "https://github.com/eBay/HomeObject"
     license = "Apache-2.0"
 
     settings = "arch", "os", "compiler", "build_type"
@@ -41,8 +41,8 @@ class HomeObjectConan(ConanFile):
         self.build_requires("gtest/1.13.0")
 
     def requirements(self):
-        self.requires("home_replication/[>=0.0.7,   include_prerelease=True]@oss/master")
-        self.requires("sisl/[~=9,                   include_prerelease=True]@oss/master")
+        self.requires("home_replication/[~=0,   include_prerelease=True]@oss/main")
+        self.requires("sisl/[~=9,               include_prerelease=True]@oss/master")
 
         self.requires("openssl/1.1.1s", override=True)
         self.requires("zlib/1.2.12", override=True)
