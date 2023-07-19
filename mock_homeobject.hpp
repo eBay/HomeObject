@@ -11,11 +11,11 @@
 namespace homeobject {
 
 class MockHomeObject : public BlobManager,
-                   public PGManager,
-                   public ShardManager,
-		   public std::enable_shared_from_this< MockHomeObject > {
-			   std::mutex _pg_lock;
-			   std::set< PGInfo > _pgs;
+                       public PGManager,
+                       public ShardManager,
+                       public std::enable_shared_from_this< MockHomeObject > {
+    std::mutex _pg_lock;
+    std::set< PGInfo > _pgs;
 
 public:
     MockHomeObject() = default;
