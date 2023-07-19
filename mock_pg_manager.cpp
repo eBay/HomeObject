@@ -1,12 +1,14 @@
 #include "mock_homeobject.hpp"
 
 namespace homeobject {
-void HomeObject::create_pg(PGInfo const& pg_info, PGManager::ok_cb cb) {
+void MockHomeObject::create_pg(PGInfo const& pg_info, PGManager::ok_cb cb) {
+    LOGINFO("Creating PG: [{}] of [{}] members", pg_info.id, pg_info.members.size());
     auto lg = std::scoped_lock(_pg_lock);
     _pgs.insert(pg_info);
     cb(PGError::OK);
 }
-void HomeObject::replace_member(pg_id id, peer_id const& old_member, PGMember const& new_member, PGManager::ok_cb cb) {
+void MockHomeObject::replace_member(pg_id id, peer_id const& old_member, PGMember const& new_member,
+                                    PGManager::ok_cb cb) {
     auto err = PGError::OK;
     {
         auto lg = std::scoped_lock(_pg_lock);

@@ -10,16 +10,16 @@
 
 namespace homeobject {
 
-class HomeObject : public BlobManager,
+class MockHomeObject : public BlobManager,
                    public PGManager,
                    public ShardManager,
-                   public std::enable_shared_from_this< HomeObject > {
-    std::mutex _pg_lock;
-    std::set< PGInfo > _pgs;
+		   public std::enable_shared_from_this< MockHomeObject > {
+			   std::mutex _pg_lock;
+			   std::set< PGInfo > _pgs;
 
 public:
-    HomeObject() = default;
-    ~HomeObject() override = default;
+    MockHomeObject() = default;
+    ~MockHomeObject() override = default;
 
     std::shared_ptr< BlobManager > blob_manager() { return shared_from_this(); }
     std::shared_ptr< PGManager > pg_manager() { return shared_from_this(); }
