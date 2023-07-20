@@ -13,6 +13,7 @@ using shard_id = uint64_t;
 
 enum class PGError {
     OK = 0,
+    BAD_ARGUMENT,
     TIMEOUT,
     UNKNOWN_PG,
     UNKNOWN_PEER,
