@@ -27,7 +27,7 @@ class BlobManager {
 public:
     using get_cb = std::function< void(std::variant< Blob, BlobError > const&, std::optional< peer_id >) >;
     using id_cb = std::function< void(std::variant< blob_id, BlobError > const&, std::optional< peer_id >) >;
-    using ok_cb = std::function< void(BlobError, std::optional< peer_id >) >;
+    using ok_cb = std::function< void(BlobError const, std::optional< peer_id >) >;
 
     virtual ~BlobManager() = default;
     virtual void put(shard_id shard, Blob const&, id_cb cb) = 0;
