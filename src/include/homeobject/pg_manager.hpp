@@ -9,6 +9,7 @@ namespace homeobject {
 enum class PGError {
     OK = 0,
     TIMEOUT,
+    INVALID_ARG,
     UNKNOWN_PG,
     UNKNOWN_PEER,
 };

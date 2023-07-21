@@ -10,8 +10,8 @@ namespace homeobject {
 enum class ShardError {
     OK = 0,
     TIMEOUT,
-    NOT_LEADER,
     INVALID_ARG,
+    NOT_LEADER,
     UNKNOWN_PG,
     UNKNOWN_SHARD,
 };
