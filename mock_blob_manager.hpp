@@ -30,7 +30,7 @@ public:
 
     virtual ~BlobManager() = default;
     virtual void put(shard_id shard, Blob const&, id_cb cb) = 0;
-    virtual void get(shard_id shard, blob_id const& blob, uint64_t off, uint64_t len, get_cb) const = 0;
+    virtual void get(shard_id shard, blob_id const& blob, uint64_t off, uint64_t len, get_cb cb) const = 0;
     virtual void del(shard_id shard, blob_id const& blob, ok_cb cb) = 0;
 };
 

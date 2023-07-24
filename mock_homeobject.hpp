@@ -4,6 +4,7 @@
 #include <mutex>
 #include <set>
 
+#include <sisl/flip/flip.hpp>
 #include "mock_blob_manager.hpp"
 #include "mock_pg_manager.hpp"
 #include "mock_shard_manager.hpp"
@@ -16,6 +17,11 @@ class MockHomeObject : public BlobManager,
                        public std::enable_shared_from_this< MockHomeObject > {
     std::mutex _pg_lock;
     std::set< PGInfo > _pgs;
+
+    mutable std::mutex _data_lock;
+    std::unordered_map< blob_id, Blob > _in_memory_disk;
+    std::unordered_set< shard_id > _shards;
+    blob_id _cur_blob_id{0};
 
 public:
     MockHomeObject() = default;
