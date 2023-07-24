@@ -3,10 +3,9 @@
 #include <optional>
 #include <string>
 #include <variant>
+#include <boost/uuid/uuid.hpp>
 
 #include <sisl/fds/buffer.hpp>
-
-#include <boost/uuid/uuid.hpp>
 
 namespace homeobject {
 
@@ -15,7 +14,7 @@ using peer_id = boost::uuids::uuid;
 using pg_id = uint16_t;
 using shard_id = uint64_t;
 
-enum class BlobError { OK = 0, TIMEOUT, INVALID_ARG, NOT_LEADER, UNKNOWN_SHARD, UNKNOWN_BLOB };
+ENUM(BlobError, uint16_t, OK, TIMEOUT, INVALID_ARG, NOT_LEADER, UNKNOWN_SHARD, UNKNOWN_BLOB);
 
 struct Blob {
     sisl::io_blob body;
