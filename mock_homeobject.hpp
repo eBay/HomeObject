@@ -32,8 +32,8 @@ public:
     std::shared_ptr< ShardManager > shard_manager() { return shared_from_this(); }
 
     // BlobManager
-    void put(shard_id shard, Blob const&, id_cb cb) override;
-    void get(shard_id shard, blob_id const& blob, uint64_t off, uint64_t len, get_cb) const override;
+    void put(shard_id shard, Blob const&, BlobManager::id_cb cb) override;
+    void get(shard_id shard, blob_id const& blob, uint64_t off, uint64_t len, BlobManager::get_cb) const override;
     void del(shard_id shard, blob_id const& blob, BlobManager::ok_cb cb) override;
 
     // PGManager
@@ -41,10 +41,10 @@ public:
     void replace_member(pg_id id, peer_id const& old_member, PGMember const& new_member, PGManager::ok_cb cb) override;
 
     // ShardManager
-    void create_shard(pg_id pg_owner, uint64_t size_mb, info_cb cb) override;
-    void get_shard(shard_id id, info_cb cb) const override;
-    void list_shards(pg_id id, info_cb cb) const override;
-    void seal_shard(shard_id id, ShardManager::ok_cb cb) override;
+    void create_shard(pg_id pg_owner, uint64_t size_mb, ShardManager::id_cb cb) override;
+    void get_shard(shard_id id, ShardManager::info_cb cb) const override;
+    void list_shards(pg_id id, ShardManager::list_cb cb) const override;
+    void seal_shard(shard_id id, ShardManager::info_cb cb) override;
 };
 
 } // namespace homeobject

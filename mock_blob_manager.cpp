@@ -4,7 +4,7 @@ namespace homeobject {
 using namespace std::chrono_literals;
 constexpr auto disk_latency = 15ms;
 
-void MockHomeObject::put(shard_id shard, Blob const& blob, id_cb cb) {
+void MockHomeObject::put(shard_id shard, Blob const& blob, BlobManager::id_cb cb) {
     std::thread([this, shard, blob, cb]() {
         std::this_thread::sleep_for(disk_latency);
         blob_id id;
@@ -19,7 +19,7 @@ void MockHomeObject::put(shard_id shard, Blob const& blob, id_cb cb) {
     }).detach();
 }
 
-void MockHomeObject::get(shard_id shard, blob_id const& blob, uint64_t off, uint64_t len, get_cb cb) const {
+void MockHomeObject::get(shard_id shard, blob_id const& blob, uint64_t off, uint64_t len, BlobManager::get_cb cb) const {
     std::thread([this, shard, blob, cb]() {
         BlobError err = BlobError::OK;
         Blob ret;
