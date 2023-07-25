@@ -8,18 +8,26 @@ void MockHomeObject::put(shard_id shard, Blob const& blob, BlobManager::id_cb cb
     std::thread([this, shard, blob, cb]() {
         std::this_thread::sleep_for(disk_latency);
         blob_id id;
+        auto err = BlobError::OK;
         {
-            auto lg = std::scoped_lock(_data_lock);
-            _shards.insert(shard);
-            id = _cur_blob_id;
-            auto [it, happened] = _in_memory_disk.emplace(id, blob);
-            if (happened) { _cur_blob_id++; }
+            auto lg = std::scoped_lock(_shard_lock, _data_lock);
+            if (0 == _shards.count(shard)) {
+                err = BlobError::UNKNOWN_SHARD;
+            } else {
+                id = _cur_blob_id;
+                auto [it, happened] = _in_memory_disk.emplace(BlobRoute{shard, id}, blob);
+                if (happened) { _cur_blob_id++; }
+            }
         }
-        cb(id, std::nullopt);
+        if (err == BlobError::OK)
+            cb(id, std::nullopt);
+        else
+            cb(err, std::nullopt);
     }).detach();
 }
 
-void MockHomeObject::get(shard_id shard, blob_id const& blob, uint64_t off, uint64_t len, BlobManager::get_cb cb) const {
+void MockHomeObject::get(shard_id shard, blob_id const& blob, uint64_t off, uint64_t len,
+                         BlobManager::get_cb cb) const {
     std::thread([this, shard, blob, cb]() {
         BlobError err = BlobError::OK;
         Blob ret;
@@ -31,7 +39,7 @@ void MockHomeObject::get(shard_id shard, blob_id const& blob, uint64_t off, uint
                 return;
             }
             auto it = _in_memory_disk.end();
-            if (it = _in_memory_disk.find(blob); it == _in_memory_disk.end()) {
+            if (it = _in_memory_disk.find(BlobRoute{shard, blob}); it == _in_memory_disk.end()) {
                 err = BlobError::UNKNOWN_BLOB;
                 return;
             }
@@ -61,12 +69,13 @@ void MockHomeObject::del(shard_id shard, blob_id const& blob, BlobManager::ok_cb
                 return;
             }
             auto it = _in_memory_disk.end();
-            if (it = _in_memory_disk.find(blob); it == _in_memory_disk.end()) {
+            auto const route = BlobRoute{shard, blob};
+            if (it = _in_memory_disk.find(route); it == _in_memory_disk.end()) {
                 err = BlobError::UNKNOWN_BLOB;
                 return;
             }
 
-            _in_memory_disk.erase(blob);
+            _in_memory_disk.erase(route);
         }();
 
         cb(err, std::nullopt);

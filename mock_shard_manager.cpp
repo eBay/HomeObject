@@ -18,8 +18,7 @@ void MockHomeObject::get_shard(shard_id id, ShardManager::info_cb cb) const {
 void MockHomeObject::list_shards(pg_id id, ShardManager::list_cb cb) const {
     std::vector< ShardInfo > shard_list;
     for (uint8_t i = 0; i < 2; i++) {
-        shard_list.emplace_back(
-            homeobject::create_mock_shard_info(i, id, ShardInfo::State::OPEN, 1024 * 1024 * 1024));
+        shard_list.emplace_back(homeobject::create_mock_shard_info(i, id, ShardInfo::State::OPEN, 1024 * 1024 * 1024));
     }
     std::variant< std::vector< ShardInfo >, ShardError > ret = shard_list;
     cb(ret, std::nullopt);
