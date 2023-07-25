@@ -38,13 +38,14 @@ class MockHomeObject : public BlobManager,
                        public ShardManager,
                        public std::enable_shared_from_this< MockHomeObject > {
     /// This simulates the MetaBlkSvc thats used within real HomeObject
-    std::mutex _pg_lock;
+    mutable std::mutex _pg_lock;
     std::map< pg_id, std::pair< PGInfo, std::unordered_set< shard_id > > > _pg_map;
     ///
 
     /// This simulates the IndexSvc thats used within real HomeObject
-    std::mutex _shard_lock;
+    mutable std::mutex _shard_lock;
     std::map< shard_id, ShardInfo > _shards;
+    shard_id _cur_shard_id{0};
     ///
 
     /// Simulates the Shard=>Chunk mapping in IndexSvc *and* DataSvc BlkId=>Data

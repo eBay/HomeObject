@@ -57,7 +57,4 @@ public:
     virtual void seal_shard(shard_id id, info_cb cb) = 0;
 };
 
-ShardInfo create_mock_shard_info(shard_id sid, pg_id pid, ShardInfo::State state, uint64_t size);
-uint64_t get_current_timestamp();
-uint16_t get_pgId_from_shardId(shard_id id);
 } // namespace homeobject
