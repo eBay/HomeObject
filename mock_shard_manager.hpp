@@ -19,6 +19,7 @@ enum class ShardError {
     INVALID_ARG,
     UNKNOWN_PG,
     UNKNOWN_SHARD,
+    UNKNOWN,
 };
 
 struct ShardInfo {
@@ -33,9 +34,9 @@ struct ShardInfo {
     State state;
     uint64_t created_time;
     uint64_t last_modified_time;
-    uint32_t available_replica_count_mb;
-    uint64_t used_capacity_mb;
-    uint64_t deleted_capacity_mb;
+    uint64_t total_capacity_bytes;
+    uint64_t available_capacity_bytes;
+    uint64_t deleted_capacity_bytes;
 };
 
 class ShardManager {
@@ -50,10 +51,13 @@ public:
     static uint64_t max_shard_size_mb(); // Static function forces runtime evaluation.
 
     virtual ~ShardManager() = default;
-    virtual void create_shard(pg_id pg_owner, uint64_t size_mb, id_cb cb) = 0;
+    virtual void create_shard(pg_id pg_owner, uint64_t size_bytes, id_cb cb) = 0;
     virtual void get_shard(shard_id id, info_cb cb) const = 0;
     virtual void list_shards(pg_id id, list_cb cb) const = 0;
     virtual void seal_shard(shard_id id, info_cb cb) = 0;
 };
 
+ShardInfo create_mock_shard_info(shard_id sid, pg_id pid, ShardInfo::State state, uint64_t size);
+uint64_t get_current_timestamp();
+uint16_t get_pgId_from_shardId(shard_id id);
 } // namespace homeobject
