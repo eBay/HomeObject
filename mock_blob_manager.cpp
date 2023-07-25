@@ -17,7 +17,9 @@ void MockHomeObject::put(shard_id shard, Blob const& blob, BlobManager::id_cb cb
                 err = BlobError::UNKNOWN_SHARD;
             } else {
                 id = _cur_blob_id;
-                auto [it, happened] = _in_memory_disk.emplace(BlobRoute{shard, id}, blob);
+                auto new_blob = Blob{sisl::io_blob(blob.body.size), blob.user_key, blob.object_off};
+                std::memcpy(new_blob.body.bytes, blob.body.bytes, new_blob.body.size);
+                auto [it, happened] = _in_memory_disk.emplace(BlobRoute{shard, id}, new_blob);
                 if (happened) { _cur_blob_id++; }
             }
         }
@@ -48,10 +50,9 @@ void MockHomeObject::get(shard_id shard, blob_id const& blob, uint64_t off, uint
 
             auto const& read_blob = it->second;
             ret.body = sisl::io_blob(read_blob.body.size);
-            ret.user_key = read_blob.user_key;
             ret.object_off = read_blob.object_off;
-            std::memcpy(reinterpret_cast< void* >(ret.body.bytes), reinterpret_cast< void* >(read_blob.body.bytes),
-                        ret.body.size);
+            ret.user_key = read_blob.user_key;
+            std::memcpy(ret.body.bytes, read_blob.body.bytes, ret.body.size);
         }();
 
         if (err == BlobError::OK) {
