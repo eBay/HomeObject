@@ -122,8 +122,9 @@ TEST_F(HomeObjectFixture, GetUnknownShard) {
 }
 
 TEST_F(HomeObjectFixture, SealUnknownShard) {
-    _obj_inst->shard_manager()->seal_shard(1, [this](auto const& e, auto opt) {
-        EXPECT_EQ(e, ShardError::UNKNOWN_SHARD);
+    _obj_inst->shard_manager()->seal_shard(1, [this](auto const& v, auto opt) {
+        ASSERT_TRUE(std::holds_alternative< ShardError >(v));
+        EXPECT_EQ(std::get< ShardError >(v), ShardError::UNKNOWN_SHARD);
         _t.signal();
     });
 }

@@ -41,7 +41,7 @@ public:
     void create_shard(pg_id pg_owner, uint64_t size_mb, ShardManager::info_cb cb) override;
     void list_shards(pg_id pg, ShardManager::info_cb cb) const override;
     void get_shard(shard_id id, ShardManager::info_cb cb) const override;
-    void seal_shard(shard_id id, ShardManager::ok_cb cb) override;
+    void seal_shard(shard_id id, ShardManager::info_cb cb) override;
 
     /// BlobManager
     void put(shard_id shard, Blob const&, BlobManager::id_cb cb) override;
@@ -74,7 +74,7 @@ void HomeObjectImpl::list_shards(pg_id pg, ShardManager::info_cb cb) const { cb(
 
 void HomeObjectImpl::get_shard(shard_id id, ShardManager::info_cb cb) const { cb(ShardError::UNKNOWN_SHARD, nullopt); }
 
-void HomeObjectImpl::seal_shard(shard_id id, ShardManager::ok_cb cb) { cb(ShardError::UNKNOWN_SHARD, nullopt); }
+void HomeObjectImpl::seal_shard(shard_id id, ShardManager::info_cb cb) { cb(ShardError::UNKNOWN_SHARD, nullopt); }
 
 void HomeObjectImpl::put(shard_id shard, Blob const&, BlobManager::id_cb cb) { cb(BlobError::UNKNOWN_SHARD, nullopt); }
 

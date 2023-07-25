@@ -10,7 +10,7 @@
 
 namespace homeobject {
 
-enum class BlobError { OK = 0, TIMEOUT, INVALID_ARG, NOT_LEADER, UNKNOWN_SHARD, UNKNOWN_BLOB };
+ENUM(BlobError, uint16_t, OK = 0, TIMEOUT, INVALID_ARG, NOT_LEADER, UNKNOWN_SHARD, UNKNOWN_BLOB);
 
 struct Blob {
     sisl::io_blob body;

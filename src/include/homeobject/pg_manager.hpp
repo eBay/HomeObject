@@ -2,17 +2,13 @@
 #include <functional>
 #include <set>
 
+#include <sisl/utility/enum.hpp>
+
 #include "common.hpp"
 
 namespace homeobject {
 
-enum class PGError {
-    OK = 0,
-    TIMEOUT,
-    INVALID_ARG,
-    UNKNOWN_PG,
-    UNKNOWN_PEER,
-};
+ENUM(PGError, uint16_t, OK = 0, TIMEOUT, INVALID_ARG, UNKNOWN_PG, UNKNOWN_PEER);
 
 struct PGMember {
     PGMember(peer_id _id) : id(_id) {}
