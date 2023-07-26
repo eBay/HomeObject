@@ -36,10 +36,11 @@ void MockHomeObject::create_shard(pg_id pg_owner, uint64_t size_bytes, ShardMana
                 ShardInfo{id, pg_owner, ShardInfo::State::OPEN, 1024 * 1024 * 1024, get_current_timestamp(), 0, 0, 0}));
         }
     }
+    if (!cb) return;
     if (err == ShardError::OK) {
-        if (cb) { cb(std::variant< shard_id, ShardError >{id}, std::nullopt); }
+        cb(std::variant< shard_id, ShardError >{id}, std::nullopt);
     } else {
-        if (cb) { cb(err, std::nullopt); }
+        cb(err, std::nullopt);
     }
 }
 
@@ -49,12 +50,14 @@ void MockHomeObject::get_shard(shard_id id, ShardManager::info_cb cb) const {
     {
         auto lg = std::scoped_lock(_pg_lock, _shard_lock);
         if (auto shard_it = _shards.find(id); _shards.end() == shard_it) {
+            LOGERROR("Could not find Shard: [shard={}] on this instance!", id);
             err = ShardError::UNKNOWN_SHARD;
         } else {
             info = shard_it->second;
         }
     }
 
+    if (!cb) return;
     if (err == ShardError::OK) {
         cb(info, std::nullopt);
     } else {
@@ -68,6 +71,7 @@ void MockHomeObject::list_shards(pg_id id, ShardManager::list_cb cb) const {
     {
         auto lg = std::scoped_lock(_pg_lock, _shard_lock);
         if (auto pg_it = _pg_map.find(id); _pg_map.end() == pg_it) {
+            LOGERROR("Could not find Pg: [pg={}] on this instance!", id);
             err = ShardError::UNKNOWN_PG;
         } else {
             for (auto const& shard_id : pg_it->second.second) {
@@ -78,6 +82,7 @@ void MockHomeObject::list_shards(pg_id id, ShardManager::list_cb cb) const {
         }
     }
 
+    if (!cb) return;
     if (err == ShardError::OK) {
         cb(info, std::nullopt);
     } else {
@@ -91,6 +96,7 @@ void MockHomeObject::seal_shard(shard_id id, ShardManager::info_cb cb) {
     {
         auto lg = std::scoped_lock(_pg_lock, _shard_lock);
         if (auto shard_it = _shards.find(id); _shards.end() == shard_it) {
+            LOGERROR("Could not find Shard: [shard={}] on this instance!", id);
             err = ShardError::UNKNOWN_SHARD;
         } else {
             shard_it->second.state = ShardInfo::State::SEALED;
@@ -98,6 +104,7 @@ void MockHomeObject::seal_shard(shard_id id, ShardManager::info_cb cb) {
         }
     }
 
+    if (!cb) return;
     if (err == ShardError::OK) {
         cb(info, std::nullopt);
     } else {

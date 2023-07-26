@@ -5,6 +5,11 @@
 
 #include <boost/uuid/uuid.hpp>
 
+[[maybe_unused]] constexpr auto Ki = 1024ul;
+[[maybe_unused]] constexpr auto Mi = Ki * Ki;
+[[maybe_unused]] constexpr auto Gi = Ki * Mi;
+[[maybe_unused]] constexpr auto Ti = Ki * Gi;
+
 namespace homeobject {
 
 using blob_id = uint64_t;
