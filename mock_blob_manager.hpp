@@ -17,7 +17,7 @@ using shard_id = uint64_t;
 ENUM(BlobError, uint16_t, OK, TIMEOUT, INVALID_ARG, NOT_LEADER, UNKNOWN_SHARD, UNKNOWN_BLOB);
 
 struct Blob {
-    sisl::io_blob body;
+    sisl::byte_array body;
     std::string user_key;
     uint64_t object_off;
 };
