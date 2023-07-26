@@ -37,9 +37,9 @@ void MockHomeObject::create_shard(pg_id pg_owner, uint64_t size_bytes, ShardMana
         }
     }
     if (err == ShardError::OK) {
-        cb(std::variant< shard_id, ShardError >{id}, std::nullopt);
+        if (cb) { cb(std::variant< shard_id, ShardError >{id}, std::nullopt); }
     } else {
-        cb(err, std::nullopt);
+        if (cb) { cb(err, std::nullopt); }
     }
 }
 

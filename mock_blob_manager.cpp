@@ -23,10 +23,14 @@ void MockHomeObject::put(shard_id shard, Blob const& blob, BlobManager::id_cb cb
                 if (happened) { _cur_blob_id++; }
             }
         }
-        if (err == BlobError::OK)
-            cb(id, std::nullopt);
-        else
-            cb(err, std::nullopt);
+
+        if (cb) {
+            if (err == BlobError::OK) {
+                cb(id, std::nullopt);
+            } else {
+                cb(err, std::nullopt);
+            }
+        }
     }).detach();
 }
 
@@ -55,11 +59,14 @@ void MockHomeObject::get(shard_id shard, blob_id const& blob, uint64_t off, uint
             std::memcpy(ret.body.bytes, read_blob.body.bytes, ret.body.size);
         }();
 
-        if (err == BlobError::OK) {
-            cb(ret, std::nullopt);
-        } else {
-            cb(err, std::nullopt);
+        if (cb) {
+            if (err == BlobError::OK) {
+                cb(ret, std::nullopt);
+            } else {
+                cb(err, std::nullopt);
+            }
         }
+        
     }).detach();
 }
 void MockHomeObject::del(shard_id shard, blob_id const& blob, BlobManager::ok_cb cb) {
@@ -76,7 +83,7 @@ void MockHomeObject::del(shard_id shard, blob_id const& blob, BlobManager::ok_cb
             }
         }();
 
-        cb(err, std::nullopt);
+        if (cb) { cb(err, std::nullopt); }
     }).detach();
 }
 

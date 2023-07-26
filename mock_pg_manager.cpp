@@ -7,7 +7,7 @@ void MockHomeObject::create_pg(PGInfo const& pg_info, PGManager::ok_cb cb) {
     LOGINFO("Creating PG: [{}] of [{}] members", pg_info.id, pg_info.members.size());
     auto lg = std::scoped_lock(_pg_lock);
     _pg_map.insert(std::make_pair(pg_info.id, std::make_pair(pg_info, std::unordered_set< shard_id >())));
-    cb(PGError::OK);
+    if (cb) { cb(PGError::OK); }
 }
 void MockHomeObject::replace_member(pg_id id, peer_id const& old_member, PGMember const& new_member,
                                     PGManager::ok_cb cb) {
@@ -28,6 +28,6 @@ void MockHomeObject::replace_member(pg_id id, peer_id const& old_member, PGMembe
             }
         }
     }
-    cb(err);
+    if (cb) { cb(err); }
 }
 } // namespace homeobject
