@@ -1,5 +1,7 @@
 #include "mock_homeobject.hpp"
 
+#define IS_M1_DEMO (0 < SISL_OPTIONS.count("m1_demo"))
+
 namespace homeobject {
 using namespace std::chrono_literals;
 constexpr auto disk_latency = 15ms;
@@ -11,7 +13,7 @@ void MockHomeObject::put(shard_id shard, Blob const& blob, BlobManager::id_cb cb
         auto err = BlobError::OK;
         {
             auto lg = std::scoped_lock(_shard_lock, _data_lock);
-            if (0 == _shards.count(shard)) {
+            if (0 == _shards.count(shard) && !IS_M1_DEMO) {
                 err = BlobError::UNKNOWN_SHARD;
             } else {
                 id = _cur_blob_id;
@@ -34,7 +36,7 @@ void MockHomeObject::get(shard_id shard, blob_id const& blob, uint64_t off, uint
         [&] {
             std::this_thread::sleep_for(disk_latency);
             auto lg = std::scoped_lock(_data_lock);
-            if (auto const it = _shards.find(shard); it == _shards.end()) {
+            if (auto const it = _shards.find(shard); it == _shards.end() && !IS_M1_DEMO) {
                 err = BlobError::UNKNOWN_SHARD;
                 return;
             }
@@ -64,18 +66,13 @@ void MockHomeObject::del(shard_id shard, blob_id const& blob, BlobManager::ok_cb
         BlobError err = BlobError::OK;
         [&] {
             auto lg = std::scoped_lock(_data_lock);
-            if (auto const it = _shards.find(shard); it == _shards.end()) {
+            if (auto const it = _shards.find(shard); it == _shards.end() && !IS_M1_DEMO) {
                 err = BlobError::UNKNOWN_SHARD;
                 return;
             }
-            auto it = _in_memory_disk.end();
-            auto const route = BlobRoute{shard, blob};
-            if (it = _in_memory_disk.find(route); it == _in_memory_disk.end()) {
+            if (0 == _in_memory_disk.erase(BlobRoute{shard, blob}) && !IS_M1_DEMO) {
                 err = BlobError::UNKNOWN_BLOB;
-                return;
             }
-
-            _in_memory_disk.erase(route);
         }();
 
         cb(err, std::nullopt);

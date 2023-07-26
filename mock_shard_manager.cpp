@@ -18,9 +18,17 @@ void MockHomeObject::create_shard(pg_id pg_owner, uint64_t size_bytes, ShardMana
     auto id = shard_id{0};
     {
         auto lg = std::scoped_lock(_pg_lock, _shard_lock);
-        if (auto pg_it = _pg_map.find(pg_owner); _pg_map.end() == pg_it) {
-            err = ShardError::UNKNOWN_PG;
-        } else {
+        auto pg_it = _pg_map.find(pg_owner);
+        if (_pg_map.end() == pg_it) {
+            if (0 < SISL_OPTIONS.count("m1_demo")) {
+                auto const pg_info = PGInfo(pg_owner);
+                auto [it, happened] =
+                    _pg_map.insert(std::make_pair(pg_owner, std::make_pair(pg_info, std::unordered_set< shard_id >())));
+                pg_it = it;
+            } else
+                err = ShardError::UNKNOWN_PG;
+        }
+        if (ShardError::OK == err) {
             id = _cur_shard_id++;
             pg_it->second.second.emplace(id);
             _shards.emplace(std::make_pair(
