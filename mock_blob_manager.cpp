@@ -66,7 +66,6 @@ void MockHomeObject::get(shard_id shard, blob_id const& blob, uint64_t off, uint
                 cb(err, std::nullopt);
             }
         }
-        
     }).detach();
 }
 void MockHomeObject::del(shard_id shard, blob_id const& blob, BlobManager::ok_cb cb) {
@@ -78,9 +77,7 @@ void MockHomeObject::del(shard_id shard, blob_id const& blob, BlobManager::ok_cb
                 err = BlobError::UNKNOWN_SHARD;
                 return;
             }
-            if (0 == _in_memory_disk.erase(BlobRoute{shard, blob}) && !IS_M1_DEMO) {
-                err = BlobError::UNKNOWN_BLOB;
-            }
+            if (0 == _in_memory_disk.erase(BlobRoute{shard, blob}) && !IS_M1_DEMO) { err = BlobError::UNKNOWN_BLOB; }
         }();
 
         if (cb) { cb(err, std::nullopt); }
