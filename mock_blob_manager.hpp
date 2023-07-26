@@ -14,7 +14,7 @@ using peer_id = boost::uuids::uuid;
 using pg_id = uint16_t;
 using shard_id = uint64_t;
 
-ENUM(BlobError, uint16_t, OK, TIMEOUT, INVALID_ARG, NOT_LEADER, UNKNOWN_SHARD, UNKNOWN_BLOB);
+ENUM(BlobError, uint16_t, OK, TIMEOUT, INVALID_ARG, NOT_LEADER, UNKNOWN_SHARD, UNKNOWN_BLOB, CHECKSUM_MISMATCH);
 
 struct Blob {
     sisl::byte_array body;
