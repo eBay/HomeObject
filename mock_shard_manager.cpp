@@ -22,8 +22,7 @@ void MockHomeObject::create_shard(pg_id pg_owner, uint64_t size_bytes, ShardMana
             id = _cur_shard_id++;
             pg_it->second.second.emplace(id);
             auto [_, happened] = _shards.emplace(std::make_pair(
-                id,
-                ShardInfo{id, pg_owner, ShardInfo::State::OPEN, 1024 * 1024 * 1024, get_current_timestamp(), 0, 0, 0}));
+                id, ShardInfo{id, pg_owner, ShardState::OPEN, 1024 * 1024 * 1024, get_current_timestamp(), 0, 0, 0}));
             err = happened ? ShardError::OK : ShardError::UNKNOWN;
         }
     }
@@ -83,7 +82,7 @@ void MockHomeObject::seal_shard(shard_id id, ShardManager::info_cb cb) {
     {
         auto lg = std::scoped_lock(_pg_lock, _shard_lock);
         if (auto shard_it = _shards.find(id); _shards.end() != shard_it) {
-            shard_it->second.state = ShardInfo::State::SEALED;
+            shard_it->second.state = ShardState::SEALED;
             info = shard_it->second;
             err = ShardError::OK;
         }

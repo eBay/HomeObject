@@ -27,16 +27,16 @@ enum class ShardError {
     UNKNOWN,
 };
 
-struct ShardInfo {
-    enum class State {
-        OPEN = 0,
-        SEALED,
-        DELETED,
-    };
+enum class ShardState {
+    OPEN = 0,
+    SEALED,
+    DELETED,
+};
 
+struct ShardInfo {
     shard_id id;
     pg_id placement_group;
-    State state;
+    ShardState state;
     uint64_t created_time;
     uint64_t last_modified_time;
     uint64_t total_capacity_bytes;
