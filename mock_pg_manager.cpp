@@ -24,7 +24,7 @@ void MockHomeObject::replace_member(pg_id id, peer_id const& old_member, PGMembe
             auto [it, happened] = members.insert(new_member);
             if (!happened) {
                 LOGERROR("Already have this member [{}] in [pg={}]", to_string(new_member.id), id);
-                err = PGError::BAD_ARGUMENT;
+                err = PGError::INVALID_ARG;
             }
         }
     }
