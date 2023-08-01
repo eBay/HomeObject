@@ -1,8 +1,7 @@
 #pragma once
 #include <functional>
 #include <memory>
-#include <variant>
-#include <vector>
+#include <string>
 
 #include "common.hpp"
 
@@ -24,6 +23,10 @@ public:
     virtual std::shared_ptr< ShardManager > shard_manager() = 0;
 };
 
-extern std::shared_ptr< HomeObject > init_homeobject(HomeObject::lookup_cb);
+struct init_params {
+    HomeObject::lookup_cb lookup;
+};
+
+extern std::shared_ptr< HomeObject > init_homeobject(init_params const& params);
 
 } // namespace homeobject

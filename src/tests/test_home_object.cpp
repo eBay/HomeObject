@@ -23,7 +23,8 @@ SISL_LOGGING_INIT(logging, homeobject)
 SISL_OPTIONS_ENABLE(logging)
 
 TEST(HomeObject, BasicEquivalence) {
-    auto obj_inst = homeobject::init_homeobject([](homeobject::peer_id const&) -> std::string { return "test"; });
+    auto obj_inst = homeobject::init_homeobject(
+        homeobject::init_params{[](homeobject::peer_id const&) -> std::string { return "test"; }});
     ASSERT_TRUE(!!obj_inst);
     auto shard_mgr = obj_inst->shard_manager();
     auto pg_mgr = obj_inst->pg_manager();
@@ -56,8 +57,8 @@ public:
     std::shared_ptr< homeobject::HomeObject > _obj_inst;
 
     void SetUp() override {
-        _obj_inst =
-            homeobject::init_homeobject([](homeobject::peer_id const&) -> std::string { return "test_fixture"; });
+        _obj_inst = homeobject::init_homeobject(
+            homeobject::init_params{[](homeobject::peer_id const&) -> std::string { return "test_fixture"; }});
     }
     void TearDown() override { EXPECT_TRUE(_t.wait(100ms)); }
 };
@@ -130,7 +131,8 @@ TEST_F(HomeObjectFixture, SealUnknownShard) {
 }
 
 TEST_F(HomeObjectFixture, PutBlobMissingShard) {
-    _obj_inst->blob_manager()->put(1, homeobject::Blob{sisl::io_blob(), "user_key", 0ul},
+    _obj_inst->blob_manager()->put(1,
+                                   homeobject::Blob{std::make_unique< sisl::byte_array_impl >(4096), "user_key", 0ul},
                                    [this](auto const& v, auto opt) {
                                        ASSERT_TRUE(std::holds_alternative< BlobError >(v));
                                        EXPECT_EQ(std::get< BlobError >(v), BlobError::UNKNOWN_SHARD);
