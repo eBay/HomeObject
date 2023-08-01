@@ -17,7 +17,7 @@ using shard_id = uint64_t;
 ENUM(BlobError, uint16_t, OK, TIMEOUT, INVALID_ARG, NOT_LEADER, UNKNOWN_SHARD, UNKNOWN_BLOB, CHECKSUM_MISMATCH);
 
 struct Blob {
-    sisl::byte_array body;
+    std::unique_ptr< sisl::byte_array_impl > body;
     std::string user_key;
     uint64_t object_off;
 };
@@ -29,7 +29,7 @@ public:
     using ok_cb = std::function< void(BlobError const, std::optional< peer_id >) >;
 
     virtual ~BlobManager() = default;
-    virtual void put(shard_id shard, Blob const&, id_cb cb) = 0;
+    virtual void put(shard_id shard, Blob&&, id_cb cb) = 0;
     virtual void get(shard_id shard, blob_id const& blob, uint64_t off, uint64_t len, get_cb cb) const = 0;
     virtual void del(shard_id shard, blob_id const& blob, ok_cb cb) = 0;
 };

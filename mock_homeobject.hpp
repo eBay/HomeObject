@@ -63,7 +63,7 @@ public:
     std::shared_ptr< ShardManager > shard_manager() { return shared_from_this(); }
 
     // BlobManager
-    void put(shard_id shard, Blob const&, BlobManager::id_cb cb) override;
+    void put(shard_id shard, Blob&&, BlobManager::id_cb cb) override;
     void get(shard_id shard, blob_id const& blob, uint64_t off, uint64_t len, BlobManager::get_cb) const override;
     void del(shard_id shard, blob_id const& blob, BlobManager::ok_cb cb) override;
 
