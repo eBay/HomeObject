@@ -3,6 +3,7 @@
 #include <set>
 
 #include <boost/uuid/uuid.hpp>
+#include <sisl/utility/enum.hpp>
 
 namespace homeobject {
 
@@ -11,13 +12,7 @@ using peer_id = boost::uuids::uuid;
 using pg_id = uint16_t;
 using shard_id = uint64_t;
 
-enum class PGError {
-    OK = 0,
-    BAD_ARGUMENT,
-    TIMEOUT,
-    UNKNOWN_PG,
-    UNKNOWN_PEER,
-};
+ENUM(PGError, uint16_t, OK, UNKNOWN, BAD_ARGUMENT, TIMEOUT, UNKNOWN_PG, UNKNOWN_PEER);
 
 struct PGMember {
     PGMember(peer_id _id) : id(_id) {}

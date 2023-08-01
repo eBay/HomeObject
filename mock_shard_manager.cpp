@@ -12,23 +12,27 @@ static uint64_t get_current_timestamp() {
     return timestamp;
 }
 
-void MockHomeObject::create_shard(pg_id pg_owner, uint64_t size_bytes, ShardManager::id_cb cb) {
+void MockHomeObject::create_shard(pg_id pg_owner, uint64_t size_bytes, ShardManager::info_cb cb) {
     LOGINFO("Creating Shard: in Pg [{}] of Size [{}b]", pg_owner, size_bytes);
     auto err = ShardError::UNKNOWN_PG;
-    auto id = shard_id{0};
+    auto ret = ShardInfo();
     {
         auto lg = std::scoped_lock(_pg_lock, _shard_lock);
         if (auto pg_it = _pg_map.find(pg_owner); _pg_map.end() != pg_it) {
-            id = _cur_shard_id++;
+            auto const id = _cur_shard_id++;
             pg_it->second.second.emplace(id);
-            auto [_, happened] = _shards.emplace(std::make_pair(
-                id, ShardInfo{id, pg_owner, ShardState::OPEN, 1024 * 1024 * 1024, get_current_timestamp(), 0, 0, 0}));
-            err = happened ? ShardError::OK : ShardError::UNKNOWN;
+            if (auto [it, happened] = _shards.emplace(std::make_pair(
+                    id,
+                    ShardInfo{id, pg_owner, ShardState::OPEN, 1024 * 1024 * 1024, get_current_timestamp(), 0, 0, 0}));
+                _shards.end() != it) {
+                err = happened ? ShardError::OK : ShardError::UNKNOWN;
+                ret = it->second;
+            }
         }
     }
     if (!cb) return;
     if (err == ShardError::OK) {
-        cb(std::variant< shard_id, ShardError >{id}, std::nullopt);
+        cb(ret, std::nullopt);
     } else {
         cb(err, std::nullopt);
     }

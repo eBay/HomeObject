@@ -72,7 +72,7 @@ public:
     void replace_member(pg_id id, peer_id const& old_member, PGMember const& new_member, PGManager::ok_cb cb) override;
 
     // ShardManager
-    void create_shard(pg_id pg_owner, uint64_t size_bytes, ShardManager::id_cb cb) override;
+    void create_shard(pg_id pg_owner, uint64_t size_bytes, ShardManager::info_cb cb) override;
     void get_shard(shard_id id, ShardManager::info_cb cb) const override;
     void list_shards(pg_id id, ShardManager::list_cb cb) const override;
     void seal_shard(shard_id id, ShardManager::info_cb cb) override;
