@@ -46,7 +46,6 @@ class HomeObjectConan(ConanFile):
 
         self.requires("openssl/1.1.1s", override=True)
         self.requires("zlib/1.2.12", override=True)
-        self.requires("libcurl/7.86.0", override=True)
 
     def validate(self):
         if self.info.settings.os in ["Macos", "Windows"]:
