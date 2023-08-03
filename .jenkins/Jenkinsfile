@@ -52,7 +52,6 @@ pipeline {
             }
         }
 
-/* Commented out until unit tests are available
         stage('Coverage') {
             when { not {
                 branch "${STABLE_BRANCH}"
@@ -60,37 +59,40 @@ pipeline {
 
             stages {
                 stage("Adjust Sonar Branch") {
-                    when {
-                        not {
+                    when { not {
                             branch "${TARGET_BRANCH}"
-                        }
-                    }
+                    } }
                     steps {
-                        sh "echo \"sonar.branch.target=${TARGET_BRANCH}\" >> sonar-project.properties"
+                        script {
+                            sh "echo \"sonar.pullreqest.branch=${BRANCH_NAME}\" >> sonar-project.properties"
+                            sh "echo \"sonar.pullreqest.base=main\" >> sonar-project.properties"
+                            KEY = sh(script: "echo ${BRANCH_NAME} | cut -d'-' -f2" , returnStdout: true)
+                            sh "echo \"Key: ${KEY}\""
+                            sh "echo \"sonar.pullreqest.key=${KEY}\" >> sonar-project.properties"
+                        }
                     }
                 }
                 stage("Code Coverage") {
                     steps {
                         slackSend channel: '#sds-ci', message: "*${PROJECT}:${TAG}* is undergoing Code Coverage."
-                        sh """echo \"sonar.branch.name=${BRANCH_NAME}\" >> sonar-project.properties
-                              conan install -o sisl:prerelease=True -pr debug ${BUILD_MISSING} -o ${PROJECT}:coverage=True .
+                        sh """conan install -o sisl:prerelease=True -pr debug ${BUILD_MISSING} -o ${PROJECT}:coverage=True .
                               build-wrapper-linux-x86-64 --out-dir /tmp/sonar conan build .
-                              find . -name \"*.gcno\" -exec gcov {} \\;"""
+                              gcovr --exclude-throw-branches --exclude-lines-by-pattern '.*(LOG|ASSERT).*' --sonarqube coverage.xml -r ."""
                         withSonarQubeEnv('sds-sonar')  {
                             sh "sonar-scanner -Dsonar.projectBaseDir=. -Dsonar.projectVersion=\"${VER}\""
                         }
+                        slackSend channel: '#sds-ci', message: "*${PROJECT}:${TAG}* Code Coverage complete."
                     }
                 }
                 stage("Quality Gate") {
                     steps {
-                        timeout(time: 5, unit: 'MINUTES') {
+                        timeout(time: 30, unit: 'SECONDS') {
                             waitForQualityGate abortPipeline: false
                         }
                     }
                 }
             }
         }
-*/
 
         stage("Compile") {
             steps {

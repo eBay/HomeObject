@@ -3,13 +3,5 @@ codecov:
     require_ci_to_pass: yes
 
 ignore:
-  - "**/*_test.c*"
-  - "**/*_test.h*"
   - "**/*_generated.h"
-  - "**/*_pb.cc"
-  - "**/*_pb.h"
-  - "**/test*/*.c*"
-  - "**/test*/*.h*"
-  - "**/*test_flip.*"
-  - "**/grpc/tests/**"
-  - "**/mocks/**"
+  - "src/tests/**"
