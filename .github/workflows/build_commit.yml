@@ -26,8 +26,28 @@ jobs:
       malloc-impl: ${{ inputs.malloc-impl }}
       prerelease: ${{ inputs.prerelease }}
     if: ${{ github.event_name != 'pull_request' }}
+  IOMgrDeps:
+    needs: SislDeps
+    uses: eBay/iomanager/.github/workflows/build_dependencies.yml@master
+    with:
+      branch: master
+      platform: ${{ inputs.platform }}
+      build-type: ${{ inputs.build-type }}
+      malloc-impl: ${{ inputs.malloc-impl }}
+      prerelease: ${{ inputs.prerelease }}
+    if: ${{ github.event_name != 'pull_request' }}
+  HomestoreDeps:
+    needs: IOMgrDeps
+    uses: eBay/homestore/.github/workflows/build_dependencies.yml@master
+    with:
+      branch: master
+      platform: ${{ inputs.platform }}
+      build-type: ${{ inputs.build-type }}
+      malloc-impl: ${{ inputs.malloc-impl }}
+      prerelease: ${{ inputs.prerelease }}
+    if: ${{ github.event_name != 'pull_request' }}
   HomeObjectDeps:
-    needs: [SislDeps]
+    needs: [HomestoreDeps]
     uses: ./.github/workflows/build_dependencies.yml
     with:
       branch: ${{ github.ref }}
