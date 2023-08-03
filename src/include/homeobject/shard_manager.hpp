@@ -35,10 +35,10 @@ public:
     using list_cb =
         std::function< void(std::variant< std::vector< ShardInfo >, ShardError > const&, std::optional< peer_id >) >;
 
-    static uint64_t max_shard_size_mb(); // Static function forces runtime evaluation.
+    static uint64_t max_shard_size(); // Static function forces runtime evaluation.
 
     virtual ~ShardManager() = default;
-    virtual void create_shard(pg_id pg_owner, uint64_t size_mb, info_cb const& cb) = 0;
+    virtual void create_shard(pg_id pg_owner, uint64_t size_bytes, info_cb const& cb) = 0;
     virtual void get_shard(shard_id id, info_cb const& cb) const = 0;
     virtual void list_shards(pg_id id, list_cb const& cb) const = 0;
     virtual void seal_shard(shard_id id, info_cb const& cb) = 0;

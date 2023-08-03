@@ -99,7 +99,7 @@ TEST_F(HomeObjectFixture, CreateShardZeroSize) {
 }
 
 TEST_F(HomeObjectFixture, CreateShardTooBig) {
-    _obj_inst->shard_manager()->create_shard(1, 2 * 1024, [this](auto const& v, auto opt) {
+    _obj_inst->shard_manager()->create_shard(1, 2 * Gi, [this](auto const& v, auto opt) {
         ASSERT_TRUE(std::holds_alternative< ShardError >(v));
         EXPECT_EQ(std::get< ShardError >(v), ShardError::INVALID_ARG);
         _t.signal();
