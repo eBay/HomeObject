@@ -1,8 +1,5 @@
 cmake_minimum_required (VERSION 3.11)
 
-# add warning options
-add_flags("-Wall -Wextra -Werror -Wpedantic -Wno-unused-parameter")
-
 add_library(${PROJECT_NAME})
 target_sources(${PROJECT_NAME} PRIVATE
 		homeobject.cpp
