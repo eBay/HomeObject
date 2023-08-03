@@ -11,6 +11,15 @@
 #include <homeobject/pg_manager.hpp>
 #include <homeobject/shard_manager.hpp>
 
+#define CB_IF_DEFINED(ret, e, ok)                                                                                      \
+    if (!cb) return;                                                                                                   \
+    auto const temp_err = (e);                                                                                         \
+    if (temp_err == (ok)) {                                                                                            \
+        cb((ret), std::nullopt);                                                                                       \
+    } else {                                                                                                           \
+        cb(temp_err, std::nullopt);                                                                                    \
+    }
+
 namespace homeobject {
 struct BlobRoute {
     shard_id shard;

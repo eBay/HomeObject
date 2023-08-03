@@ -5,9 +5,13 @@
 namespace homeobject {
 void MockHomeObject::create_pg(PGInfo const& pg_info, PGManager::ok_cb const& cb) {
     LOGINFO("Creating PG: [{}] of [{}] members", pg_info.id, pg_info.members.size());
-    auto lg = std::scoped_lock(_pg_lock);
-    _pg_map.insert(std::make_pair(pg_info.id, std::make_pair(pg_info, std::unordered_set< shard_id >())));
-    if (cb) { cb(PGError::OK); }
+    {
+        auto lg = std::scoped_lock(_pg_lock);
+        [[maybe_unused]] auto [it, _] =
+            _pg_map.insert(std::make_pair(pg_info.id, std::make_pair(pg_info, std::unordered_set< shard_id >())));
+        DEBUG_ASSERT(_pg_map.end() != it, "Failure to insert Pg into Map!");
+    }
+    if (cb) cb(PGError::OK);
 }
 void MockHomeObject::replace_member(pg_id id, peer_id const& old_member, PGMember const& new_member,
                                     PGManager::ok_cb const& cb) {
@@ -28,7 +32,7 @@ void MockHomeObject::replace_member(pg_id id, peer_id const& old_member, PGMembe
             }
         }
     }
-    if (cb) { cb(err); }
+    if (cb) cb(err);
 }
 
 extern std::shared_ptr< HomeObject > init_homeobject(init_params const& params) {
