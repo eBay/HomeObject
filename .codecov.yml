@@ -12,3 +12,4 @@ ignore:
   - "**/test*/*.h*"
   - "**/*test_flip.*"
   - "**/grpc/tests/**"
+  - "**/mocks/**"
