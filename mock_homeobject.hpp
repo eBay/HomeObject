@@ -6,10 +6,11 @@
 #include <set>
 #include <utility>
 
+#include <homeobject/homeobject.hpp>
+#include <homeobject/blob_manager.hpp>
+#include <homeobject/pg_manager.hpp>
+#include <homeobject/shard_manager.hpp>
 #include <sisl/flip/flip.hpp>
-#include "mock_blob_manager.hpp"
-#include "mock_pg_manager.hpp"
-#include "mock_shard_manager.hpp"
 
 namespace homeobject {
 struct BlobRoute {
@@ -33,7 +34,8 @@ struct std::hash< homeobject::BlobRoute > {
 
 namespace homeobject {
 
-class MockHomeObject : public BlobManager,
+class MockHomeObject : public HomeObject,
+                       public BlobManager,
                        public PGManager,
                        public ShardManager,
                        public std::enable_shared_from_this< MockHomeObject > {
@@ -55,27 +57,29 @@ class MockHomeObject : public BlobManager,
     ///
 
 public:
-    MockHomeObject() = default;
+    MockHomeObject([[maybe_unused]] HomeObject::lookup_cb const& cb = nullptr) {}
     ~MockHomeObject() override = default;
 
-    std::shared_ptr< BlobManager > blob_manager() { return shared_from_this(); }
-    std::shared_ptr< PGManager > pg_manager() { return shared_from_this(); }
-    std::shared_ptr< ShardManager > shard_manager() { return shared_from_this(); }
+    std::shared_ptr< BlobManager > blob_manager() override { return shared_from_this(); }
+    std::shared_ptr< PGManager > pg_manager() override { return shared_from_this(); }
+    std::shared_ptr< ShardManager > shard_manager() override { return shared_from_this(); }
 
     // BlobManager
-    void put(shard_id shard, Blob&&, BlobManager::id_cb cb) override;
-    void get(shard_id shard, blob_id const& blob, uint64_t off, uint64_t len, BlobManager::get_cb) const override;
-    void del(shard_id shard, blob_id const& blob, BlobManager::ok_cb cb) override;
+    void put(shard_id shard, Blob&&, BlobManager::id_cb const& cb) override;
+    void get(shard_id shard, blob_id const& blob, uint64_t off, uint64_t len,
+             BlobManager::get_cb const& cb) const override;
+    void del(shard_id shard, blob_id const& blob, BlobManager::ok_cb const& cb) override;
 
     // PGManager
-    void create_pg(PGInfo const& pg_info, PGManager::ok_cb cb) override;
-    void replace_member(pg_id id, peer_id const& old_member, PGMember const& new_member, PGManager::ok_cb cb) override;
+    void create_pg(PGInfo const& pg_info, PGManager::ok_cb const& cb) override;
+    void replace_member(pg_id id, peer_id const& old_member, PGMember const& new_member,
+                        PGManager::ok_cb const& cb) override;
 
     // ShardManager
-    void create_shard(pg_id pg_owner, uint64_t size_bytes, ShardManager::info_cb cb) override;
-    void get_shard(shard_id id, ShardManager::info_cb cb) const override;
-    void list_shards(pg_id id, ShardManager::list_cb cb) const override;
-    void seal_shard(shard_id id, ShardManager::info_cb cb) override;
+    void create_shard(pg_id pg_owner, uint64_t size_bytes, ShardManager::info_cb const& cb) override;
+    void get_shard(shard_id id, ShardManager::info_cb const& cb) const override;
+    void list_shards(pg_id id, ShardManager::list_cb const& cb) const override;
+    void seal_shard(shard_id id, ShardManager::info_cb const& cb) override;
 };
 
 } // namespace homeobject

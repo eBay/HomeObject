@@ -13,7 +13,7 @@ constexpr auto disk_latency = 15ms;
         cb(temp_err, std::nullopt);                                                                                    \
     }
 
-void MockHomeObject::put(shard_id shard, Blob&& blob, BlobManager::id_cb cb) {
+void MockHomeObject::put(shard_id shard, Blob&& blob, BlobManager::id_cb const& cb) {
     std::thread([this, shard, mblob = std::move(blob), cb]() mutable {
         std::this_thread::sleep_for(disk_latency);
         blob_id id;
@@ -33,7 +33,8 @@ void MockHomeObject::put(shard_id shard, Blob&& blob, BlobManager::id_cb cb) {
     }).detach();
 }
 
-void MockHomeObject::get(shard_id shard, blob_id const& id, uint64_t off, uint64_t len, BlobManager::get_cb cb) const {
+void MockHomeObject::get(shard_id shard, blob_id const& id, uint64_t off, uint64_t len,
+                         BlobManager::get_cb const& cb) const {
     std::thread([this, shard, id, cb]() {
         BlobError err = BlobError::UNKNOWN_SHARD;
         Blob blob;
@@ -64,7 +65,7 @@ void MockHomeObject::get(shard_id shard, blob_id const& id, uint64_t off, uint64
         CB_IF_DEFINED(std::move(blob), err);
     }).detach();
 }
-void MockHomeObject::del(shard_id shard, blob_id const& blob, BlobManager::ok_cb cb) {
+void MockHomeObject::del(shard_id shard, blob_id const& blob, BlobManager::ok_cb const& cb) {
     std::thread([this, shard, blob, cb]() {
         BlobError err = BlobError::UNKNOWN_SHARD;
         [&] {

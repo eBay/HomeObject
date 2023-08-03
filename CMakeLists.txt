@@ -9,6 +9,7 @@ target_sources(mock_homeobject PRIVATE
 		mock_shard_manager.cpp
 	)
 target_link_libraries(mock_homeobject
+    homeobject::homeobject
     nuobject_proto::nuobject_proto
     sisl::sisl
   )

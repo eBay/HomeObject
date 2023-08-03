@@ -1,5 +1,4 @@
 #include "mock_homeobject.hpp"
-#include "mock_shard_manager.hpp"
 #include <functional>
 #include <optional>
 #include <variant>
@@ -12,7 +11,7 @@ static uint64_t get_current_timestamp() {
     return timestamp;
 }
 
-void MockHomeObject::create_shard(pg_id pg_owner, uint64_t size_bytes, ShardManager::info_cb cb) {
+void MockHomeObject::create_shard(pg_id pg_owner, uint64_t size_bytes, ShardManager::info_cb const& cb) {
     LOGINFO("Creating Shard: in Pg [{}] of Size [{}b]", pg_owner, size_bytes);
     auto err = ShardError::UNKNOWN_PG;
     auto ret = ShardInfo();
@@ -21,9 +20,10 @@ void MockHomeObject::create_shard(pg_id pg_owner, uint64_t size_bytes, ShardMana
         if (auto pg_it = _pg_map.find(pg_owner); _pg_map.end() != pg_it) {
             auto const id = _cur_shard_id++;
             pg_it->second.second.emplace(id);
-            if (auto [it, happened] = _shards.emplace(std::make_pair(
-                    id,
-                    ShardInfo{id, pg_owner, ShardState::OPEN, 1024 * 1024 * 1024, get_current_timestamp(), 0, 0, 0}));
+            if (auto [it, happened] =
+                    _shards.emplace(std::make_pair(id,
+                                                   ShardInfo{id, pg_owner, ShardInfo::State::OPEN, 1024 * 1024 * 1024,
+                                                             get_current_timestamp(), 0, 0, 0}));
                 _shards.end() != it) {
                 err = happened ? ShardError::OK : ShardError::UNKNOWN;
                 ret = it->second;
@@ -38,7 +38,7 @@ void MockHomeObject::create_shard(pg_id pg_owner, uint64_t size_bytes, ShardMana
     }
 }
 
-void MockHomeObject::get_shard(shard_id id, ShardManager::info_cb cb) const {
+void MockHomeObject::get_shard(shard_id id, ShardManager::info_cb const& cb) const {
     auto info = ShardInfo();
     auto err = ShardError::UNKNOWN_SHARD;
     {
@@ -57,7 +57,7 @@ void MockHomeObject::get_shard(shard_id id, ShardManager::info_cb cb) const {
     }
 }
 
-void MockHomeObject::list_shards(pg_id id, ShardManager::list_cb cb) const {
+void MockHomeObject::list_shards(pg_id id, ShardManager::list_cb const& cb) const {
     auto info = std::vector< ShardInfo >();
     auto err = ShardError::UNKNOWN_PG;
     {
@@ -80,13 +80,13 @@ void MockHomeObject::list_shards(pg_id id, ShardManager::list_cb cb) const {
     }
 }
 
-void MockHomeObject::seal_shard(shard_id id, ShardManager::info_cb cb) {
+void MockHomeObject::seal_shard(shard_id id, ShardManager::info_cb const& cb) {
     auto info = ShardInfo();
     auto err = ShardError::UNKNOWN_SHARD;
     {
         auto lg = std::scoped_lock(_pg_lock, _shard_lock);
         if (auto shard_it = _shards.find(id); _shards.end() != shard_it) {
-            shard_it->second.state = ShardState::SEALED;
+            shard_it->second.state = ShardInfo::State::SEALED;
             info = shard_it->second;
             err = ShardError::OK;
         }
