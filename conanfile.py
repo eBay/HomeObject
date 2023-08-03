@@ -41,7 +41,7 @@ class HomeObjectConan(ConanFile):
         self.build_requires("gtest/1.13.0")
 
     def requirements(self):
-        #self.requires("home_replication/[~=0,   include_prerelease=True]@oss/main")
+        self.requires("homestore/[~=4,   include_prerelease=True]@oss/master")
         self.requires("sisl/[~=9,               include_prerelease=True]@oss/master")
 
         self.requires("openssl/1.1.1s", override=True)

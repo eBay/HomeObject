@@ -94,9 +94,9 @@ pipeline {
 
         stage("Compile") {
             steps {
-                sh """conan create ${BUILD_MISSING} -o sisl:testing=False -o iomgr:testing=off -o homestore:testing=off -o home_replication:testing=False -o sisl:prerelease=True -pr debug . ${PROJECT}/${TAG} ;
-                      conan create ${BUILD_MISSING} -o sisl:testing=False -o iomgr:testing=off -o homestore:testing=off -o home_replication:testing=False -o sisl:prerelease=True -pr test . ${PROJECT}/${TAG} ;
-                      conan create ${BUILD_MISSING} -o sisl:testing=False -o iomgr:testing=off -o homestore:testing=off -o home_replication:testing=False -o sisl:prerelease=False -pr test . ${PROJECT}/${TAG} ;"""
+                sh """conan create ${BUILD_MISSING} -o sisl:prerelease=True -pr test . ${PROJECT}/${TAG} ;
+                      conan create ${BUILD_MISSING} -o sisl:prerelease=True -pr debug . ${PROJECT}/${TAG} ;
+                      conan create ${BUILD_MISSING} -o sisl:prerelease=False -pr test . ${PROJECT}/${TAG} ;"""
             }
         }
 
