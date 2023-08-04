@@ -77,7 +77,7 @@ pipeline {
                         slackSend channel: '#sds-ci', message: "*${PROJECT}:${TAG}* is undergoing Code Coverage."
                         sh """conan install -o sisl:prerelease=True -pr debug ${BUILD_MISSING} -o ${PROJECT}:coverage=True .
                               build-wrapper-linux-x86-64 --out-dir /tmp/sonar conan build .
-                              gcovr --exclude-throw-branches --exclude-lines-by-pattern '.*(LOG|ASSERT).*' --sonarqube coverage.xml -r ."""
+                              gcovr --exclude-throw-branches --exclude-lines-by-pattern '.*(ENUM|LOG|ASSERT).*' --sonarqube coverage.xml -r ."""
                         withSonarQubeEnv('sds-sonar')  {
                             sh "sonar-scanner -Dsonar.projectBaseDir=. -Dsonar.projectVersion=\"${VER}\""
                         }

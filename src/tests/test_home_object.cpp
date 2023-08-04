@@ -67,7 +67,7 @@ public:
 // but until it is implemented we will just assume the RAFT group was
 // unresponsive and timed-out.
 TEST_F(HomeObjectFixture, CreatePgTimeout) {
-    _obj_inst->pg_manager()->create_pg(0l, [this](auto const& e) {
+    _obj_inst->pg_manager()->create_pg(homeobject::PGInfo{0l}, [this](auto const& e) {
         EXPECT_EQ(e, PGError::TIMEOUT);
         _t.signal();
     });

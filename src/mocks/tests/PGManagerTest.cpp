@@ -55,8 +55,7 @@ public:
     homeobject::peer_id _peer2;
 
     void SetUp() override {
-        auto params = homeobject::init_params{[](homeobject::peer_id const&) { return std::string(); }};
-        m_mock_homeobj = homeobject::init_homeobject(params);
+        PgManagerFixture::SetUp();
         _peer1 = boost::uuids::random_generator()();
         _peer2 = boost::uuids::random_generator()();
 

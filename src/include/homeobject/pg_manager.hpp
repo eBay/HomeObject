@@ -11,7 +11,7 @@ namespace homeobject {
 ENUM(PGError, uint16_t, OK = 0, UNKNOWN, INVALID_ARG, TIMEOUT, UNKNOWN_PG, UNKNOWN_PEER);
 
 struct PGMember {
-    PGMember(peer_id _id) : id(_id) {}
+    explicit PGMember(peer_id _id) : id(_id) {}
     PGMember(peer_id _id, std::string const& _name) : id(_id), name(_name) {}
     PGMember(peer_id _id, std::string const& _name, int32_t _priority) : id(_id), name(_name), priority(_priority) {}
     peer_id id;
@@ -20,7 +20,7 @@ struct PGMember {
 };
 
 struct PGInfo {
-    PGInfo(pg_id _id) : id(_id) {}
+    explicit PGInfo(pg_id _id) : id(_id) {}
     pg_id id;
     mutable std::set< PGMember > members;
 };

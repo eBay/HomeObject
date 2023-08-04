@@ -39,7 +39,7 @@ void MockHomeObject::replace_member(pg_id id, peer_id const& old_member, PGMembe
     }
     WITH_PG_LOCK(PGError::UNKNOWN_PG)
     if (auto pg_it = _pg_map.find(id); _pg_map.end() != pg_it) {
-        if (auto& members = pg_it->second.first.members; 0 < members.erase(old_member)) {
+        if (auto& members = pg_it->second.first.members; 0 < members.erase(PGMember{old_member})) {
             err = members.insert(new_member).second ? PGError::OK : PGError::INVALID_ARG;
             if (PGError::OK != err) LOGERROR("Already have this member [{}] in [pg={}]", to_string(new_member.id), id);
         } else

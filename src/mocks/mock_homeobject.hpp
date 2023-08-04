@@ -65,7 +65,7 @@ class MockHomeObject : public HomeObject,
     ///
 
 public:
-    MockHomeObject([[maybe_unused]] HomeObject::lookup_cb const& cb = nullptr) {}
+    explicit MockHomeObject([[maybe_unused]] HomeObject::lookup_cb const& cb = nullptr) {}
     ~MockHomeObject() override = default;
 
     std::shared_ptr< BlobManager > blob_manager() override { return shared_from_this(); }

@@ -13,26 +13,27 @@ static uint64_t get_current_timestamp() {
     {                                                                                                                  \
         auto lg = std::scoped_lock(_pg_lock, _shard_lock);
 
-#define CB_FROM_SHARD_LOCKS(ret, e, ok)                                                                                \
+#define CB_FROM_SHARD_LOCKS(ret)                                                                                       \
     }                                                                                                                  \
-    CB_IF_DEFINED(ret, e, ok)
+    CB_IF_DEFINED(ret, err, ShardError::OK)
+
+uint64_t ShardManager::max_shard_size() { return Gi; }
 
 void MockHomeObject::create_shard(pg_id pg_owner, uint64_t size_bytes, ShardManager::info_cb const& cb) {
-    LOGINFO("Creating Shard: in Pg [{}] of Size [{}b]", pg_owner, size_bytes);
-    auto ret = ShardInfo();
+    if (0 == size_bytes || max_shard_size() < size_bytes) {
+        if (cb) cb(ShardError::INVALID_ARG, std::nullopt);
+        return;
+    }
+    auto const now = get_current_timestamp();
+    auto ret = ShardInfo{0u, pg_owner, ShardInfo::State::OPEN, now, now, size_bytes, size_bytes, 0};
     WITH_SHARD_LOCKS(ShardError::UNKNOWN_PG);
     if (auto pg_it = _pg_map.find(pg_owner); _pg_map.end() != pg_it) {
-        auto const id = _cur_shard_id++;
-        pg_it->second.second.emplace(id);
-        if (auto [it, happened] = _shards.emplace(std::make_pair(
-                id,
-                ShardInfo{id, pg_owner, ShardInfo::State::OPEN, 1024 * 1024 * 1024, get_current_timestamp(), 0, 0, 0}));
-            _shards.end() != it) {
-            err = happened ? ShardError::OK : ShardError::UNKNOWN;
-            ret = it->second;
-        }
+        ret.id = _cur_shard_id++;
+        LOGINFO("Creating Shard [{}]: in Pg [{}] of Size [{}b]", ret.id, pg_owner, size_bytes);
+        pg_it->second.second.emplace(ret.id);
+        err = _shards.try_emplace(ret.id, ret).second ? ShardError::OK : ShardError::UNKNOWN;
     }
-    CB_FROM_SHARD_LOCKS(ret, err, ShardError::OK)
+    CB_FROM_SHARD_LOCKS(ret)
 }
 
 void MockHomeObject::get_shard(shard_id id, ShardManager::info_cb const& cb) const {
@@ -42,7 +43,7 @@ void MockHomeObject::get_shard(shard_id id, ShardManager::info_cb const& cb) con
         info = shard_it->second;
         err = ShardError::OK;
     }
-    CB_FROM_SHARD_LOCKS(info, err, ShardError::OK)
+    CB_FROM_SHARD_LOCKS(info)
 }
 
 void MockHomeObject::list_shards(pg_id id, ShardManager::list_cb const& cb) const {
@@ -56,7 +57,7 @@ void MockHomeObject::list_shards(pg_id id, ShardManager::list_cb const& cb) cons
             info.push_back(shard_it->second);
         }
     }
-    CB_FROM_SHARD_LOCKS(info, err, ShardError::OK)
+    CB_FROM_SHARD_LOCKS(info)
 }
 
 void MockHomeObject::seal_shard(shard_id id, ShardManager::info_cb const& cb) {
@@ -67,7 +68,7 @@ void MockHomeObject::seal_shard(shard_id id, ShardManager::info_cb const& cb) {
         info = shard_it->second;
         err = ShardError::OK;
     }
-    CB_FROM_SHARD_LOCKS(info, err, ShardError::OK)
+    CB_FROM_SHARD_LOCKS(info)
 }
 
 } // namespace homeobject

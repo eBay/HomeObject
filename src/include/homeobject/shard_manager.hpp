@@ -23,7 +23,7 @@ struct ShardInfo {
     State state;
     uint64_t created_time;
     uint64_t last_modified_time;
-    uint32_t available_capacity_bytes;
+    uint64_t available_capacity_bytes;
     uint64_t total_capacity_bytes;
     uint64_t deleted_capacity_bytes;
 };
