@@ -4,7 +4,7 @@ namespace homeobject {
 static uint64_t get_current_timestamp() {
     auto now = std::chrono::system_clock::now();
     auto duration = std::chrono::duration_cast< std::chrono::milliseconds >(now.time_since_epoch());
-    uint64_t timestamp = static_cast< uint64_t >(duration.count());
+    auto timestamp = static_cast< uint64_t >(duration.count());
     return timestamp;
 }
 

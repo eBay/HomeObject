@@ -9,29 +9,28 @@ constexpr auto disk_latency = 15ms;
     {                                                                                                                  \
         auto lg = std::scoped_lock(_shard_lock, _data_lock);
 
-#define CB_FROM_DATA_LOCKS(ret, e, ok)                                                                                 \
+#define CB_FROM_DATA_LOCKS(ret)                                                                                        \
     }                                                                                                                  \
-    CB_IF_DEFINED(ret, e, ok)
+    CB_IF_DEFINED(ret, err, BlobError::OK)
 
 void MockHomeObject::put(shard_id shard, Blob&& blob, BlobManager::id_cb const& cb) {
-    std::thread([this, shard, mblob = std::move(blob), cb]() mutable {
+    std::thread([this, shard, mblob = std::move(blob), cb = std::move(cb)]() mutable {
         std::this_thread::sleep_for(disk_latency);
         blob_id id;
         WITH_DATA_LOCKS(BlobError::UNKNOWN_SHARD)
         if (0 != _shards.count(shard)) {
             err = BlobError::OK;
             id = _cur_blob_id;
-            if (auto [it, happened] = _in_memory_disk.emplace(BlobRoute{shard, id}, std::move(mblob)); happened) {
+            if (auto [_, happened] = _in_memory_disk.try_emplace(BlobRoute{shard, id}, std::move(mblob)); happened) {
                 _cur_blob_id++;
             }
         }
-        CB_FROM_DATA_LOCKS(id, err, BlobError::OK)
+        CB_FROM_DATA_LOCKS(id)
     }).detach();
 }
 
-void MockHomeObject::get(shard_id shard, blob_id const& id, uint64_t off, uint64_t len,
-                         BlobManager::get_cb const& cb) const {
-    std::thread([this, shard, id, cb]() {
+void MockHomeObject::get(shard_id shard, blob_id const& id, uint64_t, uint64_t, BlobManager::get_cb const& cb) const {
+    std::thread([this, shard, id, cb = std::move(cb)]() {
         BlobError serr = BlobError::UNKNOWN_SHARD;
         // Only need to lookup shard with _shard_lock for READs, okay to seal while reading
         {
@@ -39,7 +38,7 @@ void MockHomeObject::get(shard_id shard, blob_id const& id, uint64_t off, uint64
             if (auto const it = _shards.find(shard); it != _shards.end()) { serr = BlobError::OK; }
         }
         if (BlobError::OK != serr) {
-            CB_IF_DEFINED(serr, serr, BlobError::OK);
+            CB_IF_DEFINED(serr, serr, BlobError::OK)
             return;
         }
 
@@ -54,16 +53,16 @@ void MockHomeObject::get(shard_id shard, blob_id const& id, uint64_t off, uint64
             std::memcpy(blob.body->bytes, read_blob.body->bytes, blob.body->size);
             err = BlobError::OK;
         }
-        CB_FROM_DATA_LOCKS(std::move(blob), err, BlobError::OK)
+        CB_FROM_DATA_LOCKS(std::move(blob))
     }).detach();
 }
 void MockHomeObject::del(shard_id shard, blob_id const& blob, BlobManager::ok_cb const& cb) {
-    std::thread([this, shard, blob, cb]() {
+    std::thread([this, shard, blob, cb = std::move(cb)]() {
         WITH_DATA_LOCKS(BlobError::UNKNOWN_SHARD)
         if (auto const it = _shards.find(shard); it != _shards.end()) {
             err = (0 < _in_memory_disk.erase(BlobRoute{shard, blob})) ? BlobError::OK : BlobError::UNKNOWN_BLOB;
         }
-        CB_FROM_DATA_LOCKS(err, BlobError::OK, BlobError::OK)
+        CB_FROM_DATA_LOCKS(err)
     }).detach();
 }
 

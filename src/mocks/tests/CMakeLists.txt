@@ -21,3 +21,12 @@ target_link_libraries(shard_mock_test
     GTest::gmock
   )
 add_test(NAME ShardMockTest COMMAND shard_mock_test -csv critical)
+
+add_executable (blob_mock_test)
+target_sources(blob_mock_test PRIVATE BlobManagerTest.cpp)
+target_link_libraries(blob_mock_test
+    homeobject_mock
+    sisl::sisl
+    GTest::gmock
+  )
+add_test(NAME BlobMockTest COMMAND blob_mock_test -csv critical)

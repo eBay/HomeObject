@@ -34,7 +34,7 @@ public:
     virtual void replace_member(pg_id id, peer_id const& old_member, PGMember const& new_member, ok_cb const& cb) = 0;
 };
 
-inline bool operator<(homeobject::PGMember const lhs, homeobject::PGMember const rhs) { return lhs.id < rhs.id; }
-inline bool operator<(homeobject::PGInfo const lhs, homeobject::PGInfo const rhs) { return lhs.id < rhs.id; }
+inline bool operator<(homeobject::PGMember const& lhs, homeobject::PGMember const& rhs) { return lhs.id < rhs.id; }
+inline bool operator<(homeobject::PGInfo const& lhs, homeobject::PGInfo const& rhs) { return lhs.id < rhs.id; }
 
 } // namespace homeobject
