@@ -12,3 +12,12 @@ target_link_libraries(pg_mock_test
     GTest::gmock
   )
 add_test(NAME PGMockTest COMMAND pg_mock_test -csv critical)
+
+add_executable (shard_mock_test)
+target_sources(shard_mock_test PRIVATE ShardManagerTest.cpp)
+target_link_libraries(shard_mock_test
+    homeobject_mock
+    sisl::sisl
+    GTest::gmock
+  )
+add_test(NAME ShardMockTest COMMAND shard_mock_test -csv critical)
