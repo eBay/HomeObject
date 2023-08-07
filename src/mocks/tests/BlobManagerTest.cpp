@@ -124,6 +124,39 @@ TEST_F(BlobManagerFixture, GetBlob) {
     END_TEST
 }
 
+TEST_F(BlobManagerFixture, DeleteBlobUnknownShard) {
+    START_TEST
+    m_mock_homeobj->blob_manager()->del(_shard.id + 1, _blob_id,
+                                        [this](BlobError const& e, std::optional< peer_id > p) mutable {
+                                            EXPECT_EQ(BlobError::UNKNOWN_SHARD, e);
+                                            EXPECT_TRUE(!p);
+                                            _p.set_value(true);
+                                        });
+    END_TEST
+}
+
+TEST_F(BlobManagerFixture, DeleteBlobUnknownBlob) {
+    START_TEST
+    m_mock_homeobj->blob_manager()->del(_shard.id, _blob_id + 1,
+                                        [this](BlobError const& e, std::optional< peer_id > p) mutable {
+                                            EXPECT_EQ(BlobError::UNKNOWN_BLOB, e);
+                                            EXPECT_TRUE(!p);
+                                            _p.set_value(true);
+                                        });
+    END_TEST
+}
+
+TEST_F(BlobManagerFixture, DeleteBlob) {
+    START_TEST
+    m_mock_homeobj->blob_manager()->del(_shard.id, _blob_id,
+                                        [this](BlobError const& e, std::optional< peer_id > p) mutable {
+                                            EXPECT_EQ(BlobError::OK, e);
+                                            EXPECT_TRUE(!p);
+                                            _p.set_value(true);
+                                        });
+    END_TEST
+}
+
 int main(int argc, char* argv[]) {
     int parsed_argc = argc;
     ::testing::InitGoogleTest(&parsed_argc, argv);
