@@ -3,7 +3,7 @@ cmake_minimum_required (VERSION 3.11)
 find_package(Threads QUIET REQUIRED)
 find_package(sisl QUIET REQUIRED)
 find_package(homestore QUIET REQUIRED)
-#find_package(home_replication QUIET REQUIRED)
+find_package(nuraft_mesg QUIET REQUIRED)
 
 find_package(GTest QUIET REQUIRED)
 

@@ -45,6 +45,9 @@ class HomeObjectConan(ConanFile):
         self.requires("homestore/[~=4,   include_prerelease=True]@oss/master")
         self.requires("sisl/[~=9,               include_prerelease=True]@oss/master")
 
+        # Replace with HomeReplication when mature
+        self.requires("nuraft_mesg/[~=0,    include_prerelease=True]@oss/main")
+
         self.requires("openssl/1.1.1s", override=True)
         self.requires("zlib/1.2.13", override=True)
 
