@@ -20,7 +20,7 @@ jobs:
   SislDeps:
     uses: eBay/sisl/.github/workflows/build_dependencies.yml@stable/v9.x
     with:
-      branch: master
+      branch: stable/v9.x
       platform: ${{ inputs.platform }}
       build-type: ${{ inputs.build-type }}
       malloc-impl: ${{ inputs.malloc-impl }}
@@ -31,6 +31,16 @@ jobs:
     uses: eBay/iomanager/.github/workflows/build_dependencies.yml@master
     with:
       branch: master
+      platform: ${{ inputs.platform }}
+      build-type: ${{ inputs.build-type }}
+      malloc-impl: ${{ inputs.malloc-impl }}
+      prerelease: ${{ inputs.prerelease }}
+    if: ${{ github.event_name != 'pull_request' }}
+  NuRaftMesgDeps:
+    needs: SislDeps
+    uses: eBay/nuraft_mesg/.github/workflows/build_dependencies.yml@main
+    with:
+      branch: main
       platform: ${{ inputs.platform }}
       build-type: ${{ inputs.build-type }}
       malloc-impl: ${{ inputs.malloc-impl }}
@@ -47,7 +57,7 @@ jobs:
       prerelease: ${{ inputs.prerelease }}
     if: ${{ github.event_name != 'pull_request' }}
   HomeObjectDeps:
-    needs: [HomestoreDeps]
+    needs: [HomestoreDeps, NuRaftMesgDeps]
     uses: ./.github/workflows/build_dependencies.yml
     with:
       branch: ${{ github.ref }}
