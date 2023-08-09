@@ -9,7 +9,7 @@ required_conan_version = ">=1.50.0"
 
 class HomeObjectConan(ConanFile):
     name = "homeobject"
-    version = "0.0.1"
+    version = "0.1.0"
     homepage = "https://github.com/eBay/HomeObject"
     description = "Blob Store built on HomeReplication"
     topics = ("ebay")
@@ -38,18 +38,14 @@ class HomeObjectConan(ConanFile):
     exports_sources = ("CMakeLists.txt", "cmake/*", "src/*", "LICENSE")
 
     def build_requirements(self):
-        self.build_requires("cmake/3.27.0")
         self.build_requires("gtest/1.14.0")
 
     def requirements(self):
-        self.requires("homestore/[~=4,   include_prerelease=True]@oss/master")
-        self.requires("sisl/[~=9,               include_prerelease=True]@oss/master")
-
+        self.requires("homestore/[~=4,      include_prerelease=True]@oss/master")
+        self.requires("sisl/[~=10,          include_prerelease=True]@oss/master")
         # Replace with HomeReplication when mature
-        self.requires("nuraft_mesg/[~=0,    include_prerelease=True]@oss/main")
-
-        self.requires("openssl/1.1.1s", override=True)
-        self.requires("zlib/1.2.13", override=True)
+        self.requires("nuraft_mesg/[~=1,    include_prerelease=True]@oss/main")
+        self.requires("lz4/1.9.4", override=True)
 
     def validate(self):
         if self.info.settings.os in ["Macos", "Windows"]:

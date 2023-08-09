@@ -18,9 +18,9 @@ on:
 
 jobs:
   SislDeps:
-    uses: eBay/sisl/.github/workflows/build_dependencies.yml@stable/v9.x
+    uses: eBay/sisl/.github/workflows/build_dependencies.yml@master
     with:
-      branch: stable/v9.x
+      branch: master
       platform: ${{ inputs.platform }}
       build-type: ${{ inputs.build-type }}
       malloc-impl: ${{ inputs.malloc-impl }}
