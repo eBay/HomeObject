@@ -165,6 +165,7 @@ jobs:
             -o sisl:testing=False \
             -o iomgr:testing=off \
             -o homestore:testing=off \
+            -o nuraft_mesg:testing=False \
             -s build_type=${{ inputs.build-type }} \
             --build missing \
             .
@@ -216,6 +217,7 @@ jobs:
             -o sisl:testing=False \
             -o iomgr:testing=off \
             -o homestore:testing=off \
+            -o nuraft_mesg:testing=False \
             -o coverage=True \
             -s build_type=${{ inputs.build-type }} \
             --build missing \
@@ -242,6 +244,7 @@ jobs:
             -o sisl:testing=False \
             -o iomgr:testing=off \
             -o homestore:testing=off \
+            -o nuraft_mesg:testing=False \
             -o homeobject:sanitize=${sanitize} \
             -s build_type=${{ inputs.build-type }} \
             --build missing \
