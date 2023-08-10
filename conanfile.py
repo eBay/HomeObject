@@ -42,11 +42,11 @@ class HomeObjectConan(ConanFile):
         self.build_requires("gtest/1.14.0")
 
     def requirements(self):
-        self.requires("homestore/[~=4,   include_prerelease=True]@oss/master")
-        self.requires("sisl/[~=9,               include_prerelease=True]@oss/master")
+        self.requires("homestore/[~=4,  include_prerelease=True]@oss/master")
+        self.requires("sisl/[~=10,      include_prerelease=True]@oss/master")
 
-        self.requires("openssl/1.1.1s", override=True)
-        self.requires("zlib/1.2.13", override=True)
+        self.requires("lz4/1.9.4", override=True)
+
 
     def validate(self):
         if self.info.settings.os in ["Macos", "Windows"]:
