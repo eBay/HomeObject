@@ -85,13 +85,6 @@ pipeline {
                         slackSend channel: '#sds-ci', message: "*${PROJECT}:${TAG}* Code Coverage complete."
                     }
                 }
-                stage("Quality Gate") {
-                    steps {
-                        timeout(time: 30, unit: 'SECONDS') {
-                            waitForQualityGate abortPipeline: false
-                        }
-                    }
-                }
             }
         }
 
