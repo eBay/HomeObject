@@ -36,6 +36,16 @@ jobs:
       malloc-impl: ${{ inputs.malloc-impl }}
       prerelease: ${{ inputs.prerelease }}
     if: ${{ github.event_name != 'pull_request' }}
+  NuRaftMesgDeps:
+    needs: SislDeps
+    uses: eBay/nuraft_mesg/.github/workflows/build_dependencies.yml@main
+    with:
+      branch: main
+      platform: ${{ inputs.platform }}
+      build-type: ${{ inputs.build-type }}
+      malloc-impl: ${{ inputs.malloc-impl }}
+      prerelease: ${{ inputs.prerelease }}
+    if: ${{ github.event_name != 'pull_request' }}
   HomestoreDeps:
     needs: IOMgrDeps
     uses: eBay/homestore/.github/workflows/build_dependencies.yml@master
@@ -47,7 +57,7 @@ jobs:
       prerelease: ${{ inputs.prerelease }}
     if: ${{ github.event_name != 'pull_request' }}
   HomeObjectDeps:
-    needs: [HomestoreDeps]
+    needs: [HomestoreDeps, NuRaftMesgDeps]
     uses: ./.github/workflows/build_dependencies.yml
     with:
       branch: ${{ github.ref }}
