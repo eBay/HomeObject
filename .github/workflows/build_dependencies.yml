@@ -107,7 +107,24 @@ jobs:
         key_prefix: IOMgrDeps-${{ inputs.platform }}-${{ inputs.build-type }}-${{ inputs.malloc-impl }}-${{ inputs.prerelease }}
       if: ${{ inputs.testing == 'True' || steps.restore-cache.outputs.cache-hit != 'true' }}
 
-    - name: Retrieve Dependencies
+    - name: Retrieve Dependencies Raft
+      uses: actions/checkout@v3
+      with:
+        repository: eBay/nuraft_mesg
+        path: import/nuraft_mesg
+        ref: main
+      if: ${{ inputs.testing == 'True' || steps.restore-cache.outputs.cache-hit != 'true' }}
+
+    - name: Load NuraftMesg Cache
+      uses: eBay/sisl/.github/actions/load_conan@stable/v8.x
+      with:
+        testing: 'False'
+        path: import/nuraft_mesg
+        key_prefix: NuMesgDeps-${{ inputs.platform }}-${{ inputs.build-type }}-${{ inputs.malloc-impl }}-${{ inputs.prerelease }}
+        fail_on_cache_miss: true
+      if: ${{ inputs.testing == 'True' || steps.restore-cache.outputs.cache-hit != 'true' }}
+
+    - name: Retrieve Dependencies Homestore
       uses: actions/checkout@v3
       with:
         repository: eBay/HomeStore
@@ -134,6 +151,7 @@ jobs:
       run: |
         sudo apt-get install -y python3-pyelftools libaio-dev
         python -m pip install pyelftools
+        conan export import/nuraft_mesg oss/main
         conan export import/homestore oss/master
         cached_pkgs=$(ls -1d ~/.conan/data/*/*/*/*/export | sed 's,.*data/,,' | cut -d'/' -f1,2 | paste -sd',' - -)
         echo "::info:: Pre-cached: ${cached_pkgs}"
@@ -147,6 +165,7 @@ jobs:
             -o sisl:testing=False \
             -o iomgr:testing=off \
             -o homestore:testing=off \
+            -o nuraft_mesg:testing=False \
             -s build_type=${{ inputs.build-type }} \
             --build missing \
             .
@@ -172,6 +191,15 @@ jobs:
         key_prefix: IOMgrDeps-${{ inputs.platform }}-${{ inputs.build-type }}-${{ inputs.malloc-impl }}-${{ inputs.prerelease }}
       if: ${{ inputs.testing == 'True' && github.event_name != 'pull_request' && steps.restore-cache.outputs.cache-hit != 'true' }}
 
+    - name: Reload NuRaftMesg Cache
+      uses: eBay/sisl/.github/actions/load_conan@stable/v8.x
+      with:
+        testing: 'False'
+        path: import/nuraft_mesg
+        key_prefix: NuMesgDeps-${{ inputs.platform }}-${{ inputs.build-type }}-${{ inputs.malloc-impl }}-${{ inputs.prerelease }}
+        fail_on_cache_miss: true
+      if: ${{ inputs.testing == 'True' && github.event_name != 'pull_request' && steps.restore-cache.outputs.cache-hit != 'true' }}
+
     - name: Reload Homestore Cache
       uses: eBay/sisl/.github/actions/load_conan@stable/v8.x
       with:
@@ -189,6 +217,7 @@ jobs:
             -o sisl:testing=False \
             -o iomgr:testing=off \
             -o homestore:testing=off \
+            -o nuraft_mesg:testing=False \
             -o coverage=True \
             -s build_type=${{ inputs.build-type }} \
             --build missing \
@@ -215,6 +244,7 @@ jobs:
             -o sisl:testing=False \
             -o iomgr:testing=off \
             -o homestore:testing=off \
+            -o nuraft_mesg:testing=False \
             -o homeobject:sanitize=${sanitize} \
             -s build_type=${{ inputs.build-type }} \
             --build missing \
