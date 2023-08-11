@@ -36,10 +36,8 @@ public:
         auto info = homeobject::PGInfo(_pg_id);
         info.members.insert(homeobject::PGMember{_peer1, "peer1", 1});
         info.members.insert(homeobject::PGMember{_peer2, "peer2", 0});
-        m_mock_homeobj->pg_manager()
-            ->create_pg(info)
-            .thenValue([](homeobject::PGError e) { EXPECT_EQ(homeobject::PGError::OK, e); })
-            .get();
+        auto e = m_mock_homeobj->pg_manager()->create_pg(info).get();
+        EXPECT_EQ(homeobject::PGError::OK, e);
     }
 
 protected:
@@ -67,21 +65,12 @@ TEST_F(ShardManagerFixture, CreateShardNoPg) {
 
 class ShardManagerFixtureWShard : public ShardManagerFixture {
 public:
-    std::mutex _shard_lock;
     ShardInfo _shard;
     void SetUp() override {
         ShardManagerFixture::SetUp();
-        m_mock_homeobj->shard_manager()
-            ->create_shard(_pg_id, Mi)
-            .thenValue([this](std::variant< ShardInfo, ShardError > const& v) mutable {
-                ASSERT_TRUE(std::holds_alternative< ShardInfo >(v));
-                {
-                    auto l = std::scoped_lock(_shard_lock);
-                    _shard = std::get< ShardInfo >(v);
-                }
-            })
-            .get();
-        auto l = std::scoped_lock(_shard_lock);
+        auto v = m_mock_homeobj->shard_manager()->create_shard(_pg_id, Mi).get();
+        ASSERT_TRUE(std::holds_alternative< ShardInfo >(v));
+        _shard = std::get< ShardInfo >(v);
         EXPECT_EQ(ShardInfo::State::OPEN, _shard.state);
         EXPECT_EQ(Mi, _shard.total_capacity_bytes);
         EXPECT_EQ(Mi, _shard.available_capacity_bytes);
