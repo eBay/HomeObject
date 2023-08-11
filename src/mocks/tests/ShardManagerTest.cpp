@@ -45,25 +45,27 @@ protected:
 };
 
 TEST_F(ShardManagerFixture, CreateShardTooBig) {
-    m_mock_homeobj->shard_manager()->create_shard(
-        _pg_id, homeobject::ShardManager::max_shard_size() + 1,
-        [](std::variant< ShardInfo, ShardError > const& v, std::optional< homeobject::peer_id >) {
+    m_mock_homeobj->shard_manager()
+        ->create_shard(_pg_id, homeobject::ShardManager::max_shard_size() + 1)
+        .thenValue([](std::variant< ShardInfo, ShardError > const& v) {
             ASSERT_TRUE(std::holds_alternative< ShardError >(v));
             EXPECT_EQ(std::get< ShardError >(v), ShardError::INVALID_ARG);
         });
 }
 
 TEST_F(ShardManagerFixture, CreateShardTooSmall) {
-    m_mock_homeobj->shard_manager()->create_shard(
-        _pg_id, 0ul, [](std::variant< ShardInfo, ShardError > const& v, std::optional< homeobject::peer_id >) {
+    m_mock_homeobj->shard_manager()
+        ->create_shard(_pg_id, 0ul)
+        .thenValue([](std::variant< ShardInfo, ShardError > const& v) {
             ASSERT_TRUE(std::holds_alternative< ShardError >(v));
             EXPECT_EQ(std::get< ShardError >(v), ShardError::INVALID_ARG);
         });
 }
 
 TEST_F(ShardManagerFixture, CreateShardNoPg) {
-    m_mock_homeobj->shard_manager()->create_shard(
-        _pg_id + 1, Mi, [](std::variant< ShardInfo, ShardError > const& v, std::optional< homeobject::peer_id >) {
+    m_mock_homeobj->shard_manager()
+        ->create_shard(_pg_id + 1, Mi)
+        .thenValue([](std::variant< ShardInfo, ShardError > const& v) {
             ASSERT_TRUE(std::holds_alternative< ShardError >(v));
             EXPECT_EQ(std::get< ShardError >(v), ShardError::UNKNOWN_PG);
         });
@@ -74,9 +76,9 @@ public:
     ShardInfo _shard;
     void SetUp() override {
         ShardManagerFixture::SetUp();
-        m_mock_homeobj->shard_manager()->create_shard(
-            _pg_id, Mi,
-            [this](std::variant< ShardInfo, ShardError > const& v, std::optional< homeobject::peer_id >) mutable {
+        m_mock_homeobj->shard_manager()
+            ->create_shard(_pg_id, Mi)
+            .thenValue([this](std::variant< ShardInfo, ShardError > const& v) mutable {
                 ASSERT_TRUE(std::holds_alternative< ShardInfo >(v));
                 _shard = std::get< ShardInfo >(v);
                 EXPECT_EQ(ShardInfo::State::OPEN, _shard.state);
@@ -89,37 +91,32 @@ public:
 };
 
 TEST_F(ShardManagerFixtureWShard, GetUnknownShard) {
-    m_mock_homeobj->shard_manager()->get_shard(
-        _shard.id + 1, [](std::variant< ShardInfo, ShardError > const& v, std::optional< homeobject::peer_id >) {
-            ASSERT_TRUE(std::holds_alternative< ShardError >(v));
-            EXPECT_EQ(std::get< ShardError >(v), ShardError::UNKNOWN_SHARD);
-        });
+    auto v = m_mock_homeobj->shard_manager()->get_shard(_shard.id + 1);
+    ASSERT_TRUE(std::holds_alternative< ShardError >(v));
+    EXPECT_EQ(std::get< ShardError >(v), ShardError::UNKNOWN_SHARD);
 }
 
 TEST_F(ShardManagerFixtureWShard, GetKnownShard) {
-    m_mock_homeobj->shard_manager()->get_shard(
-        _shard.id, [this](std::variant< ShardInfo, ShardError > const& v, std::optional< homeobject::peer_id >) {
-            ASSERT_TRUE(std::holds_alternative< ShardInfo >(v));
-            auto const& info = std::get< ShardInfo >(v);
-            EXPECT_TRUE(info.id == _shard.id);
-            EXPECT_TRUE(info.placement_group == _shard.placement_group);
-            EXPECT_EQ(info.state, ShardInfo::State::OPEN);
-        });
+    auto v = m_mock_homeobj->shard_manager()->get_shard(_shard.id);
+    ASSERT_TRUE(std::holds_alternative< ShardInfo >(v));
+    auto const& info = std::get< ShardInfo >(v);
+    EXPECT_TRUE(info.id == _shard.id);
+    EXPECT_TRUE(info.placement_group == _shard.placement_group);
+    EXPECT_EQ(info.state, ShardInfo::State::OPEN);
 }
 
 TEST_F(ShardManagerFixtureWShard, ListShardsNoPg) {
-    m_mock_homeobj->shard_manager()->list_shards(
-        _pg_id + 1,
-        [this](std::variant< std::vector< ShardInfo >, ShardError > const& v, std::optional< homeobject::peer_id >) {
+    m_mock_homeobj->shard_manager()
+        ->list_shards(_pg_id + 1)
+        .thenValue([this](std::variant< std::vector< ShardInfo >, ShardError > const& v) {
             ASSERT_TRUE(std::holds_alternative< ShardError >(v));
             EXPECT_EQ(std::get< ShardError >(v), ShardError::UNKNOWN_PG);
         });
 }
 
 TEST_F(ShardManagerFixtureWShard, ListShards) {
-    m_mock_homeobj->shard_manager()->list_shards(
-        _pg_id,
-        [this](std::variant< std::vector< ShardInfo >, ShardError > const& v, std::optional< homeobject::peer_id >) {
+    m_mock_homeobj->shard_manager()->list_shards(_pg_id).thenValue(
+        [this](std::variant< std::vector< ShardInfo >, ShardError > const& v) {
             ASSERT_TRUE(std::holds_alternative< std::vector< ShardInfo > >(v));
             auto const& info_vec = std::get< std::vector< ShardInfo > >(v);
             EXPECT_EQ(info_vec.size(), 1);
@@ -130,16 +127,17 @@ TEST_F(ShardManagerFixtureWShard, ListShards) {
 }
 
 TEST_F(ShardManagerFixtureWShard, SealShardNoShard) {
-    m_mock_homeobj->shard_manager()->seal_shard(
-        _shard.id + 1, [this](std::variant< ShardInfo, ShardError > const& v, std::optional< homeobject::peer_id >) {
+    m_mock_homeobj->shard_manager()
+        ->seal_shard(_shard.id + 1)
+        .thenValue([this](std::variant< ShardInfo, ShardError > const& v) {
             ASSERT_TRUE(std::holds_alternative< ShardError >(v));
             EXPECT_EQ(std::get< ShardError >(v), ShardError::UNKNOWN_SHARD);
         });
 }
 
 TEST_F(ShardManagerFixtureWShard, SealShard) {
-    m_mock_homeobj->shard_manager()->seal_shard(
-        _shard.id, [this](std::variant< ShardInfo, ShardError > const& v, std::optional< homeobject::peer_id >) {
+    m_mock_homeobj->shard_manager()->seal_shard(_shard.id).thenValue(
+        [this](std::variant< ShardInfo, ShardError > const& v) {
             ASSERT_TRUE(std::holds_alternative< ShardInfo >(v));
             auto const& info = std::get< ShardInfo >(v);
             EXPECT_TRUE(info.id == _shard.id);

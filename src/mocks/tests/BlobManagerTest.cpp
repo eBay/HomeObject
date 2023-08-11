@@ -47,10 +47,9 @@ public:
         info.members.insert(homeobject::PGMember{_peer2, "peer2", 0});
         m_mock_homeobj->pg_manager()->create_pg(info).thenValue(
             [](homeobject::PGError e) { EXPECT_EQ(homeobject::PGError::OK, e); });
-        m_mock_homeobj->shard_manager()->create_shard(
-            _pg_id, Mi,
-            [this](std::variant< homeobject::ShardInfo, homeobject::ShardError > const& v,
-                   std::optional< peer_id >) mutable {
+        m_mock_homeobj->shard_manager()
+            ->create_shard(_pg_id, Mi)
+            .thenValue([this](std::variant< homeobject::ShardInfo, homeobject::ShardError > const& v) mutable {
                 ASSERT_TRUE(std::holds_alternative< homeobject::ShardInfo >(v));
                 _shard = std::get< homeobject::ShardInfo >(v);
             });

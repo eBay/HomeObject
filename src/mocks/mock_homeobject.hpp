@@ -83,10 +83,10 @@ public:
     folly::Future< PGError > replace_member(pg_id id, peer_id const& old_member, PGMember const& new_member) override;
 
     // ShardManager
-    void create_shard(pg_id pg_owner, uint64_t size_bytes, ShardManager::info_cb const& cb) override;
-    void get_shard(shard_id id, ShardManager::info_cb const& cb) const override;
-    void list_shards(pg_id id, ShardManager::list_cb const& cb) const override;
-    void seal_shard(shard_id id, ShardManager::info_cb const& cb) override;
+    folly::Future< ShardManager::info_var > create_shard(pg_id pg_owner, uint64_t size_bytes) override;
+    ShardManager::info_var get_shard(shard_id id) const override;
+    folly::Future< ShardManager::list_var > list_shards(pg_id id) const override;
+    folly::Future< ShardManager::info_var > seal_shard(shard_id id) override;
 };
 
 } // namespace homeobject
