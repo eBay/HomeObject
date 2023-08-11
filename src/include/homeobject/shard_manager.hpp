@@ -3,6 +3,7 @@
 #include <optional>
 #include <variant>
 
+#include <folly/futures/Future.h>
 #include <sisl/utility/enum.hpp>
 
 #include "common.hpp"
@@ -26,22 +27,26 @@ struct ShardInfo {
     uint64_t available_capacity_bytes;
     uint64_t total_capacity_bytes;
     uint64_t deleted_capacity_bytes;
+    std::optional< peer_id > current_leader{std::nullopt};
 };
 
 class ShardManager {
 public:
     // std::optional<peer_id> returned in case follower received request.
-    using info_cb = std::function< void(std::variant< ShardInfo, ShardError > const&, std::optional< peer_id >) >;
-    using list_cb =
-        std::function< void(std::variant< std::vector< ShardInfo >, ShardError > const&, std::optional< peer_id >) >;
+    using info_var = std::variant< ShardInfo, ShardError >;
+    using list_var = std::variant< std::vector< ShardInfo >, ShardError >;
 
     static uint64_t max_shard_size(); // Static function forces runtime evaluation.
 
     virtual ~ShardManager() = default;
-    virtual void create_shard(pg_id pg_owner, uint64_t size_bytes, info_cb const& cb) = 0;
-    virtual void get_shard(shard_id id, info_cb const& cb) const = 0;
-    virtual void list_shards(pg_id id, list_cb const& cb) const = 0;
-    virtual void seal_shard(shard_id id, info_cb const& cb) = 0;
+
+    // Sync
+    virtual info_var get_shard(shard_id id) const = 0;
+
+    // Async
+    virtual folly::Future< info_var > create_shard(pg_id pg_owner, uint64_t size_bytes) = 0;
+    virtual folly::Future< list_var > list_shards(pg_id id) const = 0;
+    virtual folly::Future< info_var > seal_shard(shard_id id) = 0;
 };
 
 } // namespace homeobject
