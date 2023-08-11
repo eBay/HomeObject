@@ -26,7 +26,7 @@ struct ShardInfo {
     uint64_t available_capacity_bytes;
     uint64_t total_capacity_bytes;
     uint64_t deleted_capacity_bytes;
-    std::optional< peer_id > current_leader;
+    std::optional< peer_id > current_leader{std::nullopt};
 };
 
 class ShardManager {
