@@ -2,6 +2,7 @@
 #include <functional>
 #include <set>
 
+#include <folly/futures/Future.h>
 #include <sisl/utility/enum.hpp>
 
 #include "common.hpp"
@@ -27,11 +28,10 @@ struct PGInfo {
 
 class PGManager {
 public:
-    using ok_cb = std::function< void(PGError) >;
-
     virtual ~PGManager() = default;
-    virtual void create_pg(PGInfo const& pg_info, ok_cb const& cb) = 0;
-    virtual void replace_member(pg_id id, peer_id const& old_member, PGMember const& new_member, ok_cb const& cb) = 0;
+    virtual folly::Future< PGError > create_pg(PGInfo const& pg_info) = 0;
+    virtual folly::Future< PGError > replace_member(pg_id id, peer_id const& old_member,
+                                                    PGMember const& new_member) = 0;
 };
 
 inline bool operator<(homeobject::PGMember const& lhs, homeobject::PGMember const& rhs) { return lhs.id < rhs.id; }

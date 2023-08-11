@@ -67,19 +67,20 @@ public:
 // but until it is implemented we will just assume the RAFT group was
 // unresponsive and timed-out.
 TEST_F(HomeObjectFixture, CreatePgTimeout) {
-    _obj_inst->pg_manager()->create_pg(homeobject::PGInfo{0l}, [this](auto const& e) {
+    _obj_inst->pg_manager()->create_pg(homeobject::PGInfo{0l}).thenValue([this](auto const& e) {
         EXPECT_EQ(e, PGError::TIMEOUT);
         _t.signal();
     });
 }
 
 TEST_F(HomeObjectFixture, ReplaceMemberMissingPg) {
-    _obj_inst->pg_manager()->replace_member(0, boost::uuids::random_generator()(),
-                                            homeobject::PGMember{boost::uuids::random_generator()(), "new_member", 1},
-                                            [this](auto const& e) {
-                                                EXPECT_EQ(e, PGError::UNKNOWN_PG);
-                                                _t.signal();
-                                            });
+    _obj_inst->pg_manager()
+        ->replace_member(0, boost::uuids::random_generator()(),
+                         homeobject::PGMember{boost::uuids::random_generator()(), "new_member", 1})
+        .thenValue([this](auto const& e) {
+            EXPECT_EQ(e, PGError::UNKNOWN_PG);
+            _t.signal();
+        });
 }
 
 TEST_F(HomeObjectFixture, CreateShardMissingPg) {

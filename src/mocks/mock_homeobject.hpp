@@ -79,9 +79,8 @@ public:
     void del(shard_id shard, blob_id const& blob, BlobManager::ok_cb const& cb) override;
 
     // PGManager
-    void create_pg(PGInfo const& pg_info, PGManager::ok_cb const& cb) override;
-    void replace_member(pg_id id, peer_id const& old_member, PGMember const& new_member,
-                        PGManager::ok_cb const& cb) override;
+    folly::Future< PGError > create_pg(PGInfo const& pg_info) override;
+    folly::Future< PGError > replace_member(pg_id id, peer_id const& old_member, PGMember const& new_member) override;
 
     // ShardManager
     void create_shard(pg_id pg_owner, uint64_t size_bytes, ShardManager::info_cb const& cb) override;

@@ -4,11 +4,13 @@ namespace homeobject {
 
 std::shared_ptr< PGManager > HomeObjectImpl::pg_manager() { return shared_from_this(); }
 
-void HomeObjectImpl::create_pg(PGInfo const& pg_info, PGManager::ok_cb const& cb) { cb(PGError::TIMEOUT); }
+folly::Future< PGError > HomeObjectImpl::create_pg(PGInfo const& pg_info) {
+    return folly::makeFuture< PGError >(PGError::TIMEOUT);
+}
 
-void HomeObjectImpl::replace_member(pg_id id, peer_id const& old_member, PGMember const& new_member,
-                                    PGManager::ok_cb const& cb) {
-    cb(PGError::UNKNOWN_PG);
+folly::Future< PGError > HomeObjectImpl::replace_member(pg_id id, peer_id const& old_member,
+                                                        PGMember const& new_member) {
+    return folly::makeFuture< PGError >(PGError::UNKNOWN_PG);
 }
 
 } // namespace homeobject

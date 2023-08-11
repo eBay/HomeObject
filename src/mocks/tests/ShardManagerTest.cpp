@@ -36,8 +36,8 @@ public:
         auto info = homeobject::PGInfo(_pg_id);
         info.members.insert(homeobject::PGMember{_peer1, "peer1", 1});
         info.members.insert(homeobject::PGMember{_peer2, "peer2", 0});
-        m_mock_homeobj->pg_manager()->create_pg(info,
-                                                [](homeobject::PGError e) { EXPECT_EQ(homeobject::PGError::OK, e); });
+        m_mock_homeobj->pg_manager()->create_pg(info).thenValue(
+            [](homeobject::PGError e) { EXPECT_EQ(homeobject::PGError::OK, e); });
     }
 
 protected:
