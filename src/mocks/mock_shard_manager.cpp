@@ -24,8 +24,10 @@ folly::Future< ShardManager::info_var > MockHomeObject::create_shard(pg_id pg_ow
             pg_it->second.second.emplace(info.id);
             LOGDEBUG("Creating Shard [{}]: in Pg [{}] of Size [{}b] shard_cnt:[{}]", info.id, pg_owner, size_bytes,
                      _shards.size());
-            if (!_shards.try_emplace(info.id, info).second) p.setValue(ShardError::UNKNOWN);
-            p.setValue(std::move(info));
+            if (!_shards.try_emplace(info.id, info).second)
+                p.setValue(ShardError::UNKNOWN);
+            else
+                p.setValue(std::move(info));
         } else
             p.setValue(ShardError::UNKNOWN_PG);
     }).detach();
