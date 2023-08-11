@@ -4,17 +4,17 @@ namespace homeobject {
 
 std::shared_ptr< BlobManager > HomeObjectImpl::blob_manager() { return shared_from_this(); }
 
-void HomeObjectImpl::put(shard_id shard, Blob&&, BlobManager::id_cb const& cb) {
-    cb(BlobError::UNKNOWN_SHARD, std::nullopt);
+folly::Future< std::variant< blob_id, BlobError > > HomeObjectImpl::put(shard_id shard, Blob&&) {
+    return folly::makeFuture(BlobError::UNKNOWN_SHARD);
 }
 
-void HomeObjectImpl::get(shard_id shard, blob_id const& blob, uint64_t off, uint64_t len,
-                         BlobManager::get_cb const& cb) const {
-    cb(BlobError::UNKNOWN_SHARD, std::nullopt);
+folly::Future< std::variant< Blob, BlobError > > HomeObjectImpl::get(shard_id shard, blob_id const& blob, uint64_t off,
+                                                                     uint64_t len) const {
+    return folly::makeFuture(BlobError::UNKNOWN_SHARD);
 }
 
-void HomeObjectImpl::del(shard_id shard, blob_id const& blob, BlobManager::ok_cb const& cb) {
-    cb(BlobError::UNKNOWN_SHARD, std::nullopt);
+folly::Future< BlobError > HomeObjectImpl::del(shard_id shard, blob_id const& blob) {
+    return folly::makeFuture(BlobError::UNKNOWN_SHARD);
 }
 
 } // namespace homeobject

@@ -37,10 +37,10 @@ public:
     folly::Future< ShardManager::info_var > seal_shard(shard_id id) override;
 
     /// BlobManager
-    void put(shard_id shard, Blob&&, BlobManager::id_cb const& cb) override;
-    void get(shard_id shard, blob_id const& blob, uint64_t off, uint64_t len,
-             BlobManager::get_cb const& cb) const override;
-    void del(shard_id shard, blob_id const& blob, BlobManager::ok_cb const& cb) override;
+    folly::Future< std::variant< blob_id, BlobError > > put(shard_id shard, Blob&&) override;
+    folly::Future< std::variant< Blob, BlobError > > get(shard_id shard, blob_id const& blob, uint64_t off,
+                                                         uint64_t len) const override;
+    folly::Future< BlobError > del(shard_id shard, blob_id const& blob) override;
 };
 
 } // namespace homeobject

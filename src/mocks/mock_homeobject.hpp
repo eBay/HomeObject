@@ -11,15 +11,6 @@
 #include <homeobject/pg_manager.hpp>
 #include <homeobject/shard_manager.hpp>
 
-#define CB_IF_DEFINED(ret, e, ok)                                                                                      \
-    if (!cb) return;                                                                                                   \
-    auto const temp_err = (e);                                                                                         \
-    if (temp_err == (ok)) {                                                                                            \
-        cb((ret), std::nullopt);                                                                                       \
-    } else {                                                                                                           \
-        cb(temp_err, std::nullopt);                                                                                    \
-    }
-
 namespace homeobject {
 struct BlobRoute {
     shard_id shard;
@@ -73,10 +64,10 @@ public:
     std::shared_ptr< ShardManager > shard_manager() override { return shared_from_this(); }
 
     // BlobManager
-    void put(shard_id shard, Blob&&, BlobManager::id_cb const& cb) override;
-    void get(shard_id shard, blob_id const& blob, uint64_t off, uint64_t len,
-             BlobManager::get_cb const& cb) const override;
-    void del(shard_id shard, blob_id const& blob, BlobManager::ok_cb const& cb) override;
+    folly::Future< std::variant< blob_id, BlobError > > put(shard_id shard, Blob&&) override;
+    folly::Future< std::variant< Blob, BlobError > > get(shard_id shard, blob_id const& blob, uint64_t off,
+                                                         uint64_t len) const override;
+    folly::Future< BlobError > del(shard_id shard, blob_id const& blob) override;
 
     // PGManager
     folly::Future< PGError > create_pg(PGInfo const& pg_info) override;
