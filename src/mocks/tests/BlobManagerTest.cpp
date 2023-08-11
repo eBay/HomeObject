@@ -52,7 +52,8 @@ public:
             .thenValue([this](std::variant< homeobject::ShardInfo, homeobject::ShardError > const& v) mutable {
                 ASSERT_TRUE(std::holds_alternative< homeobject::ShardInfo >(v));
                 _shard = std::get< homeobject::ShardInfo >(v);
-            });
+            })
+            .get();
 
         auto temp_f = _p_init_blob.get_future();
         m_mock_homeobj->blob_manager()->put(

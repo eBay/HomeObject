@@ -13,17 +13,23 @@ uint64_t ShardManager::max_shard_size() { return Gi; }
 folly::Future< ShardManager::info_var > MockHomeObject::create_shard(pg_id pg_owner, uint64_t size_bytes) {
     if (0 == size_bytes || max_shard_size() < size_bytes) return folly::makeFuture(ShardError::INVALID_ARG);
 
-    auto lg = std::scoped_lock(_pg_lock, _shard_lock);
-    if (auto pg_it = _pg_map.find(pg_owner); _pg_map.end() != pg_it) {
-        auto const now = get_current_timestamp();
-        auto info = ShardInfo{_cur_shard_id++, pg_owner, ShardInfo::State::OPEN, now, now, size_bytes, size_bytes, 0};
-        pg_it->second.second.emplace(info.id);
-        LOGDEBUG("Creating Shard [{}]: in Pg [{}] of Size [{}b] shard_cnt:[{}]", info.id, pg_owner, size_bytes,
-                 _shards.size());
-        if (!_shards.try_emplace(info.id, info).second) return folly::makeFuture(ShardError::UNKNOWN);
-        return folly::makeFuture(std::move(info));
-    }
-    return folly::makeFuture(ShardError::UNKNOWN_PG);
+    auto p = folly::Promise< ShardManager::info_var >();
+    auto f = p.getFuture();
+    std::thread([this, pg_owner, size_bytes, p = std::move(p)]() mutable {
+        auto lg = std::scoped_lock(_pg_lock, _shard_lock);
+        if (auto pg_it = _pg_map.find(pg_owner); _pg_map.end() != pg_it) {
+            auto const now = get_current_timestamp();
+            auto info =
+                ShardInfo{_cur_shard_id++, pg_owner, ShardInfo::State::OPEN, now, now, size_bytes, size_bytes, 0};
+            pg_it->second.second.emplace(info.id);
+            LOGDEBUG("Creating Shard [{}]: in Pg [{}] of Size [{}b] shard_cnt:[{}]", info.id, pg_owner, size_bytes,
+                     _shards.size());
+            if (!_shards.try_emplace(info.id, info).second) p.setValue(ShardError::UNKNOWN);
+            p.setValue(std::move(info));
+        } else
+            p.setValue(ShardError::UNKNOWN_PG);
+    }).detach();
+    return f;
 }
 
 ShardManager::info_var MockHomeObject::get_shard(shard_id id) const {
@@ -33,27 +39,38 @@ ShardManager::info_var MockHomeObject::get_shard(shard_id id) const {
 }
 
 folly::Future< ShardManager::list_var > MockHomeObject::list_shards(pg_id id) const {
-    auto lg = std::scoped_lock(_pg_lock, _shard_lock);
-    if (auto pg_it = _pg_map.find(id); _pg_map.end() != pg_it) {
-        auto info = std::vector< ShardInfo >();
-        for (auto const& shard_id : pg_it->second.second) {
-            auto shard_it = _shards.find(shard_id);
-            RELEASE_ASSERT(_shards.end() != shard_it, "Missing Shard [{}]!", shard_id);
-            info.push_back(shard_it->second);
-        }
-        return folly::makeFuture(std::move(info));
-    }
-    return folly::makeFuture(ShardError::UNKNOWN_PG);
+    auto p = folly::Promise< ShardManager::list_var >();
+    auto f = p.getFuture();
+    std::thread([this, id, p = std::move(p)]() mutable {
+        auto lg = std::scoped_lock(_pg_lock, _shard_lock);
+        if (auto pg_it = _pg_map.find(id); _pg_map.end() != pg_it) {
+            auto info = std::vector< ShardInfo >();
+            for (auto const& shard_id : pg_it->second.second) {
+                LOGDEBUG("Listing Shard {}", shard_id);
+                auto shard_it = _shards.find(shard_id);
+                RELEASE_ASSERT(_shards.end() != shard_it, "Missing Shard [{}]!", shard_id);
+                info.push_back(shard_it->second);
+            }
+            p.setValue(std::move(info));
+        } else
+            p.setValue(ShardError::UNKNOWN_PG);
+    }).detach();
+    return f;
 }
 
 folly::Future< ShardManager::info_var > MockHomeObject::seal_shard(shard_id id) {
-    auto lg = std::scoped_lock(_pg_lock, _shard_lock);
-    if (auto shard_it = _shards.find(id); _shards.end() != shard_it) {
-        shard_it->second.state = ShardInfo::State::SEALED;
-        auto info = shard_it->second;
-        return folly::makeFuture(std::move(info));
-    }
-    return folly::makeFuture(ShardError::UNKNOWN_SHARD);
+    auto p = folly::Promise< ShardManager::info_var >();
+    auto f = p.getFuture();
+    std::thread([this, id, p = std::move(p)]() mutable {
+        auto lg = std::scoped_lock(_pg_lock, _shard_lock);
+        if (auto shard_it = _shards.find(id); _shards.end() != shard_it) {
+            shard_it->second.state = ShardInfo::State::SEALED;
+            auto info = shard_it->second;
+            p.setValue(std::move(info));
+        } else
+            p.setValue(ShardError::UNKNOWN_SHARD);
+    }).detach();
+    return f;
 }
 
 } // namespace homeobject
