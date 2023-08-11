@@ -3,6 +3,7 @@
 #include <optional>
 #include <variant>
 
+#include <folly/futures/Future.h>
 #include <sisl/utility/enum.hpp>
 
 #include "common.hpp"
