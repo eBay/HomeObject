@@ -23,7 +23,7 @@ folly::SemiFuture< std::variant< blob_id, BlobError > > MockHomeObject::put(shar
         }
         (BlobError::OK == err) ? p.setValue(id) : p.setValue(err);
     }).detach();
-    return f;
+    return std::move(f);
 }
 
 folly::SemiFuture< std::variant< Blob, BlobError > > MockHomeObject::get(shard_id shard, blob_id const& id, uint64_t,
@@ -54,7 +54,7 @@ folly::SemiFuture< std::variant< Blob, BlobError > > MockHomeObject::get(shard_i
         }
         if (!p.isFulfilled()) p.setValue(BlobError::UNKNOWN_BLOB);
     }).detach();
-    return f;
+    return std::move(f);
 }
 
 folly::SemiFuture< BlobError > MockHomeObject::del(shard_id shard, blob_id const& blob) {
@@ -69,7 +69,7 @@ folly::SemiFuture< BlobError > MockHomeObject::del(shard_id shard, blob_id const
         }
         p.setValue(err);
     }).detach();
-    return f;
+    return std::move(f);
 }
 
 } // namespace homeobject

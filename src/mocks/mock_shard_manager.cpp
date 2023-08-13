@@ -11,7 +11,8 @@ static uint64_t get_current_timestamp() {
 uint64_t ShardManager::max_shard_size() { return Gi; }
 
 folly::SemiFuture< ShardManager::info_var > MockHomeObject::create_shard(pg_id pg_owner, uint64_t size_bytes) {
-    if (0 == size_bytes || max_shard_size() < size_bytes) return folly::makeSemiFuture(ShardManager::info_var(ShardError::INVALID_ARG));
+    if (0 == size_bytes || max_shard_size() < size_bytes)
+        return folly::makeSemiFuture(ShardManager::info_var(ShardError::INVALID_ARG));
 
     auto [p, f] = folly::makePromiseContract< ShardManager::info_var >();
     std::thread([this, pg_owner, size_bytes, p = std::move(p)]() mutable {
@@ -30,7 +31,7 @@ folly::SemiFuture< ShardManager::info_var > MockHomeObject::create_shard(pg_id p
         } else
             p.setValue(ShardError::UNKNOWN_PG);
     }).detach();
-    return f;
+    return std::move(f);
 }
 
 ShardManager::info_var MockHomeObject::get_shard(shard_id id) const {
@@ -55,7 +56,7 @@ folly::SemiFuture< ShardManager::list_var > MockHomeObject::list_shards(pg_id id
         } else
             p.setValue(ShardError::UNKNOWN_PG);
     }).detach();
-    return f;
+    return std::move(f);
 }
 
 folly::SemiFuture< ShardManager::info_var > MockHomeObject::seal_shard(shard_id id) {
@@ -69,7 +70,7 @@ folly::SemiFuture< ShardManager::info_var > MockHomeObject::seal_shard(shard_id 
         } else
             p.setValue(ShardError::UNKNOWN_SHARD);
     }).detach();
-    return f;
+    return std::move(f);
 }
 
 } // namespace homeobject
