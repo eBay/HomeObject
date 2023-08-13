@@ -11,7 +11,7 @@ static uint64_t get_current_timestamp() {
 uint64_t ShardManager::max_shard_size() { return Gi; }
 
 folly::SemiFuture< ShardManager::info_var > MockHomeObject::create_shard(pg_id pg_owner, uint64_t size_bytes) {
-    if (0 == size_bytes || max_shard_size() < size_bytes) return folly::makeFuture(ShardError::INVALID_ARG);
+    if (0 == size_bytes || max_shard_size() < size_bytes) return folly::makeSemiFuture(ShardError::INVALID_ARG);
 
     auto [p, f] = folly::makePromiseContract< ShardManager::info_var >();
     std::thread([this, pg_owner, size_bytes, p = std::move(p)]() mutable {
