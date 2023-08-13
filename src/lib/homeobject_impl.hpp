@@ -27,20 +27,21 @@ public:
     std::shared_ptr< ShardManager > shard_manager() override;
 
     /// PgManager
-    folly::Future< PGError > create_pg(PGInfo const& pg_info) override;
-    folly::Future< PGError > replace_member(pg_id id, peer_id const& old_member, PGMember const& new_member) override;
+    folly::SemiFuture< PGError > create_pg(PGInfo const& pg_info) override;
+    folly::SemiFuture< PGError > replace_member(pg_id id, peer_id const& old_member,
+                                                PGMember const& new_member) override;
 
     /// ShardManager
-    void create_shard(pg_id pg_owner, uint64_t size_bytes, ShardManager::info_cb const& cb) override;
-    void list_shards(pg_id pg, ShardManager::list_cb const& cb) const override;
-    void get_shard(shard_id id, ShardManager::info_cb const& cb) const override;
-    void seal_shard(shard_id id, ShardManager::info_cb const& cb) override;
+    ShardManager::info_var get_shard(shard_id id) const override;
+    folly::SemiFuture< ShardManager::info_var > create_shard(pg_id pg_owner, uint64_t size_bytes) override;
+    folly::SemiFuture< ShardManager::list_var > list_shards(pg_id pg) const override;
+    folly::SemiFuture< ShardManager::info_var > seal_shard(shard_id id) override;
 
     /// BlobManager
-    void put(shard_id shard, Blob&&, BlobManager::id_cb const& cb) override;
-    void get(shard_id shard, blob_id const& blob, uint64_t off, uint64_t len,
-             BlobManager::get_cb const& cb) const override;
-    void del(shard_id shard, blob_id const& blob, BlobManager::ok_cb const& cb) override;
+    folly::SemiFuture< std::variant< blob_id, BlobError > > put(shard_id shard, Blob&&) override;
+    folly::SemiFuture< std::variant< Blob, BlobError > > get(shard_id shard, blob_id const& blob, uint64_t off,
+                                                             uint64_t len) const override;
+    folly::SemiFuture< BlobError > del(shard_id shard, blob_id const& blob) override;
 };
 
 } // namespace homeobject

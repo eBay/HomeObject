@@ -5,6 +5,7 @@
 #include <string>
 #include <variant>
 
+#include <folly/futures/Future.h>
 #include <sisl/fds/buffer.hpp>
 
 #include "common.hpp"
@@ -19,18 +20,17 @@ struct Blob {
     unique_buffer body;
     std::string user_key;
     uint64_t object_off;
+    std::optional< peer_id > current_leader{std::nullopt};
 };
 
 class BlobManager {
 public:
-    using get_cb = std::function< void(std::variant< Blob, BlobError > const&, std::optional< peer_id >) >;
-    using id_cb = std::function< void(std::variant< blob_id, BlobError > const&, std::optional< peer_id >) >;
-    using ok_cb = std::function< void(BlobError, std::optional< peer_id >) >;
-
     virtual ~BlobManager() = default;
-    virtual void put(shard_id shard, Blob&&, id_cb const& cb) = 0;
-    virtual void get(shard_id shard, blob_id const& blob, uint64_t off, uint64_t len, get_cb const& cb) const = 0;
-    virtual void del(shard_id shard, blob_id const& blob, ok_cb const& cb) = 0;
+
+    virtual folly::SemiFuture< std::variant< blob_id, BlobError > > put(shard_id shard, Blob&&) = 0;
+    virtual folly::SemiFuture< std::variant< Blob, BlobError > > get(shard_id shard, blob_id const& blob, uint64_t off,
+                                                                     uint64_t len) const = 0;
+    virtual folly::SemiFuture< BlobError > del(shard_id shard, blob_id const& blob) = 0;
 };
 
 } // namespace homeobject

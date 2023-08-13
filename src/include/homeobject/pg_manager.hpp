@@ -29,9 +29,9 @@ struct PGInfo {
 class PGManager {
 public:
     virtual ~PGManager() = default;
-    virtual folly::Future< PGError > create_pg(PGInfo const& pg_info) = 0;
-    virtual folly::Future< PGError > replace_member(pg_id id, peer_id const& old_member,
-                                                    PGMember const& new_member) = 0;
+    virtual folly::SemiFuture< PGError > create_pg(PGInfo const& pg_info) = 0;
+    virtual folly::SemiFuture< PGError > replace_member(pg_id id, peer_id const& old_member,
+                                                        PGMember const& new_member) = 0;
 };
 
 inline bool operator<(homeobject::PGMember const& lhs, homeobject::PGMember const& rhs) { return lhs.id < rhs.id; }

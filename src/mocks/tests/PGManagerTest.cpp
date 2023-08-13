@@ -13,6 +13,7 @@
 #include "mocks/mock_homeobject.hpp"
 
 using namespace std::chrono_literals;
+using homeobject::PGError;
 using homeobject::PGInfo;
 using homeobject::PGMember;
 
@@ -31,16 +32,13 @@ protected:
 };
 
 TEST_F(PgManagerFixture, CreatePgEmpty) {
-    m_mock_homeobj->pg_manager()->create_pg(PGInfo(0u)).thenValue([](homeobject::PGError e) {
-        EXPECT_EQ(homeobject::PGError::INVALID_ARG, e);
-    });
+    EXPECT_EQ(m_mock_homeobj->pg_manager()->create_pg(PGInfo(0u)).get(), PGError::INVALID_ARG);
 }
 
 TEST_F(PgManagerFixture, CreatePgNoLeader) {
     auto info = PGInfo(0u);
     info.members.insert(PGMember{boost::uuids::random_generator()()});
-    m_mock_homeobj->pg_manager()->create_pg(info).thenValue(
-        [](homeobject::PGError e) { EXPECT_EQ(homeobject::PGError::INVALID_ARG, e); });
+    EXPECT_EQ(m_mock_homeobj->pg_manager()->create_pg(info).get(), PGError::INVALID_ARG);
 }
 
 class PgManagerFixtureWPg : public PgManagerFixture {
@@ -57,8 +55,7 @@ public:
         auto info = PGInfo(_pg_id);
         info.members.insert(PGMember{_peer1, "peer1", 1});
         info.members.insert(PGMember{_peer2, "peer2", 0});
-        m_mock_homeobj->pg_manager()->create_pg(info).thenValue(
-            [](homeobject::PGError e) { EXPECT_EQ(homeobject::PGError::OK, e); });
+        EXPECT_EQ(m_mock_homeobj->pg_manager()->create_pg(info).get(), PGError::OK);
     }
 };
 
@@ -66,38 +63,28 @@ TEST_F(PgManagerFixtureWPg, CreateDuplicatePg) {
     auto info = PGInfo(_pg_id);
     info.members.insert(PGMember{boost::uuids::random_generator()(), "peer3", 6});
     info.members.insert(PGMember{boost::uuids::random_generator()(), "peer4", 2});
-    m_mock_homeobj->pg_manager()->create_pg(info).thenValue(
-        [](homeobject::PGError e) { EXPECT_EQ(homeobject::PGError::INVALID_ARG, e); });
+    EXPECT_EQ(m_mock_homeobj->pg_manager()->create_pg(info).get(), PGError::INVALID_ARG);
 }
 
-TEST_F(PgManagerFixtureWPg, MigrateUnknownPg) {
-    m_mock_homeobj->pg_manager()
-        ->replace_member(UINT16_MAX, boost::uuids::random_generator()(), PGMember{boost::uuids::random_generator()()})
-        .thenValue([](homeobject::PGError e) { EXPECT_EQ(homeobject::PGError::UNKNOWN_PG, e); });
-}
-
-TEST_F(PgManagerFixtureWPg, MigrateUnknownPeer) {
-    m_mock_homeobj->pg_manager()
-        ->replace_member(_pg_id, boost::uuids::random_generator()(), PGMember{boost::uuids::random_generator()()})
-        .thenValue([](homeobject::PGError e) { EXPECT_EQ(homeobject::PGError::UNKNOWN_PEER, e); });
-}
-
-TEST_F(PgManagerFixtureWPg, MigrateSamePeer) {
-    m_mock_homeobj->pg_manager()->replace_member(_pg_id, _peer1, PGMember{_peer1}).thenValue([](homeobject::PGError e) {
-        EXPECT_EQ(homeobject::PGError::INVALID_ARG, e);
-    });
-}
-
-TEST_F(PgManagerFixtureWPg, MigrateDuplicate) {
-    m_mock_homeobj->pg_manager()->replace_member(_pg_id, _peer1, PGMember{_peer2}).thenValue([](homeobject::PGError e) {
-        EXPECT_EQ(homeobject::PGError::INVALID_ARG, e);
-    });
-}
-
-TEST_F(PgManagerFixtureWPg, MigrateOK) {
-    m_mock_homeobj->pg_manager()
-        ->replace_member(_pg_id, _peer2, PGMember{boost::uuids::random_generator()()})
-        .thenValue([](homeobject::PGError e) { EXPECT_EQ(homeobject::PGError::OK, e); });
+TEST_F(PgManagerFixtureWPg, Migrate) {
+    EXPECT_EQ(m_mock_homeobj->pg_manager()
+                  ->replace_member(UINT16_MAX, boost::uuids::random_generator()(),
+                                   PGMember{boost::uuids::random_generator()()})
+                  .get(),
+              PGError::UNKNOWN_PG);
+    EXPECT_EQ(
+        m_mock_homeobj->pg_manager()
+            ->replace_member(_pg_id, boost::uuids::random_generator()(), PGMember{boost::uuids::random_generator()()})
+            .get(),
+        PGError::UNKNOWN_PEER);
+    EXPECT_EQ(m_mock_homeobj->pg_manager()->replace_member(_pg_id, _peer1, PGMember{_peer1}).get(),
+              PGError::INVALID_ARG);
+    EXPECT_EQ(m_mock_homeobj->pg_manager()->replace_member(_pg_id, _peer1, PGMember{_peer2}).get(),
+              PGError::INVALID_ARG);
+    EXPECT_EQ(m_mock_homeobj->pg_manager()
+                  ->replace_member(_pg_id, _peer2, PGMember{boost::uuids::random_generator()()})
+                  .get(),
+              PGError::OK);
 }
 
 int main(int argc, char* argv[]) {
