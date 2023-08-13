@@ -27,10 +27,10 @@ class BlobManager {
 public:
     virtual ~BlobManager() = default;
 
-    virtual folly::Future< std::variant< blob_id, BlobError > > put(shard_id shard, Blob&&) = 0;
-    virtual folly::Future< std::variant< Blob, BlobError > > get(shard_id shard, blob_id const& blob, uint64_t off,
-                                                                 uint64_t len) const = 0;
-    virtual folly::Future< BlobError > del(shard_id shard, blob_id const& blob) = 0;
+    virtual folly::SemiFuture< std::variant< blob_id, BlobError > > put(shard_id shard, Blob&&) = 0;
+    virtual folly::SemiFuture< std::variant< Blob, BlobError > > get(shard_id shard, blob_id const& blob, uint64_t off,
+                                                                     uint64_t len) const = 0;
+    virtual folly::SemiFuture< BlobError > del(shard_id shard, blob_id const& blob) = 0;
 };
 
 } // namespace homeobject

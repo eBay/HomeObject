@@ -13,7 +13,7 @@
 
 namespace homeobject {
 
-folly::Future< PGError > MockHomeObject::create_pg(PGInfo const& pg_info) {
+folly::SemiFuture< PGError > MockHomeObject::create_pg(PGInfo const& pg_info) {
     LOGINFO("Creating PG: [{}] of [{}] members", pg_info.id, pg_info.members.size());
     if (std::none_of(pg_info.members.begin(), pg_info.members.end(),
                      [](PGMember const& m) { return 0 < m.priority; })) {
@@ -28,8 +28,8 @@ folly::Future< PGError > MockHomeObject::create_pg(PGInfo const& pg_info) {
     RET_FOM_LOCK
 }
 
-folly::Future< PGError > MockHomeObject::replace_member(pg_id id, peer_id const& old_member,
-                                                        PGMember const& new_member) {
+folly::SemiFuture< PGError > MockHomeObject::replace_member(pg_id id, peer_id const& old_member,
+                                                            PGMember const& new_member) {
     LOGINFO("Replacing PG: [{}] member [{}] with [{}]", id, to_string(old_member), to_string(new_member.id));
     if (old_member == new_member.id) {
         LOGWARN("Rejecting replace_member with identical replacement SvcId [{}]!", to_string(old_member));
