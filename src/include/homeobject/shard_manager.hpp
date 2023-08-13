@@ -44,9 +44,9 @@ public:
     virtual info_var get_shard(shard_id id) const = 0;
 
     // Async
-    virtual folly::Future< info_var > create_shard(pg_id pg_owner, uint64_t size_bytes) = 0;
-    virtual folly::Future< list_var > list_shards(pg_id id) const = 0;
-    virtual folly::Future< info_var > seal_shard(shard_id id) = 0;
+    virtual folly::SemiFuture< info_var > create_shard(pg_id pg_owner, uint64_t size_bytes) = 0;
+    virtual folly::SemiFuture< list_var > list_shards(pg_id id) const = 0;
+    virtual folly::SemiFuture< info_var > seal_shard(shard_id id) = 0;
 };
 
 } // namespace homeobject

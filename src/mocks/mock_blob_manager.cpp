@@ -4,9 +4,8 @@ namespace homeobject {
 using namespace std::chrono_literals;
 constexpr auto disk_latency = 15ms;
 
-folly::Future< std::variant< blob_id, BlobError > > MockHomeObject::put(shard_id shard, Blob&& blob) {
-    auto p = folly::Promise< std::variant< blob_id, BlobError > >();
-    auto f = p.getFuture();
+folly::SemiFuture< std::variant< blob_id, BlobError > > MockHomeObject::put(shard_id shard, Blob&& blob) {
+    auto [p, f] = folly::makePromiseContract< std::variant< blob_id, BlobError > >();
     std::thread([this, shard, mblob = std::move(blob), p = std::move(p)]() mutable {
         std::this_thread::sleep_for(disk_latency);
         blob_id id;
@@ -24,13 +23,12 @@ folly::Future< std::variant< blob_id, BlobError > > MockHomeObject::put(shard_id
         }
         (BlobError::OK == err) ? p.setValue(id) : p.setValue(err);
     }).detach();
-    return f;
+    return std::move(f);
 }
 
-folly::Future< std::variant< Blob, BlobError > > MockHomeObject::get(shard_id shard, blob_id const& id, uint64_t,
-                                                                     uint64_t) const {
-    auto p = folly::Promise< std::variant< Blob, BlobError > >();
-    auto f = p.getFuture();
+folly::SemiFuture< std::variant< Blob, BlobError > > MockHomeObject::get(shard_id shard, blob_id const& id, uint64_t,
+                                                                         uint64_t) const {
+    auto [p, f] = folly::makePromiseContract< std::variant< Blob, BlobError > >();
     std::thread([this, shard, id, p = std::move(p)]() mutable {
         // Only need to lookup shard with _shard_lock for READs, okay to seal while reading
         {
@@ -56,12 +54,11 @@ folly::Future< std::variant< Blob, BlobError > > MockHomeObject::get(shard_id sh
         }
         if (!p.isFulfilled()) p.setValue(BlobError::UNKNOWN_BLOB);
     }).detach();
-    return f;
+    return std::move(f);
 }
 
-folly::Future< BlobError > MockHomeObject::del(shard_id shard, blob_id const& blob) {
-    auto p = folly::Promise< BlobError >();
-    auto f = p.getFuture();
+folly::SemiFuture< BlobError > MockHomeObject::del(shard_id shard, blob_id const& blob) {
+    auto [p, f] = folly::makePromiseContract< BlobError >();
     std::thread([this, shard, blob, p = std::move(p)]() mutable {
         auto err = BlobError::UNKNOWN_SHARD;
         {
@@ -72,7 +69,7 @@ folly::Future< BlobError > MockHomeObject::del(shard_id shard, blob_id const& bl
         }
         p.setValue(err);
     }).detach();
-    return f;
+    return std::move(f);
 }
 
 } // namespace homeobject
