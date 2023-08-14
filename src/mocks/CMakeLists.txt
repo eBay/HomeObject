@@ -10,13 +10,5 @@ target_link_libraries("${PROJECT_NAME}_mock"
             ${COMMON_DEPS}
         )
 
-add_library ("replication_mock")
-target_sources("replication_mock" PRIVATE
-		repl_service.cpp
-	)
-target_link_libraries("replication_mock"
-            nuraft_mesg::nuraft_mesg
-            ${COMMON_DEPS}
-        )
-
+add_subdirectory(repl_service)
 add_subdirectory(tests)
