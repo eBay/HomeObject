@@ -15,7 +15,7 @@ set(COMMON_TEST_DEPS
         ${COMMON_DEPS}
 	GTest::gmock
     )
-add_flags("-Wall -Wextra -Werror -Wpedantic -Wno-unused-parameter")
+add_flags("-Wall -Wextra -Werror -Wpedantic")
 
 include_directories (BEFORE .)
 include_directories (BEFORE include/)

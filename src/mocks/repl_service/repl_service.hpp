@@ -21,6 +21,7 @@ using rs_ptr_t = std::shared_ptr< ReplicaSet >;
 using ReplServiceError = nuraft::cmd_result_code;
 
 class ReplicatedServer {
+public:
     virtual ~ReplicatedServer() = default;
 
     /// Map HomeObject instance to
@@ -31,12 +32,14 @@ class ReplicationService {
 public:
     virtual ~ReplicationService() = default;
 
+    using set_var = std::variant< rs_ptr_t, ReplServiceError >;
+
     /// Sync APIs
-    virtual std::variant< rs_ptr_t, ReplServiceError > create_replica_set(std::string_view group_id) = 0;
-    virtual std::variant< rs_ptr_t, ReplServiceError > get_replica_set(std::string_view group_id) const = 0;
+    virtual set_var get_replica_set(std::string_view group_id) const = 0;
     virtual void iterate_replica_sets(std::function< void(const rs_ptr_t&) > cb) const = 0;
 
     /// Async APIs
+    virtual folly::SemiFuture< set_var > create_replica_set(std::string_view group_id) = 0;
     virtual folly::SemiFuture< ReplServiceError > replace_member(std::string_view group_id, std::string_view member_out,
                                                                  std::string_view member_in) const = 0;
 };

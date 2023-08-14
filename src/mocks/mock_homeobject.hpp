@@ -11,6 +11,9 @@
 #include <homeobject/pg_manager.hpp>
 #include <homeobject/shard_manager.hpp>
 
+#include "mocks/repl_service/repl_service.hpp"
+#include "repl_service/repl_service.hpp"
+
 namespace homeobject {
 struct BlobRoute {
     shard_id shard;
@@ -37,6 +40,7 @@ class MockHomeObject : public HomeObject,
                        public BlobManager,
                        public PGManager,
                        public ShardManager,
+                       public home_replication::ReplicatedServer,
                        public std::enable_shared_from_this< MockHomeObject > {
     /// This simulates the MetaBlkSvc thats used within real HomeObject
     mutable std::mutex _pg_lock;
@@ -55,13 +59,22 @@ class MockHomeObject : public HomeObject,
     blob_id _cur_blob_id{0};
     ///
 
+    std::mutex _repl_lock;
+    std::shared_ptr< home_replication::ReplicationService > _repl_svc;
+
+    void init_repl_svc();
+
 public:
     explicit MockHomeObject([[maybe_unused]] HomeObject::lookup_cb const& cb = nullptr) {}
     ~MockHomeObject() override = default;
 
-    std::shared_ptr< BlobManager > blob_manager() override { return shared_from_this(); }
-    std::shared_ptr< PGManager > pg_manager() override { return shared_from_this(); }
-    std::shared_ptr< ShardManager > shard_manager() override { return shared_from_this(); }
+    std::shared_ptr< BlobManager > blob_manager() override;
+    std::shared_ptr< PGManager > pg_manager() override;
+    std::shared_ptr< ShardManager > shard_manager() override;
+
+    folly::SemiFuture< std::string > member_address(boost::uuids::uuid const&) const override {
+        return folly::makeSemiFuture(std::string());
+    }
 
     // BlobManager
     folly::SemiFuture< std::variant< blob_id, BlobError > > put(shard_id shard, Blob&&) override;
@@ -70,7 +83,7 @@ public:
     folly::SemiFuture< BlobError > del(shard_id shard, blob_id const& blob) override;
 
     // PGManager
-    folly::SemiFuture< PGError > create_pg(PGInfo const& pg_info) override;
+    folly::SemiFuture< PGError > create_pg(PGInfo&& pg_info) override;
     folly::SemiFuture< PGError > replace_member(pg_id id, peer_id const& old_member,
                                                 PGMember const& new_member) override;
 

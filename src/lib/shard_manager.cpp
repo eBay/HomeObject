@@ -12,7 +12,8 @@ std::shared_ptr< HomeObject > init_homeobject(init_params const& params) {
 }
 
 folly::SemiFuture< ShardManager::info_var > HomeObjectImpl::create_shard(pg_id pg_owner, uint64_t size_bytes) {
-    if (0 == size_bytes || max_shard_size() < size_bytes) return folly::makeSemiFuture(ShardManager::info_var(ShardError::INVALID_ARG));
+    if (0 == size_bytes || max_shard_size() < size_bytes)
+        return folly::makeSemiFuture(ShardManager::info_var(ShardError::INVALID_ARG));
     return folly::makeSemiFuture(ShardManager::info_var(ShardError::UNKNOWN_PG));
 }
 

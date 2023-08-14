@@ -7,12 +7,14 @@ namespace home_replication {
 class MockReplicationService : public ReplicationService {
     std::shared_mutex _map_lock;
     std::map< std::string, rs_ptr_t > _set_map;
+    ReplicatedServer& _server;
 
 public:
+    explicit MockReplicationService(ReplicatedServer& server) : _server(server) {}
     ~MockReplicationService() override = default;
 
-    std::variant< rs_ptr_t, ReplServiceError > create_replica_set(std::string_view group_id) override;
-    std::variant< rs_ptr_t, ReplServiceError > get_replica_set(std::string_view group_id) const override;
+    folly::SemiFuture< set_var > create_replica_set(std::string_view group_id) override;
+    set_var get_replica_set(std::string_view group_id) const override;
     folly::SemiFuture< ReplServiceError > replace_member(std::string_view group_id, std::string_view member_out,
                                                          std::string_view member_in) const override;
     void iterate_replica_sets(std::function< void(const rs_ptr_t&) > cb) const override;
@@ -52,24 +54,28 @@ public:
     ///
 };
 
-std::variant< rs_ptr_t, ReplServiceError > MockReplicationService::create_replica_set(std::string_view group_id) {
+folly::SemiFuture< ReplicationService::set_var > MockReplicationService::create_replica_set(std::string_view group_id) {
     auto lk = std::scoped_lock(_map_lock);
     if (auto [it, happened] = _set_map.try_emplace(std::string{group_id}, nullptr); _set_map.end() != it) {
-        if (happened) it->second = std::make_shared< MockReplicaSet >(group_id);
-        return it->second;
+        if (!happened) return folly::makeSemiFuture< set_var >(ReplServiceError::SERVER_ALREADY_EXISTS);
+        it->second = std::make_shared< MockReplicaSet >(group_id);
+        return folly::makeSemiFuture< set_var >(it->second);
     }
-    return ReplServiceError::CANCELLED;
+    return folly::makeSemiFuture< set_var >(ReplServiceError::CANCELLED);
 }
 
-std::variant< rs_ptr_t, ReplServiceError > MockReplicationService::get_replica_set(std::string_view group_id) const {
+ReplicationService::set_var MockReplicationService::get_replica_set(std::string_view) const {
     return ReplServiceError::CANCELLED;
 }
-folly::SemiFuture< ReplServiceError > MockReplicationService::replace_member(std::string_view group_id,
-                                                                             std::string_view member_out,
-                                                                             std::string_view member_in) const {
+folly::SemiFuture< ReplServiceError > MockReplicationService::replace_member(std::string_view, std::string_view,
+                                                                             std::string_view) const {
     return folly::makeSemiFuture(ReplServiceError::CANCELLED);
 }
 
-void MockReplicationService::iterate_replica_sets(std::function< void(const rs_ptr_t&) > cb) const {}
+void MockReplicationService::iterate_replica_sets(std::function< void(const rs_ptr_t&) >) const {}
+
+std::shared_ptr< ReplicationService > create_repl_service(ReplicatedServer& server) {
+    return std::make_shared< MockReplicationService >(server);
+}
 
 } // namespace home_replication

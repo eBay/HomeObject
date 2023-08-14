@@ -41,7 +41,7 @@ public:
         info.members.insert(homeobject::PGMember{_peer2, "peer2", 0});
 
         LOGDEBUG("Setup Pg");
-        auto p_v = m_mock_homeobj->pg_manager()->create_pg(info).get();
+        auto p_v = m_mock_homeobj->pg_manager()->create_pg(std::move(info)).get();
         EXPECT_EQ(homeobject::PGError::OK, p_v);
 
         LOGDEBUG("Setup Shard");

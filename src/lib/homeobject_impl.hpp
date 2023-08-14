@@ -27,7 +27,7 @@ public:
     std::shared_ptr< ShardManager > shard_manager() override;
 
     /// PgManager
-    folly::SemiFuture< PGError > create_pg(PGInfo const& pg_info) override;
+    folly::SemiFuture< PGError > create_pg(PGInfo&& pg_info) override;
     folly::SemiFuture< PGError > replace_member(pg_id id, peer_id const& old_member,
                                                 PGMember const& new_member) override;
 

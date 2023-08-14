@@ -4,6 +4,11 @@ namespace homeobject {
 using namespace std::chrono_literals;
 constexpr auto disk_latency = 15ms;
 
+std::shared_ptr< BlobManager > MockHomeObject::blob_manager() {
+    init_repl_svc();
+    return shared_from_this();
+}
+
 folly::SemiFuture< std::variant< blob_id, BlobError > > MockHomeObject::put(shard_id shard, Blob&& blob) {
     auto [p, f] = folly::makePromiseContract< std::variant< blob_id, BlobError > >();
     std::thread([this, shard, mblob = std::move(blob), p = std::move(p)]() mutable {

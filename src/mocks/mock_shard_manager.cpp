@@ -10,6 +10,11 @@ static uint64_t get_current_timestamp() {
 
 uint64_t ShardManager::max_shard_size() { return Gi; }
 
+std::shared_ptr< ShardManager > MockHomeObject::shard_manager() {
+    init_repl_svc();
+    return shared_from_this();
+}
+
 folly::SemiFuture< ShardManager::info_var > MockHomeObject::create_shard(pg_id pg_owner, uint64_t size_bytes) {
     if (0 == size_bytes || max_shard_size() < size_bytes)
         return folly::makeSemiFuture(ShardManager::info_var(ShardError::INVALID_ARG));

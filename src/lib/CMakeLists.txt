@@ -1,5 +1,7 @@
 cmake_minimum_required (VERSION 3.11)
 
+add_flags("-Wno-unused-parameter")
+
 add_library(${PROJECT_NAME})
 target_sources(${PROJECT_NAME} PRIVATE
 		blob_manager.cpp

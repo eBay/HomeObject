@@ -4,7 +4,7 @@ namespace homeobject {
 
 std::shared_ptr< PGManager > HomeObjectImpl::pg_manager() { return shared_from_this(); }
 
-folly::SemiFuture< PGError > HomeObjectImpl::create_pg(PGInfo const& pg_info) {
+folly::SemiFuture< PGError > HomeObjectImpl::create_pg(PGInfo&& pg_info) {
     return folly::makeSemiFuture(PGError::TIMEOUT);
 }
 
