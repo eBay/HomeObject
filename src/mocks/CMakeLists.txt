@@ -13,4 +13,6 @@ target_link_libraries("${PROJECT_NAME}_mock"
             ${COMMON_DEPS}
         )
 
-add_subdirectory(tests)
+if(BUILD_TESTING)
+  add_subdirectory(tests)
+endif()

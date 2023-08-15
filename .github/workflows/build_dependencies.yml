@@ -219,6 +219,7 @@ jobs:
             -o homestore:testing=off \
             -o nuraft_mesg:testing=False \
             -o coverage=True \
+            -o testing=True \
             -s build_type=${{ inputs.build-type }} \
             --build missing \
             .
@@ -246,6 +247,7 @@ jobs:
             -o homestore:testing=off \
             -o nuraft_mesg:testing=False \
             -o homeobject:sanitize=${sanitize} \
+            -o homeobject:testing=True \
             -s build_type=${{ inputs.build-type }} \
             --build missing \
             .

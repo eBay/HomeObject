@@ -35,7 +35,9 @@ if (CCACHE_FOUND)
     set_property(GLOBAL PROPERTY RULE_LAUNCH_LINK ccache)
 endif ()
 
+if (BUILD_TESTING)
 enable_testing()
+endif()
 
 # add conan information 
 add_flags("-DPACKAGE_NAME=${PROJECT_NAME}")

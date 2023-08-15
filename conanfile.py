@@ -30,8 +30,8 @@ class HomeObjectConan(ConanFile):
                 'fPIC': True,
                 'coverage': False,
                 'sanitize': False,
-                'testing': True,
-                'sisl:prerelease': True,
+                'testing': False,
+                'sisl:prerelease': False,
             }
 
     generators = "cmake", "cmake_find_package"
@@ -68,7 +68,10 @@ class HomeObjectConan(ConanFile):
         definitions = {
             'CMAKE_EXPORT_COMPILE_COMMANDS': 'ON',
             'CONAN_CMAKE_SILENT_OUTPUT': 'ON',
+            'BUILD_TESTING': 'OFF',
         }
+        if self.options.testing:
+            definitions['BUILD_TESTING'] = 'ON'
 
         if self.settings.build_type == "Debug":
             if self.options.sanitize:
@@ -95,7 +98,7 @@ class HomeObjectConan(ConanFile):
         copy(self, "*.h*", join(self.source_folder, "src", "include"), join(self.package_folder, "include"), keep_path=True)
 
     def package_info(self):
-        self.cpp_info.libs = ["homeobject"]
+        self.cpp_info.libs = ["homeobject", "replication_mock"]
 
         if self.settings.os == "Linux":
             self.cpp_info.system_libs.append("pthread")
