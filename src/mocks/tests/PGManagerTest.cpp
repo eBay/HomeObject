@@ -23,8 +23,9 @@ SISL_OPTIONS_ENABLE(logging)
 class PgManagerFixture : public ::testing::Test {
 public:
     void SetUp() override {
-        auto params = homeobject::init_params{[](homeobject::peer_id const&) { return std::string(); }};
-        m_mock_homeobj = homeobject::init_homeobject(params);
+        m_mock_homeobj = homeobject::init_homeobject(
+            homeobject::HomeObject::init_params{[]() { return boost::uuids::random_generator()(); },
+                                                [](homeobject::peer_id const&) { return "test_fixture"; }});
     }
 
 protected:
@@ -38,7 +39,7 @@ TEST_F(PgManagerFixture, CreatePgEmpty) {
 TEST_F(PgManagerFixture, CreatePgNoLeader) {
     auto info = PGInfo(0u);
     info.members.insert(PGMember{boost::uuids::random_generator()()});
-    EXPECT_EQ(m_mock_homeobj->pg_manager()->create_pg(info).get(), PGError::INVALID_ARG);
+    EXPECT_EQ(m_mock_homeobj->pg_manager()->create_pg(std::move(info)).get(), PGError::INVALID_ARG);
 }
 
 class PgManagerFixtureWPg : public PgManagerFixture {
@@ -55,7 +56,7 @@ public:
         auto info = PGInfo(_pg_id);
         info.members.insert(PGMember{_peer1, "peer1", 1});
         info.members.insert(PGMember{_peer2, "peer2", 0});
-        EXPECT_EQ(m_mock_homeobj->pg_manager()->create_pg(info).get(), PGError::OK);
+        EXPECT_EQ(m_mock_homeobj->pg_manager()->create_pg(std::move(info)).get(), PGError::OK);
     }
 };
 
@@ -63,7 +64,7 @@ TEST_F(PgManagerFixtureWPg, CreateDuplicatePg) {
     auto info = PGInfo(_pg_id);
     info.members.insert(PGMember{boost::uuids::random_generator()(), "peer3", 6});
     info.members.insert(PGMember{boost::uuids::random_generator()(), "peer4", 2});
-    EXPECT_EQ(m_mock_homeobj->pg_manager()->create_pg(info).get(), PGError::INVALID_ARG);
+    EXPECT_EQ(m_mock_homeobj->pg_manager()->create_pg(std::move(info)).get(), PGError::INVALID_ARG);
 }
 
 TEST_F(PgManagerFixtureWPg, Migrate) {

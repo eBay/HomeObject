@@ -3,6 +3,8 @@
 #include <memory>
 #include <string>
 
+#include <folly/futures/Future.h>
+
 #include "common.hpp"
 
 namespace homeobject {
@@ -15,7 +17,12 @@ using endpoint = std::string;
 
 class HomeObject {
 public:
-    using lookup_cb = std::function< endpoint(peer_id const&) >;
+    using svc_id_cb = std::function< folly::SemiFuture< peer_id >() >;
+    using lookup_cb = std::function< folly::SemiFuture< endpoint >(peer_id const&) >;
+    struct init_params {
+        svc_id_cb get_svc_id; // If HomeObject discovers no existing instance a SvcId will be requested
+        lookup_cb lookup;     // When RAFT operations take place, we must map the SvcId to a gethostbyaddr() value (IP)
+    };
 
     virtual ~HomeObject() = default;
     virtual std::shared_ptr< BlobManager > blob_manager() = 0;
@@ -23,10 +30,6 @@ public:
     virtual std::shared_ptr< ShardManager > shard_manager() = 0;
 };
 
-struct init_params {
-    HomeObject::lookup_cb lookup;
-};
-
-extern std::shared_ptr< HomeObject > init_homeobject(init_params const& params);
+extern std::shared_ptr< HomeObject > init_homeobject(HomeObject::init_params&& params);
 
 } // namespace homeobject

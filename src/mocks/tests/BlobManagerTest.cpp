@@ -30,8 +30,9 @@ public:
     blob_id _blob_id;
 
     void SetUp() override {
-        auto params = homeobject::init_params{[](peer_id const&) { return std::string(); }};
-        m_mock_homeobj = homeobject::init_homeobject(params);
+        m_mock_homeobj = homeobject::init_homeobject(
+            homeobject::HomeObject::init_params{[]() { return boost::uuids::random_generator()(); },
+                                                [](homeobject::peer_id const&) { return "test_fixture"; }});
 
         _peer1 = boost::uuids::random_generator()();
         _peer2 = boost::uuids::random_generator()();
@@ -41,7 +42,7 @@ public:
         info.members.insert(homeobject::PGMember{_peer2, "peer2", 0});
 
         LOGDEBUG("Setup Pg");
-        auto p_v = m_mock_homeobj->pg_manager()->create_pg(info).get();
+        auto p_v = m_mock_homeobj->pg_manager()->create_pg(std::move(info)).get();
         EXPECT_EQ(homeobject::PGError::OK, p_v);
 
         LOGDEBUG("Setup Shard");

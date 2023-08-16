@@ -15,7 +15,7 @@ set(COMMON_TEST_DEPS
         ${COMMON_DEPS}
 	GTest::gmock
     )
-add_flags("-Wall -Wextra -Werror -Wpedantic -Wno-unused-parameter")
+add_flags("-Wall -Wextra -Werror -Wpedantic")
 
 include_directories (BEFORE .)
 include_directories (BEFORE include/)
@@ -24,4 +24,6 @@ include_directories(BEFORE ${CMAKE_CURRENT_BINARY_DIR}/lib)
 
 add_subdirectory(lib)
 add_subdirectory(mocks)
-add_subdirectory(tests)
+if(BUILD_TESTING)
+  add_subdirectory(tests)
+endif()

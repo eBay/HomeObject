@@ -27,8 +27,9 @@ public:
     homeobject::peer_id _peer2;
 
     void SetUp() override {
-        auto params = homeobject::init_params{[](homeobject::peer_id const&) { return std::string(); }};
-        m_mock_homeobj = homeobject::init_homeobject(params);
+        m_mock_homeobj = homeobject::init_homeobject(
+            homeobject::HomeObject::init_params{[]() { return boost::uuids::random_generator()(); },
+                                                [](homeobject::peer_id const&) { return "test_fixture"; }});
 
         _peer1 = boost::uuids::random_generator()();
         _peer2 = boost::uuids::random_generator()();
@@ -36,7 +37,7 @@ public:
         auto info = homeobject::PGInfo(_pg_id);
         info.members.insert(homeobject::PGMember{_peer1, "peer1", 1});
         info.members.insert(homeobject::PGMember{_peer2, "peer2", 0});
-        auto e = m_mock_homeobj->pg_manager()->create_pg(info).get();
+        auto e = m_mock_homeobj->pg_manager()->create_pg(std::move(info)).get();
         EXPECT_EQ(homeobject::PGError::OK, e);
     }
 
