@@ -2,7 +2,10 @@
 
 namespace homeobject {
 
-std::shared_ptr< BlobManager > HomeObjectImpl::blob_manager() { return shared_from_this(); }
+std::shared_ptr< BlobManager > HomeObjectImpl::blob_manager() {
+    init_repl_svc();
+    return shared_from_this();
+}
 
 folly::SemiFuture< std::variant< blob_id, BlobError > > HomeObjectImpl::put(shard_id shard, Blob&&) {
     return folly::makeSemiFuture(std::variant< blob_id, BlobError >(BlobError::UNKNOWN_SHARD));

@@ -8,13 +8,6 @@ static uint64_t get_current_timestamp() {
     return timestamp;
 }
 
-uint64_t ShardManager::max_shard_size() { return Gi; }
-
-std::shared_ptr< ShardManager > MockHomeObject::shard_manager() {
-    init_repl_svc();
-    return shared_from_this();
-}
-
 folly::SemiFuture< ShardManager::info_var > MockHomeObject::create_shard(pg_id pg_owner, uint64_t size_bytes) {
     if (0 == size_bytes || max_shard_size() < size_bytes)
         return folly::makeSemiFuture(ShardManager::info_var(ShardError::INVALID_ARG));
@@ -26,7 +19,7 @@ folly::SemiFuture< ShardManager::info_var > MockHomeObject::create_shard(pg_id p
             auto const now = get_current_timestamp();
             auto info =
                 ShardInfo{_cur_shard_id++, pg_owner, ShardInfo::State::OPEN, now, now, size_bytes, size_bytes, 0};
-            pg_it->second.second.emplace(info.id);
+            pg_it->second.emplace(info.id);
             LOGDEBUG("Creating Shard [{}]: in Pg [{}] of Size [{}b] shard_cnt:[{}]", info.id, pg_owner, size_bytes,
                      _shards.size());
             if (!_shards.try_emplace(info.id, info).second)
@@ -51,7 +44,7 @@ folly::SemiFuture< ShardManager::list_var > MockHomeObject::list_shards(pg_id id
         auto lg = std::scoped_lock(_pg_lock, _shard_lock);
         if (auto pg_it = _pg_map.find(id); _pg_map.end() != pg_it) {
             auto info = std::vector< ShardInfo >();
-            for (auto const& shard_id : pg_it->second.second) {
+            for (auto const& shard_id : pg_it->second) {
                 LOGDEBUG("Listing Shard {}", shard_id);
                 auto shard_it = _shards.find(shard_id);
                 RELEASE_ASSERT(_shards.end() != shard_it, "Missing Shard [{}]!", shard_id);

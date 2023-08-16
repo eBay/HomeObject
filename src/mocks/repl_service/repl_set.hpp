@@ -55,7 +55,7 @@ public:
     virtual void append_entry(nuraft::buffer const& b) = 0;
 
     virtual bool is_leader() const = 0;
-    virtual std::string_view group_id() const = 0;
+    virtual std::string group_id() const = 0;
 };
 
 } // namespace home_replication

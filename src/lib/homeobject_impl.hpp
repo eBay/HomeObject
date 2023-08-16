@@ -6,6 +6,8 @@
 #include "homeobject/shard_manager.hpp"
 
 #include <sisl/logging/logging.h>
+/// TODO these should come from HomeReplication
+#include "mocks/repl_service/repl_service.hpp"
 
 SISL_LOGGING_DECL(homeobject);
 
@@ -15,16 +17,35 @@ class HomeObjectImpl : public HomeObject,
                        public BlobManager,
                        public PGManager,
                        public ShardManager,
+                       public home_replication::ReplicatedServer,
                        public std::enable_shared_from_this< HomeObjectImpl > {
-    HomeObject::lookup_cb _lookup_peer;
+    /// Our SvcId retrieval and SvcId->IP mapping
+    init_params _svcid_routines;
+
+    peer_id _our_id;
+
+protected:
+    /// This simulates the MetaBlkSvc thats used within real HomeObject
+    mutable std::mutex _pg_lock;
+    std::map< pg_id, std::unordered_set< shard_id > > _pg_map;
+    ///
+
+    std::mutex _repl_lock;
+    std::shared_ptr< home_replication::ReplicationService > _repl_svc;
+
+    void init_repl_svc();
 
 public:
-    explicit HomeObjectImpl(HomeObject::lookup_cb const& lookup) : _lookup_peer(lookup) {}
+    explicit HomeObjectImpl(HomeObject::init_params&& params) : _svcid_routines(std::move(params)) {}
     ~HomeObjectImpl() override = default;
 
     std::shared_ptr< BlobManager > blob_manager() override;
     std::shared_ptr< PGManager > pg_manager() override;
     std::shared_ptr< ShardManager > shard_manager() override;
+
+    folly::SemiFuture< std::string > member_address(boost::uuids::uuid const&) const override {
+        return folly::makeSemiFuture(std::string());
+    }
 
     /// PgManager
     folly::SemiFuture< PGError > create_pg(PGInfo&& pg_info) override;

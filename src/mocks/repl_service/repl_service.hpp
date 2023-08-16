@@ -24,7 +24,7 @@ class ReplicatedServer {
 public:
     virtual ~ReplicatedServer() = default;
 
-    /// Map HomeObject instance to
+    /// Map HomeObject instance to IP
     virtual folly::SemiFuture< std::string > member_address(uuid const&) const = 0;
 };
 
@@ -35,13 +35,14 @@ public:
     using set_var = std::variant< rs_ptr_t, ReplServiceError >;
 
     /// Sync APIs
-    virtual set_var get_replica_set(std::string_view group_id) const = 0;
+    virtual set_var get_replica_set(std::string const& group_id) const = 0;
     virtual void iterate_replica_sets(std::function< void(const rs_ptr_t&) > cb) const = 0;
 
     /// Async APIs
-    virtual folly::SemiFuture< set_var > create_replica_set(std::string_view group_id) = 0;
-    virtual folly::SemiFuture< ReplServiceError > replace_member(std::string_view group_id, std::string_view member_out,
-                                                                 std::string_view member_in) const = 0;
+    virtual folly::SemiFuture< set_var > create_replica_set(std::string const& group_id,
+                                                            std::set< std::string, std::less<> >&& members) = 0;
+    virtual folly::SemiFuture< ReplServiceError >
+    replace_member(std::string const& group_id, std::string const& member_out, std::string const& member_in) const = 0;
 };
 
 extern std::shared_ptr< ReplicationService > create_repl_service(ReplicatedServer& server);

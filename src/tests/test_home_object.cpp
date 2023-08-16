@@ -17,14 +17,16 @@ using namespace std::chrono_literals;
 
 using homeobject::BlobError;
 using homeobject::PGError;
+using homeobject::PGInfo;
+using homeobject::PGMember;
 using homeobject::ShardError;
 
 SISL_LOGGING_INIT(logging, homeobject)
 SISL_OPTIONS_ENABLE(logging)
 
 TEST(HomeObject, BasicEquivalence) {
-    auto obj_inst = homeobject::init_homeobject(
-        homeobject::init_params{[](homeobject::peer_id const&) -> std::string { return "test"; }});
+    auto obj_inst = homeobject::init_homeobject(homeobject::HomeObject::init_params{
+        []() { return boost::uuids::random_generator()(); }, [](homeobject::peer_id const&) { return "test"; }});
     ASSERT_TRUE(!!obj_inst);
     auto shard_mgr = obj_inst->shard_manager();
     auto pg_mgr = obj_inst->pg_manager();
@@ -40,15 +42,19 @@ public:
 
     void SetUp() override {
         _obj_inst = homeobject::init_homeobject(
-            homeobject::init_params{[](homeobject::peer_id const&) -> std::string { return "test_fixture"; }});
+            homeobject::HomeObject::init_params{[]() { return boost::uuids::random_generator()(); },
+                                                [](homeobject::peer_id const&) { return "test_fixture"; }});
     }
 };
 
-// TODO: This test should actually not fail assuming initialization succeeded,
-// but until it is implemented we will just assume the RAFT group was
-// unresponsive and timed-out.
-TEST_F(HomeObjectFixture, CreatePgTimeout) {
-    EXPECT_EQ(_obj_inst->pg_manager()->create_pg(homeobject::PGInfo{0l}).get(), PGError::TIMEOUT);
+TEST_F(HomeObjectFixture, CreatePgEmpty) {
+    EXPECT_EQ(_obj_inst->pg_manager()->create_pg(PGInfo(0u)).get(), PGError::INVALID_ARG);
+}
+
+TEST_F(HomeObjectFixture, CreatePgNoLeader) {
+    auto info = PGInfo(0u);
+    info.members.insert(PGMember{boost::uuids::random_generator()()});
+    EXPECT_EQ(_obj_inst->pg_manager()->create_pg(std::move(info)).get(), PGError::INVALID_ARG);
 }
 
 TEST_F(HomeObjectFixture, ReplaceMemberMissingPg) {

@@ -4,11 +4,9 @@ namespace homeobject {
 
 uint64_t ShardManager::max_shard_size() { return Gi; }
 
-std::shared_ptr< ShardManager > HomeObjectImpl::shard_manager() { return shared_from_this(); }
-
-std::shared_ptr< HomeObject > init_homeobject(init_params const& params) {
-    LOGINFOMOD(homeobject, "Initializing HomeObject");
-    return std::make_shared< HomeObjectImpl >(params.lookup);
+std::shared_ptr< ShardManager > HomeObjectImpl::shard_manager() {
+    init_repl_svc();
+    return shared_from_this();
 }
 
 folly::SemiFuture< ShardManager::info_var > HomeObjectImpl::create_shard(pg_id pg_owner, uint64_t size_bytes) {
