@@ -6,10 +6,7 @@
 #include "homeobject/shard_manager.hpp"
 
 #include <sisl/logging/logging.h>
-/// TODO these should come from HomeReplication
-#include "mocks/repl_service/repl_service.hpp"
-
-SISL_LOGGING_DECL(homeobject);
+#include <home_replication/repl_service.h>
 
 namespace homeobject {
 
@@ -17,7 +14,6 @@ class HomeObjectImpl : public HomeObject,
                        public BlobManager,
                        public PGManager,
                        public ShardManager,
-                       public home_replication::ReplicatedServer,
                        public std::enable_shared_from_this< HomeObjectImpl > {
     /// Our SvcId retrieval and SvcId->IP mapping
     init_params _svcid_routines;
@@ -36,16 +32,15 @@ protected:
     void init_repl_svc();
 
 public:
-    explicit HomeObjectImpl(HomeObject::init_params&& params) : _svcid_routines(std::move(params)) {}
+    explicit HomeObjectImpl(HomeObject::init_params&& params) : _svcid_routines(std::move(params)) { }
+
     ~HomeObjectImpl() override = default;
 
     std::shared_ptr< BlobManager > blob_manager() override;
     std::shared_ptr< PGManager > pg_manager() override;
     std::shared_ptr< ShardManager > shard_manager() override;
 
-    folly::SemiFuture< std::string > member_address(boost::uuids::uuid const&) const override {
-        return folly::makeSemiFuture(std::string());
-    }
+    peer_id our_uuid() const override { return _our_id; }
 
     /// PgManager
     folly::SemiFuture< PGError > create_pg(PGInfo&& pg_info) override;

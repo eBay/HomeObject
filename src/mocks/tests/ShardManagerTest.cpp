@@ -17,7 +17,7 @@ using homeobject::shard_id;
 using homeobject::ShardError;
 using homeobject::ShardInfo;
 
-SISL_LOGGING_INIT(logging, homeobject)
+SISL_LOGGING_INIT(logging, HOMEOBJECT_LOG_MODS)
 SISL_OPTIONS_ENABLE(logging)
 
 class ShardManagerFixture : public ::testing::Test {
