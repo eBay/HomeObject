@@ -90,6 +90,10 @@ TEST_F(PgManagerFixtureWPg, Migrate) {
     EXPECT_EQ(m_mock_homeobj->pg_manager()->replace_member(_pg_id, _peer1, PGMember{_peer2}).get(),
               PGError::INVALID_ARG);
     EXPECT_EQ(m_mock_homeobj->pg_manager()
+                  ->replace_member(_pg_id, _peer1, PGMember{boost::uuids::random_generator()()})
+                  .get(),
+              PGError::INVALID_ARG);
+    EXPECT_EQ(m_mock_homeobj->pg_manager()
                   ->replace_member(_pg_id, _peer2, PGMember{boost::uuids::random_generator()()})
                   .get(),
               PGError::OK);
