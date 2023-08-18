@@ -81,6 +81,11 @@ folly::SemiFuture< PGError > HomeObjectImpl::replace_member(pg_id id, peer_id co
         return folly::makeSemiFuture(PGError::INVALID_ARG);
     }
 
+    if (old_member == our_uuid()) {
+        LOGWARN("Rejecting replace_member removing ourself {}!", to_string(old_member));
+        return folly::makeSemiFuture(PGError::INVALID_ARG);
+    }
+
     return _repl_svc->replace_member(fmt::format("{}", id), to_string(old_member), to_string(new_member.id))
         .deferValue([](ReplServiceError const& e) { return toPgError(e); });
 }

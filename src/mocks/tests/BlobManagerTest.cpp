@@ -34,7 +34,8 @@ public:
             homeobject::HomeObject::init_params{[]() { return boost::uuids::random_generator()(); },
                                                 [](homeobject::peer_id const&) { return "test_fixture"; }});
 
-        _peer1 = boost::uuids::random_generator()();
+        auto p = m_mock_homeobj->pg_manager();
+        _peer1 = m_mock_homeobj->our_uuid();
         _peer2 = boost::uuids::random_generator()();
 
         auto info = homeobject::PGInfo(_pg_id);
