@@ -126,7 +126,7 @@ jobs:
       with:
         repository: eBay/HomeReplication
         path: import/homerepl
-        ref: master
+        ref: main
       if: ${{ inputs.testing == 'True' || steps.restore-cache.outputs.cache-hit != 'true' }}
 
     - name: Load HomeReplication Cache
