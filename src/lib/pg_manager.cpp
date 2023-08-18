@@ -48,19 +48,15 @@ std::shared_ptr< PGManager > HomeObjectImpl::pg_manager() {
 
 folly::SemiFuture< PGError > HomeObjectImpl::create_pg(PGInfo&& pg_info) {
     LOGINFO("Creating PG: [{}] of [{}] members", pg_info.id, pg_info.members.size());
-    if (std::none_of(pg_info.members.begin(), pg_info.members.end(),
-                     [](PGMember const& m) { return 0 < m.priority; })) {
-        LOGERROR("No possible leader for PG: [{}]", pg_info.id);
-        return folly::makeSemiFuture(PGError::INVALID_ARG);
-    }
-
     auto saw_ourself = false;
+    auto saw_leader = false;
     auto peers = std::set< std::string, std::less<> >();
     for (auto const& member : pg_info.members) {
         if (member.id == our_uuid()) saw_ourself = true;
+        if (member.priority > 0) saw_leader = true;
         peers.insert(to_string(member.id));
     }
-    if (!saw_ourself) return folly::makeSemiFuture(PGError::INVALID_ARG);
+    if (!saw_ourself || !saw_leader) return folly::makeSemiFuture(PGError::INVALID_ARG);
 
     return _repl_svc->create_replica_set(fmt::format("{}", pg_info.id), std::move(peers))
         .deferValue([this, pg_info = std::move(pg_info)](home_replication::ReplicationService::set_var const& v) {
