@@ -42,6 +42,12 @@ TEST_F(PgManagerFixture, CreatePgNoLeader) {
     EXPECT_EQ(m_mock_homeobj->pg_manager()->create_pg(std::move(info)).get(), PGError::INVALID_ARG);
 }
 
+TEST_F(PgManagerFixture, CreatePgNotMember) {
+    auto info = PGInfo(0u);
+    info.members.insert(PGMember{boost::uuids::random_generator()(), "unknown", 1});
+    EXPECT_EQ(m_mock_homeobj->pg_manager()->create_pg(std::move(info)).get(), PGError::INVALID_ARG);
+}
+
 class PgManagerFixtureWPg : public PgManagerFixture {
 public:
     homeobject::pg_id _pg_id{1u};
@@ -50,13 +56,14 @@ public:
 
     void SetUp() override {
         PgManagerFixture::SetUp();
-        _peer1 = boost::uuids::random_generator()();
+        auto pg_m = m_mock_homeobj->pg_manager();
+        _peer1 = m_mock_homeobj->our_uuid();
         _peer2 = boost::uuids::random_generator()();
 
         auto info = PGInfo(_pg_id);
         info.members.insert(PGMember{_peer1, "peer1", 1});
         info.members.insert(PGMember{_peer2, "peer2", 0});
-        EXPECT_EQ(m_mock_homeobj->pg_manager()->create_pg(std::move(info)).get(), PGError::OK);
+        EXPECT_EQ(pg_m->create_pg(std::move(info)).get(), PGError::OK);
     }
 };
 
