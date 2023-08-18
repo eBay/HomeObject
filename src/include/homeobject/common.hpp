@@ -1,5 +1,14 @@
 #pragma once
 #include <boost/uuid/uuid.hpp>
+#include <sisl/logging/logging.h>
+
+/// Anything that links libhomestore requires these common symbols to be included in each
+/// DSO; so just include it here for all.
+#include <home_replication/repl_decls.h>
+
+SISL_LOGGING_DECL(homeobject);
+
+#define HOMEOBJECT_LOG_MODS HOMEREPL_LOG_MODS, homeobject
 
 #ifndef Ki
 constexpr uint64_t Ki = 1024ul;

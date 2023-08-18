@@ -1,8 +1,6 @@
 #include "homeobject_impl.hpp"
 
-/// TODO: This should come from HomeReplication
-#include "mocks/repl_service/repl_service.hpp"
-
+#include <home_replication/repl_service.h>
 #include <boost/uuid/uuid_io.hpp>
 
 using home_replication::ReplServiceError;

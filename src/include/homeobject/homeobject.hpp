@@ -25,6 +25,7 @@ public:
     };
 
     virtual ~HomeObject() = default;
+    virtual peer_id our_uuid() const = 0;
     virtual std::shared_ptr< BlobManager > blob_manager() = 0;
     virtual std::shared_ptr< PGManager > pg_manager() = 0;
     virtual std::shared_ptr< ShardManager > shard_manager() = 0;

@@ -17,7 +17,7 @@ using homeobject::PGError;
 using homeobject::PGInfo;
 using homeobject::PGMember;
 
-SISL_LOGGING_INIT(logging, homeobject)
+SISL_LOGGING_INIT(logging, HOMEOBJECT_LOG_MODS)
 SISL_OPTIONS_ENABLE(logging)
 
 class PgManagerFixture : public ::testing::Test {

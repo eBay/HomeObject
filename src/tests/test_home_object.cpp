@@ -21,7 +21,7 @@ using homeobject::PGInfo;
 using homeobject::PGMember;
 using homeobject::ShardError;
 
-SISL_LOGGING_INIT(logging, homeobject)
+SISL_LOGGING_INIT(logging, HOMEOBJECT_LOG_MODS)
 SISL_OPTIONS_ENABLE(logging)
 
 TEST(HomeObject, BasicEquivalence) {

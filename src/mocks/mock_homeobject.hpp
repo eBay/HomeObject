@@ -6,10 +6,9 @@
 #include <set>
 #include <utility>
 
-#include "lib/homeobject_impl.hpp"
+#include <home_replication/repl_service.h>
 
-#include "mocks/repl_service/repl_service.hpp"
-#include "repl_service/repl_service.hpp"
+#include "lib/homeobject_impl.hpp"
 
 namespace homeobject {
 struct BlobRoute {

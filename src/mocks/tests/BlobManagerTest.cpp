@@ -18,7 +18,7 @@ using homeobject::blob_id;
 using homeobject::BlobError;
 using homeobject::peer_id;
 
-SISL_LOGGING_INIT(logging, homeobject)
+SISL_LOGGING_INIT(logging, HOMEOBJECT_LOG_MODS)
 SISL_OPTIONS_ENABLE(logging)
 
 class BlobManagerFixture : public ::testing::Test {
