@@ -108,3 +108,8 @@ class HomeObjectConan(ConanFile):
         if self.settings.os == "Linux":
             self.cpp_info.components["replicated"].system_libs.append("pthread")
             self.cpp_info.components["mock"].system_libs.append("pthread")
+        if  self.options.sanitize:
+            self.cpp_info.components["mock"].sharedlinkflags.append("-fsanitize=address")
+            self.cpp_info.components["mock"].exelinkflags.append("-fsanitize=address")
+            self.cpp_info.components["mock"].sharedlinkflags.append("-fsanitize=undefined")
+            self.cpp_info.components["mock"].exelinkflags.append("-fsanitize=undefined")
