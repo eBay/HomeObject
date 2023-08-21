@@ -12,8 +12,10 @@ int main(int argc, char** argv) {
     spdlog::set_pattern("[%D %T%z] [%^%l%$] [%n] [%t] %v");
     sisl::logging::SetModuleLogLevel("home_replication", spdlog::level::level_enum::trace);
 
-    auto homeobj = init_homeobject(homeobject::HomeObject::init_params{
-        []() { return boost::uuids::random_generator()(); }, [](auto) { return homeobject::endpoint(); }});
-
+    homeobject::init_homeobject(
+        homeobject::HomeObject::init_params{[](std::optional< homeobject::peer_id > const&) {
+                                                return folly::makeSemiFuture(boost::uuids::random_generator()());
+                                            },
+                                            [](homeobject::peer_id const&) { return "test_package"; }});
     return 0;
 }
