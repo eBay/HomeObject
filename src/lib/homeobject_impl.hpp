@@ -15,26 +15,28 @@ class HomeObjectImpl : public HomeObject,
                        public PGManager,
                        public ShardManager,
                        public std::enable_shared_from_this< HomeObjectImpl > {
+
+    std::mutex _repl_lock;
+    std::shared_ptr< home_replication::ReplicationService > _repl_svc;
+
+protected:
+    peer_id _our_id;
+
     /// Our SvcId retrieval and SvcId->IP mapping
     init_params _svcid_routines;
 
-    peer_id _our_id;
-
-protected:
     /// This simulates the MetaBlkSvc thats used within real HomeObject
     mutable std::mutex _pg_lock;
     std::map< pg_id, std::unordered_set< shard_id > > _pg_map;
     ///
 
-    std::mutex _repl_lock;
-    std::shared_ptr< home_replication::ReplicationService > _repl_svc;
-
-    void init_repl_svc();
-
 public:
-    explicit HomeObjectImpl(HomeObject::init_params&& params) : _svcid_routines(std::move(params)) { }
+    explicit HomeObjectImpl(HomeObject::init_params&& params) : _svcid_routines(std::move(params)) {}
 
     ~HomeObjectImpl() override = default;
+
+    // This is public but not exposed in the API above
+    void init_repl_svc();
 
     std::shared_ptr< BlobManager > blob_manager() override;
     std::shared_ptr< PGManager > pg_manager() override;

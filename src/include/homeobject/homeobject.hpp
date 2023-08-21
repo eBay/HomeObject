@@ -1,6 +1,7 @@
 #pragma once
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 
 #include <folly/futures/Future.h>
@@ -17,10 +18,10 @@ using endpoint = std::string;
 
 class HomeObject {
 public:
-    using svc_id_cb = std::function< folly::SemiFuture< peer_id >() >;
+    using svc_id_cb = std::function< folly::SemiFuture< peer_id >(std::optional< peer_id > const& found) >;
     using lookup_cb = std::function< folly::SemiFuture< endpoint >(peer_id const&) >;
     struct init_params {
-        svc_id_cb get_svc_id; // If HomeObject discovers no existing instance a SvcId will be requested
+        svc_id_cb get_svc_id; // Callback made after determining if a SvcId exists or not (optional arg)
         lookup_cb lookup;     // When RAFT operations take place, we must map the SvcId to a gethostbyaddr() value (IP)
     };
 

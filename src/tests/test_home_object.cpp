@@ -25,8 +25,11 @@ SISL_LOGGING_INIT(logging, HOMEOBJECT_LOG_MODS)
 SISL_OPTIONS_ENABLE(logging)
 
 TEST(HomeObject, BasicEquivalence) {
-    auto obj_inst = homeobject::init_homeobject(homeobject::HomeObject::init_params{
-        []() { return boost::uuids::random_generator()(); }, [](homeobject::peer_id const&) { return "test"; }});
+    auto obj_inst = homeobject::init_homeobject(
+        homeobject::HomeObject::init_params{[](std::optional< homeobject::peer_id > const&) {
+                                                return folly::makeSemiFuture(boost::uuids::random_generator()());
+                                            },
+                                            [](homeobject::peer_id const&) { return "test"; }});
     ASSERT_TRUE(!!obj_inst);
     auto shard_mgr = obj_inst->shard_manager();
     auto pg_mgr = obj_inst->pg_manager();
@@ -42,7 +45,9 @@ public:
 
     void SetUp() override {
         _obj_inst = homeobject::init_homeobject(
-            homeobject::HomeObject::init_params{[]() { return boost::uuids::random_generator()(); },
+            homeobject::HomeObject::init_params{[](std::optional< homeobject::peer_id > const&) {
+                                                    return folly::makeSemiFuture(boost::uuids::random_generator()());
+                                                },
                                                 [](homeobject::peer_id const&) { return "test_fixture"; }});
     }
 };

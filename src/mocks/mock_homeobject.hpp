@@ -45,6 +45,9 @@ class MockHomeObject : public HomeObjectImpl {
     blob_id _cur_blob_id{0};
     ///
 
+    std::mutex _repl_lock;
+    std::shared_ptr< home_replication::ReplicationService > _repl_svc;
+
 public:
     using HomeObjectImpl::HomeObjectImpl;
     ~MockHomeObject() override = default;
