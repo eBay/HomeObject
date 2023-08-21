@@ -53,41 +53,6 @@ pipeline {
             }
         }
 
-        stage('Coverage') {
-            when { not {
-                branch "${STABLE_BRANCH}"
-            } }
-
-            stages {
-                stage("Adjust Sonar Branch") {
-                    when { not {
-                            branch "${TARGET_BRANCH}"
-                    } }
-                    steps {
-                        script {
-                            sh "echo \"sonar.pullreqest.branch=${BRANCH_NAME}\" >> sonar-project.properties"
-                            sh "echo \"sonar.pullreqest.base=main\" >> sonar-project.properties"
-                            KEY = sh(script: "echo ${BRANCH_NAME} | cut -d'-' -f2" , returnStdout: true)
-                            sh "echo \"Key: ${KEY}\""
-                            sh "echo \"sonar.pullreqest.key=${KEY}\" >> sonar-project.properties"
-                        }
-                    }
-                }
-                stage("Code Coverage") {
-                    steps {
-                        slackSend channel: '#sds-ci', message: "*${PROJECT}:${TAG}* is undergoing Code Coverage."
-                        sh """conan install ${DISABLE_DEP_TESTS} -o ${PROJECT}:testing=True -o sisl:prerelease=True -pr debug ${BUILD_MISSING} -o ${PROJECT}:coverage=True .
-                              build-wrapper-linux-x86-64 --out-dir /tmp/sonar conan build .
-                              gcovr --exclude-throw-branches --exclude-lines-by-pattern '.*(ENUM|LOG|ASSERT).*' --sonarqube coverage.xml -r ."""
-                        withSonarQubeEnv('sds-sonar')  {
-                            sh "sonar-scanner -Dsonar.projectBaseDir=. -Dsonar.projectVersion=\"${VER}\""
-                        }
-                        slackSend channel: '#sds-ci', message: "*${PROJECT}:${TAG}* Code Coverage complete."
-                    }
-                }
-            }
-        }
-
         stage("Compile") {
             steps {
                 sh """conan create ${BUILD_MISSING} ${DISABLE_DEP_TESTS} -o ${PROJECT}:sanitize=True -o ${PROJECT}:testing=True -o sisl:prerelease=True -pr debug . ${PROJECT}/${TAG} ;
