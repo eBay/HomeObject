@@ -23,9 +23,8 @@ SISL_OPTIONS_ENABLE(logging)
 class PgManagerFixture : public ::testing::Test {
 public:
     void SetUp() override {
-        m_mock_homeobj = homeobject::init_homeobject(
-            homeobject::HomeObject::init_params{[]() { return boost::uuids::random_generator()(); },
-                                                [](homeobject::peer_id const&) { return "test_fixture"; }});
+        m_mock_homeobj = homeobject::init_homeobject(homeobject::HomeObject::init_params{
+            [](auto p) { return folly::makeSemiFuture(p.value()); }, [](auto) { return "test_fixture"; }});
     }
 
 protected:
@@ -56,14 +55,13 @@ public:
 
     void SetUp() override {
         PgManagerFixture::SetUp();
-        auto pg_m = m_mock_homeobj->pg_manager();
         _peer1 = m_mock_homeobj->our_uuid();
         _peer2 = boost::uuids::random_generator()();
 
         auto info = PGInfo(_pg_id);
         info.members.insert(PGMember{_peer1, "peer1", 1});
         info.members.insert(PGMember{_peer2, "peer2", 0});
-        EXPECT_EQ(pg_m->create_pg(std::move(info)).get(), PGError::OK);
+        EXPECT_EQ(m_mock_homeobj->pg_manager()->create_pg(std::move(info)).get(), PGError::OK);
     }
 };
 

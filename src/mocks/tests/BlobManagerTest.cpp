@@ -30,11 +30,9 @@ public:
     blob_id _blob_id;
 
     void SetUp() override {
-        m_mock_homeobj = homeobject::init_homeobject(
-            homeobject::HomeObject::init_params{[]() { return boost::uuids::random_generator()(); },
-                                                [](homeobject::peer_id const&) { return "test_fixture"; }});
+        m_mock_homeobj = homeobject::init_homeobject(homeobject::HomeObject::init_params{
+            [](auto p) { return folly::makeSemiFuture(p.value()); }, [](auto) { return "test_fixture"; }});
 
-        auto p = m_mock_homeobj->pg_manager();
         _peer1 = m_mock_homeobj->our_uuid();
         _peer2 = boost::uuids::random_generator()();
 
