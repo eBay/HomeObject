@@ -1,5 +1,5 @@
 # HomeObject
-[![Conan Build](https://github.com/eBay/homeobject/actions/workflows/merge_conan_build.yml/badge.svg?branch=main)](https://github.com/eBay/homeobject/actions/workflows/merge_conan_build.yml)
+[![Conan Build](https://github.com/eBay/homeobject/actions/workflows/conan_build.yml/badge.svg?branch=main)](https://github.com/eBay/homeobject/actions/workflows/conan_build.yml)
 [![CodeCov](https://codecov.io/gh/eBay/HomeObject/branch/main/graph/badge.svg)](https://codecov.io/gh/eBay/HomeObject)
 
 Replicated BLOB Store built upon HomeStore and NuRaft

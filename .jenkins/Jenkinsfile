@@ -55,11 +55,10 @@ pipeline {
 
         stage("Compile") {
             steps {
-                sh """conan create ${BUILD_MISSING} ${DISABLE_DEP_TESTS} -o ${PROJECT}:sanitize=True -o ${PROJECT}:testing=True -o sisl:prerelease=True -pr debug . ${PROJECT}/${TAG} ;
-                      conan remove -f '${PROJECT}*'
-                      conan create ${BUILD_MISSING} ${DISABLE_DEP_TESTS} -o sisl:prerelease=True -pr test . ${PROJECT}/${TAG} ;
-                      conan create ${BUILD_MISSING} ${DISABLE_DEP_TESTS} -o sisl:prerelease=True -pr debug . ${PROJECT}/${TAG} ;
-                      conan create ${BUILD_MISSING} ${DISABLE_DEP_TESTS} -o sisl:prerelease=False -pr test . ${PROJECT}/${TAG} ;"""
+                sh """conan create ${BUILD_MISSING} ${DISABLE_DEP_TESTS} -o ${PROJECT}:sanitize=True -pr debug . ${PROJECT}/${TAG} ;
+                      conan create ${BUILD_MISSING} ${DISABLE_DEP_TESTS} -pr debug . ${PROJECT}/${TAG} ;
+                      conan create ${BUILD_MISSING} ${DISABLE_DEP_TESTS} -pr test . ${PROJECT}/${TAG} ;
+                      conan create ${BUILD_MISSING} ${DISABLE_DEP_TESTS} -o sisl:prerelease=True -pr test . ${PROJECT}/${TAG} ;"""
             }
         }
 

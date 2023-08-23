@@ -30,8 +30,7 @@ class HomeObjectConan(ConanFile):
                 'fPIC': True,
                 'coverage': False,
                 'sanitize': False,
-                'testing': False,
-                'sisl:prerelease': False,
+                'testing': True,
             }
 
     generators = "cmake", "cmake_find_package"
@@ -51,7 +50,7 @@ class HomeObjectConan(ConanFile):
         if self.info.settings.os in ["Macos", "Windows"]:
             raise ConanInvalidConfiguration("{} Builds are unsupported".format(self.info.settings.os))
         if self.info.settings.compiler.cppstd:
-            check_min_cppstd(self, 17)
+            check_min_cppstd(self, 20)
 
     def configure(self):
         if self.options.shared:
@@ -59,10 +58,9 @@ class HomeObjectConan(ConanFile):
         if self.settings.build_type == "Debug":
             if self.options.coverage and self.options.sanitize:
                 raise ConanInvalidConfiguration("Sanitizer does not work with Code Coverage!")
-            if self.options.sanitize:
-                self.options['sisl'].malloc_impl = 'libc'
-            if self.options.coverage:
-                self.options.testing = True
+            if not self.options.testing:
+                if self.options.coverage or self.options.sanitize:
+                    raise ConanInvalidConfiguration("Coverage/Sanitizer requires Testing!")
 
     def build(self):
         definitions = {
