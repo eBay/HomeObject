@@ -7,6 +7,7 @@
 
 #include <sisl/logging/logging.h>
 
+
 template <>
 struct std::hash< homeobject::ShardInfo > {
     std::size_t operator()(homeobject::ShardInfo const& i) const noexcept { return std::hash< uint64_t >()(i.id); }
@@ -27,9 +28,6 @@ class HomeObjectImpl : public HomeObject,
                        public ShardManager,
                        public std::enable_shared_from_this< HomeObjectImpl > {
 
-    std::mutex _repl_lock;
-    std::shared_ptr< home_replication::ReplicationService > _repl_svc;
-
     /// Implementation defines these
     virtual ShardManager::Result< ShardInfo > _create_shard(pg_id, uint64_t size_bytes) = 0;
     virtual ShardManager::Result< ShardInfo > _seal_shard(shard_id) = 0;
@@ -43,6 +41,9 @@ class HomeObjectImpl : public HomeObject,
     auto _defer() const { return folly::makeSemiFuture().via(folly::getGlobalCPUExecutor()); }
 
 protected:
+    std::mutex _repl_lock;
+    std::shared_ptr< home_replication::ReplicationService > _repl_svc;
+    //std::shared_ptr<homestore::ReplicationService> _repl_svc;  
     peer_id _our_id;
 
     /// Our SvcId retrieval and SvcId->IP mapping
@@ -50,19 +51,20 @@ protected:
 
     ///
     mutable std::shared_mutex _pg_lock;
-    using shard_set = std::unordered_set< ShardInfo >;
-    using pg_pair = std::pair< PGInfo, shard_set >;
-    std::map< pg_id, pg_pair > _pg_map;
+    std::map< pg_id, PG > _pg_map;
 
     mutable std::shared_mutex _shard_lock;
-    std::map< shard_id, shard_set::const_iterator > _shard_map;
+    std::map< shard_id, CShardInfo > _shard_map;
     ///
-
 public:
     explicit HomeObjectImpl(std::weak_ptr< HomeObjectApplication >&& application) :
             _application(std::move(application)) {}
 
     ~HomeObjectImpl() override = default;
+    HomeObjectImpl(const HomeObjectImpl&) = delete;
+    HomeObjectImpl(HomeObjectImpl&&) noexcept = delete;
+    HomeObjectImpl& operator=(const HomeObjectImpl&) = delete;
+    HomeObjectImpl& operator=(HomeObjectImpl&&) noexcept = delete;
 
     // This is public but not exposed in the API above
     void init_repl_svc();
@@ -83,6 +85,7 @@ public:
     ShardManager::AsyncResult< InfoList > list_shards(pg_id pg) const final;
     ShardManager::AsyncResult< ShardInfo > seal_shard(shard_id id) final;
 
+    static const std::string s_shard_info_sub_type;
     /// BlobManager
     BlobManager::AsyncResult< blob_id > put(shard_id shard, Blob&&) final;
     BlobManager::AsyncResult< Blob > get(shard_id shard, blob_id const& blob, uint64_t off, uint64_t len) const final;

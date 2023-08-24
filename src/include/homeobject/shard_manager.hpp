@@ -27,11 +27,15 @@ struct ShardInfo {
     uint64_t deleted_capacity_bytes;
     std::optional< peer_id > current_leader{std::nullopt};
 };
-using InfoList = std::list< ShardInfo >;
+
+using InfoList = std::list<ShardInfo>;
+using CShardInfo = std::shared_ptr<ShardInfo>;
+using CShardInfoList = std::list< CShardInfo >;
 
 class ShardManager : public Manager< ShardError > {
 public:
     static uint64_t max_shard_size(); // Static function forces runtime evaluation.
+    static uint64_t max_shard_num_in_pg();
 
     virtual AsyncResult< ShardInfo > get_shard(shard_id id) const = 0;
     virtual AsyncResult< InfoList > list_shards(pg_id id) const = 0;
