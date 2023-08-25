@@ -37,7 +37,7 @@ PGError toPgError(ReplServiceError const& e) {
         DEBUG_ASSERT(false, "Should not process OK!");
         [[fallthrough]];
     case ReplServiceError::FAILED:
-        [[fallthrough]];
+        return PGError::UNKNOWN;
     }
     return PGError::UNKNOWN;
 }
