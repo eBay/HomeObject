@@ -52,76 +52,39 @@ public:
     }
 };
 
-TEST_F(HomeObjectFixture, CreatePgEmpty) {
-    EXPECT_EQ(_obj_inst->pg_manager()->create_pg(PGInfo(0u)).get(), PGError::INVALID_ARG);
-}
-
-TEST_F(HomeObjectFixture, CreatePgNoLeader) {
+TEST_F(HomeObjectFixture, TestValidations) {
+    EXPECT_EQ(_obj_inst->pg_manager()->create_pg(PGInfo(0u)).get().error(), PGError::INVALID_ARG);
     auto info = PGInfo(0u);
     info.members.insert(PGMember{boost::uuids::random_generator()()});
-    EXPECT_EQ(_obj_inst->pg_manager()->create_pg(std::move(info)).get(), PGError::INVALID_ARG);
-}
-
-TEST_F(HomeObjectFixture, ReplaceMemberMissingPg) {
+    EXPECT_EQ(_obj_inst->pg_manager()->create_pg(std::move(info)).get().error(), PGError::INVALID_ARG);
     EXPECT_EQ(_obj_inst->pg_manager()
                   ->replace_member(0, boost::uuids::random_generator()(),
                                    homeobject::PGMember{boost::uuids::random_generator()(), "new_member", 1})
-                  .get(),
+                  .get()
+                  .error(),
               PGError::UNKNOWN_PG);
-}
-
-TEST_F(HomeObjectFixture, CreateShardMissingPg) {
-    auto v = _obj_inst->shard_manager()->create_shard(1, 1000).get();
-    ASSERT_TRUE(std::holds_alternative< ShardError >(v));
-    EXPECT_EQ(std::get< ShardError >(v), ShardError::UNKNOWN_PG);
-}
-
-TEST_F(HomeObjectFixture, CreateShardZeroSize) {
-    auto v = _obj_inst->shard_manager()->create_shard(1, 0).get();
-    ASSERT_TRUE(std::holds_alternative< ShardError >(v));
-    EXPECT_EQ(std::get< ShardError >(v), ShardError::INVALID_ARG);
-}
-
-TEST_F(HomeObjectFixture, CreateShardTooBig) {
-    auto v = _obj_inst->shard_manager()->create_shard(1, 2 * Gi).get();
-    ASSERT_TRUE(std::holds_alternative< ShardError >(v));
-    EXPECT_EQ(std::get< ShardError >(v), ShardError::INVALID_ARG);
-}
-
-TEST_F(HomeObjectFixture, ListShardsUnknownPg) {
-    auto v = _obj_inst->shard_manager()->list_shards(1).get();
-    ASSERT_TRUE(std::holds_alternative< ShardError >(v));
-    EXPECT_EQ(std::get< ShardError >(v), ShardError::UNKNOWN_PG);
-}
-
-TEST_F(HomeObjectFixture, GetUnknownShard) {
-    auto v = _obj_inst->shard_manager()->get_shard(1);
-    ASSERT_TRUE(std::holds_alternative< ShardError >(v));
-    EXPECT_EQ(std::get< ShardError >(v), ShardError::UNKNOWN_SHARD);
-}
-
-TEST_F(HomeObjectFixture, SealUnknownShard) {
-    auto v = _obj_inst->shard_manager()->seal_shard(1).get();
-    ASSERT_TRUE(std::holds_alternative< ShardError >(v));
-    EXPECT_EQ(std::get< ShardError >(v), ShardError::UNKNOWN_SHARD);
+    EXPECT_EQ(ShardError::UNKNOWN_PG, _obj_inst->shard_manager()->create_shard(1, 1000).get().error());
+    EXPECT_EQ(ShardError::INVALID_ARG, _obj_inst->shard_manager()->create_shard(1, 0).get().error());
+    EXPECT_EQ(ShardError::INVALID_ARG, _obj_inst->shard_manager()->create_shard(1, 2 * Gi).get().error());
+    EXPECT_EQ(ShardError::UNKNOWN_PG, _obj_inst->shard_manager()->list_shards(1).error());
+    EXPECT_EQ(ShardError::UNKNOWN_SHARD, _obj_inst->shard_manager()->get_shard(1).error());
+    EXPECT_EQ(ShardError::UNKNOWN_SHARD, _obj_inst->shard_manager()->seal_shard(1).get().error());
 }
 
 TEST_F(HomeObjectFixture, PutBlobMissingShard) {
-    auto v = _obj_inst->blob_manager()
-                 ->put(1, homeobject::Blob{std::make_unique< sisl::byte_array_impl >(4096), "user_key", 0ul})
-                 .get();
-    ASSERT_TRUE(std::holds_alternative< BlobError >(v));
-    EXPECT_EQ(std::get< BlobError >(v), BlobError::UNKNOWN_SHARD);
+    EXPECT_EQ(BlobError::UNKNOWN_SHARD,
+              _obj_inst->blob_manager()
+                  ->put(1, homeobject::Blob{std::make_unique< sisl::byte_array_impl >(4096), "user_key", 0ul})
+                  .get()
+                  .error());
 }
 
 TEST_F(HomeObjectFixture, GetBlobMissingShard) {
-    auto v = _obj_inst->blob_manager()->get(1, 0u, 0ul, UINT64_MAX).get();
-    ASSERT_TRUE(std::holds_alternative< BlobError >(v));
-    EXPECT_EQ(std::get< BlobError >(v), BlobError::UNKNOWN_SHARD);
+    EXPECT_EQ(BlobError::UNKNOWN_SHARD, _obj_inst->blob_manager()->get(1, 0u, 0ul, UINT64_MAX).get().error());
 }
 
 TEST_F(HomeObjectFixture, DeleteBlobMissingShard) {
-    EXPECT_EQ(_obj_inst->blob_manager()->del(1, 0u).get(), BlobError::UNKNOWN_SHARD);
+    EXPECT_EQ(BlobError::UNKNOWN_SHARD, _obj_inst->blob_manager()->del(1, 0u).get().error());
 }
 
 int main(int argc, char* argv[]) {

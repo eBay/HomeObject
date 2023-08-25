@@ -4,37 +4,40 @@ namespace homeobject {
 using namespace std::chrono_literals;
 constexpr auto disk_latency = 15ms;
 
-folly::SemiFuture< std::variant< blob_id, BlobError > > MockHomeObject::put(shard_id shard, Blob&& blob) {
-    auto [p, f] = folly::makePromiseContract< std::variant< blob_id, BlobError > >();
+BlobManager::AsyncResult< blob_id > MockHomeObject::put(shard_id shard, Blob&& blob) {
+    auto [p, f] = folly::makePromiseContract< BlobManager::Result< blob_id > >();
     std::thread([this, shard, mblob = std::move(blob), p = std::move(p)]() mutable {
         std::this_thread::sleep_for(disk_latency);
         blob_id id;
+        bool set_id{false};
         auto err = BlobError::UNKNOWN_SHARD;
         {
             auto lg = std::scoped_lock(_shard_lock, _data_lock);
             if (0 != _shards.count(shard)) {
-                err = BlobError::OK;
-                id = _cur_blob_id;
-                if (auto [_, happened] = _in_memory_disk.try_emplace(BlobRoute{shard, id}, std::move(mblob));
+                if (auto [_, happened] = _in_memory_disk.try_emplace(BlobRoute{shard, _cur_blob_id}, std::move(mblob));
                     happened) {
-                    _cur_blob_id++;
-                }
+                    set_id = true;
+                    id = _cur_blob_id++;
+                } else
+                    err = BlobError::BLOB_EXISTS;
             }
         }
-        (BlobError::OK == err) ? p.setValue(id) : p.setValue(err);
+        if (set_id)
+            p.setValue(id);
+        else
+            p.setValue(folly::makeUnexpected(err));
     }).detach();
     return std::move(f);
 }
 
-folly::SemiFuture< std::variant< Blob, BlobError > > MockHomeObject::get(shard_id shard, blob_id const& id, uint64_t,
-                                                                         uint64_t) const {
-    auto [p, f] = folly::makePromiseContract< std::variant< Blob, BlobError > >();
+BlobManager::AsyncResult< Blob > MockHomeObject::get(shard_id shard, blob_id const& id, uint64_t, uint64_t) const {
+    auto [p, f] = folly::makePromiseContract< BlobManager::Result< Blob > >();
     std::thread([this, shard, id, p = std::move(p)]() mutable {
         // Only need to lookup shard with _shard_lock for READs, okay to seal while reading
         {
             auto lg = std::scoped_lock(_shard_lock);
             LOGDEBUG("Looking up shard {} in set of {}", shard, _shards.size());
-            if (0 == _shards.count(shard)) p.setValue(BlobError::UNKNOWN_SHARD);
+            if (0 == _shards.count(shard)) p.setValue(folly::makeUnexpected(BlobError::UNKNOWN_SHARD));
         }
         if (p.isFulfilled()) return;
 
@@ -52,22 +55,26 @@ folly::SemiFuture< std::variant< Blob, BlobError > > MockHomeObject::get(shard_i
                 p.setValue(std::move(blob));
             }
         }
-        if (!p.isFulfilled()) p.setValue(BlobError::UNKNOWN_BLOB);
+        if (!p.isFulfilled()) p.setValue(folly::makeUnexpected(BlobError::UNKNOWN_BLOB));
     }).detach();
     return std::move(f);
 }
 
-folly::SemiFuture< BlobError > MockHomeObject::del(shard_id shard, blob_id const& blob) {
-    auto [p, f] = folly::makePromiseContract< BlobError >();
+BlobManager::NullAsyncResult MockHomeObject::del(shard_id shard, blob_id const& blob) {
+    auto [p, f] = folly::makePromiseContract< BlobManager::NullResult >();
     std::thread([this, shard, blob, p = std::move(p)]() mutable {
         auto err = BlobError::UNKNOWN_SHARD;
+        auto cnt{0ul};
         {
             auto lg = std::scoped_lock(_shard_lock, _data_lock);
             if (auto const it = _shards.find(shard); it != _shards.end()) {
-                err = (0 < _in_memory_disk.erase(BlobRoute{shard, blob})) ? BlobError::OK : BlobError::UNKNOWN_BLOB;
+                if (cnt = _in_memory_disk.erase(BlobRoute{shard, blob}); 0 == cnt) err = BlobError::UNKNOWN_BLOB;
             }
         }
-        p.setValue(err);
+        if (0 == cnt)
+            p.setValue(folly::makeUnexpected(err));
+        else
+            p.setValue(folly::Unit());
     }).detach();
     return std::move(f);
 }

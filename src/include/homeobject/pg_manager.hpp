@@ -1,15 +1,14 @@
 #pragma once
-#include <functional>
 #include <set>
+#include <string>
 
-#include <folly/futures/Future.h>
 #include <sisl/utility/enum.hpp>
 
 #include "common.hpp"
 
 namespace homeobject {
 
-ENUM(PGError, uint16_t, OK = 0, UNKNOWN, INVALID_ARG, TIMEOUT, UNKNOWN_PG, UNKNOWN_PEER);
+ENUM(PGError, uint16_t, UNKNOWN = 1, INVALID_ARG, TIMEOUT, UNKNOWN_PG, UNKNOWN_PEER);
 
 struct PGMember {
     explicit PGMember(peer_id _id) : id(_id) {}
@@ -20,18 +19,18 @@ struct PGMember {
     int32_t priority{0}; // <0 (Arbiter), ==0 (Follower), >0 (F|Leader)
 };
 
+using MemberSet = std::set< PGMember >;
+
 struct PGInfo {
     explicit PGInfo(pg_id _id) : id(_id) {}
     pg_id id;
-    mutable std::set< PGMember > members;
+    mutable MemberSet members;
 };
 
-class PGManager {
+class PGManager : public Manager< PGError > {
 public:
-    virtual ~PGManager() = default;
-    virtual folly::SemiFuture< PGError > create_pg(PGInfo&& pg_info) = 0;
-    virtual folly::SemiFuture< PGError > replace_member(pg_id id, peer_id const& old_member,
-                                                        PGMember const& new_member) = 0;
+    virtual NullAsyncResult create_pg(PGInfo&& pg_info) = 0;
+    virtual NullAsyncResult replace_member(pg_id id, peer_id const& old_member, PGMember const& new_member) = 0;
 };
 
 inline bool operator<(homeobject::PGMember const& lhs, homeobject::PGMember const& rhs) { return lhs.id < rhs.id; }

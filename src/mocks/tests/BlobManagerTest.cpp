@@ -41,57 +41,43 @@ public:
         info.members.insert(homeobject::PGMember{_peer2, "peer2", 0});
 
         LOGDEBUG("Setup Pg");
-        auto p_v = m_mock_homeobj->pg_manager()->create_pg(std::move(info)).get();
-        EXPECT_EQ(homeobject::PGError::OK, p_v);
+        EXPECT_TRUE(m_mock_homeobj->pg_manager()->create_pg(std::move(info)).get());
 
         LOGDEBUG("Setup Shard");
-        auto s_v = m_mock_homeobj->shard_manager()->create_shard(_pg_id, Mi).get();
-        ASSERT_TRUE(std::holds_alternative< homeobject::ShardInfo >(s_v));
-        _shard = std::get< homeobject::ShardInfo >(s_v);
+        auto s_e = m_mock_homeobj->shard_manager()->create_shard(_pg_id, Mi).get();
+        ASSERT_TRUE(!!s_e);
+        s_e.then([this](auto&& i) { _shard = std::move(i); });
 
         LOGDEBUG("Insert Blob to: {}", _shard.id);
-        auto o_v =
+        auto o_e =
             m_mock_homeobj->blob_manager()
                 ->put(_shard.id, Blob{std::make_unique< sisl::byte_array_impl >(4 * Ki, 512u), "test_blob", 4 * Mi})
                 .get();
-        ASSERT_TRUE(std::holds_alternative< blob_id >(o_v));
-        _blob_id = std::get< blob_id >(o_v);
+        EXPECT_TRUE(!!o_e);
+        o_e.then([this](auto&& b) mutable { _blob_id = std::move(b); });
     }
 
 protected:
     std::shared_ptr< homeobject::HomeObject > m_mock_homeobj;
 };
 
-TEST_F(BlobManagerFixture, PutUnknownShard) {
-    auto v = m_mock_homeobj->blob_manager()->put(_shard.id + 1, Blob()).get();
-    ASSERT_TRUE(std::holds_alternative< BlobError >(v));
-    EXPECT_EQ(std::get< BlobError >(v), BlobError::UNKNOWN_SHARD);
+TEST_F(BlobManagerFixture, UnknownShardOrBlob) {
+    EXPECT_EQ(BlobError::UNKNOWN_SHARD, m_mock_homeobj->blob_manager()->put(_shard.id + 1, Blob()).get().error());
+    EXPECT_EQ(BlobError::UNKNOWN_SHARD,
+              m_mock_homeobj->blob_manager()->get(_shard.id + 1, UINT64_MAX, 0, 0).get().error());
+    EXPECT_EQ(BlobError::UNKNOWN_BLOB, m_mock_homeobj->blob_manager()->get(_shard.id, UINT64_MAX, 0, 0).get().error());
+    EXPECT_EQ(BlobError::UNKNOWN_SHARD, m_mock_homeobj->blob_manager()->del(_shard.id + 1, _blob_id).get().error());
+    EXPECT_EQ(BlobError::UNKNOWN_BLOB, m_mock_homeobj->blob_manager()->del(_shard.id, _blob_id + 1).get().error());
 }
 
-TEST_F(BlobManagerFixture, GetUnknownShard) {
-    auto v = m_mock_homeobj->blob_manager()->get(_shard.id + 1, UINT64_MAX, 0, 0).get();
-    ASSERT_TRUE(std::holds_alternative< BlobError >(v));
-    EXPECT_EQ(std::get< BlobError >(v), BlobError::UNKNOWN_SHARD);
-}
-
-TEST_F(BlobManagerFixture, GetUnknownBlob) {
-    auto v = m_mock_homeobj->blob_manager()->get(_shard.id, UINT64_MAX, 0, 0).get();
-    ASSERT_TRUE(std::holds_alternative< BlobError >(v));
-    EXPECT_EQ(std::get< BlobError >(v), BlobError::UNKNOWN_BLOB);
-}
-
-TEST_F(BlobManagerFixture, GetBlob) {
-    auto v = m_mock_homeobj->blob_manager()->get(_shard.id, _blob_id, 0, 0).get();
-    ASSERT_TRUE(std::holds_alternative< Blob >(v));
-    auto const& blob = std::get< Blob >(v);
-    EXPECT_STREQ(blob.user_key.c_str(), "test_blob");
-    EXPECT_EQ(blob.object_off, 4 * Mi);
-}
-
-TEST_F(BlobManagerFixture, DeleteBlob) {
-    EXPECT_EQ(m_mock_homeobj->blob_manager()->del(_shard.id + 1, _blob_id).get(), BlobError::UNKNOWN_SHARD);
-    EXPECT_EQ(m_mock_homeobj->blob_manager()->del(_shard.id, _blob_id + 1).get(), BlobError::UNKNOWN_BLOB);
-    EXPECT_EQ(m_mock_homeobj->blob_manager()->del(_shard.id, _blob_id).get(), BlobError::OK);
+TEST_F(BlobManagerFixture, KnownBlob) {
+    auto e = m_mock_homeobj->blob_manager()->get(_shard.id, _blob_id, 0, 0).get();
+    EXPECT_TRUE(!!e);
+    e.then([](auto const& blob) {
+        EXPECT_STREQ(blob.user_key.c_str(), "test_blob");
+        EXPECT_EQ(blob.object_off, 4 * Mi);
+    });
+    EXPECT_TRUE(m_mock_homeobj->blob_manager()->del(_shard.id, _blob_id).get());
 }
 
 int main(int argc, char* argv[]) {

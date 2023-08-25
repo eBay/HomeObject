@@ -1,18 +1,15 @@
 #pragma once
-#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
-#include <variant>
 
-#include <folly/futures/Future.h>
 #include <sisl/fds/buffer.hpp>
 
 #include "common.hpp"
 
 namespace homeobject {
 
-ENUM(BlobError, uint16_t, OK = 0, UNKNOWN, TIMEOUT, INVALID_ARG, NOT_LEADER, UNKNOWN_SHARD, UNKNOWN_BLOB,
+ENUM(BlobError, uint16_t, UNKNOWN = 1, TIMEOUT, INVALID_ARG, NOT_LEADER, UNKNOWN_SHARD, UNKNOWN_BLOB, BLOB_EXISTS,
      CHECKSUM_MISMATCH);
 
 using unique_buffer = std::unique_ptr< sisl::byte_array_impl >;
@@ -23,14 +20,11 @@ struct Blob {
     std::optional< peer_id > current_leader{std::nullopt};
 };
 
-class BlobManager {
+class BlobManager : public Manager< BlobError > {
 public:
-    virtual ~BlobManager() = default;
-
-    virtual folly::SemiFuture< std::variant< blob_id, BlobError > > put(shard_id shard, Blob&&) = 0;
-    virtual folly::SemiFuture< std::variant< Blob, BlobError > > get(shard_id shard, blob_id const& blob, uint64_t off,
-                                                                     uint64_t len) const = 0;
-    virtual folly::SemiFuture< BlobError > del(shard_id shard, blob_id const& blob) = 0;
+    virtual AsyncResult< blob_id > put(shard_id shard, Blob&&) = 0;
+    virtual AsyncResult< Blob > get(shard_id shard, blob_id const& blob, uint64_t off, uint64_t len) const = 0;
+    virtual NullAsyncResult del(shard_id shard, blob_id const& blob) = 0;
 };
 
 } // namespace homeobject

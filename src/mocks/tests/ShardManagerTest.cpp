@@ -36,8 +36,7 @@ public:
         auto info = homeobject::PGInfo(_pg_id);
         info.members.insert(homeobject::PGMember{_peer1, "peer1", 1});
         info.members.insert(homeobject::PGMember{_peer2, "peer2", 0});
-        auto e = m_mock_homeobj->pg_manager()->create_pg(std::move(info)).get();
-        EXPECT_EQ(homeobject::PGError::OK, e);
+        EXPECT_TRUE(m_mock_homeobj->pg_manager()->create_pg(std::move(info)).get());
     }
 
 protected:
@@ -45,22 +44,19 @@ protected:
 };
 
 TEST_F(ShardManagerFixture, CreateShardTooBig) {
-    auto v =
-        m_mock_homeobj->shard_manager()->create_shard(_pg_id, homeobject::ShardManager::max_shard_size() + 1).get();
-    ASSERT_TRUE(std::holds_alternative< ShardError >(v));
-    EXPECT_EQ(std::get< ShardError >(v), ShardError::INVALID_ARG);
+    EXPECT_EQ(ShardError::INVALID_ARG,
+              m_mock_homeobj->shard_manager()
+                  ->create_shard(_pg_id, homeobject::ShardManager::max_shard_size() + 1)
+                  .get()
+                  .error());
 }
 
 TEST_F(ShardManagerFixture, CreateShardTooSmall) {
-    auto v = m_mock_homeobj->shard_manager()->create_shard(_pg_id, 0ul).get();
-    ASSERT_TRUE(std::holds_alternative< ShardError >(v));
-    EXPECT_EQ(std::get< ShardError >(v), ShardError::INVALID_ARG);
+    EXPECT_EQ(ShardError::INVALID_ARG, m_mock_homeobj->shard_manager()->create_shard(_pg_id, 0ul).get().error());
 }
 
 TEST_F(ShardManagerFixture, CreateShardNoPg) {
-    auto v = m_mock_homeobj->shard_manager()->create_shard(_pg_id + 1, Mi).get();
-    ASSERT_TRUE(std::holds_alternative< ShardError >(v));
-    EXPECT_EQ(std::get< ShardError >(v), ShardError::UNKNOWN_PG);
+    EXPECT_EQ(ShardError::UNKNOWN_PG, m_mock_homeobj->shard_manager()->create_shard(_pg_id + 1, Mi).get().error());
 }
 
 class ShardManagerFixtureWShard : public ShardManagerFixture {
@@ -68,9 +64,9 @@ public:
     ShardInfo _shard;
     void SetUp() override {
         ShardManagerFixture::SetUp();
-        auto v = m_mock_homeobj->shard_manager()->create_shard(_pg_id, Mi).get();
-        ASSERT_TRUE(std::holds_alternative< ShardInfo >(v));
-        _shard = std::get< ShardInfo >(v);
+        auto e = m_mock_homeobj->shard_manager()->create_shard(_pg_id, Mi).get();
+        ASSERT_TRUE(!!e);
+        e.then([this](auto&& i) { _shard = std::move(i); });
         EXPECT_EQ(ShardInfo::State::OPEN, _shard.state);
         EXPECT_EQ(Mi, _shard.total_capacity_bytes);
         EXPECT_EQ(Mi, _shard.available_capacity_bytes);
@@ -80,49 +76,46 @@ public:
 };
 
 TEST_F(ShardManagerFixtureWShard, GetUnknownShard) {
-    auto v = m_mock_homeobj->shard_manager()->get_shard(_shard.id + 1);
-    ASSERT_TRUE(std::holds_alternative< ShardError >(v));
-    EXPECT_EQ(std::get< ShardError >(v), ShardError::UNKNOWN_SHARD);
+    EXPECT_EQ(ShardError::UNKNOWN_SHARD, m_mock_homeobj->shard_manager()->get_shard(_shard.id + 1).error());
 }
 
 TEST_F(ShardManagerFixtureWShard, GetKnownShard) {
-    auto v = m_mock_homeobj->shard_manager()->get_shard(_shard.id);
-    ASSERT_TRUE(std::holds_alternative< ShardInfo >(v));
-    auto const& info = std::get< ShardInfo >(v);
-    EXPECT_TRUE(info.id == _shard.id);
-    EXPECT_TRUE(info.placement_group == _shard.placement_group);
-    EXPECT_EQ(info.state, ShardInfo::State::OPEN);
+    auto e = m_mock_homeobj->shard_manager()->get_shard(_shard.id);
+    ASSERT_TRUE(!!e);
+    e.then([this](auto const& info) {
+        EXPECT_TRUE(info.id == _shard.id);
+        EXPECT_TRUE(info.placement_group == _shard.placement_group);
+        EXPECT_EQ(info.state, ShardInfo::State::OPEN);
+    });
 }
 
 TEST_F(ShardManagerFixtureWShard, ListShardsNoPg) {
-    auto v = m_mock_homeobj->shard_manager()->list_shards(_pg_id + 1).get();
-    ASSERT_TRUE(std::holds_alternative< ShardError >(v));
-    EXPECT_EQ(std::get< ShardError >(v), ShardError::UNKNOWN_PG);
+    EXPECT_EQ(ShardError::UNKNOWN_PG, m_mock_homeobj->shard_manager()->list_shards(_pg_id + 1).error());
 }
 
 TEST_F(ShardManagerFixtureWShard, ListShards) {
-    auto v = m_mock_homeobj->shard_manager()->list_shards(_pg_id).get();
-    ASSERT_TRUE(std::holds_alternative< std::vector< ShardInfo > >(v));
-    auto const& info_vec = std::get< std::vector< ShardInfo > >(v);
-    ASSERT_EQ(info_vec.size(), 1);
-    EXPECT_TRUE(info_vec.begin()->id == _shard.id);
-    EXPECT_TRUE(info_vec.begin()->placement_group == _shard.placement_group);
-    EXPECT_EQ(info_vec.begin()->state, ShardInfo::State::OPEN);
+    auto e = m_mock_homeobj->shard_manager()->list_shards(_pg_id);
+    ASSERT_TRUE(!!e);
+    e.then([this](auto const& info_list) {
+        ASSERT_EQ(info_list.size(), 1);
+        EXPECT_TRUE(info_list.begin()->id == _shard.id);
+        EXPECT_TRUE(info_list.begin()->placement_group == _shard.placement_group);
+        EXPECT_EQ(info_list.begin()->state, ShardInfo::State::OPEN);
+    });
 }
 
 TEST_F(ShardManagerFixtureWShard, SealShardNoShard) {
-    auto v = m_mock_homeobj->shard_manager()->seal_shard(_shard.id + 1).get();
-    ASSERT_TRUE(std::holds_alternative< ShardError >(v));
-    EXPECT_EQ(std::get< ShardError >(v), ShardError::UNKNOWN_SHARD);
+    EXPECT_EQ(ShardError::UNKNOWN_SHARD, m_mock_homeobj->shard_manager()->seal_shard(_shard.id + 1).get().error());
 }
 
 TEST_F(ShardManagerFixtureWShard, SealShard) {
-    auto v = m_mock_homeobj->shard_manager()->seal_shard(_shard.id).get();
-    ASSERT_TRUE(std::holds_alternative< ShardInfo >(v));
-    auto const& info = std::get< ShardInfo >(v);
-    EXPECT_TRUE(info.id == _shard.id);
-    EXPECT_TRUE(info.placement_group == _shard.placement_group);
-    EXPECT_EQ(info.state, ShardInfo::State::SEALED);
+    auto e = m_mock_homeobj->shard_manager()->seal_shard(_shard.id).get();
+    ASSERT_TRUE(!!e);
+    e.then([this](auto const& info) {
+        EXPECT_TRUE(info.id == _shard.id);
+        EXPECT_TRUE(info.placement_group == _shard.placement_group);
+        EXPECT_EQ(info.state, ShardInfo::State::SEALED);
+    });
 }
 
 int main(int argc, char* argv[]) {

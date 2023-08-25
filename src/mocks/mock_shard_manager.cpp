@@ -8,11 +8,10 @@ static uint64_t get_current_timestamp() {
     return timestamp;
 }
 
-folly::SemiFuture< ShardManager::info_var > MockHomeObject::create_shard(pg_id pg_owner, uint64_t size_bytes) {
-    if (0 == size_bytes || max_shard_size() < size_bytes)
-        return folly::makeSemiFuture(ShardManager::info_var(ShardError::INVALID_ARG));
+ShardManager::AsyncResult< ShardInfo > MockHomeObject::create_shard(pg_id pg_owner, uint64_t size_bytes) {
+    if (0 == size_bytes || max_shard_size() < size_bytes) return folly::makeUnexpected(ShardError::INVALID_ARG);
 
-    auto [p, f] = folly::makePromiseContract< ShardManager::info_var >();
+    auto [p, f] = folly::makePromiseContract< ShardManager::Result< ShardInfo > >();
     std::thread([this, pg_owner, size_bytes, p = std::move(p)]() mutable {
         auto lg = std::scoped_lock(_pg_lock, _shard_lock);
         if (auto pg_it = _pg_map.find(pg_owner); _pg_map.end() != pg_it) {
@@ -23,42 +22,38 @@ folly::SemiFuture< ShardManager::info_var > MockHomeObject::create_shard(pg_id p
             LOGDEBUG("Creating Shard [{}]: in Pg [{}] of Size [{}b] shard_cnt:[{}]", info.id, pg_owner, size_bytes,
                      _shards.size());
             if (!_shards.try_emplace(info.id, info).second)
-                p.setValue(ShardError::UNKNOWN);
+                p.setValue(folly::makeUnexpected(ShardError::UNKNOWN));
             else
                 p.setValue(std::move(info));
         } else
-            p.setValue(ShardError::UNKNOWN_PG);
+            p.setValue(folly::makeUnexpected(ShardError::UNKNOWN_PG));
     }).detach();
     return std::move(f);
 }
 
-ShardManager::info_var MockHomeObject::get_shard(shard_id id) const {
+ShardManager::Result< ShardInfo > MockHomeObject::get_shard(shard_id id) const {
     auto lg = std::scoped_lock(_pg_lock, _shard_lock);
     if (auto shard_it = _shards.find(id); _shards.end() != shard_it) return shard_it->second;
-    return ShardError::UNKNOWN_SHARD;
+    return folly::makeUnexpected(ShardError::UNKNOWN_SHARD);
 }
 
-folly::SemiFuture< ShardManager::list_var > MockHomeObject::list_shards(pg_id id) const {
-    auto [p, f] = folly::makePromiseContract< ShardManager::list_var >();
-    std::thread([this, id, p = std::move(p)]() mutable {
-        auto lg = std::scoped_lock(_pg_lock, _shard_lock);
-        if (auto pg_it = _pg_map.find(id); _pg_map.end() != pg_it) {
-            auto info = std::vector< ShardInfo >();
-            for (auto const& shard_id : pg_it->second) {
-                LOGDEBUG("Listing Shard {}", shard_id);
-                auto shard_it = _shards.find(shard_id);
-                RELEASE_ASSERT(_shards.end() != shard_it, "Missing Shard [{}]!", shard_id);
-                info.push_back(shard_it->second);
-            }
-            p.setValue(std::move(info));
-        } else
-            p.setValue(ShardError::UNKNOWN_PG);
-    }).detach();
-    return std::move(f);
+ShardManager::Result< InfoList > MockHomeObject::list_shards(pg_id id) const {
+    auto lg = std::scoped_lock(_pg_lock, _shard_lock);
+    if (auto pg_it = _pg_map.find(id); _pg_map.end() != pg_it) {
+        auto info = std::list< ShardInfo >();
+        for (auto const& shard_id : pg_it->second) {
+            LOGDEBUG("Listing Shard {}", shard_id);
+            auto shard_it = _shards.find(shard_id);
+            RELEASE_ASSERT(_shards.end() != shard_it, "Missing Shard [{}]!", shard_id);
+            info.push_back(shard_it->second);
+        }
+        return info;
+    }
+    return folly::makeUnexpected(ShardError::UNKNOWN_PG);
 }
 
-folly::SemiFuture< ShardManager::info_var > MockHomeObject::seal_shard(shard_id id) {
-    auto [p, f] = folly::makePromiseContract< ShardManager::info_var >();
+ShardManager::AsyncResult< ShardInfo > MockHomeObject::seal_shard(shard_id id) {
+    auto [p, f] = folly::makePromiseContract< ShardManager::Result< ShardInfo > >();
     std::thread([this, id, p = std::move(p)]() mutable {
         auto lg = std::scoped_lock(_pg_lock, _shard_lock);
         if (auto shard_it = _shards.find(id); _shards.end() != shard_it) {
@@ -66,7 +61,7 @@ folly::SemiFuture< ShardManager::info_var > MockHomeObject::seal_shard(shard_id 
             auto info = shard_it->second;
             p.setValue(std::move(info));
         } else
-            p.setValue(ShardError::UNKNOWN_SHARD);
+            p.setValue(folly::makeUnexpected(ShardError::UNKNOWN_SHARD));
     }).detach();
     return std::move(f);
 }
