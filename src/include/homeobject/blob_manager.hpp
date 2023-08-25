@@ -9,7 +9,7 @@
 
 namespace homeobject {
 
-ENUM(BlobError, uint16_t, UNKNOWN = 1, TIMEOUT, INVALID_ARG, NOT_LEADER, UNKNOWN_SHARD, UNKNOWN_BLOB, BLOB_EXISTS,
+ENUM(BlobError, uint16_t, UNKNOWN = 1, TIMEOUT, INVALID_ARG, NOT_LEADER, UNKNOWN_SHARD, UNKNOWN_BLOB,
      CHECKSUM_MISMATCH);
 
 using unique_buffer = std::unique_ptr< sisl::byte_array_impl >;

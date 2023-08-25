@@ -14,12 +14,10 @@ BlobManager::AsyncResult< blob_id > MockHomeObject::put(shard_id shard, Blob&& b
         {
             auto lg = std::scoped_lock(_shard_lock, _data_lock);
             if (0 != _shards.count(shard)) {
-                if (auto [_, happened] = _in_memory_disk.try_emplace(BlobRoute{shard, _cur_blob_id}, std::move(mblob));
-                    happened) {
-                    set_id = true;
-                    id = _cur_blob_id++;
-                } else
-                    err = BlobError::BLOB_EXISTS;
+                auto [_, happened] = _in_memory_disk.try_emplace(BlobRoute{shard, _cur_blob_id}, std::move(mblob));
+                RELEASE_ASSERT(happened, "Generated duplicate BlobRoute!");
+                set_id = true;
+                id = _cur_blob_id++;
             }
         }
         if (set_id)
