@@ -24,12 +24,20 @@ using homeobject::ShardError;
 SISL_LOGGING_INIT(logging, HOMEOBJECT_LOG_MODS)
 SISL_OPTIONS_ENABLE(logging)
 
+class FixtureApp : public homeobject::HomeObjectApplication {
+public:
+    bool spdk_mode() const override { return true; }
+    uint32_t threads() const override { return 2; }
+    std::list< std::filesystem::path > devices() const override { return std::list< std::filesystem::path >(); }
+    homeobject::peer_id discover_svcid(std::optional< homeobject::peer_id > const&) const override {
+        return boost::uuids::random_generator()();
+    }
+    std::string lookup_peer(homeobject::peer_id const&) const override { return "test_fixture.com"; }
+};
+
 TEST(HomeObject, BasicEquivalence) {
-    auto obj_inst = homeobject::init_homeobject(
-        homeobject::HomeObject::init_params{[](std::optional< homeobject::peer_id > const&) {
-                                                return folly::makeSemiFuture(boost::uuids::random_generator()());
-                                            },
-                                            [](homeobject::peer_id const&) { return "test"; }});
+    auto app = std::make_shared< FixtureApp >();
+    auto obj_inst = homeobject::init_homeobject(std::weak_ptr< homeobject::HomeObjectApplication >(app));
     ASSERT_TRUE(!!obj_inst);
     auto shard_mgr = obj_inst->shard_manager();
     auto pg_mgr = obj_inst->pg_manager();
@@ -41,14 +49,12 @@ TEST(HomeObject, BasicEquivalence) {
 
 class HomeObjectFixture : public ::testing::Test {
 public:
+    std::shared_ptr< FixtureApp > app;
     std::shared_ptr< homeobject::HomeObject > _obj_inst;
 
     void SetUp() override {
-        _obj_inst = homeobject::init_homeobject(
-            homeobject::HomeObject::init_params{[](std::optional< homeobject::peer_id > const&) {
-                                                    return folly::makeSemiFuture(boost::uuids::random_generator()());
-                                                },
-                                                [](homeobject::peer_id const&) { return "test_fixture"; }});
+        app = std::make_shared< FixtureApp >();
+        _obj_inst = homeobject::init_homeobject(std::weak_ptr< homeobject::HomeObjectApplication >(app));
     }
 };
 

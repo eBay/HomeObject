@@ -1,8 +1,8 @@
 #pragma once
 
-#include <functional>
 #include <memory>
 #include <mutex>
+#include <shared_mutex>
 #include <set>
 #include <utility>
 
@@ -34,19 +34,21 @@ namespace homeobject {
 
 class MockHomeObject : public HomeObjectImpl {
     /// This simulates the IndexSvc thats used within real HomeObject
-    mutable std::mutex _shard_lock;
+    mutable std::shared_mutex _shard_lock;
     std::map< shard_id, ShardInfo > _shards;
     shard_id _cur_shard_id{0};
     ///
 
     /// Simulates the Shard=>Chunk mapping in IndexSvc *and* DataSvc BlkId=>Data
-    mutable std::mutex _data_lock;
+    mutable std::shared_mutex _data_lock;
     std::unordered_map< BlobRoute, Blob > _in_memory_disk;
     blob_id _cur_blob_id{0};
     ///
 
     std::mutex _repl_lock;
     std::shared_ptr< home_replication::ReplicationService > _repl_svc;
+
+    bool _has_shard(shard_id shard) const;
 
 public:
     using HomeObjectImpl::HomeObjectImpl;

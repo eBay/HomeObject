@@ -1,10 +1,9 @@
 #pragma once
-#include <functional>
+#include <filesystem>
+#include <list>
 #include <memory>
 #include <optional>
 #include <string>
-
-#include <folly/futures/Future.h>
 
 #include "common.hpp"
 
@@ -14,17 +13,23 @@ class BlobManager;
 class PGManager;
 class ShardManager;
 
-using endpoint = std::string;
+class HomeObjectApplication {
+public:
+    virtual ~HomeObjectApplication() = default;
+
+    virtual bool spdk_mode() const = 0;
+    virtual uint32_t threads() const = 0;
+    virtual std::list< std::filesystem::path > devices() const = 0;
+
+    // Callback made after determining if a SvcId exists or not during initialization, will consume response
+    virtual peer_id discover_svcid(std::optional< peer_id > const& found) const = 0;
+
+    // When RAFT operations take place, we must map the SvcId to a gethostbyaddr() value (IP)
+    virtual std::string lookup_peer(peer_id const&) const = 0;
+};
 
 class HomeObject {
 public:
-    using svc_id_cb = std::function< folly::SemiFuture< peer_id >(std::optional< peer_id > const& found) >;
-    using lookup_cb = std::function< folly::SemiFuture< endpoint >(peer_id const&) >;
-    struct init_params {
-        svc_id_cb get_svc_id; // Callback made after determining if a SvcId exists or not (optional arg)
-        lookup_cb lookup;     // When RAFT operations take place, we must map the SvcId to a gethostbyaddr() value (IP)
-    };
-
     virtual ~HomeObject() = default;
     virtual peer_id our_uuid() const = 0;
     virtual std::shared_ptr< BlobManager > blob_manager() = 0;
@@ -32,6 +37,6 @@ public:
     virtual std::shared_ptr< ShardManager > shard_manager() = 0;
 };
 
-extern std::shared_ptr< HomeObject > init_homeobject(HomeObject::init_params&& params);
+extern std::shared_ptr< HomeObject > init_homeobject(std::weak_ptr< HomeObjectApplication >&& application);
 
 } // namespace homeobject

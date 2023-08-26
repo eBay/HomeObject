@@ -10,7 +10,7 @@ target_link_libraries(pg_mock_test
     homeobject_mock
     ${COMMON_TEST_DEPS}
   )
-add_test(NAME PGMockTest COMMAND pg_mock_test -csv critical)
+add_test(NAME PGMockTest COMMAND pg_mock_test -csv error)
 
 add_executable (shard_mock_test)
 target_sources(shard_mock_test PRIVATE ShardManagerTest.cpp)
@@ -18,7 +18,7 @@ target_link_libraries(shard_mock_test
     homeobject_mock
     ${COMMON_TEST_DEPS}
   )
-add_test(NAME ShardMockTest COMMAND shard_mock_test -csv critical)
+add_test(NAME ShardMockTest COMMAND shard_mock_test -csv error)
 
 add_executable (blob_mock_test)
 target_sources(blob_mock_test PRIVATE BlobManagerTest.cpp)
@@ -26,4 +26,4 @@ target_link_libraries(blob_mock_test
     homeobject_mock
     ${COMMON_TEST_DEPS}
   )
-add_test(NAME BlobMockTest COMMAND blob_mock_test -csv critical)
+add_test(NAME BlobMockTest COMMAND blob_mock_test -csv error)

@@ -1,24 +1,31 @@
-#include <chrono>
 #include <string>
 
 #include <boost/uuid/random_generator.hpp>
-#include <boost/uuid/string_generator.hpp>
 #include <boost/uuid/uuid_io.hpp>
 #include <gtest/gtest.h>
-#include <gmock/gmock-matchers.h>
 
 #include <sisl/logging/logging.h>
 #include <sisl/options/options.h>
 
 #include "mocks/mock_homeobject.hpp"
 
-using namespace std::chrono_literals;
 using homeobject::shard_id;
 using homeobject::ShardError;
 using homeobject::ShardInfo;
 
 SISL_LOGGING_INIT(logging, HOMEOBJECT_LOG_MODS)
 SISL_OPTIONS_ENABLE(logging)
+
+class FixtureApp : public homeobject::HomeObjectApplication {
+public:
+    bool spdk_mode() const override { return false; }
+    uint32_t threads() const override { return 2; }
+    std::list< std::filesystem::path > devices() const override { return std::list< std::filesystem::path >(); }
+    homeobject::peer_id discover_svcid(std::optional< homeobject::peer_id > const& p) const override {
+        return p.value();
+    }
+    std::string lookup_peer(homeobject::peer_id const&) const override { return "test_fixture.com"; }
+};
 
 class ShardManagerFixture : public ::testing::Test {
 public:
@@ -27,9 +34,8 @@ public:
     homeobject::peer_id _peer2;
 
     void SetUp() override {
-        m_mock_homeobj = homeobject::init_homeobject(homeobject::HomeObject::init_params{
-            [](auto p) { return folly::makeSemiFuture(p.value()); }, [](auto) { return "test_fixture"; }});
-
+        app = std::make_shared< FixtureApp >();
+        m_mock_homeobj = homeobject::init_homeobject(std::weak_ptr< homeobject::HomeObjectApplication >(app));
         _peer1 = m_mock_homeobj->our_uuid();
         _peer2 = boost::uuids::random_generator()();
 
@@ -40,6 +46,7 @@ public:
     }
 
 protected:
+    std::shared_ptr< FixtureApp > app;
     std::shared_ptr< homeobject::HomeObject > m_mock_homeobj;
 };
 

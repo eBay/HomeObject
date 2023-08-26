@@ -23,7 +23,7 @@ protected:
     peer_id _our_id;
 
     /// Our SvcId retrieval and SvcId->IP mapping
-    init_params _svcid_routines;
+    std::weak_ptr< HomeObjectApplication > _application;
 
     /// This simulates the MetaBlkSvc thats used within real HomeObject
     mutable std::mutex _pg_lock;
@@ -31,7 +31,8 @@ protected:
     ///
 
 public:
-    explicit HomeObjectImpl(HomeObject::init_params&& params) : _svcid_routines(std::move(params)) {}
+    explicit HomeObjectImpl(std::weak_ptr< HomeObjectApplication >&& application) :
+            _application(std::move(application)) {}
 
     ~HomeObjectImpl() override = default;
 
