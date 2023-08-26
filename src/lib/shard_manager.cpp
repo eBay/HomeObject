@@ -9,20 +9,21 @@ std::shared_ptr< ShardManager > HomeObjectImpl::shard_manager() {
     return shared_from_this();
 }
 
-folly::SemiFuture< ShardManager::info_var > HomeObjectImpl::create_shard(pg_id pg_owner, uint64_t size_bytes) {
-    if (0 == size_bytes || max_shard_size() < size_bytes)
-        return folly::makeSemiFuture(ShardManager::info_var(ShardError::INVALID_ARG));
-    return folly::makeSemiFuture(ShardManager::info_var(ShardError::UNKNOWN_PG));
+ShardManager::AsyncResult< ShardInfo > HomeObjectImpl::create_shard(pg_id pg_owner, uint64_t size_bytes) {
+    if (0 == size_bytes || max_shard_size() < size_bytes) return folly::makeUnexpected(ShardError::INVALID_ARG);
+    return folly::makeUnexpected(ShardError::UNKNOWN_PG);
 }
 
-folly::SemiFuture< ShardManager::list_var > HomeObjectImpl::list_shards(pg_id pg) const {
-    return folly::makeSemiFuture(ShardManager::list_var(ShardError::UNKNOWN_PG));
+ShardManager::AsyncResult< ShardInfo > HomeObjectImpl::seal_shard(shard_id id) {
+    return folly::makeUnexpected(ShardError::UNKNOWN_SHARD);
 }
 
-ShardManager::info_var HomeObjectImpl::get_shard(shard_id id) const { return ShardError::UNKNOWN_SHARD; }
+ShardManager::Result< InfoList > HomeObjectImpl::list_shards(pg_id pg) const {
+    return folly::makeUnexpected(ShardError::UNKNOWN_PG);
+}
 
-folly::SemiFuture< ShardManager::info_var > HomeObjectImpl::seal_shard(shard_id id) {
-    return folly::makeSemiFuture(ShardManager::info_var(ShardError::UNKNOWN_SHARD));
+ShardManager::Result< ShardInfo > HomeObjectImpl::get_shard(shard_id id) const {
+    return folly::makeUnexpected(ShardError::UNKNOWN_SHARD);
 }
 
 } // namespace homeobject

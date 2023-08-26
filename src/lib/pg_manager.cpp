@@ -9,8 +9,6 @@ namespace homeobject {
 
 PGError toPgError(ReplServiceError const& e) {
     switch (e) {
-    case ReplServiceError::OK:
-        return PGError::OK;
     case ReplServiceError::BAD_REQUEST:
         [[fallthrough]];
     case ReplServiceError::CANCELLED:
@@ -35,6 +33,9 @@ PGError toPgError(ReplServiceError const& e) {
         return PGError::TIMEOUT;
     case ReplServiceError::SERVER_NOT_FOUND:
         return PGError::UNKNOWN_PG;
+    case ReplServiceError::OK:
+        DEBUG_ASSERT(false, "Should not process OK!");
+        [[fallthrough]];
     case ReplServiceError::FAILED:
         return PGError::UNKNOWN;
     }
@@ -46,7 +47,7 @@ std::shared_ptr< PGManager > HomeObjectImpl::pg_manager() {
     return shared_from_this();
 }
 
-folly::SemiFuture< PGError > HomeObjectImpl::create_pg(PGInfo&& pg_info) {
+PGManager::NullAsyncResult HomeObjectImpl::create_pg(PGInfo&& pg_info) {
     LOGINFO("Creating PG: [{}] of [{}] members", pg_info.id, pg_info.members.size());
     auto saw_ourself = false;
     auto saw_leader = false;
@@ -56,34 +57,39 @@ folly::SemiFuture< PGError > HomeObjectImpl::create_pg(PGInfo&& pg_info) {
         if (member.priority > 0) saw_leader = true;
         peers.insert(to_string(member.id));
     }
-    if (!saw_ourself || !saw_leader) return folly::makeSemiFuture(PGError::INVALID_ARG);
+    if (!saw_ourself || !saw_leader) return folly::makeUnexpected(PGError::INVALID_ARG);
 
     return _repl_svc->create_replica_set(fmt::format("{}", pg_info.id), std::move(peers))
-        .deferValue([this, pg_info = std::move(pg_info)](home_replication::ReplicationService::set_var const& v) {
-            if (std::holds_alternative< home_replication::ReplServiceError >(v)) return PGError::INVALID_ARG;
+        .deferValue([this, pg_info = std::move(pg_info)](
+                        home_replication::ReplicationService::set_var const& v) -> PGManager::NullResult {
+            if (std::holds_alternative< home_replication::ReplServiceError >(v))
+                return folly::makeUnexpected(PGError::INVALID_ARG);
 
             auto lg = std::scoped_lock(_pg_lock);
             auto [it, _] = _pg_map.try_emplace(pg_info.id, std::unordered_set< shard_id >());
             RELEASE_ASSERT(_pg_map.end() != it, "Unknown map insert error!");
-            return PGError::OK;
+            return folly::Unit();
         });
 }
 
-folly::SemiFuture< PGError > HomeObjectImpl::replace_member(pg_id id, peer_id const& old_member,
-                                                            PGMember const& new_member) {
+PGManager::NullAsyncResult HomeObjectImpl::replace_member(pg_id id, peer_id const& old_member,
+                                                          PGMember const& new_member) {
     LOGINFO("Replacing PG: [{}] member [{}] with [{}]", id, to_string(old_member), to_string(new_member.id));
     if (old_member == new_member.id) {
         LOGWARN("Rejecting replace_member with identical replacement SvcId [{}]!", to_string(old_member));
-        return folly::makeSemiFuture(PGError::INVALID_ARG);
+        return folly::makeUnexpected(PGError::INVALID_ARG);
     }
 
     if (old_member == our_uuid()) {
         LOGWARN("Rejecting replace_member removing ourself {}!", to_string(old_member));
-        return folly::makeSemiFuture(PGError::INVALID_ARG);
+        return folly::makeUnexpected(PGError::INVALID_ARG);
     }
 
     return _repl_svc->replace_member(fmt::format("{}", id), to_string(old_member), to_string(new_member.id))
-        .deferValue([](ReplServiceError const& e) { return toPgError(e); });
+        .deferValue([](ReplServiceError const& e) -> PGManager::NullResult {
+            if (ReplServiceError::OK != e) return folly::makeUnexpected(toPgError(e));
+            return folly::Unit();
+        });
 }
 
 } // namespace homeobject
