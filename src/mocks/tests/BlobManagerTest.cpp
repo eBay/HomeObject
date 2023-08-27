@@ -97,7 +97,7 @@ TEST_F(BlobManagerFixture, BasicTests) {
             EXPECT_EQ(BlobError::UNKNOWN_BLOB, e.error());
         }));
     }
-    folly::collectAll(calls).via(folly::getGlobalIOExecutor()).get();
+    folly::collectAll(calls).via(folly::getGlobalCPUExecutor()).get();
 
     EXPECT_TRUE(m_mock_homeobj->blob_manager()->del(_shard.id, _blob_id).get());
 }
