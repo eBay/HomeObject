@@ -2,24 +2,30 @@
 
 namespace homeobject {
 
-BlobManager::Result< ShardInfo > MockHomeObject::_lookup_shard(shard_id shard) const {
-    if (auto e = get_shard(shard); e) return e.value();
-    return folly::makeUnexpected(BlobError::UNKNOWN_SHARD);
+BlobManager::AsyncResult< ShardInfo > MockHomeObject::_lookup_shard(shard_id shard) const {
+    return folly::makeSemiFuture().defer([this, shard](auto) -> BlobManager::AsyncResult< ShardInfo > {
+        if (auto e = get_shard(shard); e) return e.value();
+        return folly::makeUnexpected(BlobError::UNKNOWN_SHARD);
+    });
 }
 
 BlobManager::AsyncResult< blob_id > MockHomeObject::put(shard_id shard, Blob&& blob) {
-    return _lookup_shard(shard).then(
-        [this, blob = std::move(blob)](auto const& shard_info) mutable -> BlobManager::Result< blob_id > {
-            auto lg = std::scoped_lock(_data_lock);
-            LOGDEBUGMOD(homeobject, "Writing Blob {} in set of {}", _cur_blob_id, _in_memory_disk.size());
-            auto [_, happened] = _in_memory_disk.try_emplace(BlobRoute{shard_info.id, _cur_blob_id}, std::move(blob));
-            RELEASE_ASSERT(happened, "Generated duplicate BlobRoute!");
-            return _cur_blob_id++;
-        });
+    return _lookup_shard(shard).deferValue([this, inner_blob = std::move(blob)](
+                                               auto const& e) mutable -> BlobManager::Result< blob_id > {
+        if (!e) return folly::makeUnexpected(e.error());
+        auto& shard_info = e.value();
+        auto lg = std::scoped_lock(_data_lock);
+        LOGDEBUGMOD(homeobject, "Writing Blob {} in set of {}", _cur_blob_id, _in_memory_disk.size());
+        auto [_, happened] = _in_memory_disk.try_emplace(BlobRoute{shard_info.id, _cur_blob_id}, std::move(inner_blob));
+        RELEASE_ASSERT(happened, "Generated duplicate BlobRoute!");
+        return _cur_blob_id++;
+    });
 }
 
 BlobManager::AsyncResult< Blob > MockHomeObject::get(shard_id shard, blob_id const& id, uint64_t, uint64_t) const {
-    return _lookup_shard(shard).then([this, id](auto const& shard_info) mutable -> BlobManager::Result< Blob > {
+    return _lookup_shard(shard).deferValue([this, id](auto const& e) mutable -> BlobManager::Result< Blob > {
+        if (!e) return folly::makeUnexpected(e.error());
+        auto& shard_info = e.value();
         Blob blob;
         auto lg = std::shared_lock(_data_lock);
         LOGDEBUGMOD(homeobject, "Looking up Blob {} in set of {}", id, _in_memory_disk.size());
@@ -40,7 +46,9 @@ BlobManager::AsyncResult< Blob > MockHomeObject::get(shard_id shard, blob_id con
 }
 
 BlobManager::NullAsyncResult MockHomeObject::del(shard_id shard, blob_id const& blob) {
-    return _lookup_shard(shard).then([this, blob](auto const& shard_info) mutable -> BlobManager::NullResult {
+    return _lookup_shard(shard).deferValue([this, blob](auto const& e) mutable -> BlobManager::NullResult {
+        if (!e) return folly::makeUnexpected(e.error());
+        auto& shard_info = e.value();
         auto lg = std::scoped_lock(_data_lock);
         LOGDEBUGMOD(homeobject, "Deleting blob {} in set of {}", blob, _in_memory_disk.size());
         if (0 < _in_memory_disk.erase(BlobRoute{shard_info.id, blob})) return folly::Unit();
