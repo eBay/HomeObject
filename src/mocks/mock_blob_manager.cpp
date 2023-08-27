@@ -1,80 +1,61 @@
 #include "mock_homeobject.hpp"
 
 namespace homeobject {
-using namespace std::chrono_literals;
-constexpr auto disk_latency = 15ms;
+
+bool MockHomeObject::_has_shard(shard_id shard) const {
+    auto lg = std::shared_lock(_shard_lock);
+    LOGTRACEMOD(homeobject, "Looking up shard {} in set of {}", shard, _shards.size());
+    if (0 < _shards.count(shard)) return true;
+    LOGWARNMOD(homeobject, "Missing shard: {}", shard);
+    return false;
+}
 
 BlobManager::AsyncResult< blob_id > MockHomeObject::put(shard_id shard, Blob&& blob) {
-    auto [p, f] = folly::makePromiseContract< BlobManager::Result< blob_id > >();
-    std::thread([this, shard, mblob = std::move(blob), p = std::move(p)]() mutable {
-        std::this_thread::sleep_for(disk_latency);
-        blob_id id;
-        bool set_id{false};
-        auto err = BlobError::UNKNOWN_SHARD;
-        {
-            auto lg = std::scoped_lock(_shard_lock, _data_lock);
-            if (0 != _shards.count(shard)) {
-                auto [_, happened] = _in_memory_disk.try_emplace(BlobRoute{shard, _cur_blob_id}, std::move(mblob));
-                RELEASE_ASSERT(happened, "Generated duplicate BlobRoute!");
-                set_id = true;
-                id = _cur_blob_id++;
-            }
-        }
-        if (set_id)
-            p.setValue(id);
-        else
-            p.setValue(folly::makeUnexpected(err));
-    }).detach();
-    return std::move(f);
+    if (!_has_shard(shard)) return folly::makeUnexpected(BlobError::UNKNOWN_SHARD);
+
+    return folly::makeSemiFuture().deferValue(
+        [this, shard, blob = std::move(blob)](auto) mutable -> BlobManager::Result< blob_id > {
+            auto lg = std::scoped_lock(_data_lock);
+            LOGDEBUGMOD(homeobject, "Writing Blob {} in set of {}", _cur_blob_id, _in_memory_disk.size());
+            auto [_, happened] = _in_memory_disk.try_emplace(BlobRoute{shard, _cur_blob_id}, std::move(blob));
+            RELEASE_ASSERT(happened, "Generated duplicate BlobRoute!");
+            return _cur_blob_id++;
+        });
 }
 
 BlobManager::AsyncResult< Blob > MockHomeObject::get(shard_id shard, blob_id const& id, uint64_t, uint64_t) const {
-    auto [p, f] = folly::makePromiseContract< BlobManager::Result< Blob > >();
-    std::thread([this, shard, id, p = std::move(p)]() mutable {
-        // Only need to lookup shard with _shard_lock for READs, okay to seal while reading
-        {
-            auto lg = std::scoped_lock(_shard_lock);
-            LOGDEBUG("Looking up shard {} in set of {}", shard, _shards.size());
-            if (0 == _shards.count(shard)) p.setValue(folly::makeUnexpected(BlobError::UNKNOWN_SHARD));
-        }
-        if (p.isFulfilled()) return;
+    if (!_has_shard(shard)) return folly::makeUnexpected(BlobError::UNKNOWN_SHARD);
 
-        std::this_thread::sleep_for(disk_latency);
+    return folly::makeSemiFuture().deferValue([this, shard, id](auto) mutable -> BlobManager::Result< Blob > {
         Blob blob;
-        {
-            auto lg = std::scoped_lock(_shard_lock, _data_lock);
-            LOGDEBUG("Looking up Blob {} in set of {}", id, _in_memory_disk.size());
-            if (auto it = _in_memory_disk.find(BlobRoute{shard, id}); it != _in_memory_disk.end()) {
-                auto const& read_blob = it->second;
-                blob.body = std::make_unique< sisl::byte_array_impl >(read_blob.body->size);
-                blob.object_off = read_blob.object_off;
-                blob.user_key = read_blob.user_key;
-                std::memcpy(blob.body->bytes, read_blob.body->bytes, blob.body->size);
-                p.setValue(std::move(blob));
-            }
+        auto lg = std::shared_lock(_data_lock);
+        LOGDEBUGMOD(homeobject, "Looking up Blob {} in set of {}", id, _in_memory_disk.size());
+        auto it = _in_memory_disk.find(BlobRoute{shard, id});
+        if (it == _in_memory_disk.end()) {
+            LOGWARNMOD(homeobject, "Blob missing {} during get", id);
+            return folly::makeUnexpected(BlobError::UNKNOWN_BLOB);
         }
-        if (!p.isFulfilled()) p.setValue(folly::makeUnexpected(BlobError::UNKNOWN_BLOB));
-    }).detach();
-    return std::move(f);
+
+        LOGTRACEMOD(homeobject, "Reading BLOB data for {}", id);
+        auto const& read_blob = it->second;
+        blob.body = std::make_unique< sisl::byte_array_impl >(read_blob.body->size);
+        blob.object_off = read_blob.object_off;
+        blob.user_key = read_blob.user_key;
+        std::memcpy(blob.body->bytes, read_blob.body->bytes, blob.body->size);
+        return blob;
+    });
 }
 
 BlobManager::NullAsyncResult MockHomeObject::del(shard_id shard, blob_id const& blob) {
-    auto [p, f] = folly::makePromiseContract< BlobManager::NullResult >();
-    std::thread([this, shard, blob, p = std::move(p)]() mutable {
-        auto err = BlobError::UNKNOWN_SHARD;
-        auto cnt{0ul};
-        {
-            auto lg = std::scoped_lock(_shard_lock, _data_lock);
-            if (auto const it = _shards.find(shard); it != _shards.end()) {
-                if (cnt = _in_memory_disk.erase(BlobRoute{shard, blob}); 0 == cnt) err = BlobError::UNKNOWN_BLOB;
-            }
-        }
-        if (0 == cnt)
-            p.setValue(folly::makeUnexpected(err));
-        else
-            p.setValue(folly::Unit());
-    }).detach();
-    return std::move(f);
+    if (!_has_shard(shard)) return folly::makeUnexpected(BlobError::UNKNOWN_SHARD);
+
+    return folly::makeSemiFuture().deferValue([this, shard, blob](auto) mutable -> BlobManager::NullResult {
+        auto lg = std::scoped_lock(_data_lock);
+        LOGDEBUGMOD(homeobject, "Deleting blob {} in set of {}", blob, _in_memory_disk.size());
+        if (0 < _in_memory_disk.erase(BlobRoute{shard, blob})) return folly::Unit();
+        LOGWARNMOD(homeobject, "Blob missing {} during delete", blob);
+        return folly::makeUnexpected(BlobError::UNKNOWN_BLOB);
+    });
 }
 
 } // namespace homeobject

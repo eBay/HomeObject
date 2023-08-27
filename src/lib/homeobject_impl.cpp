@@ -1,13 +1,12 @@
 #include "homeobject_impl.hpp"
 
 #include <boost/uuid/uuid_io.hpp>
-#include <folly/executors/QueuedImmediateExecutor.h>
 
 namespace homeobject {
 
-extern std::shared_ptr< HomeObject > init_homeobject(HomeObject::init_params&& params) {
+extern std::shared_ptr< HomeObject > init_homeobject(std::weak_ptr< HomeObjectApplication >&& application) {
     LOGINFOMOD(homeobject, "Initializing HomeObject");
-    auto instance = std::make_shared< HomeObjectImpl >(std::move(params));
+    auto instance = std::make_shared< HomeObjectImpl >(std::move(application));
     instance->init_repl_svc();
     return instance;
 }
@@ -17,7 +16,7 @@ void HomeObjectImpl::init_repl_svc() {
     if (!_repl_svc) {
         // TODO this should come from persistence.
         LOGINFOMOD(homeobject, "First time start-up...initiating request for SvcId.");
-        _our_id = _svcid_routines.get_svc_id(std::nullopt).via(&folly::QueuedImmediateExecutor::instance()).get();
+        _our_id = _application.lock()->discover_svcid(std::nullopt);
         LOGINFOMOD(homeobject, "SvcId received: {}", to_string(_our_id));
         _repl_svc = home_replication::create_repl_service([](auto) { return nullptr; });
     }

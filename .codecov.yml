@@ -5,3 +5,4 @@ codecov:
 ignore:
   - "**/*_generated.h"
   - "src/tests/**"
+  - "src/mocks/tests/**"
