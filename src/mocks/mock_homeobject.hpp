@@ -48,7 +48,7 @@ class MockHomeObject : public HomeObjectImpl {
     std::mutex _repl_lock;
     std::shared_ptr< home_replication::ReplicationService > _repl_svc;
 
-    bool _has_shard(shard_id shard) const;
+    BlobManager::Result< ShardInfo > _lookup_shard(shard_id shard) const;
 
 public:
     using HomeObjectImpl::HomeObjectImpl;
