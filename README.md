@@ -4,7 +4,7 @@
 
 Replicated BLOB Store built upon HomeStore and NuRaft
 
-![HomeObject Overview](doc/imgs/homeobject.png)
+![HomeObject Overview](docs/imgs/homeobject.png)
 
 ## Build
 To build (assuming a recent version of conan package manager is installed)
