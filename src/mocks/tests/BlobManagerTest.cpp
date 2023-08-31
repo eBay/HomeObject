@@ -74,7 +74,7 @@ protected:
 
 TEST_F(BlobManagerFixture, BasicTests) {
     auto calls = std::vector< folly::SemiFuture< folly::Unit > >();
-    for (auto i = _blob_id + _shard.id + 1; (_blob_id + _shard.id + 1) + (8 * Ki) > i; ++i) {
+    for (auto i = _blob_id + _shard.id + 1; (_blob_id + _shard.id + 1) + (10 * Ki) > i; ++i) {
         calls.push_back(m_mock_homeobj->blob_manager()->get(_shard.id, _blob_id).deferValue([](auto const& e) {
             EXPECT_TRUE(!!e);
             e.then([](auto const& blob) {
