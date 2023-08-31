@@ -33,25 +33,29 @@ struct std::hash< homeobject::BlobRoute > {
 namespace homeobject {
 
 class MockHomeObject : public HomeObjectImpl {
-    /// This simulates the MetaSvc thats used within real HomeObject
+    /// Simulates the tear-free "kv" in MetaBlkSvc
     mutable std::shared_mutex _shard_lock;
     std::map< shard_id, ShardInfo > _shards;
     shard_id _cur_shard_id{0};
     ///
 
-    /// Simulates the Shard=>Chunk mapping in IndexSvc *and* DataSvc BlkId=>Data
+    /// Simulates the append-only disk Chunk in DataSvc
     mutable std::mutex _data_lock;
     std::list< Blob > _in_memory_disk;
-    using pba = decltype(_in_memory_disk)::const_iterator;
+    using blkid = decltype(_in_memory_disk)::const_iterator;
+    ///
 
+    /// Simulates the Shard=>Chunk mapping in IndexSvc
     mutable std::shared_mutex _index_lock;
-    std::unordered_map< BlobRoute, pba > _in_memory_index;
+    std::unordered_map< BlobRoute, blkid > _in_memory_index;
     ///
 
     std::mutex _repl_lock;
     std::shared_ptr< home_replication::ReplicationService > _repl_svc;
 
-    BlobManager::Result< pba > _index_get(BlobRoute const& r) const;
+    /// Helpers
+    BlobManager::AsyncResult< blkid > _get_blkid(ShardInfo const& shard, blob_id id) const;
+    ///
 
 public:
     using HomeObjectImpl::HomeObjectImpl;

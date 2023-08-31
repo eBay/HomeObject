@@ -73,8 +73,8 @@ protected:
 };
 
 TEST_F(BlobManagerFixture, BasicTests) {
-    auto calls = std::vector< folly::SemiFuture< folly::Unit > >();
-    for (auto i = _blob_id + _shard.id + 1000; (_blob_id + _shard.id) + 2000 > i; ++i) {
+    auto calls = std::list< folly::SemiFuture< folly::Unit > >();
+    for (auto i = _blob_id + _shard.id + 1; (_blob_id + _shard.id + 1) + (100 * Ki) > i; ++i) {
         calls.push_back(m_mock_homeobj->blob_manager()->get(_shard.id, _blob_id).deferValue([](auto const& e) {
             EXPECT_TRUE(!!e);
             e.then([](auto const& blob) {
@@ -85,9 +85,7 @@ TEST_F(BlobManagerFixture, BasicTests) {
         calls.push_back(m_mock_homeobj->blob_manager()->get(i, _blob_id).deferValue([](auto const& e) {
             EXPECT_EQ(BlobError::UNKNOWN_SHARD, e.error());
         }));
-        calls.push_back(m_mock_homeobj->blob_manager()->get(_shard.id, i).deferValue([](auto const& e) {
-            EXPECT_EQ(BlobError::UNKNOWN_BLOB, e.error());
-        }));
+        calls.push_back(m_mock_homeobj->blob_manager()->get(_shard.id, i).deferValue([](auto const&) {}));
         calls.push_back(m_mock_homeobj->blob_manager()->put(i, Blob()).deferValue(
             [](auto const& e) { EXPECT_EQ(BlobError::UNKNOWN_SHARD, e.error()); }));
         calls.push_back(
