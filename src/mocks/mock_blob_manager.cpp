@@ -81,8 +81,11 @@ BlobManager::NullAsyncResult MockHomeObject::del(shard_id shard, blob_id const& 
                     if (auto it = _in_memory_index.find(route); _in_memory_index.end() != it) {
                         d_it = it->second;
                         _in_memory_index.erase(it);
-                    } else
-                        return folly::makeUnexpected(BlobError::UNKNOWN_BLOB);
+                    }
+                }
+                if (_in_memory_disk.cend() == d_it) {
+                    LOGWARNMOD(homeobject, "Blob missing {} during delete", route.blob);
+                    return folly::makeUnexpected(BlobError::UNKNOWN_BLOB);
                 }
                 return d_it;
             });
