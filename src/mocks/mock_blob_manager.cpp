@@ -86,12 +86,13 @@ BlobManager::NullAsyncResult MockHomeObject::del(shard_id shard, blob_id const& 
                 }
                 return d_it;
             });
-    // TODO We defer GC of the BLOB data to the client response callback, BLOB itself still needs cleanup
+    // TODO We defer GC of the BLOB leaking BLOB into disk
     return BlobManager::AsyncResult< blkid >(std::move(f))
-        .deferValue([this](auto const e) mutable -> BlobManager::NullResult {
+        .deferValue([this]([[maybe_unused]] auto const e) mutable -> BlobManager::NullResult {
             if (!e) return folly::makeUnexpected(e.error());
-            auto const& d_it = e.value();
-            _in_memory_disk.erase(d_it, d_it)->body.reset();
+            // auto const& d_it = e.value();
+            // UNSAFE !!!!!
+            // _in_memory_disk.erase(d_it, d_it)->body.reset();
             return folly::Unit();
         });
 }
