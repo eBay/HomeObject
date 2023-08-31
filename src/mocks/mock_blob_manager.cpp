@@ -11,14 +11,23 @@ BlobManager::AsyncResult< ShardInfo > MockHomeObject::_lookup_shard(shard_id sha
 
 BlobManager::AsyncResult< blob_id > MockHomeObject::put(shard_id shard, Blob&& blob) {
     return _lookup_shard(shard).deferValue([this, inner_blob = std::move(blob)](
-                                               auto const& e) mutable -> BlobManager::Result< blob_id > {
+                                               auto&& e) mutable -> BlobManager::AsyncResult< blob_id > {
         if (!e) return folly::makeUnexpected(e.error());
-        auto& shard_info = e.value();
-        auto lg = std::scoped_lock(_data_lock);
-        LOGDEBUGMOD(homeobject, "Writing Blob {} in set of {}", _cur_blob_id, _in_memory_disk.size());
-        auto [_, happened] = _in_memory_disk.try_emplace(BlobRoute{shard_info.id, _cur_blob_id}, std::move(inner_blob));
-        RELEASE_ASSERT(happened, "Generated duplicate BlobRoute!");
-        return _cur_blob_id++;
+
+        auto [p, sf] = folly::makePromiseContract< BlobManager::Result< blob_id > >();
+        std::thread([this, shard_info = std::move(e.value()), tblob = std::move(inner_blob),
+                     p = std::move(p)]() mutable {
+            blob_id new_id;
+            { // Simulate ::commit()
+                auto lg = std::scoped_lock(_data_lock);
+                new_id = _cur_blob_id++;
+                LOGDEBUGMOD(homeobject, "Writing Blob {} in set of {}", new_id, _in_memory_disk.size());
+                auto [_, happened] = _in_memory_disk.try_emplace(BlobRoute{shard_info.id, new_id}, std::move(tblob));
+                RELEASE_ASSERT(happened, "Generated duplicate BlobRoute!");
+            }
+            p.setValue(BlobManager::Result< blob_id >(new_id));
+        }).detach();
+        return sf;
     });
 }
 
