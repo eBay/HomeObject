@@ -51,7 +51,8 @@ class MockHomeObject : public HomeObjectImpl {
     std::mutex _repl_lock;
     std::shared_ptr< home_replication::ReplicationService > _repl_svc;
 
-    BlobManager::AsyncResult< MockHomeObject::pba > _get_route(shard_id shard, blob_id blob) const;
+    BlobManager::AsyncResult< pba > _get_pba(ShardInfo const& shard, blob_id id) const;
+    BlobManager::NullAsyncResult _del_pba(ShardInfo const& shard, blob_id id);
 
 public:
     using HomeObjectImpl::HomeObjectImpl;
