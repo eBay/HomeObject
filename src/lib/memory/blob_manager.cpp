@@ -8,9 +8,9 @@ BlobManager::Result< blob_id > MemoryHomeObject::_put_blob(ShardInfo const& shar
     {
         // Should be lock-free append only stucture
         auto lg = std::scoped_lock(_data_lock);
-        LOGDEBUGMOD(homeobject, "Writing Blob {}", _in_memory_disk.size());
         new_id = _in_memory_disk.size();
-        new_blkid = _in_memory_disk.insert(new_blkid, std::move(blob));
+        LOGDEBUGMOD(homeobject, "Writing Blob {}", new_id);
+        new_blkid = _in_memory_disk.insert(_in_memory_disk.end(), std::move(blob));
     }
     {
         auto lg = std::scoped_lock(_index_lock);
@@ -45,21 +45,12 @@ BlobManager::Result< Blob > MemoryHomeObject::_get_blob(ShardInfo const& shard, 
 
 BlobManager::NullResult MemoryHomeObject::_del_blob(ShardInfo const& shard, blob_id id) {
     auto route = BlobRoute(shard.id, id);
-    auto d_it = _in_memory_disk.cend();
-    {
-        auto lg = std::scoped_lock(_index_lock);
-        LOGDEBUGMOD(homeobject, "Looking up Blob {} in set of {}", route.blob, _in_memory_index.size());
-        if (auto it = _in_memory_index.find(route); _in_memory_index.end() != it) {
-            d_it = it->second;
-            _in_memory_index.erase(it);
-        }
-    }
-    if (_in_memory_disk.cend() == d_it) {
-        LOGWARNMOD(homeobject, "Blob missing {} during delete", route.blob);
-        return folly::makeUnexpected(BlobError::UNKNOWN_BLOB);
-    }
+    auto lg = std::scoped_lock(_index_lock);
+    LOGDEBUGMOD(homeobject, "Looking up Blob {} in set of {}", route.blob, _in_memory_index.size());
     // TODO We defer GC of the BLOB leaking BLOB into disk
-    return folly::Unit();
+    if (0 < _in_memory_index.erase(route)) return folly::Unit();
+    LOGWARNMOD(homeobject, "Blob missing {} during delete", route.blob);
+    return folly::makeUnexpected(BlobError::UNKNOWN_BLOB);
 }
 
 } // namespace homeobject
