@@ -57,8 +57,7 @@ pipeline {
             steps {
                 sh """conan create ${BUILD_MISSING} ${DISABLE_DEP_TESTS} -o ${PROJECT}:sanitize=True -pr debug . ${PROJECT}/${TAG} ;
                       conan create ${BUILD_MISSING} ${DISABLE_DEP_TESTS} -pr debug . ${PROJECT}/${TAG} ;
-                      conan create ${BUILD_MISSING} ${DISABLE_DEP_TESTS} -pr test . ${PROJECT}/${TAG} ;
-                      conan create ${BUILD_MISSING} ${DISABLE_DEP_TESTS} -o sisl:prerelease=True -pr test . ${PROJECT}/${TAG} ;"""
+                      conan create ${BUILD_MISSING} ${DISABLE_DEP_TESTS} -pr test . ${PROJECT}/${TAG} ;"""
             }
         }
 

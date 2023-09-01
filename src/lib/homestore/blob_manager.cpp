@@ -2,15 +2,15 @@
 
 namespace homeobject {
 
-BlobManager::Result< blob_id > HSHomeObject::_put_blob(shard_id, Blob&&) {
+BlobManager::Result< blob_id > HSHomeObject::_put_blob(ShardInfo const&, Blob&&) {
     return folly::makeUnexpected(BlobError::UNKNOWN);
 }
 
-BlobManager::Result< Blob > HSHomeObject::_get_blob(shard_id id, blob_id blob) const {
+BlobManager::Result< Blob > HSHomeObject::_get_blob(ShardInfo const&, blob_id) const {
     return folly::makeUnexpected(BlobError::UNKNOWN);
 }
 
-BlobManager::NullResult HSHomeObject::_del_blob(shard_id id, blob_id blob) {
+BlobManager::NullResult HSHomeObject::_del_blob(ShardInfo const&, blob_id) {
     return folly::makeUnexpected(BlobError::UNKNOWN);
 }
 

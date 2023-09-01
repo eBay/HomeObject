@@ -2,7 +2,7 @@
 
 namespace homeobject {
 
-BlobManager::Result< blob_id > MemoryHomeObject::_put_blob(shard_id shard, Blob&& blob) {
+BlobManager::Result< blob_id > MemoryHomeObject::_put_blob(ShardInfo const& shard, Blob&& blob) {
     auto new_blkid = _in_memory_disk.end();
     blob_id new_id;
     {
@@ -14,14 +14,14 @@ BlobManager::Result< blob_id > MemoryHomeObject::_put_blob(shard_id shard, Blob&
     }
     {
         auto lg = std::scoped_lock(_index_lock);
-        auto [_, happened] = _in_memory_index.try_emplace(BlobRoute{shard, new_id}, new_blkid);
+        auto [_, happened] = _in_memory_index.try_emplace(BlobRoute{shard.id, new_id}, new_blkid);
         RELEASE_ASSERT(happened, "Generated duplicate BlobRoute!");
     }
     return new_id;
 }
 
-BlobManager::Result< Blob > MemoryHomeObject::_get_blob(shard_id id, blob_id blob) const {
-    auto route = BlobRoute(id, blob);
+BlobManager::Result< Blob > MemoryHomeObject::_get_blob(ShardInfo const& shard, blob_id blob) const {
+    auto route = BlobRoute(shard.id, blob);
     auto d_it = _in_memory_disk.cend();
     {
         auto lg = std::shared_lock(_index_lock);
@@ -43,8 +43,8 @@ BlobManager::Result< Blob > MemoryHomeObject::_get_blob(shard_id id, blob_id blo
     return user_blob;
 }
 
-BlobManager::NullResult MemoryHomeObject::_del_blob(shard_id shard, blob_id id) {
-    auto route = BlobRoute(shard, id);
+BlobManager::NullResult MemoryHomeObject::_del_blob(ShardInfo const& shard, blob_id id) {
+    auto route = BlobRoute(shard.id, id);
     auto d_it = _in_memory_disk.cend();
     {
         auto lg = std::scoped_lock(_index_lock);
