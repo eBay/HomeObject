@@ -54,7 +54,7 @@ class MockHomeObject : public HomeObjectImpl {
     std::shared_ptr< home_replication::ReplicationService > _repl_svc;
 
     /// Helpers
-    BlobManager::AsyncResult< blkid > _get_blkid(ShardInfo const& shard, blob_id id) const;
+    folly::Future< ShardManager::Result< ShardInfo > > _get_shard(shard_id id) const;
     ///
 
 public:
@@ -70,8 +70,8 @@ public:
     // ShardManager
     ShardManager::AsyncResult< ShardInfo > create_shard(pg_id pg_owner, uint64_t size_bytes) override;
     ShardManager::AsyncResult< ShardInfo > seal_shard(shard_id id) override;
-    ShardManager::Result< ShardInfo > get_shard(shard_id id) const override;
-    ShardManager::Result< InfoList > list_shards(pg_id id) const override;
+    ShardManager::AsyncResult< ShardInfo > get_shard(shard_id id) const override;
+    ShardManager::AsyncResult< InfoList > list_shards(pg_id id) const override;
 };
 
 } // namespace homeobject

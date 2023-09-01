@@ -2,6 +2,7 @@
 
 #include <boost/uuid/random_generator.hpp>
 #include <boost/uuid/uuid_io.hpp>
+#include <folly/init/Init.h>
 #include <gtest/gtest.h>
 
 #include <sisl/logging/logging.h>
@@ -83,11 +84,11 @@ public:
 };
 
 TEST_F(ShardManagerFixtureWShard, GetUnknownShard) {
-    EXPECT_EQ(ShardError::UNKNOWN_SHARD, m_mock_homeobj->shard_manager()->get_shard(_shard.id + 1).error());
+    EXPECT_EQ(ShardError::UNKNOWN_SHARD, m_mock_homeobj->shard_manager()->get_shard(_shard.id + 1).get().error());
 }
 
 TEST_F(ShardManagerFixtureWShard, GetKnownShard) {
-    auto e = m_mock_homeobj->shard_manager()->get_shard(_shard.id);
+    auto e = m_mock_homeobj->shard_manager()->get_shard(_shard.id).get();
     ASSERT_TRUE(!!e);
     e.then([this](auto const& info) {
         EXPECT_TRUE(info.id == _shard.id);
@@ -97,11 +98,11 @@ TEST_F(ShardManagerFixtureWShard, GetKnownShard) {
 }
 
 TEST_F(ShardManagerFixtureWShard, ListShardsNoPg) {
-    EXPECT_EQ(ShardError::UNKNOWN_PG, m_mock_homeobj->shard_manager()->list_shards(_pg_id + 1).error());
+    EXPECT_EQ(ShardError::UNKNOWN_PG, m_mock_homeobj->shard_manager()->list_shards(_pg_id + 1).get().error());
 }
 
 TEST_F(ShardManagerFixtureWShard, ListShards) {
-    auto e = m_mock_homeobj->shard_manager()->list_shards(_pg_id);
+    auto e = m_mock_homeobj->shard_manager()->list_shards(_pg_id).get();
     ASSERT_TRUE(!!e);
     e.then([this](auto const& info_list) {
         ASSERT_EQ(info_list.size(), 1);
@@ -130,5 +131,8 @@ int main(int argc, char* argv[]) {
     ::testing::InitGoogleTest(&parsed_argc, argv);
     SISL_OPTIONS_LOAD(parsed_argc, argv, logging);
     sisl::logging::SetLogger(std::string(argv[0]));
+    spdlog::set_pattern("[%D %T.%e] [%n] [%^%l%$] [%t] %v");
+    parsed_argc = 1;
+    auto f = ::folly::Init(&parsed_argc, &argv, true);
     return RUN_ALL_TESTS();
 }

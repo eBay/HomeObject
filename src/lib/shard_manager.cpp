@@ -18,11 +18,11 @@ ShardManager::AsyncResult< ShardInfo > HomeObjectImpl::seal_shard(shard_id id) {
     return folly::makeUnexpected(ShardError::UNKNOWN_SHARD);
 }
 
-ShardManager::Result< InfoList > HomeObjectImpl::list_shards(pg_id pg) const {
+ShardManager::AsyncResult< InfoList > HomeObjectImpl::list_shards(pg_id pg) const {
     return folly::makeUnexpected(ShardError::UNKNOWN_PG);
 }
 
-ShardManager::Result< ShardInfo > HomeObjectImpl::get_shard(shard_id id) const {
+ShardManager::AsyncResult< ShardInfo > HomeObjectImpl::get_shard(shard_id id) const {
     return folly::makeUnexpected(ShardError::UNKNOWN_SHARD);
 }
 

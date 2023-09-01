@@ -60,8 +60,9 @@ PGManager::NullAsyncResult HomeObjectImpl::create_pg(PGInfo&& pg_info) {
     if (!saw_ourself || !saw_leader) return folly::makeUnexpected(PGError::INVALID_ARG);
 
     return _repl_svc->create_replica_set(fmt::format("{}", pg_info.id), std::move(peers))
-        .deferValue([this, pg_info = std::move(pg_info)](
-                        home_replication::ReplicationService::set_var const& v) -> PGManager::NullResult {
+        .via(folly::getGlobalCPUExecutor())
+        .thenValue([this, pg_info = std::move(pg_info)](
+                       home_replication::ReplicationService::set_var const& v) -> PGManager::NullResult {
             if (std::holds_alternative< home_replication::ReplServiceError >(v))
                 return folly::makeUnexpected(PGError::INVALID_ARG);
 

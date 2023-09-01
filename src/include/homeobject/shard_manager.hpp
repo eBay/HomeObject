@@ -33,11 +33,8 @@ class ShardManager : public Manager< ShardError > {
 public:
     static uint64_t max_shard_size(); // Static function forces runtime evaluation.
 
-    // Sync
-    virtual Result< ShardInfo > get_shard(shard_id id) const = 0;
-    virtual Result< InfoList > list_shards(pg_id id) const = 0;
-
-    // Async
+    virtual AsyncResult< ShardInfo > get_shard(shard_id id) const = 0;
+    virtual AsyncResult< InfoList > list_shards(pg_id id) const = 0;
     virtual AsyncResult< ShardInfo > create_shard(pg_id pg_owner, uint64_t size_bytes) = 0;
     virtual AsyncResult< ShardInfo > seal_shard(shard_id id) = 0;
 };
