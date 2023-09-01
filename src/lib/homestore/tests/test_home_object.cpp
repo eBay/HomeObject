@@ -9,10 +9,7 @@
 
 #include <boost/uuid/random_generator.hpp>
 
-#include "homeobject/homeobject.hpp"
-#include "homeobject/blob_manager.hpp"
-#include "homeobject/pg_manager.hpp"
-#include "homeobject/shard_manager.hpp"
+#include "lib/homestore/homeobject.hpp"
 
 using namespace std::chrono_literals;
 

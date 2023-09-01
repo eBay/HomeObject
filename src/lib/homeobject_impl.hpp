@@ -8,7 +8,15 @@
 #include <sisl/logging/logging.h>
 #include <home_replication/repl_service.h>
 
+template <>
+struct std::hash< homeobject::ShardInfo > {
+    std::size_t operator()(homeobject::ShardInfo const& i) const noexcept { return std::hash< uint64_t >()(i.id); }
+};
+
 namespace homeobject {
+
+inline bool operator<(ShardInfo const& lhs, ShardInfo const& rhs) { return lhs.id < rhs.id; }
+inline bool operator==(ShardInfo const& lhs, ShardInfo const& rhs) { return lhs.id == rhs.id; }
 
 class HomeObjectImpl : public HomeObject,
                        public BlobManager,
@@ -25,9 +33,13 @@ protected:
     /// Our SvcId retrieval and SvcId->IP mapping
     std::weak_ptr< HomeObjectApplication > _application;
 
-    /// This simulates the MetaBlkSvc thats used within real HomeObject
-    mutable std::mutex _pg_lock;
-    std::map< pg_id, std::unordered_set< shard_id > > _pg_map;
+    ///
+    mutable std::shared_mutex _pg_lock;
+    using shard_set = std::unordered_set< ShardInfo >;
+    std::map< pg_id, shard_set > _pg_map;
+
+    mutable std::shared_mutex _shard_lock;
+    std::map< shard_id, shard_set::const_iterator > _shard_map;
     ///
 
     /// Overridable Helpers
