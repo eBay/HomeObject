@@ -9,7 +9,7 @@ required_conan_version = ">=1.50.0"
 
 class HomeObjectConan(ConanFile):
     name = "homeobject"
-    version = "0.8.2"
+    version = "0.9.1"
     homepage = "https://github.com/eBay/HomeObject"
     description = "Blob Store built on HomeReplication"
     topics = ("ebay")
