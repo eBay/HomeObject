@@ -4,8 +4,7 @@ add_flags("-Wno-unused-parameter")
 
 add_library(${PROJECT_NAME}_core OBJECT)
 target_sources(${PROJECT_NAME}_core PRIVATE
-		blob_manager.cpp
-		shard_manager.cpp
+		homeobject_impl.cpp
 		pg_manager.cpp
         )
 target_link_libraries(${PROJECT_NAME}_core
@@ -13,11 +12,5 @@ target_link_libraries(${PROJECT_NAME}_core
         )
 
 
-add_library(${PROJECT_NAME})
-target_sources(${PROJECT_NAME} PRIVATE
-		homeobject_impl.cpp
-        $<TARGET_OBJECTS:${PROJECT_NAME}_core>
-        )
-target_link_libraries(${PROJECT_NAME}
-            ${COMMON_DEPS}
-        )
+add_subdirectory(homestore)
+add_subdirectory(memory)

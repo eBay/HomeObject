@@ -1,12 +1,12 @@
-#include <boost/uuid/random_generator.hpp>
+#include "homeobject.hpp"
 
-#include "mock_homeobject.hpp"
+#include <boost/uuid/random_generator.hpp>
 
 namespace homeobject {
 
 /// NOTE: We give ourselves the option to provide a different HR instance here than libhomeobject.a
 extern std::shared_ptr< HomeObject > init_homeobject(std::weak_ptr< HomeObjectApplication >&& application) {
-    auto instance = std::make_shared< MockHomeObject >(std::move(application));
+    auto instance = std::make_shared< MemoryHomeObject >(std::move(application));
     instance->init_repl_svc();
     return instance;
 }

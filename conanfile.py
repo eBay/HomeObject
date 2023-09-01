@@ -9,7 +9,7 @@ required_conan_version = ">=1.50.0"
 
 class HomeObjectConan(ConanFile):
     name = "homeobject"
-    version = "0.9.1"
+    version = "0.9.2"
     homepage = "https://github.com/eBay/HomeObject"
     description = "Blob Store built on HomeReplication"
     topics = ("ebay")
@@ -98,16 +98,16 @@ class HomeObjectConan(ConanFile):
     def package_info(self):
         self.cpp_info.names["cmake_find_package"] = "HomeObject"
         self.cpp_info.names["cmake_find_package_multi"] = "HomeObject"
-        self.cpp_info.components["replicated"].libs = ["homeobject"]
-        self.cpp_info.components["replicated"].requires = ["home_replication::nuraft"]
-        self.cpp_info.components["mock"].libs = ["homeobject_mock"]
-        self.cpp_info.components["mock"].requires = ["home_replication::mock"]
+        self.cpp_info.components["homestore"].libs = ["homeobject"]
+        self.cpp_info.components["homestore"].requires = ["home_replication::nuraft"]
+        self.cpp_info.components["memory"].libs = ["homeobject_memory"]
+        self.cpp_info.components["memory"].requires = ["home_replication::mock"]
 
         if self.settings.os == "Linux":
-            self.cpp_info.components["replicated"].system_libs.append("pthread")
-            self.cpp_info.components["mock"].system_libs.append("pthread")
+            self.cpp_info.components["homestore"].system_libs.append("pthread")
+            self.cpp_info.components["memory"].system_libs.append("pthread")
         if  self.options.sanitize:
-            self.cpp_info.components["mock"].sharedlinkflags.append("-fsanitize=address")
-            self.cpp_info.components["mock"].exelinkflags.append("-fsanitize=address")
-            self.cpp_info.components["mock"].sharedlinkflags.append("-fsanitize=undefined")
-            self.cpp_info.components["mock"].exelinkflags.append("-fsanitize=undefined")
+            self.cpp_info.components["memory"].sharedlinkflags.append("-fsanitize=address")
+            self.cpp_info.components["memory"].exelinkflags.append("-fsanitize=address")
+            self.cpp_info.components["memory"].sharedlinkflags.append("-fsanitize=undefined")
+            self.cpp_info.components["memory"].exelinkflags.append("-fsanitize=undefined")

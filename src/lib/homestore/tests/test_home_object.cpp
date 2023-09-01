@@ -2,6 +2,7 @@
 #include <condition_variable>
 #include <mutex>
 
+#include <folly/init/Init.h>
 #include <gtest/gtest.h>
 #include <sisl/logging/logging.h>
 #include <sisl/options/options.h>
@@ -97,7 +98,9 @@ int main(int argc, char* argv[]) {
     int parsed_argc = argc;
     ::testing::InitGoogleTest(&parsed_argc, argv);
     SISL_OPTIONS_LOAD(parsed_argc, argv, logging);
-    sisl::logging::SetLogger("test_homeobject");
-
+    sisl::logging::SetLogger(std::string(argv[0]));
+    spdlog::set_pattern("[%D %T.%e] [%n] [%^%l%$] [%t] %v");
+    parsed_argc = 1;
+    auto f = ::folly::Init(&parsed_argc, &argv, true);
     return RUN_ALL_TESTS();
 }
