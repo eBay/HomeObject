@@ -33,12 +33,6 @@ struct std::hash< homeobject::BlobRoute > {
 namespace homeobject {
 
 class MemoryHomeObject : public HomeObjectImpl {
-    /// Simulates the tear-free "kv" in MetaBlkSvc
-    mutable std::shared_mutex _shard_lock;
-    std::map< shard_id, ShardInfo > _shards;
-    shard_id _cur_shard_id{0};
-    ///
-
     /// Simulates the append-only disk Chunk in DataSvc
     mutable std::mutex _data_lock;
     std::list< Blob > _in_memory_disk;
