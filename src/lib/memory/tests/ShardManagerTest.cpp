@@ -8,7 +8,7 @@
 #include <sisl/logging/logging.h>
 #include <sisl/options/options.h>
 
-#include "mocks/mock_homeobject.hpp"
+#include "lib/memory/homeobject.hpp"
 
 using homeobject::shard_id;
 using homeobject::ShardError;
@@ -36,35 +36,35 @@ public:
 
     void SetUp() override {
         app = std::make_shared< FixtureApp >();
-        m_mock_homeobj = homeobject::init_homeobject(std::weak_ptr< homeobject::HomeObjectApplication >(app));
-        _peer1 = m_mock_homeobj->our_uuid();
+        m_memory_homeobj = homeobject::init_homeobject(std::weak_ptr< homeobject::HomeObjectApplication >(app));
+        _peer1 = m_memory_homeobj->our_uuid();
         _peer2 = boost::uuids::random_generator()();
 
         auto info = homeobject::PGInfo(_pg_id);
         info.members.insert(homeobject::PGMember{_peer1, "peer1", 1});
         info.members.insert(homeobject::PGMember{_peer2, "peer2", 0});
-        EXPECT_TRUE(m_mock_homeobj->pg_manager()->create_pg(std::move(info)).get());
+        EXPECT_TRUE(m_memory_homeobj->pg_manager()->create_pg(std::move(info)).get());
     }
 
 protected:
     std::shared_ptr< FixtureApp > app;
-    std::shared_ptr< homeobject::HomeObject > m_mock_homeobj;
+    std::shared_ptr< homeobject::HomeObject > m_memory_homeobj;
 };
 
 TEST_F(ShardManagerFixture, CreateShardTooBig) {
     EXPECT_EQ(ShardError::INVALID_ARG,
-              m_mock_homeobj->shard_manager()
+              m_memory_homeobj->shard_manager()
                   ->create_shard(_pg_id, homeobject::ShardManager::max_shard_size() + 1)
                   .get()
                   .error());
 }
 
 TEST_F(ShardManagerFixture, CreateShardTooSmall) {
-    EXPECT_EQ(ShardError::INVALID_ARG, m_mock_homeobj->shard_manager()->create_shard(_pg_id, 0ul).get().error());
+    EXPECT_EQ(ShardError::INVALID_ARG, m_memory_homeobj->shard_manager()->create_shard(_pg_id, 0ul).get().error());
 }
 
 TEST_F(ShardManagerFixture, CreateShardNoPg) {
-    EXPECT_EQ(ShardError::UNKNOWN_PG, m_mock_homeobj->shard_manager()->create_shard(_pg_id + 1, Mi).get().error());
+    EXPECT_EQ(ShardError::UNKNOWN_PG, m_memory_homeobj->shard_manager()->create_shard(_pg_id + 1, Mi).get().error());
 }
 
 class ShardManagerFixtureWShard : public ShardManagerFixture {
@@ -72,7 +72,7 @@ public:
     ShardInfo _shard;
     void SetUp() override {
         ShardManagerFixture::SetUp();
-        auto e = m_mock_homeobj->shard_manager()->create_shard(_pg_id, Mi).get();
+        auto e = m_memory_homeobj->shard_manager()->create_shard(_pg_id, Mi).get();
         ASSERT_TRUE(!!e);
         e.then([this](auto&& i) { _shard = std::move(i); });
         EXPECT_EQ(ShardInfo::State::OPEN, _shard.state);
@@ -84,11 +84,11 @@ public:
 };
 
 TEST_F(ShardManagerFixtureWShard, GetUnknownShard) {
-    EXPECT_EQ(ShardError::UNKNOWN_SHARD, m_mock_homeobj->shard_manager()->get_shard(_shard.id + 1).get().error());
+    EXPECT_EQ(ShardError::UNKNOWN_SHARD, m_memory_homeobj->shard_manager()->get_shard(_shard.id + 1).get().error());
 }
 
 TEST_F(ShardManagerFixtureWShard, GetKnownShard) {
-    auto e = m_mock_homeobj->shard_manager()->get_shard(_shard.id).get();
+    auto e = m_memory_homeobj->shard_manager()->get_shard(_shard.id).get();
     ASSERT_TRUE(!!e);
     e.then([this](auto const& info) {
         EXPECT_TRUE(info.id == _shard.id);
@@ -98,11 +98,11 @@ TEST_F(ShardManagerFixtureWShard, GetKnownShard) {
 }
 
 TEST_F(ShardManagerFixtureWShard, ListShardsNoPg) {
-    EXPECT_EQ(ShardError::UNKNOWN_PG, m_mock_homeobj->shard_manager()->list_shards(_pg_id + 1).get().error());
+    EXPECT_EQ(ShardError::UNKNOWN_PG, m_memory_homeobj->shard_manager()->list_shards(_pg_id + 1).get().error());
 }
 
 TEST_F(ShardManagerFixtureWShard, ListShards) {
-    auto e = m_mock_homeobj->shard_manager()->list_shards(_pg_id).get();
+    auto e = m_memory_homeobj->shard_manager()->list_shards(_pg_id).get();
     ASSERT_TRUE(!!e);
     e.then([this](auto const& info_list) {
         ASSERT_EQ(info_list.size(), 1);
@@ -113,11 +113,11 @@ TEST_F(ShardManagerFixtureWShard, ListShards) {
 }
 
 TEST_F(ShardManagerFixtureWShard, SealShardNoShard) {
-    EXPECT_EQ(ShardError::UNKNOWN_SHARD, m_mock_homeobj->shard_manager()->seal_shard(_shard.id + 1).get().error());
+    EXPECT_EQ(ShardError::UNKNOWN_SHARD, m_memory_homeobj->shard_manager()->seal_shard(_shard.id + 1).get().error());
 }
 
 TEST_F(ShardManagerFixtureWShard, SealShard) {
-    auto e = m_mock_homeobj->shard_manager()->seal_shard(_shard.id).get();
+    auto e = m_memory_homeobj->shard_manager()->seal_shard(_shard.id).get();
     ASSERT_TRUE(!!e);
     e.then([this](auto const& info) {
         EXPECT_TRUE(info.id == _shard.id);

@@ -32,7 +32,7 @@ struct std::hash< homeobject::BlobRoute > {
 
 namespace homeobject {
 
-class MockHomeObject : public HomeObjectImpl {
+class MemoryHomeObject : public HomeObjectImpl {
     /// Simulates the tear-free "kv" in MetaBlkSvc
     mutable std::shared_mutex _shard_lock;
     std::map< shard_id, ShardInfo > _shards;
@@ -54,24 +54,21 @@ class MockHomeObject : public HomeObjectImpl {
     std::shared_ptr< home_replication::ReplicationService > _repl_svc;
 
     /// Helpers
-    folly::Future< ShardManager::Result< ShardInfo > > _get_shard(shard_id id) const;
+    // ShardManager
+    folly::Future< ShardManager::Result< ShardInfo > > _get_shard(shard_id id) const override;
+    ShardManager::Result< ShardInfo > _create_shard(pg_id pg_owner, uint64_t size_bytes) override;
+    ShardManager::Result< ShardInfo > _seal_shard(shard_id id) override;
+    ShardManager::Result< InfoList > _list_shards(pg_id id) const override;
+
+    // BlobManager
+    BlobManager::Result< blob_id > _put_blob(shard_id, Blob&&) override;
+    BlobManager::Result< Blob > _get_blob(shard_id id, blob_id blob) const override;
+    BlobManager::NullResult _del_blob(shard_id id, blob_id blob) override;
     ///
 
 public:
     using HomeObjectImpl::HomeObjectImpl;
-    ~MockHomeObject() override = default;
-
-    // BlobManager
-    BlobManager::AsyncResult< blob_id > put(shard_id shard, Blob&&) override;
-    BlobManager::AsyncResult< Blob > get(shard_id shard, blob_id const& blob, uint64_t off,
-                                         uint64_t len) const override;
-    BlobManager::NullAsyncResult del(shard_id shard, blob_id const& blob) override;
-
-    // ShardManager
-    ShardManager::AsyncResult< ShardInfo > create_shard(pg_id pg_owner, uint64_t size_bytes) override;
-    ShardManager::AsyncResult< ShardInfo > seal_shard(shard_id id) override;
-    ShardManager::AsyncResult< ShardInfo > get_shard(shard_id id) const override;
-    ShardManager::AsyncResult< InfoList > list_shards(pg_id id) const override;
+    ~MemoryHomeObject() override = default;
 };
 
 } // namespace homeobject

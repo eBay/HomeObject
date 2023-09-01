@@ -9,7 +9,7 @@
 #include <sisl/logging/logging.h>
 #include <sisl/options/options.h>
 
-#include "mocks/mock_homeobject.hpp"
+#include "lib/memory/homeobject.hpp"
 
 using homeobject::Blob;
 using homeobject::blob_id;
@@ -42,8 +42,8 @@ public:
 
     void SetUp() override {
         app = std::make_shared< FixtureApp >();
-        m_mock_homeobj = homeobject::init_homeobject(std::weak_ptr< homeobject::HomeObjectApplication >(app));
-        _peer1 = m_mock_homeobj->our_uuid();
+        m_memory_homeobj = homeobject::init_homeobject(std::weak_ptr< homeobject::HomeObjectApplication >(app));
+        _peer1 = m_memory_homeobj->our_uuid();
         _peer2 = boost::uuids::random_generator()();
 
         auto info = homeobject::PGInfo(_pg_id);
@@ -51,16 +51,17 @@ public:
         info.members.insert(homeobject::PGMember{_peer2, "peer2", 0});
 
         LOGDEBUG("Setup Pg");
-        EXPECT_TRUE(m_mock_homeobj->pg_manager()->create_pg(std::move(info)).via(folly::getGlobalCPUExecutor()).get());
+        EXPECT_TRUE(
+            m_memory_homeobj->pg_manager()->create_pg(std::move(info)).via(folly::getGlobalCPUExecutor()).get());
 
         LOGDEBUG("Setup Shard");
-        auto s_e = m_mock_homeobj->shard_manager()->create_shard(_pg_id, Mi).via(folly::getGlobalCPUExecutor()).get();
+        auto s_e = m_memory_homeobj->shard_manager()->create_shard(_pg_id, Mi).via(folly::getGlobalCPUExecutor()).get();
         ASSERT_TRUE(!!s_e);
         s_e.then([this](auto&& i) { _shard = std::move(i); });
 
         LOGDEBUG("Insert Blob to: {}", _shard.id);
         auto o_e =
-            m_mock_homeobj->blob_manager()
+            m_memory_homeobj->blob_manager()
                 ->put(_shard.id, Blob{std::make_unique< sisl::byte_array_impl >(4 * Ki, 512u), "test_blob", 4 * Mi})
                 .via(folly::getGlobalCPUExecutor())
                 .get();
@@ -69,39 +70,39 @@ public:
     }
 
 protected:
-    std::shared_ptr< homeobject::HomeObject > m_mock_homeobj;
+    std::shared_ptr< homeobject::HomeObject > m_memory_homeobj;
 };
 
 TEST_F(BlobManagerFixture, BasicTests) {
     auto calls = std::list< folly::SemiFuture< folly::Unit > >();
     for (auto i = _blob_id + _shard.id + 1; (_blob_id + _shard.id + 1) + (100 * Ki) > i; ++i) {
-        calls.push_back(m_mock_homeobj->blob_manager()->get(_shard.id, _blob_id).deferValue([](auto const& e) {
+        calls.push_back(m_memory_homeobj->blob_manager()->get(_shard.id, _blob_id).deferValue([](auto const& e) {
             EXPECT_TRUE(!!e);
             e.then([](auto const& blob) {
                 EXPECT_STREQ(blob.user_key.c_str(), "test_blob");
                 EXPECT_EQ(blob.object_off, 4 * Mi);
             });
         }));
-        calls.push_back(m_mock_homeobj->blob_manager()->get(i, _blob_id).deferValue([](auto const& e) {
+        calls.push_back(m_memory_homeobj->blob_manager()->get(i, _blob_id).deferValue([](auto const& e) {
             EXPECT_EQ(BlobError::UNKNOWN_SHARD, e.error());
         }));
-        calls.push_back(m_mock_homeobj->blob_manager()->get(_shard.id, i).deferValue([](auto const&) {}));
-        calls.push_back(m_mock_homeobj->blob_manager()->put(i, Blob()).deferValue(
+        calls.push_back(m_memory_homeobj->blob_manager()->get(_shard.id, i).deferValue([](auto const&) {}));
+        calls.push_back(m_memory_homeobj->blob_manager()->put(i, Blob()).deferValue(
             [](auto const& e) { EXPECT_EQ(BlobError::UNKNOWN_SHARD, e.error()); }));
         calls.push_back(
-            m_mock_homeobj->blob_manager()
+            m_memory_homeobj->blob_manager()
                 ->put(_shard.id, Blob{std::make_unique< sisl::byte_array_impl >(4 * Ki, 512u), "test_blob", 4 * Mi})
                 .deferValue([](auto const& e) { EXPECT_TRUE(!!e); }));
-        calls.push_back(m_mock_homeobj->blob_manager()->del(i, _blob_id).deferValue([](auto const& e) {
+        calls.push_back(m_memory_homeobj->blob_manager()->del(i, _blob_id).deferValue([](auto const& e) {
             EXPECT_EQ(BlobError::UNKNOWN_SHARD, e.error());
         }));
-        calls.push_back(m_mock_homeobj->blob_manager()->del(_shard.id, i).deferValue([](auto const& e) {
+        calls.push_back(m_memory_homeobj->blob_manager()->del(_shard.id, i).deferValue([](auto const& e) {
             EXPECT_EQ(BlobError::UNKNOWN_BLOB, e.error());
         }));
     }
     folly::collectAll(calls).via(folly::getGlobalCPUExecutor()).get();
 
-    EXPECT_TRUE(m_mock_homeobj->blob_manager()->del(_shard.id, _blob_id).get());
+    EXPECT_TRUE(m_memory_homeobj->blob_manager()->del(_shard.id, _blob_id).get());
 }
 
 int main(int argc, char* argv[]) {
