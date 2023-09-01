@@ -21,9 +21,6 @@ class HSHomeObject : public HomeObjectImpl {
     BlobManager::NullResult _del_blob(ShardInfo const&, blob_id) override;
     ///
 
-    std::mutex _repl_lock;
-    std::shared_ptr< home_replication::ReplicationService > _repl_svc;
-
 public:
     using HomeObjectImpl::HomeObjectImpl;
     ~HSHomeObject() override = default;

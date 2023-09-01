@@ -27,6 +27,17 @@ class HomeObjectImpl : public HomeObject,
     std::mutex _repl_lock;
     std::shared_ptr< home_replication::ReplicationService > _repl_svc;
 
+    /// Implementation defines these
+    virtual folly::Future< ShardManager::Result< ShardInfo > > _get_shard(shard_id) const = 0;
+    virtual ShardManager::Result< ShardInfo > _create_shard(pg_id, uint64_t size_bytes) = 0;
+    virtual ShardManager::Result< InfoList > _list_shards(pg_id) const = 0;
+    virtual ShardManager::Result< ShardInfo > _seal_shard(shard_id) = 0;
+
+    virtual BlobManager::Result< blob_id > _put_blob(ShardInfo const&, Blob&&) = 0;
+    virtual BlobManager::Result< Blob > _get_blob(ShardInfo const&, blob_id) const = 0;
+    virtual BlobManager::NullResult _del_blob(ShardInfo const&, blob_id) = 0;
+    ///
+
 protected:
     peer_id _our_id;
 
@@ -40,17 +51,6 @@ protected:
 
     mutable std::shared_mutex _shard_lock;
     std::map< shard_id, shard_set::const_iterator > _shard_map;
-    ///
-
-    /// Overridable Helpers
-    virtual folly::Future< ShardManager::Result< ShardInfo > > _get_shard(shard_id) const = 0;
-    virtual ShardManager::Result< ShardInfo > _create_shard(pg_id, uint64_t size_bytes) = 0;
-    virtual ShardManager::Result< InfoList > _list_shards(pg_id) const = 0;
-    virtual ShardManager::Result< ShardInfo > _seal_shard(shard_id) = 0;
-
-    virtual BlobManager::Result< blob_id > _put_blob(ShardInfo const&, Blob&&) = 0;
-    virtual BlobManager::Result< Blob > _get_blob(ShardInfo const&, blob_id) const = 0;
-    virtual BlobManager::NullResult _del_blob(ShardInfo const&, blob_id) = 0;
     ///
 
 public:

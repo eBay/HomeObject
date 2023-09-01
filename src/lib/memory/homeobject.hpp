@@ -44,9 +44,6 @@ class MemoryHomeObject : public HomeObjectImpl {
     std::unordered_map< BlobRoute, blkid > _in_memory_index;
     ///
 
-    std::mutex _repl_lock;
-    std::shared_ptr< home_replication::ReplicationService > _repl_svc;
-
     /// Helpers
     // ShardManager
     folly::Future< ShardManager::Result< ShardInfo > > _get_shard(shard_id) const override;
