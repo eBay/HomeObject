@@ -14,7 +14,9 @@ BlobManager::Result< blob_id > MemoryHomeObject::_put_blob(ShardInfo const& shar
     }
     {
         auto lg = std::scoped_lock(_index_lock);
-        auto [_, happened] = _in_memory_index.try_emplace(BlobRoute{shard.id, new_id}, new_blkid);
+        auto [btree_it, h1] = _in_memory_index.try_emplace(shard.id, btree());
+        RELEASE_ASSERT(_in_memory_index.end() != btree_it, "Could not create BTree!");
+        auto [r_it, happened] = btree_it->second.try_emplace(BlobRoute{shard.id, new_id}, new_blkid);
         RELEASE_ASSERT(happened, "Generated duplicate BlobRoute!");
     }
     return new_id;
@@ -26,7 +28,9 @@ BlobManager::Result< Blob > MemoryHomeObject::_get_blob(ShardInfo const& shard, 
     {
         auto lg = std::shared_lock(_index_lock);
         LOGDEBUGMOD(homeobject, "Looking up Blob {} in set of {}", route.blob, _in_memory_disk.size());
-        if (auto it = _in_memory_index.find(route); _in_memory_index.end() != it) { d_it = it->second; }
+        if (auto b_it = _in_memory_index.find(shard.id); _in_memory_index.end() != b_it) {
+            if (auto it = b_it->second.find(route); b_it->second.end() != it) { d_it = it->second; }
+        }
     }
     if (_in_memory_disk.cend() == d_it) {
         LOGWARNMOD(homeobject, "Blob missing {} during get", route.blob);
@@ -48,7 +52,9 @@ BlobManager::NullResult MemoryHomeObject::_del_blob(ShardInfo const& shard, blob
     auto lg = std::scoped_lock(_index_lock);
     LOGDEBUGMOD(homeobject, "Looking up Blob {} in set of {}", route.blob, _in_memory_index.size());
     // TODO We defer GC of the BLOB leaking BLOB into disk
-    if (0 < _in_memory_index.erase(route)) return folly::Unit();
+    if (auto b_it = _in_memory_index.find(shard.id); _in_memory_index.end() != b_it) {
+        if (0 < b_it->second.erase(route)) return folly::Unit();
+    }
     LOGWARNMOD(homeobject, "Blob missing {} during delete", route.blob);
     return folly::makeUnexpected(BlobError::UNKNOWN_BLOB);
 }

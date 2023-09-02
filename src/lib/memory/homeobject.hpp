@@ -41,7 +41,8 @@ class MemoryHomeObject : public HomeObjectImpl {
 
     /// Simulates the Shard=>Chunk mapping in IndexSvc
     mutable std::shared_mutex _index_lock;
-    std::unordered_map< BlobRoute, blkid > _in_memory_index;
+    using btree = std::unordered_map< BlobRoute, blkid >;
+    std::unordered_map< shard_id, btree > _in_memory_index;
     ///
 
     /// Helpers
