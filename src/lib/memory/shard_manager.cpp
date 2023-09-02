@@ -20,7 +20,8 @@ ShardManager::Result< ShardInfo > MemoryHomeObject::_create_shard(pg_id pg_owner
 
     auto const now = get_current_timestamp();
     auto& s_set = pg_it->second.second;
-    auto info = ShardInfo{s_set.size(), pg_owner, ShardInfo::State::OPEN, now, now, size_bytes, size_bytes, 0};
+    auto s_id = (((uint64_t)pg_owner) << 48) + s_set.size();
+    auto info = ShardInfo{s_id, pg_owner, ShardInfo::State::OPEN, now, now, size_bytes, size_bytes, 0};
 
     LOGDEBUG("Creating Shard [{}]: in Pg [{}] of Size [{}b]", info.id, pg_owner, size_bytes);
 
