@@ -47,7 +47,8 @@ protected:
     ///
     mutable std::shared_mutex _pg_lock;
     using shard_set = std::unordered_set< ShardInfo >;
-    std::map< pg_id, shard_set > _pg_map;
+    using pg_pair = std::pair< PGInfo, shard_set >;
+    std::map< pg_id, pg_pair > _pg_map;
 
     mutable std::shared_mutex _shard_lock;
     std::map< shard_id, shard_set::const_iterator > _shard_map;

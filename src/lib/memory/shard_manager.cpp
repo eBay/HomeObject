@@ -19,11 +19,12 @@ ShardManager::Result< ShardInfo > MemoryHomeObject::_create_shard(pg_id pg_owner
     if (_pg_map.end() == pg_it) return folly::makeUnexpected(ShardError::UNKNOWN_PG);
 
     auto const now = get_current_timestamp();
-    auto info = ShardInfo{pg_it->second.size(), pg_owner, ShardInfo::State::OPEN, now, now, size_bytes, size_bytes, 0};
+    auto& s_set = pg_it->second.second;
+    auto info = ShardInfo{s_set.size(), pg_owner, ShardInfo::State::OPEN, now, now, size_bytes, size_bytes, 0};
 
     LOGDEBUG("Creating Shard [{}]: in Pg [{}] of Size [{}b]", info.id, pg_owner, size_bytes);
 
-    auto [s_it, happened] = pg_it->second.emplace(info);
+    auto [s_it, happened] = s_set.emplace(info);
     RELEASE_ASSERT(happened, "Duplicate Shard insertion!");
     auto [_, s_happened] = _shard_map.emplace(info.id, s_it);
     RELEASE_ASSERT(s_happened, "Duplicate Shard insertion!");
@@ -46,7 +47,7 @@ ShardManager::Result< InfoList > MemoryHomeObject::_list_shards(pg_id id) const 
     if (_pg_map.end() == pg_it) return folly::makeUnexpected(ShardError::UNKNOWN_PG);
 
     auto info_l = std::list< ShardInfo >();
-    for (auto const& info : pg_it->second) {
+    for (auto const& info : pg_it->second.second) {
         LOGDEBUG("Listing Shard {}", info.id);
         info_l.push_back(info);
     }
@@ -64,9 +65,9 @@ ShardManager::Result< ShardInfo > MemoryHomeObject::_seal_shard(shard_id id) {
 
     auto new_info = *const_it;
     new_info.state = ShardInfo::State::SEALED;
-    pg_it->second.erase(const_it);
+    pg_it->second.second.erase(const_it);
 
-    auto [s_it, happened] = pg_it->second.emplace(new_info);
+    auto [s_it, happened] = pg_it->second.second.emplace(new_info);
     RELEASE_ASSERT(happened, "Duplicate Shard insertion!");
     shard_it->second = s_it;
 

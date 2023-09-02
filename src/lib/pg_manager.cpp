@@ -66,8 +66,9 @@ PGManager::NullAsyncResult HomeObjectImpl::create_pg(PGInfo&& pg_info) {
             if (std::holds_alternative< home_replication::ReplServiceError >(v))
                 return folly::makeUnexpected(PGError::INVALID_ARG);
 
+            auto p = pg_pair(std::move(pg_info), shard_set());
             auto lg = std::scoped_lock(_pg_lock);
-            auto [it, _] = _pg_map.try_emplace(pg_info.id, std::unordered_set< ShardInfo >());
+            auto [it, _] = _pg_map.try_emplace(pg_info.id, std::move(p));
             RELEASE_ASSERT(_pg_map.end() != it, "Unknown map insert error!");
             return folly::Unit();
         });
