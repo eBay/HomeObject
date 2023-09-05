@@ -67,20 +67,8 @@ jobs:
       tooling: None
     if: ${{ github.event_name != 'pull_request' }}
 
-  HomeReplDeps:
-    needs: [HomeStoreDeps, NuRaftMesgDeps]
-    uses: eBay/homereplication/.github/workflows/build_dependencies.yml@main
-    with:
-      branch: main
-      platform: ${{ inputs.platform }}
-      build-type: ${{ inputs.build-type }}
-      malloc-impl: ${{ inputs.malloc-impl }}
-      prerelease: ${{ inputs.prerelease }}
-      tooling: None
-    if: ${{ github.event_name != 'pull_request' }}
-
   HomeObjectDeps:
-    needs: [HomeReplDeps]
+    needs: [HomeStoreDeps, NuRaftMesgDeps]
     uses: ./.github/workflows/build_dependencies.yml
     with:
       branch: ${{ github.ref }}
@@ -91,6 +79,7 @@ jobs:
       tooling: ${{ inputs.tooling }}
       testing: 'True'
     if: ${{ github.event_name != 'pull_request' }}
+
   HomeObjectBuild:
     uses: ./.github/workflows/build_dependencies.yml
     with:

@@ -8,7 +8,6 @@ find_package(nuraft_mesg QUIET REQUIRED)
 find_package(GTest QUIET REQUIRED)
 
 link_directories(${spdk_LIB_DIRS} ${dpdk_LIB_DIRS})
-link_directories(${home_replication_LIB_DIRS})
 
 set (COMMON_DEPS
         homestore::homestore
