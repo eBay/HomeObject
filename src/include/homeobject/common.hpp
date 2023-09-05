@@ -4,15 +4,14 @@
 #include <folly/Expected.h>
 #include <folly/Unit.h>
 #include <folly/futures/Future.h>
-#include <sisl/logging/logging.h>
 
-/// Anything that links libhomestore requires these common symbols to be included in each
-/// DSO; so just include it here for all.
-#include <home_replication/repl_decls.h>
+#include <homestore/homestore_decl.hpp>
+#include <iomgr/iomgr_types.hpp>
+#include <sisl/logging/logging.h>
 
 SISL_LOGGING_DECL(homeobject);
 
-#define HOMEOBJECT_LOG_MODS HOMEREPL_LOG_MODS, homeobject
+#define HOMEOBJECT_LOG_MODS grpc_server, HOMESTORE_LOG_MODS, nuraft_mesg, nuraft, home_replication, homeobject
 
 #ifndef Ki
 constexpr uint64_t Ki = 1024ul;

@@ -42,8 +42,8 @@ class HomeObjectConan(ConanFile):
     def requirements(self):
         self.requires("homestore/[~=4,      include_prerelease=True]@oss/master")
         self.requires("sisl/[~=10,          include_prerelease=True]@oss/master")
-        # Replace with HomeReplication when mature
-        self.requires("home_replication/[~=0.1,    include_prerelease=True]@oss/main")
+        # Remove when HomeStore Replication Service is mature
+        self.requires("nuraft_mesg/[~=1,    include_prerelease=True]@oss/main")
         self.requires("lz4/1.9.4", override=True)
 
     def validate(self):
@@ -98,10 +98,10 @@ class HomeObjectConan(ConanFile):
     def package_info(self):
         self.cpp_info.names["cmake_find_package"] = "HomeObject"
         self.cpp_info.names["cmake_find_package_multi"] = "HomeObject"
-        self.cpp_info.components["homestore"].libs = ["homeobject"]
-        self.cpp_info.components["homestore"].requires = ["home_replication::nuraft"]
-        self.cpp_info.components["memory"].libs = ["homeobject_memory"]
-        self.cpp_info.components["memory"].requires = ["home_replication::mock"]
+        self.cpp_info.components["homestore"].libs = ["homeobject", "home_replication_mock"]
+        self.cpp_info.components["homestore"].requires = ["homestore::homestore"]
+        self.cpp_info.components["memory"].libs = ["homeobject_memory", "home_replication_mock"]
+        self.cpp_info.components["memory"].requires = ["homestore::homestore"]
 
         if self.settings.os == "Linux":
             self.cpp_info.components["homestore"].system_libs.append("pthread")

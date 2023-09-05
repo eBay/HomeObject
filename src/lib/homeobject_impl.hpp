@@ -6,12 +6,15 @@
 #include "homeobject/shard_manager.hpp"
 
 #include <sisl/logging/logging.h>
-#include <home_replication/repl_service.h>
 
 template <>
 struct std::hash< homeobject::ShardInfo > {
     std::size_t operator()(homeobject::ShardInfo const& i) const noexcept { return std::hash< uint64_t >()(i.id); }
 };
+
+namespace home_replication {
+class ReplicationService;
+}
 
 namespace homeobject {
 
