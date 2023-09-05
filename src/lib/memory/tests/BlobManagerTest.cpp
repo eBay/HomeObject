@@ -51,19 +51,22 @@ public:
         info.members.insert(homeobject::PGMember{_peer2, "peer2", 0});
 
         LOGDEBUG("Setup Pg");
-        EXPECT_TRUE(
-            m_memory_homeobj->pg_manager()->create_pg(std::move(info)).via(folly::getGlobalCPUExecutor()).get());
+        EXPECT_TRUE(m_memory_homeobj->pg_manager()->create_pg(std::move(info)).get());
 
         LOGDEBUG("Setup Shard");
-        auto s_e = m_memory_homeobj->shard_manager()->create_shard(_pg_id, Mi).via(folly::getGlobalCPUExecutor()).get();
+        auto s_e = m_memory_homeobj->shard_manager()->create_shard(_pg_id, Mi).get();
         ASSERT_TRUE(!!s_e);
         s_e.then([this](auto&& i) { _shard = std::move(i); });
+
+        LOGDEBUG("Get on empty Shard: {}", _shard.id);
+        auto g_e = m_memory_homeobj->blob_manager()->get(_shard.id, 0).get();
+        ASSERT_FALSE(g_e);
+        EXPECT_EQ(BlobError::UNKNOWN_BLOB, g_e.error());
 
         LOGDEBUG("Insert Blob to: {}", _shard.id);
         auto o_e =
             m_memory_homeobj->blob_manager()
                 ->put(_shard.id, Blob{std::make_unique< sisl::byte_array_impl >(4 * Ki, 512u), "test_blob", 4 * Mi})
-                .via(folly::getGlobalCPUExecutor())
                 .get();
         EXPECT_TRUE(!!o_e);
         o_e.then([this](auto&& b) mutable { _blob_id = std::move(b); });
@@ -101,6 +104,12 @@ TEST_F(BlobManagerFixture, BasicTests) {
         }));
     }
     folly::collectAll(calls).via(folly::getGlobalCPUExecutor()).get();
+    EXPECT_TRUE(m_memory_homeobj->shard_manager()->seal_shard(_shard.id).get());
+    auto p_e = m_memory_homeobj->blob_manager()
+                   ->put(_shard.id, Blob{std::make_unique< sisl::byte_array_impl >(4 * Ki, 512u), "test_blob", 4 * Mi})
+                   .get();
+    ASSERT_TRUE(!p_e);
+    EXPECT_EQ(BlobError::INVALID_ARG, p_e.error());
 
     EXPECT_TRUE(m_memory_homeobj->blob_manager()->del(_shard.id, _blob_id).get());
 }
