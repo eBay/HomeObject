@@ -19,6 +19,7 @@ BlobManager::AsyncResult< blob_id > HomeObjectImpl::put(shard_id shard, Blob&& b
     return _get_shard(shard).thenValue(
         [this, blob = std::move(blob)](auto const e) mutable -> BlobManager::Result< blob_id > {
             if (!e) return folly::makeUnexpected(BlobError::UNKNOWN_SHARD);
+            if (ShardInfo::State::SEALED == e.value().state) return folly::makeUnexpected(BlobError::INVALID_ARG);
             return _put_blob(e.value(), std::move(blob));
         });
 }
