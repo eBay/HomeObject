@@ -28,9 +28,7 @@ struct ShardInfo {
     std::optional< peer_id > current_leader{std::nullopt};
 };
 
-using InfoList = std::list<ShardInfo>;
-using CShardInfo = std::shared_ptr<ShardInfo>;
-using CShardInfoList = std::list< CShardInfo >;
+using InfoList = std::list< ShardInfo >;
 
 class ShardManager : public Manager< ShardError > {
 public:

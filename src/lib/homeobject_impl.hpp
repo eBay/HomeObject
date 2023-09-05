@@ -7,12 +7,6 @@
 
 #include <sisl/logging/logging.h>
 
-
-template <>
-struct std::hash< homeobject::ShardInfo > {
-    std::size_t operator()(homeobject::ShardInfo const& i) const noexcept { return std::hash< uint64_t >()(i.id); }
-};
-
 namespace home_replication {
 class ReplicationService;
 }
@@ -21,6 +15,26 @@ namespace homeobject {
 
 inline bool operator<(ShardInfo const& lhs, ShardInfo const& rhs) { return lhs.id < rhs.id; }
 inline bool operator==(ShardInfo const& lhs, ShardInfo const& rhs) { return lhs.id == rhs.id; }
+
+struct ShardInfoExt {
+    uint16_t chunk_id;
+};
+
+struct Shard {
+    explicit Shard(ShardInfo info) : info(std::move(info)) {}
+    ShardInfo info;
+    ShardInfoExt ext_info;
+};
+
+using ShardPtr = std::shared_ptr< Shard >;
+using ShardPtrList = std::list< ShardPtr >;
+
+struct PG {
+    explicit PG(PGInfo info) : pg_info(std::move(info)) {}
+    PGInfo pg_info;
+    uint64_t shard_sequence_num{0};
+    ShardPtrList shards;
+};
 
 class HomeObjectImpl : public HomeObject,
                        public BlobManager,
@@ -54,7 +68,7 @@ protected:
     std::map< pg_id, PG > _pg_map;
 
     mutable std::shared_mutex _shard_lock;
-    std::map< shard_id, CShardInfo > _shard_map;
+    std::map < shard_id, ShardPtr > _shard_map;
     ///
 public:
     explicit HomeObjectImpl(std::weak_ptr< HomeObjectApplication >&& application) :
@@ -84,6 +98,7 @@ public:
     ShardManager::AsyncResult< ShardInfo > create_shard(pg_id pg_owner, uint64_t size_bytes) final;
     ShardManager::AsyncResult< InfoList > list_shards(pg_id pg) const final;
     ShardManager::AsyncResult< ShardInfo > seal_shard(shard_id id) final;
+    uint64_t get_current_timestamp();
 
     static const std::string s_shard_info_sub_type;
     /// BlobManager

@@ -5,7 +5,6 @@
 #include <sisl/utility/enum.hpp>
 
 #include "common.hpp"
-#include "shard_manager.hpp"
 
 namespace homeobject {
 
@@ -26,13 +25,6 @@ struct PGInfo {
     explicit PGInfo(pg_id _id) : id(_id) {}
     pg_id id;
     mutable MemberSet members;
-};
-
-struct PG {
-    explicit PG(PGInfo info) : pg_info(std::move(info)) {}
-    PGInfo pg_info;
-    uint64_t next_sequence_num_for_new_shard{0};
-    CShardInfoList shards;
 };
 
 class PGManager : public Manager< PGError > {
