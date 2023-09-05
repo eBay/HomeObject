@@ -6,7 +6,7 @@ pipeline {
         CONAN_USER = 'oss'
         TARGET_BRANCH = 'main'
         STABLE_BRANCH = 'stable/v*'
-        DISABLE_DEP_TESTS = '-o sisl:testing=False -o iomgr:testing=off -o homestore:testing=off -o nuraft_mesg:testing=False'
+        DISABLE_DEP_TESTS = '-o sisl:testing=False -o iomgr:testing=off -o homestore:testing=off -o nuraft_mesg:testing=False -o home_replication:testing=False'
     }
 
     stages {

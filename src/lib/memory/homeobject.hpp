@@ -6,7 +6,7 @@
 #include <set>
 #include <utility>
 
-#include <home_replication/repl_service.h>
+#include "mocks/repl_service.h"
 
 #include "lib/homeobject_impl.hpp"
 
