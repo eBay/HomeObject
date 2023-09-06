@@ -23,7 +23,9 @@ class HSHomeObject : public HomeObjectImpl {
 
 public:
     using HomeObjectImpl::HomeObjectImpl;
-    ~HSHomeObject() override = default;
+    ~HSHomeObject();
+
+    void init_homestore();
 };
 
 } // namespace homeobject
