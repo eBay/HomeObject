@@ -33,16 +33,11 @@ struct std::hash< homeobject::BlobRoute > {
 namespace homeobject {
 
 class MemoryHomeObject : public HomeObjectImpl {
-    /// Simulates the append-only disk Chunk in DataSvc
-    mutable std::mutex _data_lock;
-    std::list< Blob > _in_memory_disk;
-    using blkid = decltype(_in_memory_disk)::const_iterator;
-    ///
-
     /// Simulates the Shard=>Chunk mapping in IndexSvc
     mutable std::shared_mutex _index_lock;
-    using btree = std::unordered_map< BlobRoute, blkid >;
-    std::unordered_map< shard_id, btree > _in_memory_index;
+    using btree = std::unordered_map< BlobRoute, Blob >;
+    std::unordered_map< shard_id, std::pair< btree, blob_id > > _in_memory_index;
+    std::list< Blob > _garbage;
     ///
 
     /// Helpers
