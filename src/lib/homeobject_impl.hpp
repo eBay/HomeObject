@@ -31,7 +31,6 @@ class HomeObjectImpl : public HomeObject,
     std::shared_ptr< home_replication::ReplicationService > _repl_svc;
 
     /// Implementation defines these
-    virtual folly::Future< ShardManager::Result< ShardInfo > > _get_shard(shard_id) const = 0;
     virtual ShardManager::Result< ShardInfo > _create_shard(pg_id, uint64_t size_bytes) = 0;
     virtual ShardManager::Result< ShardInfo > _seal_shard(shard_id) = 0;
 

@@ -11,7 +11,6 @@ namespace homeobject {
 
 class HSHomeObject : public HomeObjectImpl {
     /// Overridable Helpers
-    folly::Future< ShardManager::Result< ShardInfo > > _get_shard(shard_id) const override;
     ShardManager::Result< ShardInfo > _create_shard(pg_id, uint64_t size_bytes) override;
     ShardManager::Result< ShardInfo > _seal_shard(shard_id) override;
 

@@ -32,16 +32,6 @@ ShardManager::Result< ShardInfo > MemoryHomeObject::_create_shard(pg_id pg_owner
     return info;
 }
 
-folly::Future< ShardManager::Result< ShardInfo > > MemoryHomeObject::_get_shard(shard_id id) const {
-    return folly::makeSemiFuture()
-        .via(folly::getGlobalCPUExecutor())
-        .thenValue([this, id](auto) -> ShardManager::Result< ShardInfo > {
-            auto lg = std::shared_lock(_shard_lock);
-            if (auto it = _shard_map.find(id); _shard_map.end() != it) return *it->second;
-            return folly::makeUnexpected(ShardError::UNKNOWN_SHARD);
-        });
-}
-
 ShardManager::Result< ShardInfo > MemoryHomeObject::_seal_shard(shard_id id) {
     auto lg = std::scoped_lock(_pg_lock, _shard_lock);
     auto shard_it = _shard_map.find(id);
