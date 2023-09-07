@@ -33,7 +33,6 @@ class HomeObjectImpl : public HomeObject,
     /// Implementation defines these
     virtual folly::Future< ShardManager::Result< ShardInfo > > _get_shard(shard_id) const = 0;
     virtual ShardManager::Result< ShardInfo > _create_shard(pg_id, uint64_t size_bytes) = 0;
-    virtual ShardManager::Result< InfoList > _list_shards(pg_id) const = 0;
     virtual ShardManager::Result< ShardInfo > _seal_shard(shard_id) = 0;
 
     virtual BlobManager::Result< blob_id > _put_blob(ShardInfo const&, Blob&&) = 0;
