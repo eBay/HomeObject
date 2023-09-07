@@ -16,8 +16,4 @@ folly::Future< ShardManager::Result< ShardInfo > > HSHomeObject::_get_shard(shar
     return folly::makeUnexpected(ShardError::UNKNOWN_SHARD);
 }
 
-ShardManager::Result< InfoList > HSHomeObject::_list_shards(pg_id pg) const {
-    return folly::makeUnexpected(ShardError::UNKNOWN_PG);
-}
-
 } // namespace homeobject

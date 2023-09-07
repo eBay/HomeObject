@@ -14,7 +14,6 @@ class HSHomeObject : public HomeObjectImpl {
     folly::Future< ShardManager::Result< ShardInfo > > _get_shard(shard_id) const override;
     ShardManager::Result< ShardInfo > _create_shard(pg_id, uint64_t size_bytes) override;
     ShardManager::Result< ShardInfo > _seal_shard(shard_id) override;
-    ShardManager::Result< InfoList > _list_shards(pg_id) const override;
 
     BlobManager::Result< blob_id > _put_blob(ShardInfo const&, Blob&&) override;
     BlobManager::Result< Blob > _get_blob(ShardInfo const&, blob_id) const override;

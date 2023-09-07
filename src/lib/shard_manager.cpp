@@ -20,7 +20,18 @@ ShardManager::AsyncResult< ShardInfo > HomeObjectImpl::create_shard(pg_id pg_own
 ShardManager::AsyncResult< InfoList > HomeObjectImpl::list_shards(pg_id pg) const {
     return folly::makeSemiFuture()
         .via(folly::getGlobalCPUExecutor())
-        .thenValue([this, pg](auto) mutable -> ShardManager::Result< InfoList > { return _list_shards(pg); });
+        .thenValue([this, pg](auto) mutable -> ShardManager::Result< InfoList > {
+            auto lg = std::shared_lock(_pg_lock);
+            auto pg_it = _pg_map.find(id);
+            if (_pg_map.end() == pg_it) return folly::makeUnexpected(ShardError::UNKNOWN_PG);
+
+            auto info_l = std::list< ShardInfo >();
+            for (auto const& info : pg_it->second.second) {
+                LOGDEBUG("Listing Shard {}", info.id);
+                info_l.push_back(info);
+            }
+            return info_l;
+        });
 }
 
 ShardManager::AsyncResult< ShardInfo > HomeObjectImpl::seal_shard(shard_id id) {

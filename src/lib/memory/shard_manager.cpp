@@ -42,19 +42,6 @@ folly::Future< ShardManager::Result< ShardInfo > > MemoryHomeObject::_get_shard(
         });
 }
 
-ShardManager::Result< InfoList > MemoryHomeObject::_list_shards(pg_id id) const {
-    auto lg = std::shared_lock(_pg_lock);
-    auto pg_it = _pg_map.find(id);
-    if (_pg_map.end() == pg_it) return folly::makeUnexpected(ShardError::UNKNOWN_PG);
-
-    auto info_l = std::list< ShardInfo >();
-    for (auto const& info : pg_it->second.second) {
-        LOGDEBUG("Listing Shard {}", info.id);
-        info_l.push_back(info);
-    }
-    return info_l;
-}
-
 ShardManager::Result< ShardInfo > MemoryHomeObject::_seal_shard(shard_id id) {
     auto lg = std::scoped_lock(_pg_lock, _shard_lock);
     auto shard_it = _shard_map.find(id);
