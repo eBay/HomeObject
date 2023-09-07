@@ -22,7 +22,7 @@ ShardManager::AsyncResult< InfoList > HomeObjectImpl::list_shards(pg_id pg) cons
         .via(folly::getGlobalCPUExecutor())
         .thenValue([this, pg](auto) mutable -> ShardManager::Result< InfoList > {
             auto lg = std::shared_lock(_pg_lock);
-            auto pg_it = _pg_map.find(id);
+            auto pg_it = _pg_map.find(pg);
             if (_pg_map.end() == pg_it) return folly::makeUnexpected(ShardError::UNKNOWN_PG);
 
             auto info_l = std::list< ShardInfo >();
