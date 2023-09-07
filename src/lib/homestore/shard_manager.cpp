@@ -12,8 +12,4 @@ ShardManager::Result< ShardInfo > HSHomeObject::_seal_shard(shard_id id) {
     return folly::makeUnexpected(ShardError::UNKNOWN_SHARD);
 }
 
-folly::Future< ShardManager::Result< ShardInfo > > HSHomeObject::_get_shard(shard_id id) const {
-    return folly::makeUnexpected(ShardError::UNKNOWN_SHARD);
-}
-
 } // namespace homeobject

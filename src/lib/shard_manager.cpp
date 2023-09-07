@@ -40,6 +40,14 @@ ShardManager::AsyncResult< ShardInfo > HomeObjectImpl::seal_shard(shard_id id) {
         .thenValue([this, id](auto) mutable -> ShardManager::Result< ShardInfo > { return _seal_shard(id); });
 }
 
-ShardManager::AsyncResult< ShardInfo > HomeObjectImpl::get_shard(shard_id id) const { return _get_shard(id); }
+ShardManager::AsyncResult< ShardInfo > HomeObjectImpl::get_shard(shard_id id) const {
+    return folly::makeSemiFuture()
+        .via(folly::getGlobalCPUExecutor())
+        .thenValue([this, id](auto) -> ShardManager::Result< ShardInfo > {
+            auto lg = std::shared_lock(_shard_lock);
+            if (auto it = _shard_map.find(id); _shard_map.end() != it) return *it->second;
+            return folly::makeUnexpected(ShardError::UNKNOWN_SHARD);
+        });
+}
 
 } // namespace homeobject
