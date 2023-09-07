@@ -1,4 +1,5 @@
 #include <chrono>
+#include <cmath>
 #include <condition_variable>
 #include <mutex>
 
@@ -24,12 +25,26 @@ SISL_OPTIONS_ENABLE(logging)
 
 class FixtureApp : public homeobject::HomeObjectApplication {
 public:
-    bool spdk_mode() const override { return true; }
+    bool spdk_mode() const override { return false; }
     uint32_t threads() const override { return 2; }
-    std::list< std::filesystem::path > devices() const override { return std::list< std::filesystem::path >(); }
+    std::list< std::filesystem::path > devices() const override {
+        /* create files */
+        LOGINFO("creating device files with size {} ", 1, homestore::in_bytes(2 * Gi));
+        const std::string fpath{"/tmp/test_homestore.data"};
+        LOGINFO("creating {} device file", fpath);
+        if (std::filesystem::exists(fpath)) { std::filesystem::remove(fpath); }
+        std::ofstream ofs{fpath, std::ios::binary | std::ios::out | std::ios::trunc};
+        std::filesystem::resize_file(fpath, 2 * Gi);
+
+        auto device_info = std::list< std::filesystem::path >();
+        device_info.emplace_back(std::filesystem::canonical(fpath));
+        return device_info;
+    }
     homeobject::peer_id discover_svcid(std::optional< homeobject::peer_id > const&) const override {
         return boost::uuids::random_generator()();
     }
+    /// TODO
+    /// This will have to work if we test replication in the future
     std::string lookup_peer(homeobject::peer_id const&) const override { return "test_fixture.com"; }
 };
 
