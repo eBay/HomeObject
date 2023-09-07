@@ -13,7 +13,7 @@ BlobManager::Result< blob_id > MemoryHomeObject::_put_blob(ShardInfo const& shar
     auto route = BlobRoute{shard.id, btree_it->second.size()};
     LOGDEBUGMOD(homeobject, "Writing BLOB {} to: BlkId:[{}]", route.blob, fmt::ptr(new_blkid.get()));
 
-    auto [_, happened] = btree_it->second.try_emplace(route, std::make_pair(std::move(new_blkid), true));
+    auto [_, happened] = btree_it->second.try_emplace(route, std::move(new_blkid));
     RELEASE_ASSERT(happened, "Generated duplicate BlobRoute!");
 
     return route.blob;
@@ -27,10 +27,7 @@ BlobManager::Result< Blob > MemoryHomeObject::_get_blob(ShardInfo const& shard, 
         auto lg = std::shared_lock(_index_lock);
         if (auto b_it = _in_memory_index.find(shard.id); _in_memory_index.end() != b_it) {
             LOGDEBUGMOD(homeobject, "Looking up Blob {} in set of {}", route.blob, b_it->second.size());
-            if (auto it = b_it->second.find(route); b_it->second.end() != it) {
-                // Is this BLOB still alive?
-                if (it->second.second) unsafe_ptr = it->second.first.get();
-            }
+            if (auto it = b_it->second.find(route); b_it->second.end() != it) unsafe_ptr = it->second.get();
         }
     }
     if (!unsafe_ptr) {
@@ -55,7 +52,8 @@ BlobManager::NullResult MemoryHomeObject::_del_blob(ShardInfo const& shard, blob
     if (auto b_it = _in_memory_index.find(shard.id); _in_memory_index.end() != b_it) {
         auto& our_btree = b_it->second;
         if (auto r_it = our_btree.find(route); our_btree.end() != r_it) {
-            r_it->second.second = false;
+            _garbage.push_back(std::move(r_it->second));
+            our_btree.erase(r_it);
             return folly::Unit();
         }
     }
