@@ -33,14 +33,11 @@ struct std::hash< homeobject::BlobRoute > {
 namespace homeobject {
 
 class MemoryHomeObject : public HomeObjectImpl {
-    // Memory based allocations
-    using blkid = std::unique_ptr< Blob >;
-
     /// Simulates the Shard=>Chunk mapping in IndexSvc
     mutable std::shared_mutex _index_lock;
-    using btree = std::unordered_map< BlobRoute, blkid >;
+    using btree = std::unordered_map< BlobRoute, Blob >;
     std::unordered_map< shard_id, btree > _in_memory_index;
-    std::list< blkid > _garbage;
+    std::list< Blob > _garbage;
     ///
 
     /// Helpers
