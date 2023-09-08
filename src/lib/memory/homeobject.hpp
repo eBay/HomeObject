@@ -32,11 +32,18 @@ struct std::hash< homeobject::BlobRoute > {
 
 namespace homeobject {
 
+using btree = std::unordered_map< BlobRoute, Blob >;
+
+struct ShardIndex {
+    mutable std::shared_mutex _btree_lock;
+    btree _btree;
+    blob_id _shard_seq_num{0ull};
+};
+
 class MemoryHomeObject : public HomeObjectImpl {
     /// Simulates the Shard=>Chunk mapping in IndexSvc
     mutable std::shared_mutex _index_lock;
-    using btree = std::unordered_map< BlobRoute, Blob >;
-    std::unordered_map< shard_id, std::pair< btree, blob_id > > _in_memory_index;
+    std::unordered_map< shard_id, ShardIndex > _in_memory_index;
     std::list< Blob > _garbage;
     ///
 

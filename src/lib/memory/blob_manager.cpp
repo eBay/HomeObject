@@ -3,33 +3,43 @@
 namespace homeobject {
 
 BlobManager::Result< blob_id > MemoryHomeObject::_put_blob(ShardInfo const& shard, Blob&& blob) {
-    auto lg = std::scoped_lock(_index_lock);
-    auto [btree_it, h1] = _in_memory_index.try_emplace(shard.id, std::make_pair(btree(), blob_id(0ull)));
-    RELEASE_ASSERT(_in_memory_index.end() != btree_it, "Could not create BTree!");
+    auto route = BlobRoute{shard.id, 0ull};
+    auto index_it = _in_memory_index.end();
+    {
+        auto lg = std::scoped_lock(_index_lock);
+        index_it = _in_memory_index.try_emplace(shard.id).first;
+        RELEASE_ASSERT(_in_memory_index.end() != index_it, "Could not create BTree!");
+        route.blob = index_it->second._shard_seq_num++;
+    }
 
-    auto route = BlobRoute{shard.id, btree_it->second.second++};
-    LOGDEBUGMOD(homeobject, "Writing BLOB {} to: BlkId:[{}]", route.blob, fmt::ptr(&blob));
-
-    auto [_, happened] = btree_it->second.first.try_emplace(route, std::move(blob));
+    auto bt_lg = std::scoped_lock(index_it->second._btree_lock);
+    auto [new_it, happened] = index_it->second._btree.try_emplace(route, std::move(blob));
     RELEASE_ASSERT(happened, "Generated duplicate BlobRoute!");
 
+    LOGDEBUGMOD(homeobject, "Wrote BLOB {} to: BlkId:[{}]", route.blob, fmt::ptr(&new_it->second));
     return route.blob;
 }
 
 BlobManager::Result< Blob > MemoryHomeObject::_get_blob(ShardInfo const& shard, blob_id blob) const {
-    auto route = BlobRoute(shard.id, blob);
-    // This is only *safe* because we defer GC to shutdown currently.
-    auto unsafe_ptr = decltype(Blob::body)::pointer{nullptr};
-    Blob user_blob;
+    auto index_it = _in_memory_index.end();
     {
         auto lg = std::shared_lock(_index_lock);
-        if (auto b_it = _in_memory_index.find(shard.id); _in_memory_index.end() != b_it) {
-            LOGDEBUGMOD(homeobject, "Looking up Blob {} in set of {}", route.blob, b_it->second.second);
-            if (auto it = b_it->second.first.find(route); b_it->second.first.end() != it) {
-                user_blob.object_off = it->second.object_off;
-                user_blob.user_key = it->second.user_key;
-                unsafe_ptr = it->second.body.get();
-            }
+        if (index_it = _in_memory_index.find(shard.id); _in_memory_index.end() == index_it) {
+            return folly::makeUnexpected(BlobError::UNKNOWN_BLOB);
+        }
+    }
+
+    auto route = BlobRoute(shard.id, blob);
+    Blob user_blob;
+    // This is only *safe* because we defer GC to shutdown currently.
+    auto unsafe_ptr = decltype(Blob::body)::pointer{nullptr};
+    {
+        auto bt_lg = std::shared_lock(index_it->second._btree_lock);
+        LOGDEBUGMOD(homeobject, "Looking up Blob {} in set of {}", route.blob, index_it->second._shard_seq_num);
+        if (auto it = index_it->second._btree.find(route); index_it->second._btree.end() != it) {
+            user_blob.object_off = it->second.object_off;
+            user_blob.user_key = it->second.user_key;
+            unsafe_ptr = it->second.body.get();
         }
     }
     if (!unsafe_ptr) {
@@ -43,17 +53,23 @@ BlobManager::Result< Blob > MemoryHomeObject::_get_blob(ShardInfo const& shard, 
 }
 
 BlobManager::NullResult MemoryHomeObject::_del_blob(ShardInfo const& shard, blob_id id) {
-    auto route = BlobRoute(shard.id, id);
-    auto lg = std::scoped_lock(_index_lock);
-    LOGDEBUGMOD(homeobject, "Looking up Blob {} in set of {}", route.blob, _in_memory_index.size());
-    // TODO We defer GC of the BLOB leaking BLOB into memory for now
-    if (auto b_it = _in_memory_index.find(shard.id); _in_memory_index.end() != b_it) {
-        auto& our_btree = b_it->second.first;
-        if (auto r_it = our_btree.find(route); our_btree.end() != r_it) {
-            _garbage.push_back(std::move(r_it->second));
-            our_btree.erase(r_it);
-            return folly::Unit();
+    auto index_it = _in_memory_index.end();
+    LOGDEBUGMOD(homeobject, "Looking up Blob {} in set of {}", id, _in_memory_index.size());
+    {
+        auto lg = std::shared_lock(_index_lock);
+        if (index_it = _in_memory_index.find(shard.id); _in_memory_index.end() == index_it) {
+            return folly::makeUnexpected(BlobError::UNKNOWN_BLOB);
         }
+    }
+
+    auto route = BlobRoute(shard.id, id);
+    // TODO We defer GC of the BLOB leaking BLOB into memory for now
+    auto bt_lg = std::scoped_lock(index_it->second._btree_lock);
+    auto& our_btree = index_it->second._btree;
+    if (auto r_it = our_btree.find(route); our_btree.end() != r_it) {
+        _garbage.push_back(std::move(r_it->second));
+        our_btree.erase(r_it);
+        return folly::Unit();
     }
     LOGWARNMOD(homeobject, "Blob missing {} during delete", route.blob);
     return folly::makeUnexpected(BlobError::UNKNOWN_BLOB);
