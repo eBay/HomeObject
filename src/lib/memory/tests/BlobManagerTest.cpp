@@ -100,8 +100,8 @@ TEST_F(BlobManagerFixture, BasicTests) {
                             EXPECT_EQ(blob.object_off, 4 * Mi);
                         });
                     }));
-                our_calls.push_back(m_memory_homeobj->blob_manager()->get(i, _blob_id).deferValue([](auto const& e) {
-                }));
+                our_calls.push_back(
+                    m_memory_homeobj->blob_manager()->get(i, _blob_id).deferValue([](auto const& e) {}));
                 our_calls.push_back(
                     m_memory_homeobj->blob_manager()->get(_shard_1.id, i).deferValue([](auto const&) {}));
                 our_calls.push_back(
@@ -118,8 +118,8 @@ TEST_F(BlobManagerFixture, BasicTests) {
                         ->put(_shard_2.id,
                               Blob{std::make_unique< sisl::byte_array_impl >(8 * Ki, 512u), "test_blob_2", 4 * Mi})
                         .deferValue([](auto const& e) { EXPECT_TRUE(!!e); }));
-                our_calls.push_back(m_memory_homeobj->blob_manager()->del(i, _blob_id).deferValue([](auto const& e) {
-                }));
+                our_calls.push_back(
+                    m_memory_homeobj->blob_manager()->del(i, _blob_id).deferValue([](auto const& e) {}));
                 our_calls.push_back(m_memory_homeobj->blob_manager()->del(_shard_1.id, i).deferValue([](auto const& e) {
                     EXPECT_EQ(BlobError::UNKNOWN_BLOB, e.error());
                 }));

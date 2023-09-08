@@ -43,7 +43,8 @@ struct ShardIndex {
 class MemoryHomeObject : public HomeObjectImpl {
     /// Simulates the Shard=>Chunk mapping in IndexSvc
     mutable std::shared_mutex _index_lock;
-    std::unordered_map< shard_id, ShardIndex > _in_memory_index;
+    using index_svc = std::unordered_map< shard_id, ShardIndex >;
+    index_svc _in_memory_index;
     std::list< Blob > _garbage;
     ///
 
@@ -57,6 +58,8 @@ class MemoryHomeObject : public HomeObjectImpl {
     BlobManager::Result< Blob > _get_blob(ShardInfo const&, blob_id) const override;
     BlobManager::NullResult _del_blob(ShardInfo const&, blob_id) override;
     ///
+
+    BlobManager::Result< index_svc::iterator > _find_index(shard_id);
 
 public:
     using HomeObjectImpl::HomeObjectImpl;
