@@ -2,16 +2,16 @@
 
 namespace homeobject {
 
-MemoryHomeObject::index_svc::iterator MemoryHomeObject::_find_index(shard_id shard) {
+ShardIndex& MemoryHomeObject::_find_index(shard_id shard) {
     auto lg = std::shared_lock(_index_lock);
     auto index_it = _in_memory_index.find(shard);
     RELEASE_ASSERT(_in_memory_index.end() != index_it, "Missing BTree!!");
-    return index_it;
+    return index_it->second;
 }
 
 BlobManager::Result< blob_id > MemoryHomeObject::_put_blob(ShardInfo const& shard, Blob&& blob) {
     // Lookup Shard Index (BTree and SSN)
-    auto& shard_index = _find_index(shard.id)->second;
+    auto& shard_index = _find_index(shard.id);
 
     // Lock the BTree
     shard_index._btree_lock.lock();
@@ -64,7 +64,7 @@ BlobManager::Result< Blob > MemoryHomeObject::_get_blob(ShardInfo const& shard, 
 
 BlobManager::NullResult MemoryHomeObject::_del_blob(ShardInfo const& shard, blob_id id) {
     // Lookup Shard Index (BTree and SSN)
-    auto& shard_index = _find_index(shard.id)->second;
+    auto& shard_index = _find_index(shard.id);
 
     // Calculate BlobRoute from ShardInfo (use ordinal?)
     auto route = BlobRoute(shard.id, id);
