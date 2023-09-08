@@ -6,6 +6,7 @@
 #include <set>
 #include <utility>
 
+#include <folly/synchronization/RWSpinLock.h>
 #include "mocks/repl_service.h"
 
 #include "lib/homeobject_impl.hpp"
@@ -35,7 +36,7 @@ namespace homeobject {
 using btree = std::unordered_map< BlobRoute, Blob >;
 
 struct ShardIndex {
-    mutable std::shared_mutex _btree_lock;
+    mutable folly::RWSpinLock _btree_lock;
     btree _btree;
     blob_id _shard_seq_num{0ull};
 };
@@ -59,7 +60,7 @@ class MemoryHomeObject : public HomeObjectImpl {
     BlobManager::NullResult _del_blob(ShardInfo const&, blob_id) override;
     ///
 
-    BlobManager::Result< index_svc::iterator > _find_index(shard_id);
+    ShardIndex& _find_index(shard_id);
 
 public:
     using HomeObjectImpl::HomeObjectImpl;
