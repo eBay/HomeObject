@@ -9,18 +9,15 @@ std::shared_ptr< BlobManager > HomeObjectImpl::blob_manager() {
 
 BlobManager::AsyncResult< Blob > HomeObjectImpl::get(shard_id shard, blob_id const& blob, uint64_t off,
                                                      uint64_t len) const {
-    return get_shard(shard)
-        .via(folly::getGlobalCPUExecutor())
-        .thenValue([this, blob](auto const e) -> BlobManager::Result< Blob > {
-            if (!e) return folly::makeUnexpected(BlobError::UNKNOWN_SHARD);
-            return _get_blob(e.value(), blob);
-        });
+    return _get_shard(shard).thenValue([this, blob](auto const e) -> BlobManager::Result< Blob > {
+        if (!e) return folly::makeUnexpected(BlobError::UNKNOWN_SHARD);
+        return _get_blob(e.value(), blob);
+    });
 }
 
 BlobManager::AsyncResult< blob_id > HomeObjectImpl::put(shard_id shard, Blob&& blob) {
-    return get_shard(shard)
-        .via(folly::getGlobalCPUExecutor())
-        .thenValue([this, blob = std::move(blob)](auto const e) mutable -> BlobManager::Result< blob_id > {
+    return _get_shard(shard).thenValue(
+        [this, blob = std::move(blob)](auto const e) mutable -> BlobManager::Result< blob_id > {
             if (!e) return folly::makeUnexpected(BlobError::UNKNOWN_SHARD);
             if (ShardInfo::State::SEALED == e.value().state) return folly::makeUnexpected(BlobError::INVALID_ARG);
             return _put_blob(e.value(), std::move(blob));
@@ -28,12 +25,10 @@ BlobManager::AsyncResult< blob_id > HomeObjectImpl::put(shard_id shard, Blob&& b
 }
 
 BlobManager::NullAsyncResult HomeObjectImpl::del(shard_id shard, blob_id const& blob) {
-    return get_shard(shard)
-        .via(folly::getGlobalCPUExecutor())
-        .thenValue([this, blob](auto const e) mutable -> BlobManager::NullResult {
-            if (!e) return folly::makeUnexpected(BlobError::UNKNOWN_SHARD);
-            return _del_blob(e.value(), blob);
-        });
+    return _get_shard(shard).thenValue([this, blob](auto const e) mutable -> BlobManager::NullResult {
+        if (!e) return folly::makeUnexpected(BlobError::UNKNOWN_SHARD);
+        return _del_blob(e.value(), blob);
+    });
 }
 
 } // namespace homeobject

@@ -39,6 +39,9 @@ class HomeObjectImpl : public HomeObject,
     virtual BlobManager::NullResult _del_blob(ShardInfo const&, blob_id) = 0;
     ///
 
+    folly::Future< ShardManager::Result< ShardInfo > > _get_shard(shard_id id) const;
+    auto _defer() const { return folly::makeSemiFuture().via(folly::getGlobalCPUExecutor()); }
+
 protected:
     peer_id _our_id;
 
