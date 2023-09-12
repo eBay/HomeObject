@@ -16,10 +16,9 @@ ShardManager::Result< ShardInfo > MemoryHomeObject::_create_shard(pg_id pg_owner
 
         auto& s_list = pg_it->second.shards;
         info.id = (((uint64_t)pg_owner) << 48) + s_list.size();
-        auto shard = std::make_shared<Shard>(info);
+	auto iter = s_list.emplace(s_list.end(), Shard(info));
         LOGDEBUG("Creating Shard [{}]: in Pg [{}] of Size [{}b]", info.id, pg_owner, size_bytes);
-        s_list.push_back(shard);
-        auto [_, s_happened] = _shard_map.emplace(info.id, shard);
+        auto [_, s_happened] = _shard_map.emplace(info.id, iter);
         RELEASE_ASSERT(s_happened, "Duplicate Shard insertion!");
     }
     auto lg = std::scoped_lock(_index_lock);
@@ -32,8 +31,9 @@ ShardManager::Result< ShardInfo > MemoryHomeObject::_seal_shard(shard_id id) {
     auto lg = std::scoped_lock(_shard_lock);
     auto shard_it = _shard_map.find(id);
     if (_shard_map.end() == shard_it) return folly::makeUnexpected(ShardError::UNKNOWN_SHARD);
-    shard_it->second->info.state = ShardInfo::State::SEALED;
-    return shard_it->second->info;
+    auto& shard_info = (*shard_it->second).info;
+    shard_info.state = ShardInfo::State::SEALED;
+    return shard_info;    
 }
 
 } // namespace homeobject

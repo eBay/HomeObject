@@ -22,15 +22,17 @@ class HSHomeObject : public HomeObjectImpl {
     BlobManager::Result< Blob > _get_blob(ShardInfo const&, blob_id) const override;
     BlobManager::NullResult _del_blob(ShardInfo const&, blob_id) override;
     ///
+    mutable std::shared_mutex _flying_shard_lock;
+    std::map< int64_t, Shard > _flying_shards;
 private:
-    bool check_if_pg_exist(pg_id pg) const;
     shard_id generate_new_shard_id(pg_id pg);
     shard_id make_new_shard_id(pg_id pg, uint64_t sequence_num) const;
     uint64_t get_sequence_num_from_shard_id(uint64_t shard_id);
-    std::string serialize_shard_info(ShardPtr shard) const;
-    ShardPtr deserialize_shard_info(const std::string& shard_info_str) const;
-    void do_commit_new_shard(ShardPtr shard_info);
-    void do_commit_seal_shard(ShardPtr shard_info);
+    std::string serialize_shard(const Shard& shard) const;
+    Shard deserialize_shard(const std::string& shard_info_str) const;
+    void do_commit_new_shard(const Shard& shard);
+    void do_commit_seal_shard(const Shard& shard);
+    void register_homestore_metablk_callback();
 public:
     using HomeObjectImpl::HomeObjectImpl;
     ~HSHomeObject();
@@ -39,6 +41,9 @@ public:
 
     static const std::string s_shard_info_sub_type;  
     void on_shard_meta_blk_found(homestore::meta_blk* mblk, sisl::byte_view buf, size_t size);
+
+    bool precheck_and_decode_shard_msg(int64_t lsn, sisl::blob const& header, sisl::blob const& key,
+                                        std::string* msg);
 
     void on_pre_commit_shard_msg(int64_t lsn, sisl::blob const& header, sisl::blob const& key,
                                  void* user_ctx);

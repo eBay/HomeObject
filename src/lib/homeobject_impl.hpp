@@ -16,24 +16,20 @@ namespace homeobject {
 inline bool operator<(ShardInfo const& lhs, ShardInfo const& rhs) { return lhs.id < rhs.id; }
 inline bool operator==(ShardInfo const& lhs, ShardInfo const& rhs) { return lhs.id == rhs.id; }
 
-struct ShardInfoExt {
-    uint16_t chunk_id;
-};
-
 struct Shard {
     explicit Shard(ShardInfo info) : info(std::move(info)) {}
     ShardInfo info;
-    ShardInfoExt ext_info;
+    uint16_t chunk_id;
 };
 
-using ShardPtr = std::shared_ptr< Shard >;
-using ShardPtrList = std::list< ShardPtr >;
+using ShardList = std::list< Shard >;
+using ShardIterator = ShardList::iterator;
 
 struct PG {
     explicit PG(PGInfo info) : pg_info(std::move(info)) {}
     PGInfo pg_info;
     uint64_t shard_sequence_num{0};
-    ShardPtrList shards;
+    ShardList shards;
 };
 
 class HomeObjectImpl : public HomeObject,
@@ -50,8 +46,7 @@ class HomeObjectImpl : public HomeObject,
     virtual BlobManager::Result< Blob > _get_blob(ShardInfo const&, blob_id) const = 0;
     virtual BlobManager::NullResult _del_blob(ShardInfo const&, blob_id) = 0;
     ///
-
-    folly::Future< ShardManager::Result< ShardInfo > > _get_shard(shard_id id) const;
+    folly::Future< ShardManager::Result< Shard > > _get_shard(shard_id id) const;
     auto _defer() const { return folly::makeSemiFuture().via(folly::getGlobalCPUExecutor()); }
 
 protected:
@@ -68,8 +63,9 @@ protected:
     std::map< pg_id, PG > _pg_map;
 
     mutable std::shared_mutex _shard_lock;
-    std::map < shard_id, ShardPtr > _shard_map;
+    std::map < shard_id, ShardIterator > _shard_map;
     ///
+    PGManager::Result< PG > _get_pg(pg_id pg);
 public:
     explicit HomeObjectImpl(std::weak_ptr< HomeObjectApplication >&& application) :
             _application(std::move(application)) {}
@@ -99,8 +95,6 @@ public:
     ShardManager::AsyncResult< InfoList > list_shards(pg_id pg) const final;
     ShardManager::AsyncResult< ShardInfo > seal_shard(shard_id id) final;
     uint64_t get_current_timestamp();
-
-    static const std::string s_shard_info_sub_type;
     /// BlobManager
     BlobManager::AsyncResult< blob_id > put(shard_id shard, Blob&&) final;
     BlobManager::AsyncResult< Blob > get(shard_id shard, blob_id const& blob, uint64_t off, uint64_t len) const final;

@@ -29,15 +29,6 @@ void HSHomeObject::init_homestore() {
     LOGINFO("Starting iomgr with {} threads, spdk: {}", app->threads(), false);
     ioenvironment.with_iomgr(iomgr::iomgr_params{.num_threads = app->threads(), .is_spdk = app->spdk_mode()});
 
-    //register some callbacks for metadata recovery;
-    using namespace homestore;
-    HomeStore::instance()->meta_service().register_handler(HSHomeObject::s_shard_info_sub_type,
-                                                     [this](homestore::meta_blk* mblk, sisl::byte_view buf, size_t size) {
-                                                         on_shard_meta_blk_found(mblk, buf, size);
-                                                     },
-                                                     nullptr,
-                                                     true);
-
     /// TODO Where should this come from?
     const uint64_t app_mem_size = 2 * Gi;
     LOGINFO("Initialize and start HomeStore with app_mem_size = {}", homestore::in_bytes(app_mem_size));
@@ -48,10 +39,14 @@ void HSHomeObject::init_homestore() {
     }
 
     /// TODO need Repl service eventually yeah?
+    using namespace homestore;
     uint32_t services = HS_SERVICE::META | HS_SERVICE::LOG_REPLICATED | HS_SERVICE::LOG_LOCAL | HS_SERVICE::DATA;
 
     bool need_format = HomeStore::instance()->start(
-        hs_input_params{.devices = device_info, .app_mem_size = app_mem_size, .services = services});
+        hs_input_params{.devices = device_info, .app_mem_size = app_mem_size, .services = services},
+        [this]() {
+            register_homestore_metablk_callback();
+        });
 
     /// TODO how should this work?
     LOGWARN("Persistence Looks Vacant, Formatting!!");
@@ -64,6 +59,17 @@ void HSHomeObject::init_homestore() {
             {HS_SERVICE::INDEX, hs_format_params{.size_pct = 30.0}},
         });
     }
+}
+
+void HSHomeObject::register_homestore_metablk_callback() {
+    //register some callbacks for metadata recovery;
+    using namespace homestore;
+    HomeStore::instance()->meta_service().register_handler(HSHomeObject::s_shard_info_sub_type,
+                                [this](homestore::meta_blk* mblk, sisl::byte_view buf, size_t size) {
+                                    on_shard_meta_blk_found(mblk, buf, size);
+                                },
+                                nullptr,
+                                true);
 }
 
 void HomeObjectImpl::init_repl_svc() {
@@ -87,8 +93,8 @@ void HSHomeObject::on_shard_meta_blk_found(homestore::meta_blk* mblk, sisl::byte
     std::string shard_info_str;
     shard_info_str.append(r_cast<const char*>(buf.bytes()), size);
 
-    auto shard = deserialize_shard_info(shard_info_str);
-    if (shard->info.state == ShardInfo::State::OPEN) {
+    auto shard = deserialize_shard(shard_info_str);
+    if (shard.info.state == ShardInfo::State::OPEN) {
         // create shard;
         do_commit_new_shard(shard);
     } else {
