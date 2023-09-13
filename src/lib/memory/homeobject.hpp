@@ -1,7 +1,6 @@
 #pragma once
 
 #include <atomic>
-#include <shared_mutex>
 #include <utility>
 
 #include <folly/concurrency/ConcurrentHashMap.h>
@@ -53,8 +52,7 @@ struct Shard {
 
 class MemoryHomeObject : public HomeObjectImpl {
     /// Simulates the Shard=>Chunk mapping in IndexSvc
-    mutable std::shared_mutex _index_lock;
-    using index_svc = std::unordered_map< shard_id, Shard >;
+    using index_svc = folly::ConcurrentHashMap< shard_id, std::unique_ptr< Shard > >;
     index_svc _in_memory_index;
     ///
 
