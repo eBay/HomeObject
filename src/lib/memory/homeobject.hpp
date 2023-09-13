@@ -1,12 +1,10 @@
 #pragma once
 
-#include <memory>
-#include <mutex>
+#include <atomic>
 #include <shared_mutex>
-#include <set>
 #include <utility>
 
-#include <folly/synchronization/RWSpinLock.h>
+#include <folly/concurrency/ConcurrentHashMap.h>
 #include "mocks/repl_service.h"
 
 #include "lib/homeobject_impl.hpp"
@@ -38,23 +36,24 @@ namespace homeobject {
 ENUM(BlobState, uint8_t, ALIVE = 0, DELETED);
 
 struct BlobExt : public Blob {
-    std::atomic< BlobState > _state{BlobState::ALIVE};
+    BlobState _state{BlobState::DELETED};
+    std::shared_ptr< Blob > _blob;
 
-    explicit operator bool() const { return _state.load(std::memory_order_relaxed) == BlobState::ALIVE; }
+    explicit operator bool() const { return _state == BlobState::ALIVE; }
 };
+inline bool operator==(BlobExt const& lhs, BlobExt const& rhs) { return lhs._blob == rhs._blob; }
 
-using btree = std::unordered_map< BlobRoute, BlobExt >;
+using btree = folly::ConcurrentHashMap< BlobRoute, BlobExt >;
 
-struct ShardIndex {
-    mutable folly::RWSpinLock _btree_lock;
+struct Shard {
     btree _btree;
-    blob_id _shard_seq_num{0ull};
+    std::atomic< blob_id > _shard_seq_num{0ull};
 };
 
 class MemoryHomeObject : public HomeObjectImpl {
     /// Simulates the Shard=>Chunk mapping in IndexSvc
     mutable std::shared_mutex _index_lock;
-    using index_svc = std::unordered_map< shard_id, ShardIndex >;
+    using index_svc = std::unordered_map< shard_id, Shard >;
     index_svc _in_memory_index;
     ///
 
@@ -69,7 +68,7 @@ class MemoryHomeObject : public HomeObjectImpl {
     BlobManager::NullResult _del_blob(ShardInfo const&, blob_id) override;
     ///
 
-    ShardIndex& _find_index(shard_id);
+    Shard& _find_index(shard_id);
 
 public:
     using HomeObjectImpl::HomeObjectImpl;
