@@ -1,4 +1,5 @@
 #include "homeobject.hpp"
+#include <atomic>
 
 namespace homeobject {
 
@@ -45,7 +46,7 @@ BlobManager::Result< Blob > MemoryHomeObject::_get_blob(ShardInfo const& shard, 
     Blob user_blob;
     auto unsafe_ptr = decltype(Blob::body)::pointer{nullptr};
     shard_index._btree_lock.lock_shared();
-    if (auto it = shard_index._btree.find(route); shard_index._btree.end() != it) {
+    if (auto it = shard_index._btree.find(route); shard_index._btree.end() != it && it->second) {
         user_blob.object_off = it->second.object_off;
         user_blob.user_key = it->second.user_key;
         unsafe_ptr = it->second.body.get();
@@ -69,17 +70,16 @@ BlobManager::NullResult MemoryHomeObject::_del_blob(ShardInfo const& shard, blob
     // Calculate BlobRoute from ShardInfo (use ordinal?)
     auto route = BlobRoute(shard.id, id);
 
-    // Lock the BTree *OWNED* and find the BLOB location. Move the index value to *garbage*, to be dealt
-    // with later and remove route from Index.
+    // Lock the BTree *SHARED* find the BLOB location. Update the state value to *DELETED*, to be dealt
+    // with later during GC.
     auto result = BlobManager::NullResult(folly::makeUnexpected(BlobError::UNKNOWN_BLOB));
-    shard_index._btree_lock.lock();
+    shard_index._btree_lock.lock_shared();
     auto& our_btree = shard_index._btree;
     if (auto r_it = our_btree.find(route); our_btree.end() != r_it) {
         result = folly::Unit();
-        _garbage.push_back(std::move(r_it->second));
-        our_btree.erase(r_it);
+        r_it->second._state.store(BlobState::DELETED, std::memory_order_relaxed);
     }
-    shard_index._btree_lock.unlock();
+    shard_index._btree_lock.unlock_shared();
 
     if (!result) LOGWARNMOD(homeobject, "Blob missing {} during delete", route.blob);
     return result;
