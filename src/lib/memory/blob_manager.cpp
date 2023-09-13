@@ -18,11 +18,11 @@ BlobManager::Result< blob_id > MemoryHomeObject::_put_blob(ShardInfo const& shar
     auto route = BlobRoute{shard.id, our_shard._shard_seq_num++};
     auto new_blob = BlobExt();
     new_blob._state = BlobState::ALIVE;
-    new_blob._blob = std::make_shared< Blob >(std::move(blob));
-    auto [new_it, happened] = our_shard._btree.try_emplace(route, std::move(new_blob));
+    new_blob._blob = new Blob(std::move(blob)); // Move Blob to Heap
+    LOGDEBUGMOD(homeobject, "Wrote BLOB {} to: BlkId:[{}]", route.blob, fmt::ptr(new_blob._blob));
 
+    auto [new_it, happened] = our_shard._btree.try_emplace(route, std::move(new_blob));
     RELEASE_ASSERT(happened, "Generated duplicate BlobRoute!");
-    LOGDEBUGMOD(homeobject, "Wrote BLOB {} to: BlkId:[{}]", route.blob, fmt::ptr(&new_it->second));
     return route.blob;
 }
 

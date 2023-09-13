@@ -37,7 +37,7 @@ ENUM(BlobState, uint8_t, ALIVE = 0, DELETED);
 
 struct BlobExt : public Blob {
     BlobState _state{BlobState::DELETED};
-    std::shared_ptr< Blob > _blob;
+    Blob* _blob;
 
     explicit operator bool() const { return _state == BlobState::ALIVE; }
 };
@@ -48,6 +48,7 @@ using btree = folly::ConcurrentHashMap< BlobRoute, BlobExt >;
 struct Shard {
     btree _btree;
     std::atomic< blob_id > _shard_seq_num{0ull};
+    ~Shard();
 };
 
 class MemoryHomeObject : public HomeObjectImpl {
