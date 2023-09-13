@@ -52,7 +52,7 @@ struct Shard {
 
 class MemoryHomeObject : public HomeObjectImpl {
     /// Simulates the Shard=>Chunk mapping in IndexSvc
-    using index_svc = folly::ConcurrentHashMap< shard_id, std::shared_ptr< Shard > >;
+    using index_svc = folly::ConcurrentHashMap< shard_id, std::unique_ptr< Shard > >;
     index_svc _in_memory_index;
     ///
 
