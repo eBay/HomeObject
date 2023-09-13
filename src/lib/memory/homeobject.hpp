@@ -38,9 +38,9 @@ namespace homeobject {
 ENUM(BlobState, uint8_t, ALIVE = 0, DELETED);
 
 struct BlobExt : public Blob {
-    BlobState _state{BlobState::ALIVE};
+    std::atomic< BlobState > _state{BlobState::ALIVE};
 
-    explicit operator bool() const { return _state == BlobState::ALIVE; }
+    explicit operator bool() const { return _state.load(std::memory_order_relaxed) == BlobState::ALIVE; }
 };
 
 using btree = std::unordered_map< BlobRoute, BlobExt >;

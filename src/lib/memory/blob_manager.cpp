@@ -1,4 +1,5 @@
 #include "homeobject.hpp"
+#include <atomic>
 
 namespace homeobject {
 
@@ -69,16 +70,16 @@ BlobManager::NullResult MemoryHomeObject::_del_blob(ShardInfo const& shard, blob
     // Calculate BlobRoute from ShardInfo (use ordinal?)
     auto route = BlobRoute(shard.id, id);
 
-    // Lock the BTree *OWNED* and find the BLOB location. Move the index value to *garbage*, to be dealt
-    // with later and remove route from Index.
+    // Lock the BTree *SHARED* find the BLOB location. Update the state value to *DELETED*, to be dealt
+    // with later during GC.
     auto result = BlobManager::NullResult(folly::makeUnexpected(BlobError::UNKNOWN_BLOB));
-    shard_index._btree_lock.lock();
+    shard_index._btree_lock.lock_shared();
     auto& our_btree = shard_index._btree;
     if (auto r_it = our_btree.find(route); our_btree.end() != r_it) {
         result = folly::Unit();
-        r_it->second._state = BlobState::DELETED;
+        r_it->second._state.store(BlobState::DELETED, std::memory_order_relaxed);
     }
-    shard_index._btree_lock.unlock();
+    shard_index._btree_lock.unlock_shared();
 
     if (!result) LOGWARNMOD(homeobject, "Blob missing {} during delete", route.blob);
     return result;
