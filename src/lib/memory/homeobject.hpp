@@ -33,7 +33,15 @@ struct std::hash< homeobject::BlobRoute > {
 
 namespace homeobject {
 
-using btree = std::unordered_map< BlobRoute, Blob >;
+///
+// Used to TombStone Blob's in the Index to defer for GC.
+ENUM(BlobState, uint8_t, ALIVE = 0, DELETED);
+
+struct BlobExt : public Blob {
+    BlobState _state;
+};
+
+using btree = std::unordered_map< BlobRoute, BlobExt >;
 
 struct ShardIndex {
     mutable folly::RWSpinLock _btree_lock;
@@ -46,7 +54,6 @@ class MemoryHomeObject : public HomeObjectImpl {
     mutable std::shared_mutex _index_lock;
     using index_svc = std::unordered_map< shard_id, ShardIndex >;
     index_svc _in_memory_index;
-    std::list< Blob > _garbage;
     ///
 
     /// Helpers

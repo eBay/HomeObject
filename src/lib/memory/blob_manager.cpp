@@ -45,7 +45,8 @@ BlobManager::Result< Blob > MemoryHomeObject::_get_blob(ShardInfo const& shard, 
     Blob user_blob;
     auto unsafe_ptr = decltype(Blob::body)::pointer{nullptr};
     shard_index._btree_lock.lock_shared();
-    if (auto it = shard_index._btree.find(route); shard_index._btree.end() != it) {
+    if (auto it = shard_index._btree.find(route);
+        shard_index._btree.end() != it && it->second._state != BlobState::DELETED) {
         user_blob.object_off = it->second.object_off;
         user_blob.user_key = it->second.user_key;
         unsafe_ptr = it->second.body.get();
@@ -76,8 +77,7 @@ BlobManager::NullResult MemoryHomeObject::_del_blob(ShardInfo const& shard, blob
     auto& our_btree = shard_index._btree;
     if (auto r_it = our_btree.find(route); our_btree.end() != r_it) {
         result = folly::Unit();
-        _garbage.push_back(std::move(r_it->second));
-        our_btree.erase(r_it);
+        r_it->second._state = BlobState::DELETED;
     }
     shard_index._btree_lock.unlock();
 
