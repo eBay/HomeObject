@@ -3,10 +3,9 @@
 namespace homeobject {
 
 Shard& MemoryHomeObject::_find_index(shard_id shard) {
-    auto lg = std::shared_lock(_index_lock);
     auto index_it = _in_memory_index.find(shard);
     RELEASE_ASSERT(_in_memory_index.end() != index_it, "Missing BTree!!");
-    return index_it->second;
+    return *index_it->second;
 }
 
 BlobManager::Result< blob_id > MemoryHomeObject::_put_blob(ShardInfo const& shard, Blob&& blob) {
@@ -30,11 +29,10 @@ BlobManager::Result< Blob > MemoryHomeObject::_get_blob(ShardInfo const& shard, 
     // Lookup Shard Index (BTree and SSN)
     auto index_it = _in_memory_index.cend();
     {
-        auto lg = std::shared_lock(_index_lock);
         if (index_it = _in_memory_index.find(shard.id); _in_memory_index.cend() == index_it)
             return folly::makeUnexpected(BlobError::UNKNOWN_SHARD);
     }
-    auto& our_shard = index_it->second;
+    auto& our_shard = *index_it->second;
 
     // Calculate BlobRoute from ShardInfo (use ordinal?)
     auto route = BlobRoute(shard.id, blob);
