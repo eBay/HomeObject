@@ -37,7 +37,7 @@ ENUM(BlobState, uint8_t, ALIVE = 0, DELETED);
 
 struct BlobExt : public Blob {
     BlobState _state{BlobState::DELETED};
-    std::shared_ptr< Blob > _blob;
+    Blob* _blob;
 
     explicit operator bool() const { return _state == BlobState::ALIVE; }
 };
