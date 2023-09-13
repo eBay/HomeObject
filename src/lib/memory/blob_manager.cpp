@@ -45,8 +45,7 @@ BlobManager::Result< Blob > MemoryHomeObject::_get_blob(ShardInfo const& shard, 
     Blob user_blob;
     auto unsafe_ptr = decltype(Blob::body)::pointer{nullptr};
     shard_index._btree_lock.lock_shared();
-    if (auto it = shard_index._btree.find(route);
-        shard_index._btree.end() != it && it->second._state != BlobState::DELETED) {
+    if (auto it = shard_index._btree.find(route); shard_index._btree.end() != it && it->second) {
         user_blob.object_off = it->second.object_off;
         user_blob.user_key = it->second.user_key;
         unsafe_ptr = it->second.body.get();
