@@ -48,6 +48,7 @@ using btree = folly::ConcurrentHashMap< BlobRoute, BlobExt >;
 struct Shard {
     btree _btree;
     std::atomic< blob_id > _shard_seq_num{0ull};
+    ~Shard();
 };
 
 class MemoryHomeObject : public HomeObjectImpl {
