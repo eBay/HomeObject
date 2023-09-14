@@ -13,22 +13,38 @@ struct BlobRoute {
     shard_id shard;
     blob_id blob;
 };
-
-inline std::string toString(BlobRoute const& r) { return fmt::format("{}:{}", r.shard, r.blob); }
-
-inline bool operator<(BlobRoute const& lhs, BlobRoute const& rhs) { return toString(lhs) < toString(rhs); }
-
-inline bool operator==(BlobRoute const& lhs, BlobRoute const& rhs) { return toString(lhs) == toString(rhs); }
 } // namespace homeobject
+
+namespace fmt {
+template <>
+struct formatter< homeobject::BlobRoute > {
+    template < typename ParseContext >
+    constexpr auto parse(ParseContext& ctx) {
+        return ctx.begin();
+    }
+
+    template < typename FormatContext >
+    auto format(const homeobject::BlobRoute& r, FormatContext& ctx) {
+        return format_to(ctx.out(), "{}:{:012x}", r.shard, r.blob);
+    }
+};
+} // namespace fmt
 
 template <>
 struct std::hash< homeobject::BlobRoute > {
     std::size_t operator()(homeobject::BlobRoute const& r) const noexcept {
-        return std::hash< std::string >()(homeobject::toString(r));
+        return std::hash< std::string >()(fmt::format("{}", r));
     }
 };
 
 namespace homeobject {
+
+inline bool operator<(BlobRoute const& lhs, BlobRoute const& rhs) {
+    return fmt::format("{}", lhs) < fmt::format("{}", rhs);
+}
+inline bool operator==(BlobRoute const& lhs, BlobRoute const& rhs) {
+    return fmt::format("{}", lhs) == fmt::format("{}", rhs);
+}
 
 ///
 // Used to TombStone Blob's in the Index to defer for GC.
