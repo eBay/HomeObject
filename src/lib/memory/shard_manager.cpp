@@ -30,7 +30,7 @@ ShardManager::Result< ShardInfo > MemoryHomeObject::_create_shard(pg_id pg_owner
         auto [_, s_happened] = _shard_map.emplace(info.id, s_it);
         RELEASE_ASSERT(s_happened, "Duplicate Shard insertion!");
     }
-    auto [it, happened] = _in_memory_index.try_emplace(info.id, std::make_unique< Shard >());
+    auto [it, happened] = _in_memory_index.try_emplace(info.id, std::make_unique< ShardIndex >());
     RELEASE_ASSERT(happened, "Could not create BTree!");
     return info;
 }

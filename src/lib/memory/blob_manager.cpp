@@ -2,7 +2,7 @@
 
 namespace homeobject {
 
-Shard& MemoryHomeObject::_find_index(shard_id shard) {
+ShardIndex& MemoryHomeObject::_find_index(shard_id shard) {
     auto index_it = _in_memory_index.find(shard);
     RELEASE_ASSERT(_in_memory_index.end() != index_it, "Missing BTree!!");
     return *index_it->second;

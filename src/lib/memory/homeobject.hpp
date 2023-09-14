@@ -44,15 +44,15 @@ inline bool operator==(BlobExt const& lhs, BlobExt const& rhs) { return lhs._blo
 
 using btree = folly::ConcurrentHashMap< BlobRoute, BlobExt >;
 
-struct Shard {
+struct ShardIndex {
     btree _btree;
     std::atomic< blob_id > _shard_seq_num{0ull};
-    ~Shard();
+    ~ShardIndex();
 };
 
 class MemoryHomeObject : public HomeObjectImpl {
     /// Simulates the Shard=>Chunk mapping in IndexSvc
-    using index_svc = folly::ConcurrentHashMap< shard_id, std::unique_ptr< Shard > >;
+    using index_svc = folly::ConcurrentHashMap< shard_id, std::unique_ptr< ShardIndex > >;
     index_svc _in_memory_index;
     ///
 
@@ -67,7 +67,7 @@ class MemoryHomeObject : public HomeObjectImpl {
     BlobManager::NullResult _del_blob(ShardInfo const&, blob_id) override;
     ///
 
-    Shard& _find_index(shard_id);
+    ShardIndex& _find_index(shard_id);
 
 public:
     using HomeObjectImpl::HomeObjectImpl;
