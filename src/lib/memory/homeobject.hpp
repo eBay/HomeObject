@@ -67,7 +67,7 @@ class MemoryHomeObject : public HomeObjectImpl {
     BlobManager::NullResult _del_blob(ShardInfo const&, blob_id) override;
     ///
 
-    ShardIndex& _find_index(shard_id);
+    ShardIndex& _find_index(shard_id) const;
 
 public:
     using HomeObjectImpl::HomeObjectImpl;
