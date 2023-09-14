@@ -7,8 +7,11 @@
 
 namespace homeobject {
 
+static constexpr uint32_t SEQUENCE_BIT_NUM_IN_SHARD{48};
+
 uint64_t ShardManager::max_shard_size() { return Gi; }
-uint64_t ShardManager::max_shard_num_in_pg() {return ((uint64_t)0x01) << 48;}
+
+uint64_t ShardManager::max_shard_num_in_pg() {return ((uint64_t)0x01) << SEQUENCE_BIT_NUM_IN_SHARD;}
 
 shard_id HSHomeObject::generate_new_shard_id(pg_id pg) {
     std::scoped_lock lock_guard(_pg_lock);
@@ -20,11 +23,11 @@ shard_id HSHomeObject::generate_new_shard_id(pg_id pg) {
 }
 
 shard_id HSHomeObject::make_new_shard_id(pg_id pg, uint64_t sequence_num) const {
-    return ((uint64_t)pg << 48) | sequence_num; 
+    return ((uint64_t)pg << SEQUENCE_BIT_NUM_IN_SHARD) | sequence_num;
 }
 
 uint64_t HSHomeObject::get_sequence_num_from_shard_id(uint64_t shard_id) {
-    return shard_id & (0x0000FFFFFFFFFFFF);
+    return shard_id & (max_shard_num_in_pg() - 1);
 }
 
 std::string HSHomeObject::serialize_shard(const Shard& shard) const {
@@ -98,7 +101,7 @@ ShardManager::Result< ShardInfo > HSHomeObject::_create_shard(pg_id pg_owner, ui
     auto [p, sf] = folly::makePromiseContract< ShardManager::Result<ShardInfo> >();
     replica_set->write(sisl::blob(buf->data_begin(), needed_size), sisl::blob(), value,
                        static_cast<void*>(&p));
-    auto info = std::move(sf).via(folly::getGlobalCPUExecutor()).get();
+    auto info = std::move(sf).get();
     if (!bool(info)) {
         LOGWARN("create new shard [{}] on pg [{}] is failed with error:{}", new_shard_id, pg_owner, info.error());
     }
@@ -146,16 +149,26 @@ void HSHomeObject::on_pre_commit_shard_msg(int64_t lsn, sisl::blob const& header
 
     //write shard header to ReplDev which will bind the newly created shard to one underlay homestore physical chunk;
     using namespace homestore;
+    auto datasvc_page_size = HomeStore::instance()->data_service().get_page_size();
+    if (shard_msg.size() % datasvc_page_size != 0) {
+        uint32_t need_size = (shard_msg.size() / datasvc_page_size + 1)  * datasvc_page_size;
+        shard_msg.resize(need_size);
+    }
+
+    auto write_buf = iomanager.iobuf_alloc(512, shard_msg.size());
+    std::memcpy(r_cast<uint8_t*>(write_buf), r_cast<const uint8_t*>(shard_msg.c_str()), shard_msg.size());
+
     sisl::sg_list sgs;
     sgs.size = shard_msg.size();
-    sgs.iovs.emplace_back(iovec(static_cast<void*>(const_cast<char*>(shard_msg.c_str())), shard_msg.size()));
+    sgs.iovs.emplace_back(iovec(static_cast<void*>(write_buf), shard_msg.size()));
     std::vector< homestore::BlkId > out_blkids;
     auto future = HomeStore::instance()->data_service().async_alloc_write(sgs, homestore::blk_alloc_hints(), out_blkids);
-    if (std::move(future).get() == false) {
+    bool write_result = std::move(future).get();
+    iomanager.iobuf_free(write_buf);
+    if (!write_result) {
         LOGWARN("write lsn {} msg to homestore data service is failed", lsn);
         return;
     }
-
     RELEASE_ASSERT(out_blkids.size() == 1, "output blkids num is not 1");
     shard.chunk_id = out_blkids[0].get_chunk_num();
     std::scoped_lock lock_guard(_flying_shard_lock);

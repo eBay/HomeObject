@@ -14,6 +14,7 @@ static constexpr uint64_t HOMEOBJECT_REPLICATION_MAGIC = 0x11153ca24efc8d34;
 static constexpr uint32_t HOMEOBJECT_REPLICATION_PROTOCOL_VERSION_V1 = 0x01;
 static constexpr uint32_t init_crc32 = 0;
 
+#pragma pack(1)
 struct ReplicationMessageHeader {
     uint64_t magic_num{HOMEOBJECT_REPLICATION_MAGIC};
     uint32_t protocol_version{HOMEOBJECT_REPLICATION_PROTOCOL_VERSION_V1};
@@ -27,5 +28,6 @@ struct ReplicationMessageHeader {
     }
 };
 
+#pragma pack()
 
 }

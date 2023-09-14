@@ -9,6 +9,9 @@ class HomeObjectImpl;
 
 class ReplicationStateMachine : public home_replication::ReplicaSetListener {
 public:
+    explicit ReplicationStateMachine(HSHomeObject* home_object) : _home_object(home_object) {}
+  
+    ~ReplicationStateMachine() = default;
     /// @brief Called when the log entry has been committed in the replica set.
     ///
     /// This function is called from a dedicated commit thread which is different from the original thread calling
@@ -59,7 +62,7 @@ public:
     virtual void on_rollback(int64_t lsn, const sisl::blob& header, const sisl::blob& key, void* ctx);
 
     /// @brief Called when the replica set is being stopped
-    virtual void on_replica_stop() = 0;
+    virtual void on_replica_stop();
 
 private:
     HSHomeObject* _home_object;

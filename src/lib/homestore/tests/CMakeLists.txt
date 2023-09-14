@@ -10,3 +10,12 @@ target_link_libraries(test_home_object
         )
 add_test(NAME HomeObject COMMAND ${CMAKE_BINARY_DIR}/bin/test_home_object)
 set_property(TEST HomeObject PROPERTY RUN_SERIAL 1)
+
+add_executable (test_shard_manager)
+target_sources(test_shard_manager PRIVATE test_shard_manager.cpp)
+target_link_libraries(test_shard_manager
+    homeobject_homestore
+    ${COMMON_TEST_DEPS}
+  )
+add_test(NAME ShardManagerTest COMMAND ${CMAKE_BINARY_DIR}/bin/test_shard_manager)
+

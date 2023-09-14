@@ -79,6 +79,8 @@ public:
     // This is public but not exposed in the API above
     void init_repl_svc();
 
+    std::shared_ptr< home_replication::ReplicationService > get_repl_svc()  { return _repl_svc;}
+
     std::shared_ptr< BlobManager > blob_manager() final;
     std::shared_ptr< PGManager > pg_manager() final;
     std::shared_ptr< ShardManager > shard_manager() final;
