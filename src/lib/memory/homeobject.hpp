@@ -50,7 +50,7 @@ inline bool operator==(BlobRoute const& lhs, BlobRoute const& rhs) {
 // Used to TombStone Blob's in the Index to defer for GC.
 ENUM(BlobState, uint8_t, ALIVE = 0, DELETED);
 
-struct BlobExt : public Blob {
+struct BlobExt {
     BlobState _state{BlobState::DELETED};
     Blob* _blob;
 
