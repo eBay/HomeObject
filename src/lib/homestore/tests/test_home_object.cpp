@@ -91,11 +91,9 @@ TEST_F(HomeObjectFixture, TestValidations) {
 }
 
 TEST_F(HomeObjectFixture, PutBlobMissingShard) {
-    EXPECT_EQ(BlobError::UNKNOWN_SHARD,
-              _obj_inst->blob_manager()
-                  ->put(1, homeobject::Blob{std::make_unique< sisl::byte_array_impl >(4096), "user_key", 0ul})
-                  .get()
-                  .error());
+    EXPECT_EQ(
+        BlobError::UNKNOWN_SHARD,
+        _obj_inst->blob_manager()->put(1, homeobject::Blob{sisl::io_blob_safe(4096), "user_key", 0ul}).get().error());
 }
 
 TEST_F(HomeObjectFixture, GetBlobMissingShard) {

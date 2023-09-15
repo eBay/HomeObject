@@ -47,15 +47,7 @@ BlobManager::Result< Blob > MemoryHomeObject::_get_blob(ShardInfo const& shard, 
     // This is only *safe* because we defer GC.
     auto& ext_blob = blob_it->second;
     RELEASE_ASSERT(ext_blob._blob != nullptr, "Blob Deleted!");
-    RELEASE_ASSERT(!!ext_blob._blob->body, "BlobBody Deleted!");
-    auto unsafe_ptr = ext_blob._blob->body.get();
-
-    Blob user_blob;
-    user_blob.object_off = ext_blob._blob->object_off;
-    user_blob.user_key = ext_blob._blob->user_key;
-    user_blob.body = std::make_unique< sisl::byte_array_impl >(unsafe_ptr->size);
-    std::memcpy(user_blob.body->bytes, unsafe_ptr->bytes, user_blob.body->size);
-    return user_blob;
+    return *ext_blob._blob;
 }
 
 BlobManager::NullResult MemoryHomeObject::_del_blob(ShardInfo const& shard, blob_id id) {

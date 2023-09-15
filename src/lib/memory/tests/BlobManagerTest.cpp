@@ -70,10 +70,9 @@ public:
         EXPECT_EQ(BlobError::UNKNOWN_BLOB, g_e.error());
 
         LOGDEBUG("Insert Blob to: {}", _shard_1.id);
-        auto o_e =
-            m_memory_homeobj->blob_manager()
-                ->put(_shard_1.id, Blob{std::make_unique< sisl::byte_array_impl >(4 * Ki, 512u), "test_blob", 4 * Mi})
-                .get();
+        auto o_e = m_memory_homeobj->blob_manager()
+                       ->put(_shard_1.id, Blob{sisl::io_blob_safe(4 * Ki, 512u), "test_blob", 4 * Mi})
+                       .get();
         EXPECT_TRUE(!!o_e);
         o_e.then([this](auto&& b) mutable { _blob_id = std::move(b); });
     }
@@ -108,17 +107,16 @@ TEST_F(BlobManagerFixture, BasicTests) {
                 our_calls.push_back(
                     m_memory_homeobj->blob_manager()->get(_shard_2.id, (i - _shard_2.id)).deferValue([](auto const&) {
                     }));
-                our_calls.push_back(m_memory_homeobj->blob_manager()->put(i, Blob()).deferValue(
-                    [](auto const& e) { EXPECT_EQ(BlobError::UNKNOWN_SHARD, e.error()); }));
                 our_calls.push_back(
                     m_memory_homeobj->blob_manager()
-                        ->put(_shard_1.id,
-                              Blob{std::make_unique< sisl::byte_array_impl >(4 * Ki, 512u), "test_blob", 4 * Mi})
-                        .deferValue([](auto const& e) { EXPECT_TRUE(!!e); }));
+                        ->put(i, Blob{sisl::io_blob_safe(512u, 512u), "test_blob", 0ul})
+                        .deferValue([](auto const& e) { EXPECT_EQ(BlobError::UNKNOWN_SHARD, e.error()); }));
+                our_calls.push_back(m_memory_homeobj->blob_manager()
+                                        ->put(_shard_1.id, Blob{sisl::io_blob_safe(4 * Ki, 512u), "test_blob", 4 * Mi})
+                                        .deferValue([](auto const& e) { EXPECT_TRUE(!!e); }));
                 our_calls.push_back(
                     m_memory_homeobj->blob_manager()
-                        ->put(_shard_2.id,
-                              Blob{std::make_unique< sisl::byte_array_impl >(8 * Ki, 512u), "test_blob_2", 4 * Mi})
+                        ->put(_shard_2.id, Blob{sisl::io_blob_safe(8 * Ki, 512u), "test_blob_2", 4 * Mi})
                         .deferValue([](auto const& e) { EXPECT_TRUE(!!e); }));
                 our_calls.push_back(
                     m_memory_homeobj->blob_manager()->del(i, _blob_id).deferValue([](auto const& e) {}));
@@ -136,10 +134,9 @@ TEST_F(BlobManagerFixture, BasicTests) {
         t.join();
     folly::collectAll(calls).via(folly::getGlobalCPUExecutor()).get();
     EXPECT_TRUE(m_memory_homeobj->shard_manager()->seal_shard(_shard_1.id).get());
-    auto p_e =
-        m_memory_homeobj->blob_manager()
-            ->put(_shard_1.id, Blob{std::make_unique< sisl::byte_array_impl >(4 * Ki, 512u), "test_blob", 4 * Mi})
-            .get();
+    auto p_e = m_memory_homeobj->blob_manager()
+                   ->put(_shard_1.id, Blob{sisl::io_blob_safe(4 * Ki, 512u), "test_blob", 4 * Mi})
+                   .get();
     ASSERT_TRUE(!p_e);
     EXPECT_EQ(BlobError::INVALID_ARG, p_e.error());
 
