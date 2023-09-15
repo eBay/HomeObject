@@ -70,7 +70,7 @@ ShardManager::Result< ShardInfo > HSHomeObject::_create_shard(pg_id pg_owner, ui
     auto replica_set_var = _repl_svc->get_replica_set(fmt::format("{}", pg_owner));
     if (std::holds_alternative< home_replication:: ReplServiceError>(replica_set_var)) {
         LOGWARN("failed to get replica set instance for pg [{}]", pg_owner);
-	return folly::makeUnexpected(ShardError::UNKNOWN_PG);	
+        return folly::makeUnexpected(ShardError::UNKNOWN_PG);	
     }
 
     auto replica_set = std::get< home_replication::rs_ptr_t >(replica_set_var);
@@ -127,7 +127,7 @@ bool HSHomeObject::precheck_and_decode_shard_msg(int64_t lsn, sisl::blob const& 
     auto crc = crc32_ieee(init_crc32, r_cast< const uint8_t* >(shard_msg.c_str()), shard_msg.size());
     if (msg_header->payload_crc != crc) {
         LOGWARN("replication message body is corrupted with crc error, lsn:{}", lsn);
-	return false;
+        return false;
     }
     *msg = std::move(shard_msg);
     return true;
@@ -213,6 +213,7 @@ void HSHomeObject::on_shard_message_commit(int64_t lsn, sisl::blob const& header
         if (promise) {
             promise->setValue(folly::makeUnexpected(ShardError::INVALID_ARG));
         }
+        return;
     }
 
     auto shard = deserialize_shard(shard_msg);
