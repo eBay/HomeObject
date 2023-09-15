@@ -14,8 +14,8 @@ ENUM(BlobError, uint16_t, UNKNOWN = 1, TIMEOUT, INVALID_ARG, NOT_LEADER, UNKNOWN
 
 struct Blob {
     Blob(sisl::io_blob_safe b, std::string const& u, uint64_t o) : body(std::move(b)), user_key(u), object_off(o) {}
-    Blob(Blob const&);
-    Blob& operator=(Blob const&);
+
+    Blob clone() const;
 
     sisl::io_blob_safe body;
     std::string user_key;

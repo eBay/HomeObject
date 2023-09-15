@@ -31,19 +31,10 @@ BlobManager::NullAsyncResult HomeObjectImpl::del(shard_id shard, blob_id const& 
     });
 }
 
-Blob::Blob(Blob const& rhs) :
-        body(sisl::io_blob_safe(rhs.body.size)), user_key(rhs.user_key), object_off(rhs.object_off) {
-    std::memcpy(body.bytes, rhs.body.bytes, rhs.body.size);
-}
-
-Blob& Blob::operator=(Blob const& rhs) {
-    if (&rhs != this) {
-        body = sisl::io_blob_safe(rhs.body.size);
-        user_key = rhs.user_key;
-        object_off = rhs.object_off;
-        std::memcpy(body.bytes, rhs.body.bytes, rhs.body.size);
-    }
-    return *this;
+Blob Blob::clone() const {
+    auto new_body = sisl::io_blob_safe(body.size);
+    std::memcpy(new_body.bytes, body.bytes, body.size);
+    return Blob(std::move(new_body), user_key, object_off);
 }
 
 } // namespace homeobject

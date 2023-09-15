@@ -47,7 +47,7 @@ BlobManager::Result< Blob > MemoryHomeObject::_get_blob(ShardInfo const& shard, 
     // This is only *safe* because we defer GC.
     auto& ext_blob = blob_it->second;
     RELEASE_ASSERT(ext_blob._blob != nullptr, "Blob Deleted!");
-    return *ext_blob._blob;
+    return ext_blob._blob->clone();
 }
 
 BlobManager::NullResult MemoryHomeObject::_del_blob(ShardInfo const& shard, blob_id id) {
