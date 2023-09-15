@@ -14,7 +14,6 @@ BlobManager::Result< blob_id > MemoryHomeObject::_put_blob(ShardInfo const& shar
 
     // Generate BlobID (with RAFT this will happen implicitly) and Route
     auto const route = BlobRoute{shard.id, our_shard._shard_seq_num++};
-    if ((UINT64_MAX >> 16) < route.blob) { return folly::makeUnexpected(BlobError::UNKNOWN); }
     LOGTRACEMOD(homeobject, "Writing Blob {}", route);
 
     // Write (move) Blob to Heap

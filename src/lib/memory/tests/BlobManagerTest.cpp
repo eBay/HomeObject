@@ -144,6 +144,8 @@ TEST_F(BlobManagerFixture, BasicTests) {
     EXPECT_EQ(BlobError::INVALID_ARG, p_e.error());
 
     EXPECT_TRUE(m_memory_homeobj->blob_manager()->del(_shard_1.id, _blob_id).get());
+    EXPECT_EQ(BlobError::UNKNOWN_BLOB, m_memory_homeobj->blob_manager()->get(_shard_1.id, _blob_id).get().error());
+    EXPECT_EQ(BlobError::UNKNOWN_BLOB, m_memory_homeobj->blob_manager()->del(_shard_1.id, _blob_id).get().error());
 }
 
 int main(int argc, char* argv[]) {
