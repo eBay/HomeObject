@@ -103,9 +103,11 @@ TEST_F(BlobManagerFixture, BasicTests) {
                 our_calls.push_back(
                     m_memory_homeobj->blob_manager()->get(i, _blob_id).deferValue([](auto const& e) {}));
                 our_calls.push_back(
-                    m_memory_homeobj->blob_manager()->get(_shard_1.id, i).deferValue([](auto const&) {}));
+                    m_memory_homeobj->blob_manager()->get(_shard_1.id, (i - _shard_2.id)).deferValue([](auto const&) {
+                    }));
                 our_calls.push_back(
-                    m_memory_homeobj->blob_manager()->get(_shard_2.id, i).deferValue([](auto const&) {}));
+                    m_memory_homeobj->blob_manager()->get(_shard_2.id, (i - _shard_2.id)).deferValue([](auto const&) {
+                    }));
                 our_calls.push_back(m_memory_homeobj->blob_manager()->put(i, Blob()).deferValue(
                     [](auto const& e) { EXPECT_EQ(BlobError::UNKNOWN_SHARD, e.error()); }));
                 our_calls.push_back(
@@ -120,9 +122,10 @@ TEST_F(BlobManagerFixture, BasicTests) {
                         .deferValue([](auto const& e) { EXPECT_TRUE(!!e); }));
                 our_calls.push_back(
                     m_memory_homeobj->blob_manager()->del(i, _blob_id).deferValue([](auto const& e) {}));
-                our_calls.push_back(m_memory_homeobj->blob_manager()->del(_shard_1.id, i).deferValue([](auto const& e) {
-                    EXPECT_EQ(BlobError::UNKNOWN_BLOB, e.error());
-                }));
+                our_calls.push_back(
+                    m_memory_homeobj->blob_manager()->del(_shard_1.id, (i - _shard_2.id)).deferValue([](auto const& e) {
+                        EXPECT_EQ(BlobError::UNKNOWN_BLOB, e.error());
+                    }));
             }
 
             auto lg = std::scoped_lock(call_lock);

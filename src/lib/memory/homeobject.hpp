@@ -1,12 +1,9 @@
 #pragma once
 
-#include <memory>
-#include <mutex>
-#include <shared_mutex>
-#include <set>
+#include <atomic>
 #include <utility>
 
-#include <folly/synchronization/RWSpinLock.h>
+#include <folly/concurrency/ConcurrentHashMap.h>
 #include "mocks/repl_service.h"
 
 #include "lib/homeobject_impl.hpp"
@@ -16,37 +13,63 @@ struct BlobRoute {
     shard_id shard;
     blob_id blob;
 };
-
-inline std::string toString(BlobRoute const& r) { return fmt::format("{}:{}", r.shard, r.blob); }
-
-inline bool operator<(BlobRoute const& lhs, BlobRoute const& rhs) { return toString(lhs) < toString(rhs); }
-
-inline bool operator==(BlobRoute const& lhs, BlobRoute const& rhs) { return toString(lhs) == toString(rhs); }
 } // namespace homeobject
+
+namespace fmt {
+template <>
+struct formatter< homeobject::BlobRoute > {
+    template < typename ParseContext >
+    constexpr auto parse(ParseContext& ctx) {
+        return ctx.begin();
+    }
+
+    template < typename FormatContext >
+    auto format(const homeobject::BlobRoute& r, FormatContext& ctx) {
+        return format_to(ctx.out(), "{}:{:012x}", r.shard, r.blob);
+    }
+};
+} // namespace fmt
 
 template <>
 struct std::hash< homeobject::BlobRoute > {
     std::size_t operator()(homeobject::BlobRoute const& r) const noexcept {
-        return std::hash< std::string >()(homeobject::toString(r));
+        return std::hash< std::string >()(fmt::format("{}", r));
     }
 };
 
 namespace homeobject {
 
-using btree = std::unordered_map< BlobRoute, Blob >;
+inline bool operator<(BlobRoute const& lhs, BlobRoute const& rhs) {
+    return fmt::format("{}", lhs) < fmt::format("{}", rhs);
+}
+inline bool operator==(BlobRoute const& lhs, BlobRoute const& rhs) {
+    return fmt::format("{}", lhs) == fmt::format("{}", rhs);
+}
+
+///
+// Used to TombStone Blob's in the Index to defer for GC.
+ENUM(BlobState, uint8_t, ALIVE = 0, DELETED);
+
+struct BlobExt {
+    BlobState _state{BlobState::DELETED};
+    Blob* _blob;
+
+    explicit operator bool() const { return _state == BlobState::ALIVE; }
+};
+inline bool operator==(BlobExt const& lhs, BlobExt const& rhs) { return lhs._blob == rhs._blob; }
+
+using btree = folly::ConcurrentHashMap< BlobRoute, BlobExt >;
 
 struct ShardIndex {
-    mutable folly::RWSpinLock _btree_lock;
     btree _btree;
-    blob_id _shard_seq_num{0ull};
+    std::atomic< blob_id > _shard_seq_num{0ull};
+    ~ShardIndex();
 };
 
 class MemoryHomeObject : public HomeObjectImpl {
     /// Simulates the Shard=>Chunk mapping in IndexSvc
-    mutable std::shared_mutex _index_lock;
-    using index_svc = std::unordered_map< shard_id, ShardIndex >;
+    using index_svc = folly::ConcurrentHashMap< shard_id, std::unique_ptr< ShardIndex > >;
     index_svc _in_memory_index;
-    std::list< Blob > _garbage;
     ///
 
     /// Helpers
@@ -60,7 +83,7 @@ class MemoryHomeObject : public HomeObjectImpl {
     BlobManager::NullResult _del_blob(ShardInfo const&, blob_id) override;
     ///
 
-    ShardIndex& _find_index(shard_id);
+    ShardIndex& _find_index(shard_id) const;
 
 public:
     using HomeObjectImpl::HomeObjectImpl;
