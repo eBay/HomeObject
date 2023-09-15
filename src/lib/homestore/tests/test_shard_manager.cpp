@@ -8,6 +8,9 @@
 #include <sisl/logging/logging.h>
 #include <sisl/options/options.h>
 
+//will allow unit tests to access object private/protected for validation;
+#define protected public
+
 #include "lib/homestore/homeobject.hpp"
 #include "lib/homestore/replication_state_machine.hpp"
 #include "mocks/mock_replica_set.hpp"
@@ -132,6 +135,22 @@ TEST_F(ShardManagerWithShardsTesting, CreateShardSuccess) {
      EXPECT_EQ(Mi, shard_info.available_capacity_bytes);
      EXPECT_EQ(0ul, shard_info.deleted_capacity_bytes);
      EXPECT_EQ(_pg_id, shard_info.placement_group);    
+}
+
+TEST_F(ShardManagerWithShardsTesting, CreateShardAndValidateMembers) {
+     auto e = _home_object->shard_manager()->create_shard(_pg_id, Mi).get();
+     ASSERT_TRUE(!!e);
+     ShardInfo shard_info = e.value();
+     homeobject::HSHomeObject* ho = dynamic_cast<homeobject::HSHomeObject*>(_home_object.get());
+     EXPECT_TRUE(ho != nullptr);
+     auto pg_iter = ho->_pg_map.find(_pg_id);
+     EXPECT_TRUE(pg_iter !=  ho->_pg_map.end());
+     auto& pg = pg_iter->second;
+     EXPECT_TRUE(pg.shard_sequence_num == 1);
+     EXPECT_EQ(1, pg.shards.size());
+     auto& shard = *pg.shards.begin();
+     EXPECT_TRUE(shard.info == shard_info);
+     EXPECT_TRUE(shard.metablk_cookie != nullptr);
 }
 
 TEST_F(ShardManagerWithShardsTesting, GetKnownShard) {

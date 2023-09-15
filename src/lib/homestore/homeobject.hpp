@@ -33,6 +33,7 @@ private:
     void do_commit_new_shard(const Shard& shard);
     void do_commit_seal_shard(const Shard& shard);
     void register_homestore_metablk_callback();
+    void* get_shard_metablk(shard_id id);
 public:
     using HomeObjectImpl::HomeObjectImpl;
     ~HSHomeObject();

@@ -20,6 +20,7 @@ struct Shard {
     explicit Shard(ShardInfo info) : info(std::move(info)) {}
     ShardInfo info;
     uint16_t chunk_id;
+    void* metablk_cookie{nullptr};
 };
 
 using ShardList = std::list< Shard >;
@@ -47,7 +48,7 @@ class HomeObjectImpl : public HomeObject,
     virtual BlobManager::NullResult _del_blob(ShardInfo const&, blob_id) = 0;
     ///
     folly::Future< ShardManager::Result< Shard > > _get_shard(shard_id id) const;
-    auto _defer() const { return folly::makeSemiFuture().via(folly::getGlobalCPUExecutor()); }
+    auto _defer() const { return folly::makeSemiFuture().via(folly::getGlobalCPUExecutor());}
 
 protected:
     std::mutex _repl_lock;
@@ -63,7 +64,7 @@ protected:
     std::map< pg_id, PG > _pg_map;
 
     mutable std::shared_mutex _shard_lock;
-    std::map < shard_id, ShardIterator > _shard_map;
+    std::map< shard_id, ShardIterator > _shard_map;
     ///
     PGManager::Result< PG > _get_pg(pg_id pg);
 public:

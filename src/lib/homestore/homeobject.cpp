@@ -94,12 +94,11 @@ void HSHomeObject::on_shard_meta_blk_found(homestore::meta_blk* mblk, sisl::byte
     shard_info_str.append(r_cast<const char*>(buf.bytes()), size);
 
     auto shard = deserialize_shard(shard_info_str);
-    if (shard.info.state == ShardInfo::State::OPEN) {
-        // create shard;
-        do_commit_new_shard(shard);
-    } else {
-        do_commit_seal_shard(shard);
-    }
+    shard.metablk_cookie = mblk;
+
+    //As shard info in the homestore metablk is always the latest state(OPEN or SEALED),
+    //we can always create a shard from this shard info and once shard is deleted, the associated metablk will be deleted too.
+    do_commit_new_shard(shard);
 }
 
 } // namespace homeobject

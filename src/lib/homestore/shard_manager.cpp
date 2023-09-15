@@ -87,7 +87,7 @@ ShardManager::Result< ShardInfo > HSHomeObject::_create_shard(pg_id pg_owner, ui
     //preapre msg header;
     const uint32_t needed_size = sizeof(ReplicationMessageHeader) + create_shard_message.size();
     auto buf = nuraft::buffer::alloc(needed_size);
-    uint8_t* raw_ptr = static_cast<uint8_t*>(buf->data_begin());
+    uint8_t* raw_ptr = buf->data_begin();
     ReplicationMessageHeader *header = new(raw_ptr) ReplicationMessageHeader();
     header->message_type = ReplicationMessageType::SHARD_MESSAGE;
     header->payload_size = create_shard_message.size();
@@ -216,7 +216,8 @@ void HSHomeObject::on_shard_message_commit(int64_t lsn, sisl::blob const& header
     }
 
     auto shard = deserialize_shard(shard_msg);
-    if (shard.info.state == ShardInfo::State::OPEN) {
+    switch(shard.info.state) {
+    case ShardInfo::State::OPEN: {
         std::scoped_lock lock_guard(_flying_shard_lock);
         auto iter = _flying_shards.find(lsn);
         if (iter == _flying_shards.end()) {
@@ -228,21 +229,27 @@ void HSHomeObject::on_shard_message_commit(int64_t lsn, sisl::blob const& header
         }
         shard.chunk_id = iter->second.chunk_id;
         _flying_shards.erase(iter);
-        //deserialize the finalized shard msg;
+        //serialize the finalized shard msg;
         shard_msg = serialize_shard(shard);
-    }
-
-    // persist the serialize result to homestore MetaBlkService;
-    void* cookie = nullptr;
-    homestore::hs()->meta_service().add_sub_sb(HSHomeObject::s_shard_info_sub_type,
-                                               r_cast<const uint8_t*>(shard_msg.c_str()), shard_msg.size(), cookie);
-
-    //update in-memory shard map;
-    if (shard.info.state == ShardInfo::State::OPEN) {
-        //create shard;
+        // persist the serialize result to homestore MetaBlkService;
+        homestore::hs()->meta_service().add_sub_sb(HSHomeObject::s_shard_info_sub_type,
+            r_cast<const uint8_t*>(shard_msg.c_str()), shard_msg.size(), shard.metablk_cookie);
+        //update in-memory shard map;
         do_commit_new_shard(shard);
-    } else {
+        break;
+    }
+    
+    case ShardInfo::State::SEALED: {
+        void* metablk_cookie = get_shard_metablk(shard.info.id);
+        RELEASE_ASSERT(metablk_cookie != nullptr, "seal shard when metablk is nullptr");
+        homestore::hs()->meta_service().update_sub_sb(r_cast<const uint8_t*>(shard_msg.c_str()), shard_msg.size(), metablk_cookie);
+        shard.metablk_cookie = metablk_cookie;
         do_commit_seal_shard(shard);
+        break;
+    }
+    default : {
+        break;
+    }
     }
 
     if (promise) {
@@ -271,6 +278,15 @@ void HSHomeObject::do_commit_seal_shard(const Shard& shard) {
     auto shard_iter = _shard_map.find(shard.info.id);
     RELEASE_ASSERT(shard_iter != _shard_map.end(), "Missing shard info");
     *(shard_iter->second) = shard;
+}
+
+void* HSHomeObject::get_shard_metablk(shard_id id) {
+    std::scoped_lock lock_guard(_shard_lock);
+    auto shard_iter = _shard_map.find(id);
+    if (shard_iter == _shard_map.end()) {
+        return nullptr;
+    }
+    return (*shard_iter->second).metablk_cookie;
 }
 
 } // namespace homeobject
