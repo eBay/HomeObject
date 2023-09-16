@@ -180,6 +180,82 @@ TEST_F(ShardManagerWithShardsTesting, ListShards) {
     });
 }
 
+TEST_F(ShardManagerWithShardsTesting, RollbackCreateShard) {
+    homeobject::HSHomeObject* ho = dynamic_cast<homeobject::HSHomeObject*>(_home_object.get());
+    auto create_time = ho->get_current_timestamp();
+    auto shard_info = ShardInfo(100, _pg_id, ShardInfo::State::OPEN,
+                                create_time, create_time, Mi, Mi, 0);  
+    auto shard = homeobject::Shard(shard_info);
+    nlohmann::json j;
+    j["shard_info"]["shard_id"] = shard.info.id;
+    j["shard_info"]["pg_id"] = shard.info.placement_group;
+    j["shard_info"]["state"] = shard.info.state;
+    j["shard_info"]["created_time"] = shard.info.created_time;
+    j["shard_info"]["modified_time"] = shard.info.last_modified_time;
+    j["shard_info"]["total_capacity"] = shard.info.total_capacity_bytes;
+    j["shard_info"]["available_capacity"] = shard.info.available_capacity_bytes;
+    j["shard_info"]["deleted_capacity"] = shard.info.deleted_capacity_bytes;
+    j["ext_info"]["chunk_id"] = shard.chunk_id;
+    auto shard_msg = j.dump();
+    const uint32_t needed_size = sizeof(homeobject::ReplicationMessageHeader) + shard_msg.size();
+    auto buf = nuraft::buffer::alloc(needed_size);
+    uint8_t* raw_ptr = buf->data_begin();
+    homeobject::ReplicationMessageHeader *header = new(raw_ptr) homeobject::ReplicationMessageHeader();
+    header->message_type = homeobject::ReplicationMessageType::SHARD_MESSAGE;
+    header->payload_size = shard_msg.size();
+    uint32_t expected_crc = crc32_ieee(homeobject::init_crc32, r_cast< const uint8_t* >(shard_msg.c_str()), shard_msg.size());
+
+    header->payload_crc = expected_crc;
+    header->header_crc = header->calculate_crc();
+    raw_ptr += sizeof(homeobject::ReplicationMessageHeader);
+    std::memcpy(raw_ptr, shard_msg.c_str(), shard_msg.size());
+
+    //everything is fine but it is rollbacked;
+    ho->on_pre_commit_shard_msg(100, sisl::blob(buf->data_begin(), needed_size), sisl::blob(), nullptr);
+    ho->on_rollback_shard_msg(100, sisl::blob(buf->data_begin(), needed_size), sisl::blob(), nullptr);
+    ho->on_shard_message_commit(100, sisl::blob(buf->data_begin(), needed_size), sisl::blob(), nullptr);
+    auto future = _home_object->shard_manager()->get_shard(shard_info.id).get();
+    ASSERT_EQ(ShardError::UNKNOWN_SHARD, future.error());
+}
+
+TEST_F(ShardManagerWithShardsTesting, RollbackCreateShardV2) {
+    homeobject::HSHomeObject* ho = dynamic_cast<homeobject::HSHomeObject*>(_home_object.get());
+    auto create_time = ho->get_current_timestamp();
+    auto shard_info = ShardInfo(100, _pg_id, ShardInfo::State::OPEN,
+                                create_time, create_time, Mi, Mi, 0);  
+    auto shard = homeobject::Shard(shard_info);
+    nlohmann::json j;
+    j["shard_info"]["shard_id"] = shard.info.id;
+    j["shard_info"]["pg_id"] = shard.info.placement_group;
+    j["shard_info"]["state"] = shard.info.state;
+    j["shard_info"]["created_time"] = shard.info.created_time;
+    j["shard_info"]["modified_time"] = shard.info.last_modified_time;
+    j["shard_info"]["total_capacity"] = shard.info.total_capacity_bytes;
+    j["shard_info"]["available_capacity"] = shard.info.available_capacity_bytes;
+    j["shard_info"]["deleted_capacity"] = shard.info.deleted_capacity_bytes;
+    j["ext_info"]["chunk_id"] = shard.chunk_id;
+    auto shard_msg = j.dump();
+    const uint32_t needed_size = sizeof(homeobject::ReplicationMessageHeader) + shard_msg.size();
+    auto buf = nuraft::buffer::alloc(needed_size);
+    uint8_t* raw_ptr = buf->data_begin();
+    homeobject::ReplicationMessageHeader *header = new(raw_ptr) homeobject::ReplicationMessageHeader();
+    header->message_type = homeobject::ReplicationMessageType::SHARD_MESSAGE;
+    header->payload_size = shard_msg.size();
+    uint32_t expected_crc = crc32_ieee(homeobject::init_crc32, r_cast< const uint8_t* >(shard_msg.c_str()), shard_msg.size());
+
+    header->payload_crc = expected_crc;
+    header->header_crc = header->calculate_crc();
+    raw_ptr += sizeof(homeobject::ReplicationMessageHeader);
+    std::memcpy(raw_ptr, shard_msg.c_str(), shard_msg.size());
+
+    //everything is fine but it is rollbacked;
+    homeobject::ReplicationStateMachine replica_set_listener(ho);
+    replica_set_listener.on_pre_commit(100, sisl::blob(buf->data_begin(), needed_size), sisl::blob(), nullptr);
+    replica_set_listener.on_rollback(100, sisl::blob(buf->data_begin(), needed_size), sisl::blob(), nullptr);
+    auto future = _home_object->shard_manager()->get_shard(shard_info.id).get();
+    ASSERT_EQ(ShardError::UNKNOWN_SHARD, future.error());
+}
+
 TEST_F(ShardManagerWithShardsTesting, SealUnknownShard) {
     EXPECT_EQ(ShardError::UNKNOWN_SHARD, _home_object->shard_manager()->seal_shard(1000).get().error());
 }
