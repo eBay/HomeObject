@@ -62,7 +62,12 @@ csharedChunk HeapChunkSelector::select_chunk(homestore::blk_count_t count, const
 
 void HeapChunkSelector::foreach_chunks(std::function< void(csharedChunk&) >&& cb) {
     //we should call `cb` on all the chunks, selected or not
-    std::lock_guard<std::mutex> l(lock); 
+
+    //actually, after vdev is initialized, no more new chunks will be added again, 
+    //so we can make this assumption and disable this lock.
+
+    //if we support dynamiclly add new chunks to vdev in the future, we need to enable this lock
+    //std::lock_guard<std::mutex> l(lock); 
     std::for_each(std::execution::par_unseq, m_chunks.begin(), m_chunks.end(), 
     [cb = std::move(cb)](const VChunk& p){ cb(p.get_internal_chunk()); });
 }
