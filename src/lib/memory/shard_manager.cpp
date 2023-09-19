@@ -29,10 +29,10 @@ ShardManager::Result< ShardInfo > MemoryHomeObject::_create_shard(pg_id pg_owner
 ShardManager::Result< ShardInfo > MemoryHomeObject::_seal_shard(shard_id id) {
     auto lg = std::scoped_lock(_shard_lock);
     auto shard_it = _shard_map.find(id);
-    if (_shard_map.end() == shard_it) return folly::makeUnexpected(ShardError::UNKNOWN_SHARD);
+    RELEASE_ASSERT(_shard_map.end() != shard_it, "Missing ShardIterator!");
     auto& shard_info = (*shard_it->second).info;
     shard_info.state = ShardInfo::State::SEALED;
-    return shard_info;    
+    return shard_info;
 }
 
 } // namespace homeobject

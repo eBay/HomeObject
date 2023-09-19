@@ -31,8 +31,11 @@ ShardManager::AsyncResult< InfoList > HomeObjectImpl::list_shards(pg_id pg) cons
 }
 
 ShardManager::AsyncResult< ShardInfo > HomeObjectImpl::seal_shard(shard_id id) {
-    return _defer().thenValue(
-        [this, id](auto) mutable -> ShardManager::Result< ShardInfo > { return _seal_shard(id); });
+    return _get_shard(id).thenValue([this](auto const e) mutable -> ShardManager::Result< ShardInfo > {
+        if (!e) return folly::makeUnexpected(ShardError::UNKNOWN_SHARD);
+        if (ShardInfo::State::SEALED == e.value().info.state) return e.value().info;
+        return _seal_shard(e.value().info.id);
+    });
 }
 
 
