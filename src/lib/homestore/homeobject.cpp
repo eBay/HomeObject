@@ -44,9 +44,7 @@ void HSHomeObject::init_homestore() {
 
     bool need_format = HomeStore::instance()->start(
         hs_input_params{.devices = device_info, .app_mem_size = app_mem_size, .services = services},
-        [this]() {
-            register_homestore_metablk_callback();
-        });
+        [this]() { register_homestore_metablk_callback(); });
 
     /// TODO how should this work?
     LOGWARN("Persistence Looks Vacant, Formatting!!");
@@ -62,14 +60,14 @@ void HSHomeObject::init_homestore() {
 }
 
 void HSHomeObject::register_homestore_metablk_callback() {
-    //register some callbacks for metadata recovery;
+    // register some callbacks for metadata recovery;
     using namespace homestore;
-    HomeStore::instance()->meta_service().register_handler(HSHomeObject::s_shard_info_sub_type,
-                                [this](homestore::meta_blk* mblk, sisl::byte_view buf, size_t size) {
-                                    on_shard_meta_blk_found(mblk, buf, size);
-                                },
-                                nullptr,
-                                true);
+    HomeStore::instance()->meta_service().register_handler(
+        HSHomeObject::s_shard_info_sub_type,
+        [this](homestore::meta_blk* mblk, sisl::byte_view buf, size_t size) {
+            on_shard_meta_blk_found(mblk, buf, size);
+        },
+        nullptr, true);
 }
 
 void HomeObjectImpl::init_repl_svc() {
@@ -91,13 +89,14 @@ HSHomeObject::~HSHomeObject() {
 
 void HSHomeObject::on_shard_meta_blk_found(homestore::meta_blk* mblk, sisl::byte_view buf, size_t size) {
     std::string shard_info_str;
-    shard_info_str.append(r_cast<const char*>(buf.bytes()), size);
+    shard_info_str.append(r_cast< const char* >(buf.bytes()), size);
 
     auto shard = deserialize_shard(shard_info_str);
     shard.metablk_cookie = mblk;
 
-    //As shard info in the homestore metablk is always the latest state(OPEN or SEALED),
-    //we can always create a shard from this shard info and once shard is deleted, the associated metablk will be deleted too.
+    // As shard info in the homestore metablk is always the latest state(OPEN or SEALED),
+    // we can always create a shard from this shard info and once shard is deleted, the associated metablk will be
+    // deleted too.
     do_commit_new_shard(shard);
 }
 
