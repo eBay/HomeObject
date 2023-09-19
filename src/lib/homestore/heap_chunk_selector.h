@@ -42,10 +42,10 @@ public:
     void release_chunk(const uint32_t&);
 
     // we use 64K for the initial size 
-    static constexpr uint32_t chunk_atomicmap_init_size() {return 1<<16;}
+    static constexpr uint32_t chunk_atomicmap_init_size = 1<<16;
 
     // we suppose our max pdev number is 64(64 physical disks)
-    static constexpr uint32_t pdev_atomicmap_init_size() {return 1<<6;}
+    static constexpr uint32_t pdev_atomicmap_init_size = 1<<6;
 
     using PdevHeapMap = folly::AtomicHashMap< uint32_t, std::shared_ptr< std::pair< std::mutex, VChunkHeap > > >;
     using PdevAvalableBlkMap = folly::AtomicHashMap< uint32_t, std::atomic_uint32_t >;

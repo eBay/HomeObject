@@ -8,13 +8,11 @@ namespace homeobject {
 
 //https://github.com/facebook/folly/blob/61c11d77eb9a8bdc60f673017fccfbe900125cb6/folly/AtomicHashMap.h#L42
 //AtomichashMap has a max size limit of ~18x initial size.
-//we support max of 64k chunks for now, so 64*1024/18 + 1 = 3641, we use 4000 for sufficiently initial size 
-#define DEFAULT_ATOMICHASHMAP_INITIAL_SIZE 4000
 
 HeapChunkSelector::HeapChunkSelector() : 
-m_pdev_heap_map(PdevHeapMap(pdev_atomicmap_init_size())), 
-m_pdev_avalable_blk_map(PdevAvalableBlkMap(pdev_atomicmap_init_size())), 
-m_chunks(chunk_atomicmap_init_size()) {}
+m_pdev_heap_map(PdevHeapMap(pdev_atomicmap_init_size)), 
+m_pdev_avalable_blk_map(pdev_atomicmap_init_size), 
+m_chunks(chunk_atomicmap_init_size) {}
 
 HeapChunkSelector::HeapChunkSelector(const uint32_t& pdev_heap_map_initial_size, 
 const uint32_t& pdev_avalable_blk_map_initial_size, const uint32_t& chunk_initial_num) : 
