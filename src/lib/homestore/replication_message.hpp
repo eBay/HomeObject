@@ -24,10 +24,10 @@ struct ReplicationMessageHeader {
     uint8_t reserved_pad[6]{};
     uint32_t header_crc;
     uint32_t calculate_crc() const {
-        return crc32_ieee(init_crc32, r_cast<const unsigned char*>(this), sizeof(*this) - sizeof(header_crc));
+        return crc32_ieee(init_crc32, r_cast< const unsigned char* >(this), sizeof(*this) - sizeof(header_crc));
     }
 };
 
 #pragma pack()
 
-}
+} // namespace homeobject

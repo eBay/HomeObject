@@ -96,9 +96,7 @@ PGManager::NullAsyncResult HomeObjectImpl::replace_member(pg_id id, peer_id cons
 PGManager::Result< PG > HomeObjectImpl::_get_pg(pg_id pg) {
     std::scoped_lock lock_guard(_pg_lock);
     auto iter = _pg_map.find(pg);
-    if (iter == _pg_map.end()) {
-        return folly::makeUnexpected(PGError::UNKNOWN_PG);
-    }
+    if (iter == _pg_map.end()) { return folly::makeUnexpected(PGError::UNKNOWN_PG); }
     return iter->second;
 }
 
