@@ -9,18 +9,10 @@
 #include <mutex>
 #include <utility>
 #include <memory>
-#include <map>
 #include <functional>
 #include <atomic>
 
 #include <folly/AtomicHashMap.h>
-
-using VChunk = homestore::VChunk;
-
-template <>
-struct std::hash< VChunk > {
-    std::size_t operator()(VChunk const& v) const noexcept { return std::hash< uint16_t >()(v.get_chunk_id()); }
-};
 
 namespace homeobject {
 
@@ -32,6 +24,7 @@ public:
     HeapChunkSelector(const uint32_t&, const uint32_t&, const uint32_t&);
     ~HeapChunkSelector() = default;
 
+    using VChunk = homestore::VChunk;
     class VChunkComparator {
     public:
         bool operator()(VChunk& lhs, VChunk& rhs) {
@@ -45,12 +38,21 @@ public:
     void foreach_chunks(std::function< void(csharedChunk&) >&& cb) override;
     csharedChunk select_chunk([[maybe_unused]]homestore::blk_count_t nblks, const homestore::blk_alloc_hints& hints);
 
+    // this function is used to return a chunk back to ChunkSelector when sealing a shard, and will only be used by Homeobject.
+    void release_chunk(const uint32_t&);
+
+    // we use 64K for the initial size 
+    static constexpr uint32_t chunk_atomicmap_init_size() {return 1<<16;}
+
+    // we suppose our max pdev number is 64(64 physical disks)
+    static constexpr uint32_t pdev_atomicmap_init_size() {return 1<<6;}
+
     using PdevHeapMap = folly::AtomicHashMap< uint32_t, std::shared_ptr< std::pair< std::mutex, VChunkHeap > > >;
     using PdevAvalableBlkMap = folly::AtomicHashMap< uint32_t, std::atomic_uint32_t >;
-    using ChunkMap = folly::AtomicHashMap< uint32_t, VChunk >;
+    using ChunkMap = folly::AtomicHashMap< uint32_t, csharedChunk >;
 
 private:
-    //this holds all the chunks for each pdev, they are all unselected.
+    //this holds all the unselected chunks for each pdev.
     PdevHeapMap m_pdev_heap_map;
 
     //for now, uint32_t is enough for the sum of all the available blocks of a pdev.
