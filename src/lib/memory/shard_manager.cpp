@@ -38,12 +38,13 @@ ShardManager::Result< ShardInfo > MemoryHomeObject::_create_shard(pg_id pg_owner
 ShardManager::Result< ShardInfo > MemoryHomeObject::_seal_shard(shard_id id) {
     auto lg = std::scoped_lock(_pg_lock, _shard_lock);
     auto shard_it = _shard_map.find(id);
-    if (_shard_map.end() == shard_it) return folly::makeUnexpected(ShardError::UNKNOWN_SHARD);
+    RELEASE_ASSERT(_shard_map.end() != shard_it, "Missing ShardIterator!");
 
     auto const_it = shard_it->second;
     auto pg_it = _pg_map.find(const_it->placement_group);
     RELEASE_ASSERT(_pg_map.end() != pg_it, "Missing ShardInfo!");
 
+    // Copy the Info and replace it
     auto new_info = *const_it;
     new_info.state = ShardInfo::State::SEALED;
     pg_it->second.second.erase(const_it);
