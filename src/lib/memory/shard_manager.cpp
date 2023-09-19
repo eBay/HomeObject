@@ -16,7 +16,7 @@ ShardManager::Result< ShardInfo > MemoryHomeObject::_create_shard(pg_id pg_owner
 
         auto& s_list = pg_it->second.shards;
         info.id = (((uint64_t)pg_owner) << 48) + s_list.size();
-	auto iter = s_list.emplace(s_list.end(), Shard(info));
+        auto iter = s_list.emplace(s_list.end(), Shard(info));
         LOGDEBUG("Creating Shard [{}]: in Pg [{}] of Size [{}b]", info.id, pg_owner, size_bytes);
         auto [_, s_happened] = _shard_map.emplace(info.id, iter);
         RELEASE_ASSERT(s_happened, "Duplicate Shard insertion!");
