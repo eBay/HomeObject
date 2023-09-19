@@ -65,10 +65,9 @@ PGManager::NullAsyncResult HomeObjectImpl::create_pg(PGInfo&& pg_info) {
                        home_replication::ReplicationService::set_var const& v) -> PGManager::NullResult {
             if (std::holds_alternative< home_replication::ReplServiceError >(v))
                 return folly::makeUnexpected(PGError::INVALID_ARG);
-
-            auto p = pg_pair(std::move(pg_info), shard_set());
+            auto pg = PG(std::move(pg_info));
             auto lg = std::scoped_lock(_pg_lock);
-            auto [it, _] = _pg_map.try_emplace(pg_info.id, std::move(p));
+            auto [it, _] = _pg_map.try_emplace(pg_info.id, std::move(pg));
             RELEASE_ASSERT(_pg_map.end() != it, "Unknown map insert error!");
             return folly::Unit();
         });
@@ -92,6 +91,15 @@ PGManager::NullAsyncResult HomeObjectImpl::replace_member(pg_id id, peer_id cons
             if (ReplServiceError::OK != e) return folly::makeUnexpected(toPgError(e));
             return folly::Unit();
         });
+}
+
+PGManager::Result< PG > HomeObjectImpl::_get_pg(pg_id pg) {
+    std::scoped_lock lock_guard(_pg_lock);
+    auto iter = _pg_map.find(pg);
+    if (iter == _pg_map.end()) {
+        return folly::makeUnexpected(PGError::UNKNOWN_PG);
+    }
+    return iter->second;
 }
 
 } // namespace homeobject
