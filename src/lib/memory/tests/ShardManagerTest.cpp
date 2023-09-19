@@ -117,13 +117,15 @@ TEST_F(ShardManagerFixtureWShard, SealShardNoShard) {
 }
 
 TEST_F(ShardManagerFixtureWShard, SealShard) {
-    auto e = m_memory_homeobj->shard_manager()->seal_shard(_shard.id).get();
-    ASSERT_TRUE(!!e);
-    e.then([this](auto const& info) {
-        EXPECT_TRUE(info.id == _shard.id);
-        EXPECT_TRUE(info.placement_group == _shard.placement_group);
-        EXPECT_EQ(info.state, ShardInfo::State::SEALED);
-    });
+    for (auto i = 0; 2 > i; ++i) {
+        auto e = m_memory_homeobj->shard_manager()->seal_shard(_shard.id).get();
+        ASSERT_TRUE(!!e);
+        e.then([this](auto const& info) {
+            EXPECT_TRUE(info.id == _shard.id);
+            EXPECT_TRUE(info.placement_group == _shard.placement_group);
+            EXPECT_EQ(info.state, ShardInfo::State::SEALED);
+        });
+    }
 }
 
 int main(int argc, char* argv[]) {

@@ -2,9 +2,12 @@
 
 #include <homestore/homestore.hpp>
 #include <homestore/index_service.hpp>
+#include <homestore/meta_service.hpp>
 #include <iomgr/io_environment.hpp>
 
 namespace homeobject {
+
+const std::string HSHomeObject::s_shard_info_sub_type = "shard_info";
 
 extern std::shared_ptr< HomeObject > init_homeobject(std::weak_ptr< HomeObjectApplication >&& application) {
     LOGINFOMOD(homeobject, "Initializing HomeObject");
@@ -40,7 +43,10 @@ void HSHomeObject::init_homestore() {
     uint32_t services = HS_SERVICE::META | HS_SERVICE::LOG_REPLICATED | HS_SERVICE::LOG_LOCAL | HS_SERVICE::DATA;
 
     bool need_format = HomeStore::instance()->start(
-        hs_input_params{.devices = device_info, .app_mem_size = app_mem_size, .services = services});
+        hs_input_params{.devices = device_info, .app_mem_size = app_mem_size, .services = services},
+        [this]() {
+            register_homestore_metablk_callback();
+        });
 
     /// TODO how should this work?
     LOGWARN("Persistence Looks Vacant, Formatting!!");
@@ -53,6 +59,17 @@ void HSHomeObject::init_homestore() {
             {HS_SERVICE::INDEX, hs_format_params{.size_pct = 30.0}},
         });
     }
+}
+
+void HSHomeObject::register_homestore_metablk_callback() {
+    //register some callbacks for metadata recovery;
+    using namespace homestore;
+    HomeStore::instance()->meta_service().register_handler(HSHomeObject::s_shard_info_sub_type,
+                                [this](homestore::meta_blk* mblk, sisl::byte_view buf, size_t size) {
+                                    on_shard_meta_blk_found(mblk, buf, size);
+                                },
+                                nullptr,
+                                true);
 }
 
 void HomeObjectImpl::init_repl_svc() {
@@ -70,6 +87,18 @@ HSHomeObject::~HSHomeObject() {
     homestore::HomeStore::instance()->shutdown();
     homestore::HomeStore::reset_instance();
     iomanager.stop();
+}
+
+void HSHomeObject::on_shard_meta_blk_found(homestore::meta_blk* mblk, sisl::byte_view buf, size_t size) {
+    std::string shard_info_str;
+    shard_info_str.append(r_cast<const char*>(buf.bytes()), size);
+
+    auto shard = deserialize_shard(shard_info_str);
+    shard.metablk_cookie = mblk;
+
+    //As shard info in the homestore metablk is always the latest state(OPEN or SEALED),
+    //we can always create a shard from this shard info and once shard is deleted, the associated metablk will be deleted too.
+    do_commit_new_shard(shard);
 }
 
 } // namespace homeobject
