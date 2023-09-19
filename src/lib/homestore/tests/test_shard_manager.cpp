@@ -86,16 +86,6 @@ TEST_F(ShardManagerTesting, CreateShardWithUnknownPG) {
     EXPECT_EQ(ShardError::UNKNOWN_PG, _home_object->shard_manager()->create_shard(_pg_id + 1, Mi).get().error());
 }
 
-TEST_F(ShardManagerTesting, CreateShardWithPGNotLeader) {
-    homeobject::HSHomeObject* ho = dynamic_cast<homeobject::HSHomeObject*>(_home_object.get());
-    EXPECT_TRUE(ho != nullptr);
-    auto rs = ho->get_repl_svc()->get_replica_set(fmt::format("{}", _pg_id));
-    EXPECT_TRUE(std::holds_alternative<home_replication::rs_ptr_t>(rs));
-    auto replicaset = dynamic_cast<home_replication::MockReplicaSet*>(std::get<home_replication::rs_ptr_t>(rs).get());
-    replicaset->set_follower();
-    EXPECT_EQ(ShardError::NOT_LEADER, _home_object->shard_manager()->create_shard(_pg_id, Mi).get().error());
-}
-
 TEST_F(ShardManagerTesting, GetUnknownShard) {
     EXPECT_EQ(ShardError::UNKNOWN_SHARD, _home_object->shard_manager()->get_shard(_shard_id).get().error());
 }

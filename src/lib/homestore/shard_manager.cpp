@@ -74,11 +74,6 @@ ShardManager::Result< ShardInfo > HSHomeObject::_create_shard(pg_id pg_owner, ui
     }
 
     auto replica_set = std::get< home_replication::rs_ptr_t >(replica_set_var);
-    if (!replica_set->is_leader()) {
-        LOGWARN("pg [{}] replica set is not a leader, please retry other pg members", pg_owner);
-        return folly::makeUnexpected(ShardError::NOT_LEADER);
-    }
-
     auto new_shard_id = generate_new_shard_id(pg_owner);
     auto create_time = get_current_timestamp();
     auto shard_info = ShardInfo(new_shard_id, pg_owner, ShardInfo::State::OPEN,
@@ -149,7 +144,7 @@ void HSHomeObject::on_pre_commit_shard_msg(int64_t lsn, sisl::blob const& header
 
     //write shard header to ReplDev which will bind the newly created shard to one underlay homestore physical chunk;
     using namespace homestore;
-    auto datasvc_page_size = HomeStore::instance()->data_service().get_page_size();
+    auto datasvc_page_size = HomeStore::instance()->data_service().get_blk_size();
     if (shard_msg.size() % datasvc_page_size != 0) {
         uint32_t need_size = (shard_msg.size() / datasvc_page_size + 1)  * datasvc_page_size;
         shard_msg.resize(need_size);
@@ -162,15 +157,15 @@ void HSHomeObject::on_pre_commit_shard_msg(int64_t lsn, sisl::blob const& header
     sgs.size = shard_msg.size();
     sgs.iovs.emplace_back(iovec(static_cast<void*>(write_buf), shard_msg.size()));
     std::vector< homestore::BlkId > out_blkids;
-    auto future = HomeStore::instance()->data_service().async_alloc_write(sgs, homestore::blk_alloc_hints(), out_blkids);
-    bool write_result = std::move(future).get();
+    homestore::MultiBlkId out_blkid;
+    auto future = HomeStore::instance()->data_service().async_alloc_write(sgs, homestore::blk_alloc_hints(), out_blkid);
     iomanager.iobuf_free(write_buf);
-    if (!write_result) {
+    //non-zero means write failure.
+    if ((std::move(future).get())) {
         LOGWARN("write lsn {} msg to homestore data service is failed", lsn);
         return;
     }
-    RELEASE_ASSERT(out_blkids.size() == 1, "output blkids num is not 1");
-    shard.chunk_id = out_blkids[0].get_chunk_num();
+    shard.chunk_id = out_blkid.chunk_num();
     std::scoped_lock lock_guard(_flying_shard_lock);
     auto [_, happened] = _flying_shards.emplace(lsn, std::move(shard));
     RELEASE_ASSERT(happened, "duplicated flying create shard msg");
