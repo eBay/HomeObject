@@ -2,7 +2,7 @@
 [![Conan Build](https://github.com/eBay/homeobject/actions/workflows/conan_build.yml/badge.svg?branch=main)](https://github.com/eBay/homeobject/actions/workflows/conan_build.yml)
 [![CodeCov](https://codecov.io/gh/eBay/HomeObject/branch/main/graph/badge.svg)](https://codecov.io/gh/eBay/HomeObject)
 
-Replicated BLOB Store built upon HomeStore and NuRaft
+Replicated BLOB Store built upon [HomeStore](https://github.com/eBay/HomeStore).
 
 ## Terminology
 HomeObject implements the management and persistence of three primary client visible “objects” that can be acted upon.
@@ -34,7 +34,7 @@ A Pg is an abstraction around the replication of a set of Shards. Pgs are mainta
 HomeObject, but is used when addressing a particular Replicated Device (see Homestore Services).
 
 Pgs can be remapped across instances of HomeObject for the purposes of load balancing or remediating a failure. The
-management and scheduling of Pgs in NuObject v2 is done by the ClusterManager.
+management and scheduling of Pgs is the concern of the Application.
 
 [PgManager API](https://github.com/eBay/HomeObject/blob/main/src/include/homeobject/pg_manager.hpp)
 
