@@ -43,9 +43,42 @@ management and scheduling of Pgs is the concern of the Application.
 ![HomeObject Overview](docs/imgs/homeobject.png)
 
 ## Build
-To build (assuming a recent version of conan package manager is installed)
+
+### System Pre-requisites
+* CMake 3.13 or later
+* conan 1.x (`pipx install conan~=1`)
+* libaio-dev (assuming Ubuntu)
+* uuid-dev (assuming Ubuntu)
+
+### Dependencies
+* SISL
 ```
-   $ conan create . <user>/<channel>
+$ git clone https://github.com/eBay/sisl
+$ cd sisl & ./prepare.sh && conan export . oss/master
+```
+
+* IOManager
+```
+$ git clone https://github.com/eBay/iomanager
+$ cd iomanager & ./prepare.sh && conan export . oss/master
+```
+
+* HomeStore
+```
+$ git clone https://github.com/eBay/homestore
+$ cd homestore && conan export . oss/master
+```
+
+### Compilation
+```
+$ mkdir build
+$ cd build
+
+# Install all dependencies
+$ conan install --build missing <path_to_homeobject>
+
+# Build and Test
+$ conan build <path_to_homeobject>
 ```
 
 ## Contributing to This Project
