@@ -40,7 +40,7 @@ class HomeObjectConan(ConanFile):
         self.build_requires("gtest/1.14.0")
 
     def requirements(self):
-        self.requires("homestore/[>4.2 <4.4, include_prerelease=True]@oss/master")
+        self.requires("homestore/[~=4.2 <4.4, include_prerelease=True]@oss/master")
         self.requires("sisl/[~=10,          include_prerelease=True]@oss/master")
         # Remove when HomeStore Replication Service is mature
         self.requires("nuraft_mesg/[~=1,    include_prerelease=True]@oss/main")
