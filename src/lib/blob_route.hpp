@@ -1,5 +1,7 @@
 #include <functional>
 
+#include <boost/functional/hash.hpp>
+
 #include "homeobject/common.hpp"
 
 namespace homeobject {
@@ -34,7 +36,6 @@ struct formatter< homeobject::BlobRoute > {
 template <>
 struct std::hash< homeobject::BlobRoute > {
     std::size_t operator()(homeobject::BlobRoute const& r) const noexcept {
-        // This arithmetic lifted from: https://en.cppreference.com/w/cpp/utility/hash
-        return std::hash< homeobject::shard_id >{}(r.shard) ^ (std::hash< homeobject::blob_id >{}(r.blob) << 1);
+        return boost::hash_value< homeobject::blob_id >(std::make_pair(r.shard, r.blob));
     }
 };

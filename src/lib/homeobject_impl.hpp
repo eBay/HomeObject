@@ -17,9 +17,7 @@ constexpr size_t pg_width = sizeof(pg_id) * 8;
 constexpr size_t shard_width = (sizeof(shard_id) * 8) - pg_width;
 constexpr size_t shard_mask = std::numeric_limits< homeobject::shard_id >::max() >> pg_width;
 
-inline shard_id make_new_shard_id(pg_id pg, uint64_t sequence_num) {
-    return ((uint64_t)pg << shard_width) | sequence_num;
-}
+inline shard_id make_new_shard_id(pg_id pg, shard_id next_shard) { return ((uint64_t)pg << shard_width) | next_shard; }
 
 inline bool operator<(ShardInfo const& lhs, ShardInfo const& rhs) { return lhs.id < rhs.id; }
 inline bool operator==(ShardInfo const& lhs, ShardInfo const& rhs) { return lhs.id == rhs.id; }
