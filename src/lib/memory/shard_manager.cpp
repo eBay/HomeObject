@@ -15,9 +15,9 @@ ShardManager::Result< ShardInfo > MemoryHomeObject::_create_shard(pg_id pg_owner
         if (_pg_map.end() == pg_it) return folly::makeUnexpected(ShardError::UNKNOWN_PG);
 
         auto& s_list = pg_it->second.shards;
-        info.id = (((uint64_t)pg_owner) << shard_width) + s_list.size();
+        info.id = make_new_shard_id(pg_owner, s_list.size());
         auto iter = s_list.emplace(s_list.end(), Shard(info));
-        LOGDEBUG("Creating Shard [{}]: in Pg [{}] of Size [{}b]", info.id, pg_owner, size_bytes);
+        LOGDEBUG("Creating Shard [{}]: in Pg [{}] of Size [{}b]", info.id & shard_mask, pg_owner, size_bytes);
         auto [_, s_happened] = _shard_map.emplace(info.id, iter);
         RELEASE_ASSERT(s_happened, "Duplicate Shard insertion!");
     }

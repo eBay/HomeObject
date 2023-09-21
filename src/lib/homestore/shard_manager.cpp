@@ -21,10 +21,6 @@ shard_id HSHomeObject::generate_new_shard_id(pg_id pg) {
     return make_new_shard_id(pg, new_sequence_num);
 }
 
-shard_id HSHomeObject::make_new_shard_id(pg_id pg, uint64_t sequence_num) const {
-    return ((uint64_t)pg << shard_width) | sequence_num;
-}
-
 uint64_t HSHomeObject::get_sequence_num_from_shard_id(uint64_t shard_id) {
     return shard_id & (max_shard_num_in_pg() - 1);
 }
@@ -97,7 +93,8 @@ ShardManager::Result< ShardInfo > HSHomeObject::_create_shard(pg_id pg_owner, ui
     replica_set->write(sisl::blob(buf->data_begin(), needed_size), sisl::blob(), value, static_cast< void* >(&p));
     auto info = std::move(sf).get();
     if (!bool(info)) {
-        LOGWARN("create new shard [{}] on pg [{}] is failed with error:{}", new_shard_id, pg_owner, info.error());
+        LOGWARN("create new shard [{}] on pg [{}] is failed with error:{}", new_shard_id & shard_mask, pg_owner,
+                info.error());
     }
     header->~ReplicationMessageHeader();
     return info;
