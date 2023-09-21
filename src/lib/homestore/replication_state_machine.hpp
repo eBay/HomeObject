@@ -10,7 +10,7 @@ class HomeObjectImpl;
 class ReplicationStateMachine : public home_replication::ReplicaSetListener {
 public:
     explicit ReplicationStateMachine(HSHomeObject* home_object) : _home_object(home_object) {}
-  
+
     ~ReplicationStateMachine() = default;
     /// @brief Called when the log entry has been committed in the replica set.
     ///
@@ -68,4 +68,4 @@ private:
     HSHomeObject* _home_object;
 };
 
-}
+} // namespace homeobject

@@ -38,12 +38,11 @@ ShardManager::AsyncResult< ShardInfo > HomeObjectImpl::seal_shard(shard_id id) {
     });
 }
 
-
 ShardManager::AsyncResult< ShardInfo > HomeObjectImpl::get_shard(shard_id id) const {
     return _get_shard(id).thenValue([this](auto const e) mutable -> ShardManager::Result< ShardInfo > {
-            if (!e) { return folly::makeUnexpected(e.error());}
-            return e.value().info;
-      });
+        if (!e) { return folly::makeUnexpected(e.error()); }
+        return e.value().info;
+    });
 }
 
 ///

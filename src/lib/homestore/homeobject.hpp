@@ -24,6 +24,7 @@ class HSHomeObject : public HomeObjectImpl {
     ///
     mutable std::shared_mutex _flying_shard_lock;
     std::map< int64_t, Shard > _flying_shards;
+
 private:
     shard_id generate_new_shard_id(pg_id pg);
     shard_id make_new_shard_id(pg_id pg, uint64_t sequence_num) const;
@@ -34,24 +35,21 @@ private:
     void do_commit_seal_shard(const Shard& shard);
     void register_homestore_metablk_callback();
     void* get_shard_metablk(shard_id id);
+
 public:
     using HomeObjectImpl::HomeObjectImpl;
     ~HSHomeObject();
 
     void init_homestore();
 
-    static const std::string s_shard_info_sub_type;  
+    static const std::string s_shard_info_sub_type;
     void on_shard_meta_blk_found(homestore::meta_blk* mblk, sisl::byte_view buf, size_t size);
 
-    bool precheck_and_decode_shard_msg(int64_t lsn, sisl::blob const& header, sisl::blob const& key,
-                                        std::string* msg);
+    bool precheck_and_decode_shard_msg(int64_t lsn, sisl::blob const& header, sisl::blob const& key, std::string* msg);
 
-    void on_pre_commit_shard_msg(int64_t lsn, sisl::blob const& header, sisl::blob const& key,
-                                 void* user_ctx);
-    void on_rollback_shard_msg(int64_t lsn, sisl::blob const& header, sisl::blob const& key,
-                               void* user_ctx);
-    void on_shard_message_commit(int64_t lsn, sisl::blob const& header, sisl::blob const& key,
-                                 void* user_ctx);  
+    void on_pre_commit_shard_msg(int64_t lsn, sisl::blob const& header, sisl::blob const& key, void* user_ctx);
+    void on_rollback_shard_msg(int64_t lsn, sisl::blob const& header, sisl::blob const& key, void* user_ctx);
+    void on_shard_message_commit(int64_t lsn, sisl::blob const& header, sisl::blob const& key, void* user_ctx);
 };
 
 } // namespace homeobject

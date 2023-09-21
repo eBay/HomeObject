@@ -8,7 +8,8 @@ class MockReplicaSet : public ReplicaSet {
     std::string _g_id;
     bool _is_leader{true};
     uint32_t _current_lsn{0};
-    std::shared_ptr<ReplicaSetListener> _listener;
+    std::shared_ptr< ReplicaSetListener > _listener;
+
 public:
     MockReplicaSet(std::string const& group_id, std::set< std::string, std::less<> >&& members) :
             _g_id(group_id), _members(std::move(members)) {}
@@ -23,18 +24,18 @@ public:
             _listener->on_pre_commit(_current_lsn, head, key, ctx);
             home_replication::pba_list_t pba;
             _listener->on_commit(_current_lsn, head, key, pba, ctx);
-	}
+        }
         ++_current_lsn;
     }
     void transfer_pba_ownership(int64_t, const pba_list_t&) override {}
     void send_data_service_response(sisl::io_blob_list_t const&,
                                     boost::intrusive_ptr< sisl::GenericRpcData >&) override {}
     void append_entry(nuraft::buffer const&) override {}
-    void set_leader() { _is_leader = true;}
+    void set_leader() { _is_leader = true; }
     void set_follower() { _is_leader = false; }
     bool is_leader() const override { return _is_leader; }
     std::string group_id() const override { return _g_id; }
-    void set_listener(std::shared_ptr<ReplicaSetListener> listener) { _listener = listener;}
+    void set_listener(std::shared_ptr< ReplicaSetListener > listener) { _listener = listener; }
 
     /// nuraft_mesg::mesg_state_mgr overrides
     uint32_t get_logstore_id() const override { return 0u; }
@@ -54,4 +55,4 @@ public:
     ///
 };
 
-}
+} // namespace home_replication

@@ -48,12 +48,12 @@ class HomeObjectImpl : public HomeObject,
     virtual BlobManager::NullResult _del_blob(ShardInfo const&, blob_id) = 0;
     ///
     folly::Future< ShardManager::Result< Shard > > _get_shard(shard_id id) const;
-    auto _defer() const { return folly::makeSemiFuture().via(folly::getGlobalCPUExecutor());}
+    auto _defer() const { return folly::makeSemiFuture().via(folly::getGlobalCPUExecutor()); }
 
 protected:
     std::mutex _repl_lock;
     std::shared_ptr< home_replication::ReplicationService > _repl_svc;
-    //std::shared_ptr<homestore::ReplicationService> _repl_svc;  
+    // std::shared_ptr<homestore::ReplicationService> _repl_svc;
     peer_id _our_id;
 
     /// Our SvcId retrieval and SvcId->IP mapping
@@ -67,6 +67,7 @@ protected:
     std::map< shard_id, ShardIterator > _shard_map;
     ///
     PGManager::Result< PG > _get_pg(pg_id pg);
+
 public:
     explicit HomeObjectImpl(std::weak_ptr< HomeObjectApplication >&& application) :
             _application(std::move(application)) {}
@@ -80,7 +81,7 @@ public:
     // This is public but not exposed in the API above
     void init_repl_svc();
 
-    std::shared_ptr< home_replication::ReplicationService > get_repl_svc()  { return _repl_svc;}
+    std::shared_ptr< home_replication::ReplicationService > get_repl_svc() { return _repl_svc; }
 
     std::shared_ptr< BlobManager > blob_manager() final;
     std::shared_ptr< PGManager > pg_manager() final;
