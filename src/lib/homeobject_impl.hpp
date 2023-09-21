@@ -15,6 +15,7 @@ namespace homeobject {
 
 constexpr size_t pg_width = sizeof(pg_id) * 8;
 constexpr size_t shard_width = (sizeof(shard_id) * 8) - pg_width;
+constexpr size_t shard_mask = std::numeric_limits< homeobject::shard_id >::max() >> pg_width;
 
 inline bool operator<(ShardInfo const& lhs, ShardInfo const& rhs) { return lhs.id < rhs.id; }
 inline bool operator==(ShardInfo const& lhs, ShardInfo const& rhs) { return lhs.id == rhs.id; }

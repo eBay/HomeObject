@@ -26,8 +26,7 @@ struct formatter< homeobject::BlobRoute > {
     template < typename FormatContext >
     auto format(homeobject::BlobRoute const& r, FormatContext& ctx) {
         return format_to(ctx.out(), "{:04x}:{:012x}:{:016x}", (r.shard >> homeobject::shard_width),
-                         (r.shard & (std::numeric_limits< homeobject::shard_id >::max() >> homeobject::pg_width)),
-                         r.blob);
+                         (r.shard & homeobject::shard_mask), r.blob);
     }
 };
 } // namespace fmt
