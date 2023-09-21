@@ -91,7 +91,7 @@ TEST_F(HeapChunkSelectorTest, test_select_chunk) {
         for (int j = 3; j > 0; j--) {
             auto chunk = HCS.select_chunk(count, hints);
             ASSERT_EQ(chunk->get_pdev_id(), i);
-            EXPECT_EQ(chunk->available_blks(), j);
+            ASSERT_EQ(chunk->available_blks(), j);
         }
     }
 }
@@ -102,22 +102,38 @@ TEST_F(HeapChunkSelectorTest, test_release_chunk) {
     hints.pdev_id_hint = 1;
     auto chunk1 = HCS.select_chunk(count, hints);
     ASSERT_EQ(chunk1->get_pdev_id(), 1);
-    EXPECT_EQ(chunk1->available_blks(), 3);
+    ASSERT_EQ(chunk1->available_blks(), 3);
 
     auto chunk2 = HCS.select_chunk(count, hints);
     ASSERT_EQ(chunk2->get_pdev_id(), 1);
-    EXPECT_EQ(chunk2->available_blks(), 2);
+    ASSERT_EQ(chunk2->available_blks(), 2);
 
     HCS.release_chunk(chunk1->get_chunk_id());
     HCS.release_chunk(chunk2->get_chunk_id());
 
     chunk1 = HCS.select_chunk(count, hints);
     ASSERT_EQ(chunk1->get_pdev_id(), 1);
-    EXPECT_EQ(chunk1->available_blks(), 3);
+    ASSERT_EQ(chunk1->available_blks(), 3);
 
     chunk2 = HCS.select_chunk(count, hints);
     ASSERT_EQ(chunk2->get_pdev_id(), 1);
-    EXPECT_EQ(chunk2->available_blks(), 2);
+    ASSERT_EQ(chunk2->available_blks(), 2);
+}
+
+TEST_F(HeapChunkSelectorTest, test_mark_chunk_selected) {
+    HCS.mark_chunk_selected(2);
+    homestore::blk_count_t count = 1;
+    homestore::blk_alloc_hints hints;
+    hints.pdev_id_hint = 1;
+    // we mark chunk id 2 is select ,so we will get 3 and 1
+    // from pdev 1;
+    auto chunk = HCS.select_chunk(count, hints);
+    ASSERT_EQ(chunk->get_pdev_id(), 1);
+    ASSERT_EQ(chunk->available_blks(), 3);
+
+    chunk = HCS.select_chunk(count, hints);
+    ASSERT_EQ(chunk->get_pdev_id(), 1);
+    ASSERT_EQ(chunk->available_blks(), 1);
 }
 
 int main(int argc, char* argv[]) {
