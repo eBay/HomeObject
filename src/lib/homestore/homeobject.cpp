@@ -38,12 +38,10 @@ void HSHomeObject::init_homestore() {
         device_info.emplace_back(std::filesystem::canonical(path).string(), homestore::HSDevType::Data);
     }
 
-    /// TODO need Repl service eventually yeah?
+    /// TODO need Repl service eventually and use HeapChunkSelector
     using namespace homestore;
-    uint32_t services = HS_SERVICE::META | HS_SERVICE::LOG_REPLICATED | HS_SERVICE::LOG_LOCAL | HS_SERVICE::DATA;
-
-    bool need_format = HomeStore::instance()->start(
-        hs_input_params{.devices = device_info, .app_mem_size = app_mem_size, .services = services},
+    bool need_format = HomeStore::instance()->with_data_service(nullptr).with_log_service().start(
+        hs_input_params{.devices = device_info, .app_mem_size = app_mem_size},
         [this]() { register_homestore_metablk_callback(); });
 
     /// TODO how should this work?
