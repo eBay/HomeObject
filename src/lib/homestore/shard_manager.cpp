@@ -7,11 +7,9 @@
 
 namespace homeobject {
 
-static constexpr uint32_t SEQUENCE_BIT_NUM_IN_SHARD{48};
-
 uint64_t ShardManager::max_shard_size() { return Gi; }
 
-uint64_t ShardManager::max_shard_num_in_pg() { return ((uint64_t)0x01) << SEQUENCE_BIT_NUM_IN_SHARD; }
+uint64_t ShardManager::max_shard_num_in_pg() { return ((uint64_t)0x01) << shard_width; }
 
 shard_id HSHomeObject::generate_new_shard_id(pg_id pg) {
     std::scoped_lock lock_guard(_pg_lock);
@@ -24,7 +22,7 @@ shard_id HSHomeObject::generate_new_shard_id(pg_id pg) {
 }
 
 shard_id HSHomeObject::make_new_shard_id(pg_id pg, uint64_t sequence_num) const {
-    return ((uint64_t)pg << SEQUENCE_BIT_NUM_IN_SHARD) | sequence_num;
+    return ((uint64_t)pg << shard_width) | sequence_num;
 }
 
 uint64_t HSHomeObject::get_sequence_num_from_shard_id(uint64_t shard_id) {
