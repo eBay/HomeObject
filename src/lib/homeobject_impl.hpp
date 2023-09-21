@@ -37,6 +37,7 @@ struct PG {
     PGInfo pg_info;
     uint64_t shard_sequence_num{0};
     ShardList shards;
+    boost::uuids::uuid repl_dev_uuid; // will be filled when pg_creation is based on HS SoloReplDev
 };
 
 class HomeObjectImpl : public HomeObject,

@@ -1,4 +1,5 @@
 #include "homeobject.hpp"
+#include "replication_state_machine.hpp"
 
 #include <homestore/homestore.hpp>
 #include <homestore/index_service.hpp>
@@ -38,21 +39,27 @@ void HSHomeObject::init_homestore() {
         device_info.emplace_back(std::filesystem::canonical(path).string(), homestore::HSDevType::Data);
     }
 
-    /// TODO need Repl service eventually and use HeapChunkSelector
+    _chunk_selector = std::make_shared< HeapChunkSelector >();
+
     using namespace homestore;
-    bool need_format = HomeStore::instance()->with_data_service(nullptr).with_log_service().start(
-        hs_input_params{.devices = device_info, .app_mem_size = app_mem_size},
-        [this]() { register_homestore_metablk_callback(); });
+    auto hsi = HomeStore::instance();
+    // when enable replication service of homestore, log service will be enabled automatically.
+    // and meta service is already enabled by default.
+    hsi->with_repl_data_service(repl_impl_type::solo, std::make_unique< HOReplServiceCallbacks >(this),
+                                _chunk_selector);
+
+    bool need_format = hsi->start(hs_input_params{.devices = device_info, .app_mem_size = app_mem_size},
+                                  [this]() { register_homestore_metablk_callback(); });
 
     /// TODO how should this work?
     LOGWARN("Persistence Looks Vacant, Formatting!!");
     if (need_format) {
-        HomeStore::instance()->format_and_start(std::map< uint32_t, hs_format_params >{
+        hsi->format_and_start(std::map< uint32_t, hs_format_params >{
             {HS_SERVICE::META, hs_format_params{.size_pct = 5.0}},
             {HS_SERVICE::LOG_REPLICATED, hs_format_params{.size_pct = 10.0}},
             {HS_SERVICE::LOG_LOCAL, hs_format_params{.size_pct = 5.0}},
-            {HS_SERVICE::DATA, hs_format_params{.size_pct = 50.0}},
             {HS_SERVICE::INDEX, hs_format_params{.size_pct = 30.0}},
+            {HS_SERVICE::REPLICATION, hs_format_params{.size_pct = 50.0}},
         });
     }
 }
@@ -65,7 +72,7 @@ void HSHomeObject::register_homestore_metablk_callback() {
         [this](homestore::meta_blk* mblk, sisl::byte_view buf, size_t size) {
             on_shard_meta_blk_found(mblk, buf, size);
         },
-        nullptr, true);
+        [this](bool success) { on_shard_meta_blk_recover_completed(success); }, true);
 }
 
 void HomeObjectImpl::init_repl_svc() {
@@ -86,16 +93,25 @@ HSHomeObject::~HSHomeObject() {
 }
 
 void HSHomeObject::on_shard_meta_blk_found(homestore::meta_blk* mblk, sisl::byte_view buf, size_t size) {
-    std::string shard_info_str;
-    shard_info_str.append(r_cast< const char* >(buf.bytes()), size);
-
-    auto shard = deserialize_shard(shard_info_str);
+    auto shard = deserialize_shard(r_cast< const char* >(buf.bytes()), size);
     shard.metablk_cookie = mblk;
-
     // As shard info in the homestore metablk is always the latest state(OPEN or SEALED),
     // we can always create a shard from this shard info and once shard is deleted, the associated metablk will be
     // deleted too.
     do_commit_new_shard(shard);
+}
+
+void HSHomeObject::on_shard_meta_blk_recover_completed(bool success) {
+    // Find all shard with opening state and excluede their binding chunks from the HeapChunkSelector;
+    std::unordered_set< homestore::chunk_num_t > excluding_chunks;
+    std::scoped_lock lock_guard(_pg_lock);
+    for (auto& pair : _pg_map) {
+        for (auto& shard : pair.second.shards) {
+            if (shard.info.state == ShardInfo::State::OPEN) { excluding_chunks.emplace(shard.chunk_id); }
+        }
+    }
+
+    _chunk_selector->build_per_dev_chunk_heap(excluding_chunks);
 }
 
 } // namespace homeobject
