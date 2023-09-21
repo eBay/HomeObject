@@ -117,7 +117,11 @@ void HeapChunkSelector::mark_chunk_selected(const uint16_t chunkID) {
     for (; !heap.empty();) {
         VChunk vchunk = heap.top();
         heap.pop();
-        if (vchunk.get_chunk_id() == chunkID) break;
+        if (vchunk.get_chunk_id() == chunkID) {
+            auto pdevID = vchunk.get_pdev_id();
+            m_per_dev_heap[pdevID]->available_blk_count.fetch_sub(vchunk.available_blks());
+            break;
+        }
         temp.emplace_back(vchunk);
     }
     for (auto& vchunk : temp) {
