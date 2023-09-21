@@ -7,11 +7,9 @@
 
 namespace homeobject {
 
-static constexpr uint32_t SEQUENCE_BIT_NUM_IN_SHARD{48};
-
 uint64_t ShardManager::max_shard_size() { return Gi; }
 
-uint64_t ShardManager::max_shard_num_in_pg() { return ((uint64_t)0x01) << SEQUENCE_BIT_NUM_IN_SHARD; }
+uint64_t ShardManager::max_shard_num_in_pg() { return ((uint64_t)0x01) << shard_width; }
 
 shard_id HSHomeObject::generate_new_shard_id(pg_id pg) {
     std::scoped_lock lock_guard(_pg_lock);
@@ -21,10 +19,6 @@ shard_id HSHomeObject::generate_new_shard_id(pg_id pg) {
     RELEASE_ASSERT(new_sequence_num < ShardManager::max_shard_num_in_pg(),
                    "new shard id must be less than ShardManager::max_shard_num_in_pg()");
     return make_new_shard_id(pg, new_sequence_num);
-}
-
-shard_id HSHomeObject::make_new_shard_id(pg_id pg, uint64_t sequence_num) const {
-    return ((uint64_t)pg << SEQUENCE_BIT_NUM_IN_SHARD) | sequence_num;
 }
 
 uint64_t HSHomeObject::get_sequence_num_from_shard_id(uint64_t shard_id) {
@@ -99,7 +93,8 @@ ShardManager::Result< ShardInfo > HSHomeObject::_create_shard(pg_id pg_owner, ui
     replica_set->write(sisl::blob(buf->data_begin(), needed_size), sisl::blob(), value, static_cast< void* >(&p));
     auto info = std::move(sf).get();
     if (!bool(info)) {
-        LOGWARN("create new shard [{}] on pg [{}] is failed with error:{}", new_shard_id, pg_owner, info.error());
+        LOGWARN("create new shard [{}] on pg [{}] is failed with error:{}", new_shard_id & shard_mask, pg_owner,
+                info.error());
     }
     header->~ReplicationMessageHeader();
     return info;

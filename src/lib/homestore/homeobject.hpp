@@ -27,7 +27,6 @@ class HSHomeObject : public HomeObjectImpl {
 
 private:
     shard_id generate_new_shard_id(pg_id pg);
-    shard_id make_new_shard_id(pg_id pg, uint64_t sequence_num) const;
     uint64_t get_sequence_num_from_shard_id(uint64_t shard_id);
     std::string serialize_shard(const Shard& shard) const;
     Shard deserialize_shard(const std::string& shard_info_str) const;

@@ -7,44 +7,9 @@
 #include "mocks/repl_service.h"
 
 #include "lib/homeobject_impl.hpp"
+#include "lib/blob_route.hpp"
 
 namespace homeobject {
-struct BlobRoute {
-    shard_id shard;
-    blob_id blob;
-};
-} // namespace homeobject
-
-namespace fmt {
-template <>
-struct formatter< homeobject::BlobRoute > {
-    template < typename ParseContext >
-    constexpr auto parse(ParseContext& ctx) {
-        return ctx.begin();
-    }
-
-    template < typename FormatContext >
-    auto format(const homeobject::BlobRoute& r, FormatContext& ctx) {
-        return format_to(ctx.out(), "{}:{:012x}", r.shard, r.blob);
-    }
-};
-} // namespace fmt
-
-template <>
-struct std::hash< homeobject::BlobRoute > {
-    std::size_t operator()(homeobject::BlobRoute const& r) const noexcept {
-        return std::hash< std::string >()(fmt::format("{}", r));
-    }
-};
-
-namespace homeobject {
-
-inline bool operator<(BlobRoute const& lhs, BlobRoute const& rhs) {
-    return fmt::format("{}", lhs) < fmt::format("{}", rhs);
-}
-inline bool operator==(BlobRoute const& lhs, BlobRoute const& rhs) {
-    return fmt::format("{}", lhs) == fmt::format("{}", rhs);
-}
 
 ///
 // Used to TombStone Blob's in the Index to defer for GC.
@@ -55,13 +20,11 @@ struct BlobExt {
     Blob* _blob;
 
     explicit operator bool() const { return _state == BlobState::ALIVE; }
+    bool operator==(const BlobExt& rhs) const { return _blob == rhs._blob; }
 };
-inline bool operator==(BlobExt const& lhs, BlobExt const& rhs) { return lhs._blob == rhs._blob; }
-
-using btree = folly::ConcurrentHashMap< BlobRoute, BlobExt >;
 
 struct ShardIndex {
-    btree _btree;
+    folly::ConcurrentHashMap< BlobRoute, BlobExt > _btree;
     std::atomic< blob_id > _shard_seq_num{0ull};
     ~ShardIndex();
 };
