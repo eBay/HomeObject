@@ -36,7 +36,7 @@ void HeapChunkSelector::add_chunk(csharedChunk& chunk) {
 csharedChunk HeapChunkSelector::select_chunk(homestore::blk_count_t count, const homestore::blk_alloc_hints& hint) {
     auto& chunkIdHint = hint.chunk_id_hint;
     if (chunkIdHint.has_value()) {
-        LOGINFO("should not allocated a chunk with exiting chunk_id {} in hint!", chunkIdHint.value());
+        LOGWARN("should not allocated a chunk with exiting chunk_id {} in hint!", chunkIdHint.value());
         return nullptr;
     }
 
@@ -54,7 +54,7 @@ csharedChunk HeapChunkSelector::select_chunk(homestore::blk_count_t count, const
                                  return lhs.second->available_blk_count.load() < rhs.second->available_blk_count.load();
                              });
         if (it == m_per_dev_heap.end()) {
-            LOGINFO("No pdev found for new pg");
+            LOGWARN("No pdev found for new pg");
             return nullptr;
         }
         pdevID = it->first;
@@ -64,11 +64,11 @@ csharedChunk HeapChunkSelector::select_chunk(homestore::blk_count_t count, const
 
     auto it = m_per_dev_heap.find(pdevID);
     if (it == m_per_dev_heap.end()) {
-        LOGINFO("No pdev found for pdev {}", pdevID);
+        LOGWARN("No pdev found for pdev {}", pdevID);
         return nullptr;
     }
 
-    const auto& vchunk = [it = std::move(it), pdevID]() {
+    const auto& vchunk = [it = std::move(it)]() {
         auto& heapLock = it->second->mtx;
         auto& heap = it->second->m_heap;
         std::lock_guard< std::mutex > l(heapLock);
@@ -82,7 +82,7 @@ csharedChunk HeapChunkSelector::select_chunk(homestore::blk_count_t count, const
         auto& avalableBlkCounter = it->second->available_blk_count;
         avalableBlkCounter.fetch_sub(vchunk.available_blks());
     } else {
-        LOGINFO("No pdev found for pdev {}", pdevID);
+        LOGWARN("No pdev found for pdev {}", pdevID);
     }
 
     return vchunk.get_internal_chunk();
@@ -94,7 +94,7 @@ void HeapChunkSelector::foreach_chunks(std::function< void(csharedChunk&) >&& cb
                   [cb = std::move(cb)](auto& p) { cb(p.second); });
 }
 
-void HeapChunkSelector::release_chunk(const uint16_t chunkID) {
+void HeapChunkSelector::release_chunk(const homestore::chunk_num_t chunkID) {
     const auto& it = m_chunks.find(chunkID);
     if (it == m_chunks.end()) {
         LOGWARN("No chunk found for ChunkID {}", chunkID);
@@ -103,7 +103,7 @@ void HeapChunkSelector::release_chunk(const uint16_t chunkID) {
     }
 }
 
-void HeapChunkSelector::mark_chunk_selected(const uint16_t chunkID) {
+void HeapChunkSelector::mark_chunk_selected(const homestore::chunk_num_t chunkID) {
     const auto& it = m_chunks.find(chunkID);
     if (it == m_chunks.end()) {
         LOGWARN("No chunk found for ChunkID {}", chunkID);
