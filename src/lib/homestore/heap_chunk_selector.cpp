@@ -114,7 +114,6 @@ void HeapChunkSelector::mark_chunk_selected(const uint16_t chunkID) {
     auto& heap = m_per_dev_heap[pdevID]->m_heap;
     std::vector< VChunk > temp;
     std::lock_guard< std::mutex > l(heapLock);
-    // after add copy constructor of VChunk in homestore, we can change the following code
     for (; !heap.empty();) {
         VChunk vchunk = heap.top();
         heap.pop();

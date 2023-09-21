@@ -42,7 +42,7 @@ public:
     void release_chunk(const uint16_t);
 
     // homestore will initialize HeapChunkSelector by adding all the chunks. but some of them are already
-    // selected by open shards. so after homeobject restarts, we need to mark all the chunks as selected
+    // selected by open shards. so after homeobject restarts, we need to mark all these chunks as selected
     void mark_chunk_selected(const uint16_t);
 
 private:
