@@ -12,6 +12,7 @@ SISL_LOGGING_INIT(logging, HOMEOBJECT_LOG_MODS)
 SISL_OPTIONS_ENABLE(logging)
 
 namespace homestore {
+
 class Chunk : public std::enable_shared_from_this< Chunk > {
 public:
     uint32_t available_blks() const { return m_available_blks; }
@@ -58,6 +59,7 @@ cshared< Chunk > VChunk::get_internal_chunk() const { return m_internal_chunk->g
 using homeobject::csharedChunk;
 using homeobject::HeapChunkSelector;
 using homestore::Chunk;
+using homestore::chunk_num_t;
 
 class HeapChunkSelectorTest : public ::testing::Test {
 protected:
@@ -71,6 +73,8 @@ protected:
         HCS.add_chunk(std::make_shared< Chunk >(3, 7, 1));
         HCS.add_chunk(std::make_shared< Chunk >(3, 8, 2));
         HCS.add_chunk(std::make_shared< Chunk >(3, 9, 3));
+        std::unordered_set< chunk_num_t > excludingChunks;
+        HCS.build_per_dev_chunk_heap(excludingChunks);
     };
 
 public:
@@ -118,22 +122,6 @@ TEST_F(HeapChunkSelectorTest, test_release_chunk) {
     chunk2 = HCS.select_chunk(count, hints);
     ASSERT_EQ(chunk2->get_pdev_id(), 1);
     ASSERT_EQ(chunk2->available_blks(), 2);
-}
-
-TEST_F(HeapChunkSelectorTest, test_mark_chunk_selected) {
-    HCS.mark_chunk_selected(2);
-    homestore::blk_count_t count = 1;
-    homestore::blk_alloc_hints hints;
-    hints.pdev_id_hint = 1;
-    // we mark chunk id 2 is select ,so we will get 3 and 1
-    // from pdev 1;
-    auto chunk = HCS.select_chunk(count, hints);
-    ASSERT_EQ(chunk->get_pdev_id(), 1);
-    ASSERT_EQ(chunk->available_blks(), 3);
-
-    chunk = HCS.select_chunk(count, hints);
-    ASSERT_EQ(chunk->get_pdev_id(), 1);
-    ASSERT_EQ(chunk->available_blks(), 1);
 }
 
 int main(int argc, char* argv[]) {
