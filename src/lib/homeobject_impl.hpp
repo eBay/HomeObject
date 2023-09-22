@@ -19,9 +19,6 @@ constexpr size_t shard_mask = std::numeric_limits< homeobject::shard_id >::max()
 
 inline shard_id make_new_shard_id(pg_id pg, shard_id next_shard) { return ((uint64_t)pg << shard_width) | next_shard; }
 
-inline bool operator<(ShardInfo const& lhs, ShardInfo const& rhs) { return lhs.id < rhs.id; }
-inline bool operator==(ShardInfo const& lhs, ShardInfo const& rhs) { return lhs.id == rhs.id; }
-
 struct Shard {
     explicit Shard(ShardInfo info) : info(std::move(info)) {}
     ShardInfo info;

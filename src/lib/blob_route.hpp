@@ -1,3 +1,4 @@
+#include <compare>
 #include <functional>
 
 #include <boost/functional/hash.hpp>

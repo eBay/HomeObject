@@ -1,4 +1,5 @@
 #pragma once
+#include <compare>
 #include <list>
 #include <optional>
 
@@ -26,6 +27,8 @@ struct ShardInfo {
     uint64_t total_capacity_bytes;
     uint64_t deleted_capacity_bytes;
     std::optional< peer_id > current_leader{std::nullopt};
+
+    auto operator<=>(ShardInfo const& rhs) const { return id <=> rhs.id; }
 };
 
 using InfoList = std::list< ShardInfo >;
