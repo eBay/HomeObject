@@ -29,6 +29,7 @@ struct ShardInfo {
     std::optional< peer_id > current_leader{std::nullopt};
 
     auto operator<=>(ShardInfo const& rhs) const { return id <=> rhs.id; }
+    auto operator==(ShardInfo const& rhs) const { return id == rhs.id; }
 };
 
 using InfoList = std::list< ShardInfo >;

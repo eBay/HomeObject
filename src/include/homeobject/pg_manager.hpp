@@ -22,6 +22,7 @@ struct PGMember {
     auto operator<=>(PGMember const& rhs) const {
         return boost::uuids::hash_value(id) <=> boost::uuids::hash_value(rhs.id);
     }
+    auto operator==(PGMember const& rhs) const { return id == rhs.id; }
 };
 
 using MemberSet = std::set< PGMember >;
@@ -32,6 +33,7 @@ struct PGInfo {
     mutable MemberSet members;
 
     auto operator<=>(PGInfo const& rhs) const { return id <=> rhs.id; }
+    auto operator==(PGInfo const& rhs) const { return id == rhs.id; }
 };
 
 class PGManager : public Manager< PGError > {
