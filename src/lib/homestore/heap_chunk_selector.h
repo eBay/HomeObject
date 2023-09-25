@@ -46,6 +46,8 @@ public:
     // this should be called after ShardManager is initialized and get all the open shards
     void build_per_dev_chunk_heap(const std::unordered_set< chunk_num_t >& excludingChunks);
 
+    homestore::blk_alloc_hints get_blk_alloc_hints_on_same_pdev(chunk_num_t chunk_id) const;
+
 private:
     std::unordered_map< uint32_t, std::shared_ptr< PerDevHeap > > m_per_dev_heap;
 
