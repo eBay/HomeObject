@@ -21,7 +21,7 @@ public:
 
 class ReplicationStateMachine : public homestore::ReplDevListener {
 public:
-    explicit ReplicationStateMachine(HSHomeObject* home_object, homestore::cshared< homestore::ReplDev >& repl_dev) :
+    explicit ReplicationStateMachine(HSHomeObject* home_object, homestore::ReplDev& repl_dev) :
             _home_object(home_object), _repl_dev(repl_dev) {}
 
     virtual ~ReplicationStateMachine() = default;
@@ -90,7 +90,7 @@ public:
 
 private:
     HSHomeObject* _home_object;
-    homestore::cshared< homestore::ReplDev > _repl_dev;
+    homestore::ReplDev&  _repl_dev;
 };
 
 } // namespace homeobject

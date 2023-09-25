@@ -48,7 +48,7 @@ public:
 
     void on_shard_message_commit(int64_t lsn, sisl::blob const& header, sisl::blob const& key,
                                  homestore::MultiBlkId const& blkids, void* user_ctx,
-                                 homestore::cshared< homestore::ReplDev > repl_dev);
+                                 homestore::ReplDev& repl_dev);
 
     void* get_shard_metablk(shard_id id) const;
 

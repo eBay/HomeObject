@@ -5,7 +5,7 @@ namespace homeobject {
 
 std::unique_ptr< homestore::ReplDevListener >
 HOReplServiceCallbacks::on_repl_dev_init(homestore::cshared< homestore::ReplDev >& repl_dev) {
-    return std::make_unique< ReplicationStateMachine >(_home_object, repl_dev);
+    return std::make_unique< ReplicationStateMachine >(_home_object, *repl_dev);
 }
 
 void ReplicationStateMachine::on_commit(int64_t lsn, const sisl::blob& header, const sisl::blob& key,

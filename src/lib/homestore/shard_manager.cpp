@@ -114,7 +114,7 @@ ShardManager::Result< ShardInfo > HSHomeObject::_seal_shard(shard_id id) {
 
 void HSHomeObject::on_shard_message_commit(int64_t lsn, sisl::blob const& header, sisl::blob const&,
                                            homestore::MultiBlkId const& blkids, void* user_ctx,
-                                           homestore::cshared< homestore::ReplDev > repl_dev) {
+                                           homestore::ReplDev& repl_dev) {
     folly::Promise< ShardManager::Result< ShardInfo > >* promise = nullptr;
     // user_ctx will be nullptr when:
     // 1. on the follower side
@@ -135,7 +135,7 @@ void HSHomeObject::on_shard_message_commit(int64_t lsn, sisl::blob const& header
     value.size = value_size;
     value.iovs.emplace_back(iovec{.iov_base = value_buf, .iov_len = value_size});
 
-    repl_dev->async_read(blkids, value, value_size)
+    repl_dev.async_read(blkids, value, value_size)
         .thenValue([this, header, msg_header, blkids, value_buf, value_size, promise](auto&& err) {
             if (err ||
                 crc32_ieee(init_crc32, r_cast< const uint8_t* >(value_buf), value_size) != msg_header->payload_crc) {
