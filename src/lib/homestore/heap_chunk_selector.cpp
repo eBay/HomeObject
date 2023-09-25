@@ -118,10 +118,10 @@ void HeapChunkSelector::build_per_dev_chunk_heap(const std::unordered_set< chunk
     };
 }
 
-homestore::blk_alloc_hints HeapChunkSelector::get_blk_alloc_hints_on_same_pdev(chunk_num_t chunk_id) const {
+homestore::blk_alloc_hints HeapChunkSelector::chunk_to_hints(chunk_num_t chunk_id) const {
     auto iter = m_chunks.find(chunk_id);
     if (iter == m_chunks.end()) {
-        LOGWARN("No chunk found for ChunkID {}, will return default blk alloc hints", chunk_id);
+        LOGWARNMOD(homeobject, "No chunk found for chunk_id {}, will return default blk alloc hints", chunk_id);
         return homestore::blk_alloc_hints();
     }
     homestore::blk_alloc_hints hints;
