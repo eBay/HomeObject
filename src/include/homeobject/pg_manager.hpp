@@ -1,4 +1,5 @@
 #pragma once
+#include <compare>
 #include <set>
 #include <string>
 
@@ -17,6 +18,11 @@ struct PGMember {
     peer_id id;
     std::string name;
     int32_t priority{0}; // <0 (Arbiter), ==0 (Follower), >0 (F|Leader)
+
+    auto operator<=>(PGMember const& rhs) const {
+        return boost::uuids::hash_value(id) <=> boost::uuids::hash_value(rhs.id);
+    }
+    auto operator==(PGMember const& rhs) const { return id == rhs.id; }
 };
 
 using MemberSet = std::set< PGMember >;
@@ -25,6 +31,9 @@ struct PGInfo {
     explicit PGInfo(pg_id _id) : id(_id) {}
     pg_id id;
     mutable MemberSet members;
+
+    auto operator<=>(PGInfo const& rhs) const { return id <=> rhs.id; }
+    auto operator==(PGInfo const& rhs) const { return id == rhs.id; }
 };
 
 class PGManager : public Manager< PGError > {
@@ -32,8 +41,5 @@ public:
     virtual NullAsyncResult create_pg(PGInfo&& pg_info) = 0;
     virtual NullAsyncResult replace_member(pg_id id, peer_id const& old_member, PGMember const& new_member) = 0;
 };
-
-inline bool operator<(homeobject::PGMember const& lhs, homeobject::PGMember const& rhs) { return lhs.id < rhs.id; }
-inline bool operator<(homeobject::PGInfo const& lhs, homeobject::PGInfo const& rhs) { return lhs.id < rhs.id; }
 
 } // namespace homeobject
