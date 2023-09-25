@@ -1,4 +1,4 @@
-#include "lib/homestore/heap_chunk_selector.h"
+#include "lib/homestore_backend/heap_chunk_selector.h"
 
 #include <gtest/gtest.h>
 

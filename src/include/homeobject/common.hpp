@@ -11,7 +11,7 @@
 
 SISL_LOGGING_DECL(homeobject);
 
-#define HOMEOBJECT_LOG_MODS grpc_server, HOMESTORE_LOG_MODS, nuraft_mesg, nuraft, home_replication, homeobject
+#define HOMEOBJECT_LOG_MODS grpc_server, HOMESTORE_LOG_MODS, homeobject
 
 #ifndef Ki
 constexpr uint64_t Ki = 1024ul;
@@ -25,11 +25,26 @@ constexpr uint64_t Gi = Ki * Mi;
 
 namespace homeobject {
 
-using blob_id = uint64_t;
+using blob_id_t = uint64_t;
 
-using peer_id = boost::uuids::uuid;
-using pg_id = uint16_t;
-using shard_id = uint64_t;
+using peer_id_t = boost::uuids::uuid;
+using pg_id_t = uint16_t;
+using shard_id_t = uint64_t;
+
+template < typename T >
+using shared = std::shared_ptr< T >;
+
+template < typename T >
+using cshared = const std::shared_ptr< T >;
+
+template < typename T >
+using unique = std::unique_ptr< T >;
+
+template < typename T >
+using intrusive = boost::intrusive_ptr< T >;
+
+template < typename T >
+using cintrusive = const boost::intrusive_ptr< T >;
 
 template < class E >
 class Manager {

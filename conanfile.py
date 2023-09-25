@@ -9,7 +9,7 @@ required_conan_version = ">=1.50.0"
 
 class HomeObjectConan(ConanFile):
     name = "homeobject"
-    version = "0.10.2"
+    version = "0.10.3"
     homepage = "https://github.com/eBay/HomeObject"
     description = "Blob Store built on HomeReplication"
     topics = ("ebay")
@@ -42,8 +42,6 @@ class HomeObjectConan(ConanFile):
     def requirements(self):
         self.requires("homestore/[~=4,      include_prerelease=True]@oss/master")
         self.requires("sisl/[~=10,          include_prerelease=True]@oss/master")
-        # Remove when HomeStore Replication Service is mature
-        self.requires("nuraft_mesg/[~=1,    include_prerelease=True]@oss/main")
         self.requires("lz4/1.9.4", override=True)
 
     def validate(self):
