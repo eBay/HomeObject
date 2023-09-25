@@ -76,18 +76,25 @@ ShardManager::Result< ShardInfo > HSHomeObject::_create_shard(pg_id pg_owner, ui
     auto shard_info =
         ShardInfo(new_shard_id, pg_owner, ShardInfo::State::OPEN, create_time, create_time, size_bytes, size_bytes, 0);
     std::string create_shard_message = serialize_shard(Shard(shard_info));
+
+    // round up msg size to homestore datasvc blk size
+    const auto datasvc_blk_size = homestore::HomeStore::instance()->data_service().get_blk_size();
+    auto msg_size = create_shard_message.size();
+    if (msg_size % datasvc_blk_size != 0) { msg_size = (msg_size / datasvc_blk_size + 1) * datasvc_blk_size; }
+    auto msg_buf = iomanager.iobuf_alloc(512, msg_size);
+    std::memset(r_cast< uint8_t* >(msg_buf), 0, msg_size);
+    std::memcpy(r_cast< uint8_t* >(msg_buf), create_shard_message.c_str(), create_shard_message.size());
+
     // preapre msg header;
     ReplicationMessageHeader header;
     header.repl_group_id = pg.value().pg_info.id;
     header.msg_type = ReplicationMessageType::CREATE_SHARD_MSG;
-    header.payload_size = create_shard_message.size();
-    header.payload_crc =
-        crc32_ieee(init_crc32, r_cast< const uint8_t* >(create_shard_message.c_str()), create_shard_message.size());
+    header.payload_size = msg_size;
+    header.payload_crc = crc32_ieee(init_crc32, r_cast< const uint8_t* >(msg_buf), msg_size);
     header.header_crc = header.calculate_crc();
     sisl::sg_list value;
-    value.size = create_shard_message.size();
-    value.iovs.push_back(
-        iovec(r_cast< void* >(const_cast< char* >(create_shard_message.c_str())), create_shard_message.size()));
+    value.size = msg_size;
+    value.iovs.push_back(iovec(msg_buf, msg_size));
     // replicate this create shard message to PG members;
     auto [p, sf] = folly::makePromiseContract< ShardManager::Result< ShardInfo > >();
     repl_dev.value()->async_alloc_write(sisl::blob(r_cast< uint8_t* >(&header), sizeof(header)), sisl::blob(), value,
@@ -97,6 +104,7 @@ ShardManager::Result< ShardInfo > HSHomeObject::_create_shard(pg_id pg_owner, ui
         LOGWARN("create new shard [{}] on pg [{}] is failed with error:{}", new_shard_id & shard_mask, pg_owner,
                 info.error());
     }
+    iomanager.iobuf_free(msg_buf);
     return info;
 }
 
@@ -107,7 +115,6 @@ ShardManager::Result< ShardInfo > HSHomeObject::_seal_shard(shard_id id) {
 void HSHomeObject::on_shard_message_commit(int64_t lsn, sisl::blob const& header, sisl::blob const&,
                                            homestore::MultiBlkId const& blkids, void* user_ctx,
                                            homestore::cshared< homestore::ReplDev > repl_dev) {
-
     folly::Promise< ShardManager::Result< ShardInfo > >* promise = nullptr;
     // user_ctx will be nullptr when:
     // 1. on the follower side
@@ -127,43 +134,47 @@ void HSHomeObject::on_shard_message_commit(int64_t lsn, sisl::blob const& header
     sisl::sg_list value;
     value.size = value_size;
     value.iovs.emplace_back(iovec{.iov_base = value_buf, .iov_len = value_size});
-    auto future = repl_dev->async_read(blkids, value, value_size);
-    if (std::move(future).get() ||
-        crc32_ieee(init_crc32, r_cast< const uint8_t* >(value_buf), value_size) != msg_header->payload_crc) {
-        // read failure or read successfully but data is corrupted;
-        if (promise) { promise->setValue(folly::makeUnexpected(ShardError::INVALID_ARG)); }
-        iomanager.iobuf_free(value_buf);
-        return;
-    }
 
-    auto shard = deserialize_shard(r_cast< const char* >(value_buf), value_size);
-    switch (msg_header->msg_type) {
-    case ReplicationMessageType::CREATE_SHARD_MSG: {
-        shard.chunk_id = blkids.chunk_num();
-        // serialize the finalized shard msg and persist the serialize result to homestore MetaBlkService;
-        auto shard_msg = serialize_shard(shard);
-        homestore::hs()->meta_service().add_sub_sb(HSHomeObject::s_shard_info_sub_type,
-                                                   r_cast< const uint8_t* >(shard_msg.c_str()), shard_msg.size(),
-                                                   shard.metablk_cookie);
-        do_commit_new_shard(shard);
-        break;
-    }
+    repl_dev->async_read(blkids, value, value_size)
+        .thenValue([this, header, msg_header, blkids, value_buf, value_size, promise](auto&& err) {
+            if (err ||
+                crc32_ieee(init_crc32, r_cast< const uint8_t* >(value_buf), value_size) != msg_header->payload_crc) {
+                // read failure or read successfully but data is corrupted;
+                if (promise) { promise->setValue(folly::makeUnexpected(ShardError::INVALID_ARG)); }
+                iomanager.iobuf_free(value_buf);
+                return;
+            }
 
-    case ReplicationMessageType::SEAL_SHARD_MSG: {
-        void* metablk_cookie = get_shard_metablk(shard.info.id);
-        RELEASE_ASSERT(metablk_cookie != nullptr, "seal shard when metablk is nullptr");
-        homestore::hs()->meta_service().update_sub_sb(r_cast< const uint8_t* >(value_buf), value_size, metablk_cookie);
-        shard.metablk_cookie = metablk_cookie;
-        do_commit_seal_shard(shard);
-        break;
-    }
-    default: {
-        break;
-    }
-    }
+            auto shard = deserialize_shard(r_cast< const char* >(value_buf), value_size);
+            switch (msg_header->msg_type) {
+            case ReplicationMessageType::CREATE_SHARD_MSG: {
+                shard.chunk_id = blkids.chunk_num();
+                // serialize the finalized shard msg and persist the serialize result to homestore MetaBlkService;
+                auto shard_msg = serialize_shard(shard);
+                homestore::hs()->meta_service().add_sub_sb(HSHomeObject::s_shard_info_sub_type,
+                                                           r_cast< const uint8_t* >(shard_msg.c_str()),
+                                                           shard_msg.size(), shard.metablk_cookie);
+                do_commit_new_shard(shard);
+                break;
+            }
 
-    iomanager.iobuf_free(value_buf);
-    if (promise) { promise->setValue(ShardManager::Result< ShardInfo >(shard.info)); }
+            case ReplicationMessageType::SEAL_SHARD_MSG: {
+                void* metablk_cookie = get_shard_metablk(shard.info.id);
+                RELEASE_ASSERT(metablk_cookie != nullptr, "seal shard when metablk is nullptr");
+                homestore::hs()->meta_service().update_sub_sb(r_cast< const uint8_t* >(value_buf), value_size,
+                                                              metablk_cookie);
+                shard.metablk_cookie = metablk_cookie;
+                do_commit_seal_shard(shard);
+                break;
+            }
+            default: {
+                break;
+            }
+            }
+
+            iomanager.iobuf_free(value_buf);
+            if (promise) { promise->setValue(ShardManager::Result< ShardInfo >(shard.info)); }
+        });
 }
 
 void HSHomeObject::do_commit_new_shard(const Shard& shard) {

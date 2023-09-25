@@ -59,7 +59,10 @@ void HSHomeObject::init_homestore() {
             {HS_SERVICE::LOG_REPLICATED, hs_format_params{.size_pct = 10.0}},
             {HS_SERVICE::LOG_LOCAL, hs_format_params{.size_pct = 5.0}},
             {HS_SERVICE::INDEX, hs_format_params{.size_pct = 30.0}},
-            {HS_SERVICE::REPLICATION, hs_format_params{.size_pct = 50.0}},
+            {HS_SERVICE::REPLICATION,
+             hs_format_params{.size_pct = 50.0,
+                              .alloc_type = homestore::blk_allocator_type_t::append,
+                              .chunk_sel_type = homestore::chunk_selector_type_t::CUSTOM}},
         });
     }
 }

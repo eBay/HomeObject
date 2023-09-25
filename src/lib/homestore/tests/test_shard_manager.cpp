@@ -3,6 +3,9 @@
 #include <boost/uuid/random_generator.hpp>
 #include <boost/uuid/uuid_io.hpp>
 #include <folly/init/Init.h>
+
+#include <homestore/blkdata_service.hpp>
+
 #include <gtest/gtest.h>
 
 #include <sisl/logging/logging.h>
@@ -100,9 +103,6 @@ TEST_F(ShardManagerTesting, ListShardsOnEmptyPg) {
     e.then([this](auto const& info_list) { ASSERT_EQ(info_list.size(), 0); });
 }
 
-// Disable following cases temporary as they will create real shards using HS ReplDev and
-// depends on another PR to create PG using HS ReplDev instead of MockReplicaSet
-/*
 TEST_F(ShardManagerTesting, CreateShardSuccess) {
     auto e = _home_object->shard_manager()->create_shard(_pg_id, Mi).get();
     ASSERT_TRUE(!!e);
@@ -160,72 +160,6 @@ TEST_F(ShardManagerTesting, SealUnknownShard) {
     EXPECT_EQ(ShardError::UNKNOWN_SHARD, _home_object->shard_manager()->seal_shard(1000).get().error());
 }
 
-TEST_F(ShardManagerTesting, MockSealShard) {
-    auto e = _home_object->shard_manager()->create_shard(_pg_id, Mi).get();
-    ASSERT_TRUE(!!e);
-    ShardInfo shard_info = e.value();
-    auto shard = homeobject::Shard(shard_info);
-    shard.info.state = ShardInfo::State::SEALED;
-    nlohmann::json j;
-    j["shard_info"]["shard_id"] = shard.info.id;
-    j["shard_info"]["pg_id"] = shard.info.placement_group;
-    j["shard_info"]["state"] = shard.info.state;
-    j["shard_info"]["created_time"] = shard.info.created_time;
-    j["shard_info"]["modified_time"] = shard.info.last_modified_time;
-    j["shard_info"]["total_capacity"] = shard.info.total_capacity_bytes;
-    j["shard_info"]["available_capacity"] = shard.info.available_capacity_bytes;
-    j["shard_info"]["deleted_capacity"] = shard.info.deleted_capacity_bytes;
-    j["ext_info"]["chunk_id"] = shard.chunk_id;
-    auto seal_shard_msg = j.dump();
-
-    homeobject::ReplicationMessageHeader header;
-    header.repl_group_id = _pg_id;
-    header.msg_type = homeobject::ReplicationMessageType::SEAL_SHARD_MSG;
-    header.payload_size = seal_shard_msg.size();
-    header.payload_crc =
-        crc32_ieee(homeobject::init_crc32, r_cast< const uint8_t* >(seal_shard_msg.c_str()), seal_shard_msg.size());
-    header.header_crc = header.calculate_crc();
-    sisl::sg_list value;
-    value.size = seal_shard_msg.size();
-    value.iovs.push_back(iovec(r_cast< void* >(const_cast< char* >(seal_shard_msg.c_str())), seal_shard_msg.size()));
-
-    // header is corrupted with crc;
-    ++header.header_crc;
-    homeobject::HSHomeObject* ho = dynamic_cast< homeobject::HSHomeObject* >(_home_object.get());
-    auto pg = ho->_get_pg(_pg_id);
-    ASSERT_TRUE(!!pg);
-    homestore::ReplicationService* replication_service =
-        (homestore::ReplicationService*)(&homestore::HomeStore::instance()->repl_service());
-    auto repl_dev = replication_service->get_replica_dev(pg.value().repl_dev_uuid);
-
-    {
-        auto [p, sf] = folly::makePromiseContract< homeobject::ShardManager::Result< ShardInfo > >();
-        repl_dev.value()->async_alloc_write(sisl::blob(r_cast< uint8_t* >(&header), sizeof(header)), sisl::blob(),
-                                            value, static_cast< void* >(&p));
-        auto info = std::move(sf).get();
-        EXPECT_FALSE(info);
-    }
-
-    // everything is fine;
-    header.header_crc = header.calculate_crc();
-    auto [p, sf] = folly::makePromiseContract< homeobject::ShardManager::Result< ShardInfo > >();
-    repl_dev.value()->async_alloc_write(sisl::blob(r_cast< uint8_t* >(&header), sizeof(header)), sisl::blob(), value,
-                                        static_cast< void* >(&p));
-    auto info = std::move(sf).get();
-    EXPECT_TRUE(info);
-    EXPECT_TRUE(info.value().id == shard_info.id);
-    EXPECT_TRUE(info.value().placement_group == _pg_id);
-    EXPECT_EQ(info.value().state, ShardInfo::State::SEALED);
-
-    auto pg_iter = ho->_pg_map.find(_pg_id);
-    EXPECT_TRUE(pg_iter != ho->_pg_map.end());
-    auto& pg_result = pg_iter->second;
-    EXPECT_EQ(1, pg_result.shards.size());
-    auto& check_shard = *pg_result.shards.begin();
-    EXPECT_EQ(ShardInfo::State::SEALED, check_shard.info.state);
-    EXPECT_TRUE(check_shard.metablk_cookie != nullptr);
-}
-
 TEST_F(ShardManagerTesting, ShardManagerRecovery) {
     auto e = _home_object->shard_manager()->create_shard(_pg_id, Mi).get();
     ASSERT_TRUE(!!e);
@@ -272,6 +206,84 @@ TEST_F(ShardManagerTesting, ShardManagerRecovery) {
         EXPECT_EQ(info.state, ShardInfo::State::OPEN);
     });
 }
+
+// Disable following cases temporary as PG Info recovery is needed too and
+// depends on another PR to create/recover PG using HS ReplDev
+/*
+TEST_F(ShardManagerTesting, MockSealShard) {
+    auto e = _home_object->shard_manager()->create_shard(_pg_id, Mi).get();
+    ASSERT_TRUE(!!e);
+    ShardInfo shard_info = e.value();
+    auto shard = homeobject::Shard(shard_info);
+    shard.info.state = ShardInfo::State::SEALED;
+    nlohmann::json j;
+    j["shard_info"]["shard_id"] = shard.info.id;
+    j["shard_info"]["pg_id"] = shard.info.placement_group;
+    j["shard_info"]["state"] = shard.info.state;
+    j["shard_info"]["created_time"] = shard.info.created_time;
+    j["shard_info"]["modified_time"] = shard.info.last_modified_time;
+    j["shard_info"]["total_capacity"] = shard.info.total_capacity_bytes;
+    j["shard_info"]["available_capacity"] = shard.info.available_capacity_bytes;
+    j["shard_info"]["deleted_capacity"] = shard.info.deleted_capacity_bytes;
+    j["ext_info"]["chunk_id"] = shard.chunk_id;
+    auto seal_shard_msg = j.dump();
+    const auto datasvc_blk_size = homestore::HomeStore::instance()->data_service().get_blk_size();
+    auto msg_size = seal_shard_msg.size();
+    if (msg_size %  datasvc_blk_size != 0) {
+        msg_size = (msg_size / datasvc_blk_size + 1) * datasvc_blk_size;
+    }
+    auto msg_buf = iomanager.iobuf_alloc(512, msg_size);
+    std::memset(r_cast<uint8_t*>(msg_buf), 0, msg_size);
+    std::memcpy(r_cast<uint8_t*>(msg_buf), seal_shard_msg.c_str(), seal_shard_msg.size());
+
+    homeobject::ReplicationMessageHeader header;
+    header.repl_group_id = _pg_id;
+    header.msg_type = homeobject::ReplicationMessageType::SEAL_SHARD_MSG;
+    header.payload_size = msg_size;
+    header.payload_crc = crc32_ieee(homeobject::init_crc32, msg_buf, msg_size);
+    header.header_crc = header.calculate_crc();
+    sisl::sg_list value;
+    value.size = msg_size;
+    value.iovs.push_back(iovec(msg_buf, msg_size));
+
+    // header is corrupted with crc;
+    ++header.header_crc;
+    homeobject::HSHomeObject* ho = dynamic_cast< homeobject::HSHomeObject* >(_home_object.get());
+    auto pg = ho->_get_pg(_pg_id);
+    ASSERT_TRUE(!!pg);
+    homestore::ReplicationService* replication_service =
+        (homestore::ReplicationService*)(&homestore::HomeStore::instance()->repl_service());
+    auto repl_dev = replication_service->get_replica_dev(pg.value().repl_dev_uuid);
+
+    {
+        auto [p, sf] = folly::makePromiseContract< homeobject::ShardManager::Result< ShardInfo > >();
+        repl_dev.value()->async_alloc_write(sisl::blob(r_cast< uint8_t* >(&header), sizeof(header)), sisl::blob(),
+                                            value, static_cast< void* >(&p));
+        auto info = std::move(sf).get();
+        EXPECT_FALSE(info);
+    }
+
+    // everything is fine;
+    header.header_crc = header.calculate_crc();
+    auto [p, sf] = folly::makePromiseContract< homeobject::ShardManager::Result< ShardInfo > >();
+    repl_dev.value()->async_alloc_write(sisl::blob(r_cast< uint8_t* >(&header), sizeof(header)), sisl::blob(), value,
+                                        static_cast< void* >(&p));
+    auto info = std::move(sf).get();
+    EXPECT_TRUE(info);
+    EXPECT_TRUE(info.value().id == shard_info.id);
+    EXPECT_TRUE(info.value().placement_group == _pg_id);
+    EXPECT_EQ(info.value().state, ShardInfo::State::SEALED);
+
+    auto pg_iter = ho->_pg_map.find(_pg_id);
+    EXPECT_TRUE(pg_iter != ho->_pg_map.end());
+    auto& pg_result = pg_iter->second;
+    EXPECT_EQ(1, pg_result.shards.size());
+    auto& check_shard = *pg_result.shards.begin();
+    EXPECT_EQ(ShardInfo::State::SEALED, check_shard.info.state);
+    EXPECT_TRUE(check_shard.metablk_cookie != nullptr);
+    iomanager.iobuf_free(msg_buf);
+}
+
 
 class FixtureAppWithRecovery : public FixtureApp {
 public:

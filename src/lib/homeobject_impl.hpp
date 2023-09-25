@@ -47,6 +47,7 @@ class HomeObjectImpl : public HomeObject,
                        public std::enable_shared_from_this< HomeObjectImpl > {
 
     /// Implementation defines these
+    virtual PGManager::NullAsyncResult _create_pg(PGInfo&& pg_info, std::set< std::string, std::less<> >&& peers) = 0;
     virtual ShardManager::Result< ShardInfo > _create_shard(pg_id, uint64_t size_bytes) = 0;
     virtual ShardManager::Result< ShardInfo > _seal_shard(shard_id) = 0;
 

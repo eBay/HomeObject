@@ -36,6 +36,9 @@ class MemoryHomeObject : public HomeObjectImpl {
     ///
 
     /// Helpers
+
+    // PGManager
+    PGManager::NullAsyncResult _create_pg(PGInfo&& pg_info, std::set< std::string, std::less<> >&& peers) override;
     // ShardManager
     ShardManager::Result< ShardInfo > _create_shard(pg_id, uint64_t size_bytes) override;
     ShardManager::Result< ShardInfo > _seal_shard(shard_id) override;
