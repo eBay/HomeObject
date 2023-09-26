@@ -11,7 +11,7 @@
 
 SISL_LOGGING_DECL(homeobject);
 
-#define HOMEOBJECT_LOG_MODS grpc_server, HOMESTORE_LOG_MODS, homeobject
+#define HOMEOBJECT_LOG_MODS grpc_server, HOMESTORE_LOG_MODS, homeobject, blobmgr
 
 #ifndef Ki
 constexpr uint64_t Ki = 1024ul;

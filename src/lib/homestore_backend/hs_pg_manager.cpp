@@ -50,9 +50,24 @@ PGManager::NullAsyncResult HSHomeObject::_create_pg(PGInfo&& pg_info, std::set< 
     pg_info.replica_set_uuid = boost::uuids::random_generator()();
     return hs_repl_service()
         .create_repl_dev(pg_info.replica_set_uuid, std::move(peers), std::make_unique< ReplicationStateMachine >(this))
-        .thenValue([this, pg_info = std::move(pg_info)](auto&& v) -> PGManager::NullResult {
+        .thenValue([this, pg_info = std::move(pg_info)](auto&& v) mutable -> PGManager::NullResult {
             if (v.hasError()) { return folly::makeUnexpected(toPgError(v.error())); }
-            add_pg_to_map(std::make_unique< HS_PG >(std::move(pg_info), std::move(v.value())));
+
+            // TODO create index table during create shard.
+            auto index_table = create_index_table();
+            auto uuid_str = boost::uuids::to_string(index_table->uuid());
+
+            auto pg_id = pg_info.id;
+            auto hs_pg = std::make_unique< HS_PG >(std::move(pg_info), std::move(v.value()), index_table);
+            std::scoped_lock lock_guard(index_lock_);
+            RELEASE_ASSERT(index_table_pg_map_.count(uuid_str) == 0, "duplicate index table found");
+            index_table_pg_map_[uuid_str] = PgIndexTable{pg_id, index_table};
+
+            LOGINFO("Index table created for pg {} uuid {}", pg_id, uuid_str);
+            hs_pg->index_table_ = index_table;
+            // Add to index service, so that it gets cleaned up when index service is shutdown.
+            homestore::hs()->index_service().add_index_table(index_table);
+            add_pg_to_map(std::move(hs_pg));
             return folly::Unit();
         });
 }
@@ -121,7 +136,8 @@ void HSHomeObject::on_pg_meta_blk_found(sisl::byte_view const& buf, void* meta_c
                 return;
             }
 
-            add_pg_to_map(std::make_unique< HS_PG >(pg_sb, std::move(v.value())));
+            auto hs_pg = std::make_unique< HS_PG >(pg_sb, std::move(v.value()));
+
             // check if any shard recovery is pending by this pg;
             auto iter = pending_recovery_shards_.find(pg_sb->id);
             if (iter != pending_recovery_shards_.end()) {
@@ -130,6 +146,20 @@ void HSHomeObject::on_pg_meta_blk_found(sisl::byte_view const& buf, void* meta_c
                 }
                 pending_recovery_shards_.erase(iter);
             }
+
+            // During PG recovery check if index is already recoverd else
+            // add entry in map, so that index recovery can update the PG.
+            std::scoped_lock lg(index_lock_);
+            auto uuid_str = boost::uuids::to_string(pg_sb->index_table_uuid);
+            auto it = index_table_pg_map_.find(uuid_str);
+            if (it != index_table_pg_map_.end()) {
+                hs_pg->index_table_ = it->second.index_table;
+                it->second.pg_id = pg_sb->id;
+            } else {
+                index_table_pg_map_.emplace(uuid_str, PgIndexTable{pg_sb->id, nullptr});
+            }
+
+            add_pg_to_map(std::move(hs_pg));
         });
 }
 
@@ -142,12 +172,13 @@ PGInfo HSHomeObject::HS_PG::pg_info_from_sb(homestore::superblk< pg_info_superbl
     return pginfo;
 }
 
-HSHomeObject::HS_PG::HS_PG(PGInfo info, shared< homestore::ReplDev > rdev) :
-        PG{std::move(info)}, pg_sb_{"PGManager"}, repl_dev_{std::move(rdev)} {
+HSHomeObject::HS_PG::HS_PG(PGInfo info, shared< homestore::ReplDev > rdev, shared< BlobIndexTable > index_table) :
+        PG{std::move(info)}, pg_sb_{"PGManager"}, repl_dev_{std::move(rdev)}, index_table_(index_table) {
     pg_sb_.create(sizeof(pg_info_superblk) + ((pg_info_.members.size() - 1) * sizeof(pg_members)));
     pg_sb_->id = pg_info_.id;
     pg_sb_->num_members = pg_info_.members.size();
     pg_sb_->replica_set_uuid = repl_dev_->group_id();
+    pg_sb_->index_table_uuid = index_table_->uuid();
 
     uint32_t i{0};
     for (auto const& m : pg_info_.members) {
