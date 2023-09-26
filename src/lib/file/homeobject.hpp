@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <filesystem>
 #include <utility>
 
 #include <folly/concurrency/ConcurrentHashMap.h>
@@ -30,6 +31,8 @@ struct ShardIndex {
 };
 
 class FileHomeObject : public HomeObjectImpl {
+    std::filesystem::path const file_store_ = "file_store";
+
     /// Simulates the Shard=>Chunk mapping in IndexSvc
     using index_svc = folly::ConcurrentHashMap< shard_id, std::unique_ptr< ShardIndex > >;
     index_svc index_;

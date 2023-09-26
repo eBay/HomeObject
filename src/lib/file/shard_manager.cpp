@@ -1,11 +1,17 @@
 #include <chrono>
+#include <filesystem>
 
 #include "homeobject.hpp"
 
 namespace homeobject {
 
+using std::filesystem::path;
+
 uint64_t ShardManager::max_shard_size() { return Gi; }
 
+///
+// Each Shard is stored as a FILE on the system. We defer creating the "PG" (directory) until
+// the first Shard is created
 ShardManager::Result< ShardInfo > FileHomeObject::_create_shard(pg_id pg_owner, uint64_t size_bytes) {
     auto const now = get_current_timestamp();
     auto info = ShardInfo(0ull, pg_owner, ShardInfo::State::OPEN, now, now, size_bytes, size_bytes, 0);
@@ -21,11 +27,24 @@ ShardManager::Result< ShardInfo > FileHomeObject::_create_shard(pg_id pg_owner, 
         auto [_, s_happened] = _shard_map.emplace(info.id, iter);
         RELEASE_ASSERT(s_happened, "Duplicate Shard insertion!");
     }
-    auto [it, happened] = index_.try_emplace(info.id, std::make_unique< ShardIndex >());
+
+    auto const shard_path = file_store_ / path(fmt::format("{:04x}", (info.id >> homeobject::shard_width)));
+    RELEASE_ASSERT(std::filesystem::create_directories(shard_path), "Could not create directory: {}",
+                   shard_path.string());
+
+    auto const shard_file = shard_path / path(fmt::format("{:012x}", (info.id & homeobject::shard_mask)));
+    RELEASE_ASSERT(!std::filesystem::exists(shard_file), "Shard Path Exists! [path={}]", shard_file.string());
+    std::ofstream ofs{shard_path, std::ios::binary | std::ios::out | std::ios::trunc};
+    std::filesystem::resize_file(shard_path, max_shard_size());
+    RELEASE_ASSERT(std::filesystem::exists(shard_file), "Shard Path Failed Creation! [path={}]", shard_file.string());
+
+    auto [_, happened] = index_.try_emplace(info.id, std::make_unique< ShardIndex >());
     RELEASE_ASSERT(happened, "Could not create BTree!");
     return info;
 }
 
+///
+// Shard STATE is managed through the FILE stat (rw/ro)
 ShardManager::Result< ShardInfo > FileHomeObject::_seal_shard(shard_id id) {
     auto lg = std::scoped_lock(_shard_lock);
     auto shard_it = _shard_map.find(id);
