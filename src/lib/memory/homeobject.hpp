@@ -16,23 +16,23 @@ namespace homeobject {
 ENUM(BlobState, uint8_t, ALIVE = 0, DELETED);
 
 struct BlobExt {
-    BlobState _state{BlobState::DELETED};
-    Blob* _blob;
+    BlobState state_{BlobState::DELETED};
+    Blob* blob_;
 
-    explicit operator bool() const { return _state == BlobState::ALIVE; }
-    bool operator==(const BlobExt& rhs) const { return _blob == rhs._blob; }
+    explicit operator bool() const { return state_ == BlobState::ALIVE; }
+    bool operator==(const BlobExt& rhs) const { return blob_ == rhs.blob_; }
 };
 
 struct ShardIndex {
-    folly::ConcurrentHashMap< BlobRoute, BlobExt > _btree;
-    std::atomic< blob_id > _shard_seq_num{0ull};
+    folly::ConcurrentHashMap< BlobRoute, BlobExt > btree_;
+    std::atomic< blob_id > shard_seq_num_{0ull};
     ~ShardIndex();
 };
 
 class MemoryHomeObject : public HomeObjectImpl {
     /// Simulates the Shard=>Chunk mapping in IndexSvc
     using index_svc = folly::ConcurrentHashMap< shard_id, std::unique_ptr< ShardIndex > >;
-    index_svc _in_memory_index;
+    index_svc index_;
     ///
 
     /// Helpers
@@ -45,8 +45,6 @@ class MemoryHomeObject : public HomeObjectImpl {
     BlobManager::Result< Blob > _get_blob(ShardInfo const&, blob_id) const override;
     BlobManager::NullResult _del_blob(ShardInfo const&, blob_id) override;
     ///
-
-    ShardIndex& _find_index(shard_id) const;
 
 public:
     using HomeObjectImpl::HomeObjectImpl;

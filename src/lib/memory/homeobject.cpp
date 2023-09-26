@@ -22,8 +22,8 @@ void HomeObjectImpl::init_repl_svc() {
 }
 
 ShardIndex::~ShardIndex() {
-    for (auto it = _btree.begin(); it != _btree.end(); ++it) {
-        delete it->second._blob;
+    for (auto it = btree_.begin(); it != btree_.end(); ++it) {
+        delete it->second.blob_;
     }
 }
 
