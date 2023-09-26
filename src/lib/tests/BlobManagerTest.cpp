@@ -21,6 +21,7 @@ TEST_F(TestFixture, BasicTests) {
                     e.then([](auto const& blob) {
                         EXPECT_STREQ(blob.user_key.c_str(), "test_blob");
                         EXPECT_EQ(blob.object_off, 4 * Mi);
+                        EXPECT_STREQ((char*)blob.body.bytes, "HELLO, WORLD!");
                     });
                 }));
                 our_calls.push_back(homeobj_->blob_manager()->get(i, _blob_id).deferValue([](auto const& e) {}));

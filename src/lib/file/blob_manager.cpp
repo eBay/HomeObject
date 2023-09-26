@@ -42,9 +42,9 @@ BlobManager::Result< blob_id > FileHomeObject::_put_blob(ShardInfo const& _shard
 
     auto err = pwrite(shard_fd, &h_size, sizeof(h_size), route.blob);
     RELEASE_ASSERT(0 < err, "Failed to write to: {}", shard_file.string());
-    err = err || pwrite(shard_fd, serialize.c_str(), h_size, sizeof(h_size) + route.blob);
+    err = pwrite(shard_fd, serialize.c_str(), h_size, sizeof(h_size) + route.blob);
     RELEASE_ASSERT(0 < err, "Failed to write to: {}", shard_file.string());
-    err = err || pwrite(shard_fd, _blob.body.bytes, _blob.body.size, sizeof(h_size) + h_size + route.blob);
+    err = pwrite(shard_fd, _blob.body.bytes, _blob.body.size, sizeof(h_size) + h_size + route.blob);
     RELEASE_ASSERT(0 < err, "Failed to write to: {}", shard_file.string());
     auto [_, happened] = shard.btree_.try_emplace(route, true);
     RELEASE_ASSERT(happened, "Generated duplicate BlobRoute!");
