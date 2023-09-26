@@ -12,26 +12,13 @@
 
 namespace homeobject {
 
-///
-// Used to TombStone Blob's in the Index to defer for GC.
-ENUM(BlobState, uint8_t, ALIVE = 0, DELETED);
-
-struct BlobExt {
-    BlobState state_{BlobState::DELETED};
-    Blob* blob_;
-
-    explicit operator bool() const { return state_ == BlobState::ALIVE; }
-    bool operator==(const BlobExt& rhs) const { return blob_ == rhs.blob_; }
-};
-
 struct ShardIndex {
-    folly::ConcurrentHashMap< BlobRoute, BlobExt > btree_;
-    std::atomic< blob_id > shard_seq_num_{0ull};
-    ~ShardIndex();
+    folly::ConcurrentHashMap< BlobRoute, bool > btree_;
+    std::atomic< blob_id > shard_offset_{0ull};
 };
 
 class FileHomeObject : public HomeObjectImpl {
-    std::filesystem::path const file_store_ = "file_store";
+    std::filesystem::path const file_store_;
 
     /// Simulates the Shard=>Chunk mapping in IndexSvc
     using index_svc = folly::ConcurrentHashMap< shard_id, std::unique_ptr< ShardIndex > >;
@@ -50,7 +37,8 @@ class FileHomeObject : public HomeObjectImpl {
     ///
 
 public:
-    using HomeObjectImpl::HomeObjectImpl;
+    FileHomeObject(std::weak_ptr< HomeObjectApplication >&& application, std::filesystem::path const& root) :
+            HomeObjectImpl::HomeObjectImpl(std::move(application)), file_store_(root) {}
     ~FileHomeObject() override = default;
 };
 

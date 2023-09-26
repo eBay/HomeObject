@@ -29,17 +29,33 @@ ShardManager::Result< ShardInfo > FileHomeObject::_create_shard(pg_id pg_owner, 
     }
 
     auto const shard_path = file_store_ / path(fmt::format("{:04x}", (info.id >> homeobject::shard_width)));
-    RELEASE_ASSERT(std::filesystem::create_directories(shard_path), "Could not create directory: {}",
-                   shard_path.string());
+    std::filesystem::create_directories(shard_path);
 
     auto const shard_file = shard_path / path(fmt::format("{:012x}", (info.id & homeobject::shard_mask)));
     RELEASE_ASSERT(!std::filesystem::exists(shard_file), "Shard Path Exists! [path={}]", shard_file.string());
-    std::ofstream ofs{shard_path, std::ios::binary | std::ios::out | std::ios::trunc};
-    std::filesystem::resize_file(shard_path, max_shard_size());
+    std::ofstream ofs{shard_file, std::ios::binary | std::ios::out | std::ios::trunc};
+    std::filesystem::resize_file(shard_file, max_shard_size());
     RELEASE_ASSERT(std::filesystem::exists(shard_file), "Shard Path Failed Creation! [path={}]", shard_file.string());
 
-    auto [_, happened] = index_.try_emplace(info.id, std::make_unique< ShardIndex >());
+    auto shard_fd = open(shard_file.string().c_str(), O_WRONLY);
+    RELEASE_ASSERT(shard_fd >= 0, "Failed to open Shard {}", shard_file.string());
+
+    nlohmann::json j;
+    j["shard_id"] = info.id;
+    j["pg_id"] = info.placement_group;
+    j["state"] = info.state;
+    j["created_time"] = info.created_time;
+    j["modified_time"] = info.last_modified_time;
+    j["total_capacity"] = info.total_capacity_bytes;
+    j["available_capacity"] = info.available_capacity_bytes;
+    j["deleted_capacity"] = info.deleted_capacity_bytes;
+    auto serialize = j.dump();
+    auto err = pwrite(shard_fd, serialize.c_str(), serialize.size(), 0ull);
+    RELEASE_ASSERT(0 < err, "Failed to write to: {}", shard_file.string());
+
+    auto [it, happened] = index_.try_emplace(info.id, std::make_unique< ShardIndex >());
     RELEASE_ASSERT(happened, "Could not create BTree!");
+    it->second->shard_offset_.store(serialize.size());
     return info;
 }
 

@@ -30,8 +30,6 @@ public:
     FixtureApp() {
         clean();
         LOGINFO("creating device {} file with size {} ", path_, homestore::in_bytes(2 * Gi));
-        std::ofstream ofs{path_, std::ios::binary | std::ios::out | std::ios::trunc};
-        std::filesystem::resize_file(path_, 2 * Gi);
     }
 
     ~FixtureApp() override { clean(); }
@@ -40,12 +38,12 @@ public:
     uint32_t threads() const override { return 2; }
 
     void clean() {
-        if (std::filesystem::exists(path_)) { std::filesystem::remove(path_); }
+        if (std::filesystem::exists(path_)) { std::filesystem::remove_all(path_); }
     }
 
     std::list< std::filesystem::path > devices() const override {
         auto device_info = std::list< std::filesystem::path >();
-        device_info.emplace_back(std::filesystem::canonical(path_));
+        device_info.emplace_back(std::filesystem::weakly_canonical(path_));
         return device_info;
     }
 
@@ -94,9 +92,9 @@ public:
         EXPECT_EQ(BlobError::UNKNOWN_BLOB, g_e.error());
 
         LOGDEBUG("Insert Blob to: {}", _shard_1.id);
-        auto o_e = homeobj_->blob_manager()
-                       ->put(_shard_1.id, Blob{sisl::io_blob_safe(4 * Ki, 512u), "test_blob", 4 * Mi})
-                       .get();
+        auto blob_data = sisl::io_blob_safe(4 * Ki, 512u);
+        sprintf((char*)blob_data.bytes, "HELLO, WORLD!");
+        auto o_e = homeobj_->blob_manager()->put(_shard_1.id, Blob{std::move(blob_data), "test_blob", 4 * Mi}).get();
         EXPECT_TRUE(!!o_e);
         o_e.then([this](auto&& b) mutable { _blob_id = std::move(b); });
     }
