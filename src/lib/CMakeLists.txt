@@ -18,3 +18,4 @@ endif()
 
 add_subdirectory(homestore)
 add_subdirectory(memory)
+add_subdirectory(file)
