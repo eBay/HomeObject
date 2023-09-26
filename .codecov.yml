@@ -6,4 +6,4 @@ ignore:
   - "**/*_generated.h"
   - "src/mocks/**"
   - "src/lib/homestore/tests/**"
-  - "src/lib/memory/tests/**"
+  - "src/lib/tests/**"
