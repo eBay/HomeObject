@@ -102,10 +102,13 @@ class HomeObjectConan(ConanFile):
         self.cpp_info.components["homestore"].requires = ["homestore::homestore"]
         self.cpp_info.components["memory"].libs = ["homeobject_memory", "home_replication_mock"]
         self.cpp_info.components["memory"].requires = ["homestore::homestore"]
+        self.cpp_info.components["file"].libs = ["homeobject_file", "home_replication_mock"]
+        self.cpp_info.components["file"].requires = ["homestore::homestore"]
 
         if self.settings.os == "Linux":
             self.cpp_info.components["homestore"].system_libs.append("pthread")
             self.cpp_info.components["memory"].system_libs.append("pthread")
+            self.cpp_info.components["file"].system_libs.append("pthread")
         if  self.options.sanitize:
             self.cpp_info.components["memory"].sharedlinkflags.append("-fsanitize=address")
             self.cpp_info.components["memory"].exelinkflags.append("-fsanitize=address")
