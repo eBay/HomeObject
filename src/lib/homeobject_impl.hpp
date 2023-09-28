@@ -46,8 +46,6 @@ struct Shard {
 using ShardList = std::list< Shard >;
 using ShardIterator = ShardList::iterator;
 
-struct PGReplDevBase {};
-
 struct PG {
     explicit PG(PGInfo info) : pg_info_(std::move(info)) {}
     PG(PG const& pg) = delete;

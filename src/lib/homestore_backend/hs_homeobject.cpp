@@ -40,12 +40,12 @@ void HSHomeObject::init_homestore() {
         device_info.emplace_back(std::filesystem::canonical(path).string(), homestore::HSDevType::Data);
     }
 
-    _chunk_selector = std::make_shared< HeapChunkSelector >();
+    chunk_selector_ = std::make_shared< HeapChunkSelector >();
 
     using namespace homestore;
     bool need_format = HomeStore::instance()
                            ->with_index_service(nullptr)
-                           .with_repl_data_service(repl_impl_type::solo, std::make_shared< HeapChunkSelector >())
+                           .with_repl_data_service(repl_impl_type::solo, chunk_selector_)
                            .start(hs_input_params{.devices = device_info, .app_mem_size = app_mem_size},
                                   [this]() { register_homestore_metablk_callback(); });
     if (need_format) {
@@ -106,12 +106,12 @@ void HSHomeObject::on_shard_meta_blk_recover_completed(bool success) {
     std::unordered_set< homestore::chunk_num_t > excluding_chunks;
     std::scoped_lock lock_guard(_pg_lock);
     for (auto& pair : _pg_map) {
-        for (auto& shard : pair.second.shards) {
+        for (auto& shard : pair.second->shards_) {
             if (shard.info.state == ShardInfo::State::OPEN) { excluding_chunks.emplace(shard.chunk_id); }
         }
     }
 
-    _chunk_selector->build_per_dev_chunk_heap(excluding_chunks);
+    chunk_selector_->build_per_dev_chunk_heap(excluding_chunks);
 }
 
 } // namespace homeobject

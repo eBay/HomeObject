@@ -3,15 +3,17 @@
 #include <folly/futures/Future.h>
 #include <homestore/replication/repl_dev.h>
 #include "hs_homeobject.hpp"
+#include "replication_message.hpp"
 
 namespace homeobject {
 
 class HSHomeObject;
 
 struct ho_repl_ctx : public homestore::repl_req_ctx {
+    ReplicationMessageHeader header_;    
     sisl::io_blob_safe hdr_buf_;
 
-    ho_repl_ctx(uint32_t size) : homestore::repl_req_ctx{}, hdr_buf_{size} {}
+    ho_repl_ctx(uint32_t size, uint32_t alignment) : homestore::repl_req_ctx{}, hdr_buf_{size, alignment} {}
     template < typename T >
     T* to() {
         return r_cast< T* >(this);
@@ -27,14 +29,14 @@ struct repl_result_ctx : public ho_repl_ctx {
         return intrusive< repl_result_ctx< T > >{new repl_result_ctx< T >(std::forward< Args >(args)...)};
     }
 
-    repl_result_ctx(uint32_t hdr_size) : ho_repl_ctx{hdr_size} {}
+    repl_result_ctx(uint32_t hdr_size, uint32_t alignment) : ho_repl_ctx{hdr_size, alignment} {}
     folly::SemiFuture< T > result() { return promise_.getSemiFuture(); }
 };
 
 class ReplicationStateMachine : public homestore::ReplDevListener {
 public:
 
-    explicit ReplicationStateMachine(HSHomeObject* home_object) : _home_object(home_object) {}
+    explicit ReplicationStateMachine(HSHomeObject* home_object) : home_object_(home_object) {}
 
     virtual ~ReplicationStateMachine() = default;
 
@@ -107,7 +109,7 @@ public:
     void on_replica_stop() override;
 
 private:
-    HSHomeObject* _home_object;
+    HSHomeObject* home_object_;
 };
 
 } // namespace homeobject

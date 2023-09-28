@@ -2,12 +2,6 @@
 #include "replication_state_machine.hpp"
 
 namespace homeobject {
-
-std::unique_ptr< homestore::ReplDevListener >
-HOReplServiceCallbacks::on_repl_dev_init(homestore::cshared< homestore::ReplDev >& repl_dev) {
-    return std::make_unique< ReplicationStateMachine >(_home_object, *repl_dev);
-}
-
 void ReplicationStateMachine::on_commit(int64_t lsn, const sisl::blob& header, const sisl::blob& key,
                                         const homestore::MultiBlkId& pbas, cintrusive< homestore::repl_req_ctx >& ctx) {
     LOGINFO("applying raft log commit with lsn:{}", lsn);
@@ -15,7 +9,7 @@ void ReplicationStateMachine::on_commit(int64_t lsn, const sisl::blob& header, c
     switch (msg_header->msg_type) {
     case ReplicationMessageType::CREATE_SHARD_MSG:
     case ReplicationMessageType::SEAL_SHARD_MSG: {
-        _home_object->on_shard_message_commit(lsn, header, key, blkids, ctx, _repl_dev);
+        home_object_->on_shard_message_commit(lsn, header, key, pbas, ctx);
         break;
     }
     case ReplicationMessageType::PUT_BLOB_MSG:
@@ -26,21 +20,22 @@ void ReplicationStateMachine::on_commit(int64_t lsn, const sisl::blob& header, c
     }
 }
 
-bool ReplicationStateMachine::on_pre_commit(int64_t lsn, sisl::blob const& header, sisl::blob const& key,
-                                            cintrusive< homestore::repl_req_ctx >& ctx) {
+bool ReplicationStateMachine::on_pre_commit(int64_t lsn, sisl::blob const&, sisl::blob const&,
+                                            cintrusive< homestore::repl_req_ctx >&) {
     LOGINFO("on_pre_commit with lsn:{}", lsn);
     // For shard creation, since homestore repldev inside will write shard header to data service first before this
     // function is called. So there is nothing is needed to do and we can get the binding chunk_id with the newly shard
     // from the blkid in on_commit()
+    return true;
 }
 
-void ReplicationStateMachine::on_rollback(int64_t lsn, sisl::blob const& header, sisl::blob const& key, void* ctx) {
+void ReplicationStateMachine::on_rollback(int64_t lsn, sisl::blob const&, sisl::blob const&,
+                                          cintrusive< homestore::repl_req_ctx >&) {
     LOGINFO("on_rollback  with lsn:{}", lsn);
 }
 
 homestore::blk_alloc_hints ReplicationStateMachine::get_blk_alloc_hints(sisl::blob const& header,
                                                                         cintrusive< homestore::repl_req_ctx >& ctx) {
-    // TODO: Return blk_alloc_hints specific to create shard or blob put
     const ReplicationMessageHeader* msg_header = r_cast< const ReplicationMessageHeader* >(header.bytes);
     if (msg_header->header_crc != msg_header->calculate_crc()) {
         LOGWARN("replication message header is corrupted with crc error and can not get blk alloc hints");
@@ -49,9 +44,9 @@ homestore::blk_alloc_hints ReplicationStateMachine::get_blk_alloc_hints(sisl::bl
 
     switch (msg_header->msg_type) {
     case ReplicationMessageType::CREATE_SHARD_MSG: {
-        auto list_shard_result = _home_object->shard_manager()->list_shards(msg_header->repl_group_id).get();
+        auto list_shard_result = home_object_->shard_manager()->list_shards(msg_header->pg_id).get();
         if (!list_shard_result) {
-            LOGWARN("list shards failed with unknown pg {}", msg_header->repl_group_id);
+            LOGWARN("list shards failed with unknown pg {}", msg_header->pg_id);
             break;
         }
 
@@ -59,7 +54,7 @@ homestore::blk_alloc_hints ReplicationStateMachine::get_blk_alloc_hints(sisl::bl
             // pg is empty without any shards, we leave the decision the HeapChunkSelector to select a pdev
             // with most available space and select one chunk based on that pdev
         } else {
-            auto chunk_id = _home_object->get_shard_chunk(list_shard_result.value().front().id);
+            auto chunk_id = home_object_->get_shard_chunk(list_shard_result.value().front().id);
             RELEASE_ASSERT(!!chunk_id, "unknown shard id to get binded chunk");
             // TODO:HS will add a new interface to get alloc hint based on a reference chunk;
             // and we can will call that interface for return alloc hint;

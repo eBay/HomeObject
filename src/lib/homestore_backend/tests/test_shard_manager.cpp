@@ -159,6 +159,9 @@ TEST_F(ShardManagerTesting, SealUnknownShard) {
     EXPECT_EQ(ShardError::UNKNOWN_SHARD, _home_object->shard_manager()->seal_shard(1000).get().error());
 }
 
+// Disable following cases temporary as PG Info recovery is needed too and
+// depends on another PR to create/recover PG using HS ReplDev
+/*
 TEST_F(ShardManagerTesting, ShardManagerRecovery) {
 
     auto e = _home_object->shard_manager()->create_shard(_pg_id, Mi).get();
@@ -187,10 +190,10 @@ TEST_F(ShardManagerTesting, ShardManagerRecovery) {
     auto pg_iter = ho->_pg_map.find(_pg_id);
     EXPECT_TRUE(pg_iter != ho->_pg_map.end());
     auto& pg = pg_iter->second;
-    EXPECT_EQ(1, pg->shards.size());
-    auto& check_shard = *pg->shards.begin();
+    EXPECT_EQ(1, pg->shards_.size());
+    auto& check_shard = *pg->shards_.begin();
     void* saved_metablk = check_shard.metablk_cookie;
-    pg_iter->second.shards.clear();
+    pg_iter->second.shards_.clear();
     ho->_shard_map.clear();
     EXPECT_EQ(ShardError::UNKNOWN_SHARD, _home_object->shard_manager()->get_shard(_shard_id).get().error());
 
@@ -207,9 +210,6 @@ TEST_F(ShardManagerTesting, ShardManagerRecovery) {
     });
 }
 
-// Disable following cases temporary as PG Info recovery is needed too and
-// depends on another PR to create/recover PG using HS ReplDev
-/*
 TEST_F(ShardManagerTesting, MockSealShard) {
     auto e = _home_object->shard_manager()->create_shard(_pg_id, Mi).get();
     ASSERT_TRUE(!!e);

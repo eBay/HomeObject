@@ -79,37 +79,33 @@ ShardManager::Result< ShardInfo > HSHomeObject::_create_shard(pg_id_t pg_owner, 
     auto create_time = get_current_timestamp();
     auto shard_info =
         ShardInfo(new_shard_id, pg_owner, ShardInfo::State::OPEN, create_time, create_time, size_bytes, size_bytes, 0);
-    std::string const create_shard_message = serialize_shard(Shard(shard_info));
-    const uint32_t needed_size = sizeof(ReplicationMessageHeader) + create_shard_message.size();
-    auto req = repl_result_ctx< ShardManager::Result< ShardInfo > >::make(needed_size);
-    // round up msg size to homestore datasvc blk size
-    const auto datasvc_blk_size = homestore::HomeStore::instance()->data_service().get_blk_size();
-    auto msg_size = create_shard_message.size();
-    if (msg_size % datasvc_blk_size != 0) { msg_size = (msg_size / datasvc_blk_size + 1) * datasvc_blk_size; }
-    auto msg_buf = iomanager.iobuf_alloc(512, msg_size);
-    std::memset(r_cast< uint8_t* >(msg_buf), 0, msg_size);
-    std::memcpy(r_cast< uint8_t* >(msg_buf), create_shard_message.c_str(), create_shard_message.size());
 
-    // preapre msg header;
-    ReplicationMessageHeader header;
-    header.repl_group_id = pg.value().pg_info.id;
-    header.msg_type = ReplicationMessageType::CREATE_SHARD_MSG;
-    header.payload_size = msg_size;
-    header.payload_crc = crc32_ieee(init_crc32, r_cast< const uint8_t* >(msg_buf), msg_size);
-    header.header_crc = header.calculate_crc();
+    std::string const create_shard_message = serialize_shard(Shard(shard_info));
+    const auto msg_size = sisl::round_up(create_shard_message.size(), repl_dev->get_blk_size());
+    auto req = repl_result_ctx< ShardManager::Result< ShardInfo > >::make(msg_size, 512 /*alignment*/);
+    auto buf_ptr = req->hdr_buf_.bytes;
+    std::memset(buf_ptr, 0, msg_size);
+    std::memcpy(buf_ptr, create_shard_message.c_str(), create_shard_message.size());    
+    // preapre msg header; 
+    req->header_.msg_type = ReplicationMessageType::CREATE_SHARD_MSG;
+    req->header_.pg_id = pg_owner;
+    req->header_.shard_id = new_shard_id;
+    req->header_.payload_size = msg_size;
+    req->header_.payload_crc = crc32_ieee(init_crc32, buf_ptr, msg_size);
+    req->header_.seal();
+    sisl::blob header;
+    header.bytes = r_cast<uint8_t*>(&req->header_);
+    header.size = sizeof(req->header_);
     sisl::sg_list value;
     value.size = msg_size;
-    value.iovs.push_back(iovec(msg_buf, msg_size));
+    value.iovs.push_back(iovec(buf_ptr, msg_size));
     // replicate this create shard message to PG members;
-    auto [p, sf] = folly::makePromiseContract< ShardManager::Result< ShardInfo > >();
-    repl_dev.value()->async_alloc_write(sisl::blob(r_cast< uint8_t* >(&header), sizeof(header)), sisl::blob(), value,
-                                        static_cast< void* >(&p));
-    auto info = std::move(sf).get();
+    repl_dev->async_alloc_write(header, sisl::blob{}, value, req);
+    auto info = req->result().get();
     if (!bool(info)) {
         LOGWARN("create new shard [{}] on pg [{}] is failed with error:{}", new_shard_id & shard_mask, pg_owner,
                 info.error());
     }
-    iomanager.iobuf_free(msg_buf);
     return info;
 }
 
@@ -119,8 +115,8 @@ ShardManager::Result< ShardInfo > HSHomeObject::_seal_shard(shard_id_t id) {
 
 void HSHomeObject::on_shard_message_commit(int64_t lsn, sisl::blob const& header, sisl::blob const&,
                                            homestore::MultiBlkId const& blkids,
-                                           cintrusive< homestore::repl_req_ctx >& hs_ctx),
-                                           homestore::ReplDev& repl_dev) {
+                                           cintrusive< homestore::repl_req_ctx >& hs_ctx) {
+  /*
     folly::Promise< ShardManager::Result< ShardInfo > >* promise = nullptr;
     // user_ctx will be nullptr when:
     // 1. on the follower side
@@ -183,6 +179,7 @@ void HSHomeObject::on_shard_message_commit(int64_t lsn, sisl::blob const& header
         });
 
     if (ctx) { ctx->promise_.setValue(ShardManager::Result< ShardInfo >(shard.info)); }
+  */
 }
 
 void HSHomeObject::do_commit_new_shard(const Shard& shard) {
@@ -215,7 +212,7 @@ void* HSHomeObject::get_shard_metablk(shard_id_t id) const {
     return (*shard_iter->second).metablk_cookie;
 }
 
-ShardManager::Result< uint16_t > HSHomeObject::get_shard_chunk(shard_id id) const {
+ShardManager::Result< homestore::chunk_num_t > HSHomeObject::get_shard_chunk(shard_id_t id) const {
     std::scoped_lock lock_guard(_shard_lock);
     auto shard_iter = _shard_map.find(id);
     if (shard_iter == _shard_map.end()) { return folly::makeUnexpected(ShardError::UNKNOWN_SHARD); }
