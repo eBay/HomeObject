@@ -9,6 +9,7 @@
 
 #include "heap_chunk_selector.h"
 #include "lib/homeobject_impl.hpp"
+#include "replication_message.hpp"
 
 namespace homestore {
 struct meta_blk;
@@ -17,8 +18,6 @@ struct meta_blk;
 namespace homeobject {
 
 class HSHomeObject : public HomeObjectImpl {
-    std::shared_ptr< HeapChunkSelector > chunk_selector_;
-private:  
     /// Overridable Helpers
     ShardManager::Result< ShardInfo > _create_shard(pg_id_t, uint64_t size_bytes) override;
     ShardManager::Result< ShardInfo > _seal_shard(shard_id_t) override;
@@ -46,6 +45,18 @@ public:
         peer_id_t replica_set_uuid;
         pg_members members[1]; // ISO C++ forbids zero-size array
     };
+
+    struct shard_info_superblk {
+        shard_id_t id;
+        pg_id_t placement_group;
+        ShardInfo::State state;
+        uint64_t created_time;
+        uint64_t last_modified_time;
+        uint64_t available_capacity_bytes;
+        uint64_t total_capacity_bytes;
+        uint64_t deleted_capacity_bytes;
+        homestore::chunk_num_t chunk_id;
+    };
 #pragma pack()
 
     struct HS_PG : public PG {
@@ -59,23 +70,41 @@ public:
         static PGInfo pg_info_from_sb(homestore::superblk< pg_info_superblk > const& sb);
     };
 
+    struct HS_Shard : public Shard {
+        homestore::superblk< shard_info_superblk > sb_;
+        HS_Shard(ShardInfo info, homestore::chunk_num_t chunk_id);
+        HS_Shard(homestore::superblk< shard_info_superblk > const& sb);
+        virtual ~HS_Shard() = default;
+
+        void update_info(const ShardInfo& info);
+        void write_sb();
+        static ShardInfo shard_info_from_sb(homestore::superblk< shard_info_superblk > const& sb);
+    };
+
+private:
+    shared< HeapChunkSelector > chunk_selector_;
+    std::shared_mutex recovery_mutex_;
+    std::map< pg_id_t, std::list< homestore::superblk< shard_info_superblk > > > pending_recovery_shards_;
+
 private:
     static homestore::ReplicationService& hs_repl_service() { return homestore::hs()->repl_service(); }
 
     void add_pg_to_map(shared< HS_PG > hs_pg);
     shard_id_t generate_new_shard_id(pg_id_t pg);
     uint64_t get_sequence_num_from_shard_id(uint64_t shard_id_t);
-    std::string serialize_shard(const Shard& shard) const;
-    Shard deserialize_shard(const char* shard_info_str, size_t size) const;
-    void do_commit_new_shard(const Shard& shard);
-    void do_commit_seal_shard(const Shard& shard);
-    void register_homestore_metablk_callback();
-    void* get_shard_metablk(shard_id_t id) const;
+
+    static ShardInfo deserialize_shard_info(const char* shard_info_str, size_t size);
+    static std::string serialize_shard_info(const ShardInfo& info);
+    void add_new_shard_to_map(ShardPtr shard);
+    void update_shard_in_map(const ShardInfo& shard_info);
+    void do_shard_message_commit(int64_t lsn, const ReplicationMessageHeader& header,
+                                 homestore::MultiBlkId const& blkids, sisl::blob value,
+                                 cintrusive< homestore::repl_req_ctx >& hs_ctx);
     // recover part
-    static const std::string s_shard_info_sub_type;
+    void register_homestore_metablk_callback();
     void on_pg_meta_blk_found(sisl::byte_view const& buf, void* meta_cookie);
-    void on_shard_meta_blk_found(homestore::meta_blk* mblk, sisl::byte_view buf, size_t size);
-    void on_shard_meta_blk_recover_completed(bool success);  
+    void on_shard_meta_blk_found(homestore::meta_blk* mblk, sisl::byte_view buf);
+    void on_shard_meta_blk_recover_completed(bool success);
 
 public:
     using HomeObjectImpl::HomeObjectImpl;
@@ -83,11 +112,12 @@ public:
 
     void init_homestore();
 
-    void on_shard_message_commit(int64_t lsn, sisl::blob const& header, sisl::blob const& key,
-                                 homestore::MultiBlkId const& blkids,				 
-                                 cintrusive< homestore::repl_req_ctx >& hs_ctx);
+    void on_shard_message_commit(int64_t lsn, sisl::blob const& header, homestore::MultiBlkId const& blkids,
+                                 homestore::ReplDev* repl_dev, cintrusive< homestore::repl_req_ctx >& hs_ctx);
 
-    ShardManager::Result< homestore::chunk_num_t > get_shard_chunk(shard_id_t id) const;  
+    ShardManager::Result< homestore::chunk_num_t > get_shard_chunk(shard_id_t id) const;
+
+    shared< HeapChunkSelector > chunk_selector() { return chunk_selector_; }
 };
 
 } // namespace homeobject

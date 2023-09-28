@@ -21,8 +21,8 @@ ShardManager::AsyncResult< InfoList > HomeObjectImpl::list_shards(pg_id_t pgid) 
 
         auto info_l = std::list< ShardInfo >();
         for (auto const& shard : pg->shards_) {
-            LOGDEBUG("Listing Shard {}", shard.info.id);
-            info_l.push_back(shard.info);
+            LOGDEBUG("Listing Shard {}", shard->info.id);
+            info_l.push_back(shard->info);
         }
         return info_l;
     });

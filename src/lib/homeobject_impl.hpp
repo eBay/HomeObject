@@ -38,13 +38,12 @@ inline shard_id_t make_new_shard_id(pg_id_t pg, shard_id_t next_shard) {
 
 struct Shard {
     explicit Shard(ShardInfo info) : info(std::move(info)) {}
+    virtual ~Shard() = default;
     ShardInfo info;
-    uint16_t chunk_id;
-    void* metablk_cookie{nullptr};
 };
 
-using ShardList = std::list< Shard >;
-using ShardIterator = ShardList::iterator;
+using ShardPtr = shared< Shard >;
+using ShardPtrList = std::list< ShardPtr >;
 
 struct PG {
     explicit PG(PGInfo info) : pg_info_(std::move(info)) {}
@@ -56,7 +55,7 @@ struct PG {
 
     PGInfo pg_info_;
     uint64_t shard_sequence_num_{0};
-    ShardList shards_;
+    ShardPtrList shards_;
 };
 
 class HomeObjectImpl : public HomeObject,
@@ -92,7 +91,7 @@ protected:
     std::map< pg_id_t, shared< PG > > _pg_map;
 
     mutable std::shared_mutex _shard_lock;
-    std::map< shard_id_t, ShardIterator > _shard_map;
+    std::map< shard_id_t, ShardPtr > _shard_map;
     ///
 
 public:

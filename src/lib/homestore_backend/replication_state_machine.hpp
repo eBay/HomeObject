@@ -10,7 +10,7 @@ namespace homeobject {
 class HSHomeObject;
 
 struct ho_repl_ctx : public homestore::repl_req_ctx {
-    ReplicationMessageHeader header_;    
+    ReplicationMessageHeader header_;
     sisl::io_blob_safe hdr_buf_;
 
     ho_repl_ctx(uint32_t size, uint32_t alignment) : homestore::repl_req_ctx{}, hdr_buf_{size, alignment} {}
@@ -35,7 +35,6 @@ struct repl_result_ctx : public ho_repl_ctx {
 
 class ReplicationStateMachine : public homestore::ReplDevListener {
 public:
-
     explicit ReplicationStateMachine(HSHomeObject* home_object) : home_object_(home_object) {}
 
     virtual ~ReplicationStateMachine() = default;
@@ -109,7 +108,7 @@ public:
     void on_replica_stop() override;
 
 private:
-    HSHomeObject* home_object_;
+    HSHomeObject* home_object_{nullptr};
 };
 
 } // namespace homeobject

@@ -121,6 +121,17 @@ void HSHomeObject::on_pg_meta_blk_found(sisl::byte_view const& buf, void* meta_c
                 return;
             }
             add_pg_to_map(std::make_shared< HS_PG >(pg_sb, std::move(v.value())));
+
+            // check if any shard recovery is pending by this pg;
+            std::scoped_lock lock_guard(recovery_mutex_);
+            auto iter = pending_recovery_shards_.find(pg_sb->id);
+            if (iter != pending_recovery_shards_.end()) {
+                for (auto& sb : iter->second) {
+                    auto hs_shard = std::make_shared< HS_Shard >(sb);
+                    add_new_shard_to_map(hs_shard);
+                }
+                pending_recovery_shards_.erase(iter);
+            }
         });
 }
 
@@ -129,6 +140,7 @@ PGInfo HSHomeObject::HS_PG::pg_info_from_sb(homestore::superblk< pg_info_superbl
     for (uint32_t i{0}; i < sb->num_members; ++i) {
         pginfo.members.emplace(sb->members[i].id, std::string(sb->members[i].name), sb->members[i].priority);
     }
+    pginfo.replica_set_uuid = sb->replica_set_uuid;
     return pginfo;
 }
 

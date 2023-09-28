@@ -10,8 +10,6 @@
 
 namespace homeobject {
 
-const std::string HSHomeObject::s_shard_info_sub_type = "shard_info";
-
 extern std::shared_ptr< HomeObject > init_homeobject(std::weak_ptr< HomeObjectApplication >&& application) {
     LOGINFOMOD(homeobject, "Initializing HomeObject");
     auto instance = std::make_shared< HSHomeObject >(std::move(application));
@@ -41,7 +39,6 @@ void HSHomeObject::init_homestore() {
     }
 
     chunk_selector_ = std::make_shared< HeapChunkSelector >();
-
     using namespace homestore;
     bool need_format = HomeStore::instance()
                            ->with_index_service(nullptr)
@@ -63,19 +60,17 @@ void HSHomeObject::init_homestore() {
             {HS_SERVICE::INDEX, hs_format_params{.size_pct = 5.0}},
         });
     }
+    LOGINFO("Initialize and start HomeStore is successfully");
 }
 
 void HSHomeObject::register_homestore_metablk_callback() {
     // register some callbacks for metadata recovery;
     using namespace homestore;
     HomeStore::instance()->meta_service().register_handler(
-        HSHomeObject::s_shard_info_sub_type,
-        [this](homestore::meta_blk* mblk, sisl::byte_view buf, size_t size) {
-            on_shard_meta_blk_found(mblk, buf, size);
-        },
+        "ShardManager",
+        [this](homestore::meta_blk* mblk, sisl::byte_view buf, size_t size) { on_shard_meta_blk_found(mblk, buf); },
 
-        [this](bool success) { on_shard_meta_blk_recover_completed(success); },
-        true);
+        [this](bool success) { on_shard_meta_blk_recover_completed(success); }, true);
 
     HomeStore::instance()->meta_service().register_handler(
         "PGManager",
@@ -91,23 +86,37 @@ HSHomeObject::~HSHomeObject() {
     iomanager.stop();
 }
 
-void HSHomeObject::on_shard_meta_blk_found(homestore::meta_blk* mblk, sisl::byte_view buf, size_t size) {
-    auto shard = deserialize_shard(r_cast< const char* >(buf.bytes()), size);
-    shard.metablk_cookie = mblk;
-    // As shard info in the homestore metablk is always the latest state(OPEN or SEALED),
-    // we can always create a shard from this shard info and once shard is deleted, the associated metablk will be
-    // deleted too.
-    do_commit_new_shard(shard);
-}
+void HSHomeObject::on_shard_meta_blk_found(homestore::meta_blk* mblk, sisl::byte_view buf) {
+    homestore::superblk< shard_info_superblk > sb;
+    sb.load(buf, mblk);
 
+    bool pg_is_recovery = false;
+    {
+        std::scoped_lock lock_guard(_pg_lock);
+        pg_is_recovery = _pg_map.find(sb->placement_group) != _pg_map.end();
+    }
+
+    if (pg_is_recovery) {
+        auto hs_shard = std::make_shared< HS_Shard >(sb);
+        add_new_shard_to_map(hs_shard);
+        return;
+    }
+
+    // There is no guarantee that pg info will be recovery before shard recovery
+    std::scoped_lock lock_guard(recovery_mutex_);
+    pending_recovery_shards_[sb->placement_group].push_back(std::move(sb));
+}
 
 void HSHomeObject::on_shard_meta_blk_recover_completed(bool success) {
     // Find all shard with opening state and excluede their binding chunks from the HeapChunkSelector;
+    RELEASE_ASSERT(pending_recovery_shards_.empty(), "some shards is still pending on recovery");
     std::unordered_set< homestore::chunk_num_t > excluding_chunks;
     std::scoped_lock lock_guard(_pg_lock);
     for (auto& pair : _pg_map) {
         for (auto& shard : pair.second->shards_) {
-            if (shard.info.state == ShardInfo::State::OPEN) { excluding_chunks.emplace(shard.chunk_id); }
+            if (shard->info.state == ShardInfo::State::OPEN) {
+                excluding_chunks.emplace(dp_cast< HS_Shard >(shard)->sb_->chunk_id);
+            }
         }
     }
 
