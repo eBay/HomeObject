@@ -1,4 +1,4 @@
-#include "homeobject.hpp"
+#include "mem_homeobject.hpp"
 
 namespace homeobject {
 
@@ -18,7 +18,7 @@ namespace homeobject {
     } else
 
 // Write (move) Blob to new BlobExt on heap and Insert BlobExt to Index
-BlobManager::Result< blob_id > MemoryHomeObject::_put_blob(ShardInfo const& _shard, Blob&& _blob) {
+BlobManager::Result< blob_id_t > MemoryHomeObject::_put_blob(ShardInfo const& _shard, Blob&& _blob) {
     WITH_SHARD
     WITH_ROUTE(shard.shard_seq_num_++)
 
@@ -29,14 +29,14 @@ BlobManager::Result< blob_id > MemoryHomeObject::_put_blob(ShardInfo const& _sha
 }
 
 // Lookup BlobExt and duplicate underyling Blob for user; only *safe* because we defer GC.
-BlobManager::Result< Blob > MemoryHomeObject::_get_blob(ShardInfo const& _shard, blob_id _blob) const {
+BlobManager::Result< Blob > MemoryHomeObject::_get_blob(ShardInfo const& _shard, blob_id_t _blob) const {
     WITH_SHARD
     WITH_ROUTE(_blob)
     IF_BLOB_ALIVE { return blob_it->second.blob_->clone(); }
 }
 
 // Tombstone BlobExt entry
-BlobManager::NullResult MemoryHomeObject::_del_blob(ShardInfo const& _shard, blob_id _blob) {
+BlobManager::NullResult MemoryHomeObject::_del_blob(ShardInfo const& _shard, blob_id_t _blob) {
     WITH_SHARD
     WITH_ROUTE(_blob)
     IF_BLOB_ALIVE {

@@ -10,7 +10,7 @@
 
 #include <boost/uuid/random_generator.hpp>
 
-#include "lib/homestore/homeobject.hpp"
+#include "lib/homestore_backend/hs_homeobject.hpp"
 
 using namespace std::chrono_literals;
 
@@ -40,12 +40,12 @@ public:
         device_info.emplace_back(std::filesystem::canonical(fpath));
         return device_info;
     }
-    homeobject::peer_id discover_svcid(std::optional< homeobject::peer_id > const&) const override {
+    homeobject::peer_id_t discover_svcid(std::optional< homeobject::peer_id_t > const&) const override {
         return boost::uuids::random_generator()();
     }
     /// TODO
     /// This will have to work if we test replication in the future
-    std::string lookup_peer(homeobject::peer_id const&) const override { return "test_fixture.com"; }
+    std::string lookup_peer(homeobject::peer_id_t const&) const override { return "test_fixture.com"; }
 };
 
 TEST(HomeObject, BasicEquivalence) {
@@ -81,7 +81,7 @@ TEST_F(HomeObjectFixture, TestValidations) {
                                    homeobject::PGMember{boost::uuids::random_generator()(), "new_member", 1})
                   .get()
                   .error(),
-              PGError::UNKNOWN_PG);
+              PGError::UNSUPPORTED_OP);
     EXPECT_EQ(ShardError::UNKNOWN_PG, _obj_inst->shard_manager()->create_shard(1, 1000).get().error());
     EXPECT_EQ(ShardError::INVALID_ARG, _obj_inst->shard_manager()->create_shard(1, 0).get().error());
     EXPECT_EQ(ShardError::INVALID_ARG, _obj_inst->shard_manager()->create_shard(1, 2 * Gi).get().error());

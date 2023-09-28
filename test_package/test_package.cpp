@@ -11,10 +11,10 @@ public:
     bool spdk_mode() const override { return false; }
     uint32_t threads() const override { return 1; }
     std::list< std::filesystem::path > devices() const override { return std::list< std::filesystem::path >(); }
-    homeobject::peer_id discover_svcid(std::optional< homeobject::peer_id > const& p) const override {
+    homeobject::peer_id_t discover_svcid(std::optional< homeobject::peer_id_t > const& p) const override {
         return boost::uuids::random_generator()();
     }
-    std::string lookup_peer(homeobject::peer_id const&) const override { return "test_package.com"; }
+    std::string lookup_peer(homeobject::peer_id_t const&) const override { return "test_package.com"; }
 };
 
 int main(int argc, char** argv) {
@@ -22,7 +22,7 @@ int main(int argc, char** argv) {
     sisl::logging::SetLogger(std::string(argv[0]));
     spdlog::set_pattern("[%D %T%z] [%^%l%$] [%n] [%t] %v");
 
-    auto a = std::make_shared<TestApp>();
+    auto a = std::make_shared< TestApp >();
     homeobject::init_homeobject(a);
     return 0;
 }
