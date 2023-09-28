@@ -96,9 +96,9 @@ class HomeObjectConan(ConanFile):
     def package_info(self):
         self.cpp_info.names["cmake_find_package"] = "HomeObject"
         self.cpp_info.names["cmake_find_package_multi"] = "HomeObject"
-        self.cpp_info.components["homestore"].libs = ["homeobject", "home_replication_mock"]
+        self.cpp_info.components["homestore"].libs = ["homeobject"]
         self.cpp_info.components["homestore"].requires = ["homestore::homestore"]
-        self.cpp_info.components["memory"].libs = ["homeobject_memory", "home_replication_mock"]
+        self.cpp_info.components["memory"].libs = ["homeobject_memory"]
         self.cpp_info.components["memory"].requires = ["homestore::homestore"]
 
         if self.settings.os == "Linux":

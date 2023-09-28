@@ -24,7 +24,7 @@ using homeobject::BlobError;
 using homeobject::peer_id_t;
 
 class FixtureApp : public homeobject::HomeObjectApplication {
-    std::string path_{"/tmp/test_homestore.data"};
+    std::string path_{"/tmp/test_homestore.data." + std::to_string(rand())};
 
 public:
     FixtureApp() {

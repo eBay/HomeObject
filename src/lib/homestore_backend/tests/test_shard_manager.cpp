@@ -23,22 +23,27 @@ SISL_LOGGING_INIT(logging, HOMEOBJECT_LOG_MODS)
 SISL_OPTIONS_ENABLE(logging)
 
 class FixtureApp : public homeobject::HomeObjectApplication {
+private:
+    std::string fpath_{"/tmp/test_shard_manager.data.{}" + std::to_string(rand())};
+
 public:
     bool spdk_mode() const override { return false; }
     uint32_t threads() const override { return 2; }
     std::list< std::filesystem::path > devices() const override {
-        /* create files */
-        LOGINFO("creating device files with size {} ", 1, homestore::in_bytes(2 * Gi));
-        const std::string fpath{"/tmp/test_homestore.data"};
-        LOGINFO("creating {} device file", fpath);
-        if (std::filesystem::exists(fpath)) { std::filesystem::remove(fpath); }
-        std::ofstream ofs{fpath, std::ios::binary | std::ios::out | std::ios::trunc};
-        std::filesystem::resize_file(fpath, 2 * Gi);
+        LOGINFO("creating {} device file with size={}", fpath_, homestore::in_bytes(2 * Gi));
+        if (std::filesystem::exists(fpath_)) { std::filesystem::remove(fpath_); }
+        std::ofstream ofs{fpath_, std::ios::binary | std::ios::out | std::ios::trunc};
+        std::filesystem::resize_file(fpath_, 2 * Gi);
 
         auto device_info = std::list< std::filesystem::path >();
-        device_info.emplace_back(std::filesystem::canonical(fpath));
+        device_info.emplace_back(std::filesystem::canonical(fpath_));
         return device_info;
     }
+
+    ~FixtureApp() {
+        if (std::filesystem::exists(fpath_)) { std::filesystem::remove(fpath_); }
+    }
+
     homeobject::peer_id_t discover_svcid(std::optional< homeobject::peer_id_t > const&) const override {
         return boost::uuids::random_generator()();
     }
