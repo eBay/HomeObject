@@ -49,10 +49,12 @@ public:
 
     struct HS_PG : public PG {
         homestore::superblk< pg_info_superblk > pg_sb_;
-        std::shared_ptr< homestore::ReplDev > repl_dev_;
+        shared< homestore::ReplDev > repl_dev_;
 
         HS_PG(PGInfo info, shared< homestore::ReplDev > rdev);
         HS_PG(homestore::superblk< pg_info_superblk > const& sb, shared< homestore::ReplDev > rdev);
+        virtual ~HS_PG() = default;
+
         static PGInfo pg_info_from_sb(homestore::superblk< pg_info_superblk > const& sb);
     };
 
@@ -60,7 +62,6 @@ private:
     static homestore::ReplicationService& hs_repl_service() { return homestore::hs()->repl_service(); }
 
     shard_id_t generate_new_shard_id(pg_id_t pg);
-    shard_id_t make_new_shard_id(pg_id_t pg, uint64_t sequence_num) const;
     uint64_t get_sequence_num_from_shard_id(uint64_t shard_id_t);
     std::string serialize_shard(const Shard& shard) const;
     Shard deserialize_shard(const std::string& shard_info_str) const;

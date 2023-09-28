@@ -46,9 +46,8 @@ void HSHomeObject::init_homestore() {
                            .with_repl_data_service(repl_impl_type::solo, std::make_shared< HeapChunkSelector >())
                            .start(hs_input_params{.devices = device_info, .app_mem_size = app_mem_size},
                                   [this]() { register_homestore_metablk_callback(); });
-
-    LOGWARN("Seems like we are booting/starting first time, Formatting!!");
     if (need_format) {
+        LOGWARN("Seems like we are booting/starting first time, Formatting!!");
         HomeStore::instance()->format_and_start({
             {HS_SERVICE::META, hs_format_params{.size_pct = 5.0}},
             {HS_SERVICE::LOG_REPLICATED, hs_format_params{.size_pct = 10.0}},
@@ -67,14 +66,14 @@ void HSHomeObject::init_homestore() {
 void HSHomeObject::register_homestore_metablk_callback() {
     // register some callbacks for metadata recovery;
     using namespace homestore;
-    hs()->meta_service().register_handler(
+    HomeStore::instance()->meta_service().register_handler(
         HSHomeObject::s_shard_info_sub_type,
         [this](homestore::meta_blk* mblk, sisl::byte_view buf, size_t size) {
             on_shard_meta_blk_found(mblk, buf, size);
         },
         nullptr, true);
 
-    hs()->meta_service().register_handler(
+    HomeStore::instance()->meta_service().register_handler(
         "PGManager",
         [this](homestore::meta_blk* mblk, sisl::byte_view buf, size_t size) {
             on_pg_meta_blk_found(std::move(buf), voidptr_cast(mblk));

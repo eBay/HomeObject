@@ -9,33 +9,18 @@
 
 namespace homeobject {
 
-static constexpr uint32_t SEQUENCE_BIT_NUM_IN_SHARD{48};
-
 uint64_t ShardManager::max_shard_size() { return Gi; }
 
-uint64_t ShardManager::max_shard_num_in_pg() { return ((uint64_t)0x01) << SEQUENCE_BIT_NUM_IN_SHARD; }
+uint64_t ShardManager::max_shard_num_in_pg() { return ((uint64_t)0x01) << shard_width; }
 
 shard_id_t HSHomeObject::generate_new_shard_id(pg_id_t pgid) {
-    HS_PG* pg{nullptr};
-    {
-        std::shared_lock lg{_pg_lock};
-        if (auto it = _pg_map.find(pgid); it != _pg_map.end()) {
-            pg = s_cast< HS_PG* >(it->second.get());
-        } else {
-            RELEASE_ASSERT(false, "commit on a shard with unavailable pg [{}]", pgid);
-            return 0;
-        }
-    }
-
-    std::scoped_lock lg(pg->mtx_);
-    auto new_sequence_num = ++(pg->shard_sequence_num_);
-    RELEASE_ASSERT_LT(new_sequence_num, ShardManager::max_shard_num_in_pg(),
-                      "new shard id must be less than ShardManager::max_shard_num_in_pg()");
+    std::scoped_lock lock_guard(_pg_lock);
+    auto iter = _pg_map.find(pgid);
+    RELEASE_ASSERT(iter != _pg_map.end(), "Missing pg info");
+    auto new_sequence_num = ++(iter->second->shard_sequence_num_);
+    RELEASE_ASSERT(new_sequence_num < ShardManager::max_shard_num_in_pg(),
+                   "new shard id must be less than ShardManager::max_shard_num_in_pg()");
     return make_new_shard_id(pgid, new_sequence_num);
-}
-
-shard_id_t HSHomeObject::make_new_shard_id(pg_id_t pg, uint64_t sequence_num) const {
-    return ((uint64_t)pg << SEQUENCE_BIT_NUM_IN_SHARD) | sequence_num;
 }
 
 uint64_t HSHomeObject::get_sequence_num_from_shard_id(uint64_t shard_id_t) {
@@ -73,18 +58,17 @@ Shard HSHomeObject::deserialize_shard(const std::string& shard_json_str) const {
 }
 
 ShardManager::Result< ShardInfo > HSHomeObject::_create_shard(pg_id_t pg_owner, uint64_t size_bytes) {
-    HS_PG* pg{nullptr};
+    shared< homestore::ReplDev > repl_dev;
     {
-        std::shared_lock lg{_pg_lock};
-        if (auto it = _pg_map.find(pg_owner); it != _pg_map.end()) {
-            pg = s_cast< HS_PG* >(it->second.get());
-        } else {
+        std::shared_lock lock_guard(_pg_lock);
+        auto iter = _pg_map.find(pg_owner);
+        if (iter == _pg_map.end()) {
             LOGWARN("failed to create shard with non-exist pg [{}]", pg_owner);
             return folly::makeUnexpected(ShardError::UNKNOWN_PG);
         }
+        repl_dev = std::static_pointer_cast< HS_PG >(iter->second)->repl_dev_;
     }
-
-    if (!pg->repl_dev_) {
+    if (!repl_dev) {
         LOGWARN("failed to get repl dev instance for pg [{}]", pg_owner);
         return folly::makeUnexpected(ShardError::PG_NOT_READY);
     }
@@ -110,7 +94,7 @@ ShardManager::Result< ShardInfo > HSHomeObject::_create_shard(pg_id_t pg_owner, 
     std::memcpy(raw_ptr, create_shard_message.c_str(), create_shard_message.size());
 
     // replicate this create shard message to PG members;
-    pg->repl_dev_->async_alloc_write(req->hdr_buf_, sisl::blob{}, sisl::sg_list{}, req);
+    repl_dev->async_alloc_write(req->hdr_buf_, sisl::blob{}, sisl::sg_list{}, req);
     auto info = req->result().get();
 
     header->~ReplicationMessageHeader();
@@ -238,26 +222,19 @@ void HSHomeObject::on_shard_message_commit(int64_t lsn, sisl::blob const& header
 }
 
 void HSHomeObject::do_commit_new_shard(const Shard& shard) {
-    HS_PG* pg{nullptr};
-    {
-        std::shared_lock lg{_pg_lock};
-        if (auto it = _pg_map.find(shard.info.placement_group); it != _pg_map.end()) {
-            pg = s_cast< HS_PG* >(it->second.get());
-        } else {
-            RELEASE_ASSERT(false, "commit on a shard with unavailable pg [{}]", shard.info.placement_group);
-            return;
-        }
-    }
-
-    std::scoped_lock lg{pg->mtx_};
-    auto& shards = pg->shards_;
+    // TODO: We are taking a global lock for all pgs to create shard. Is it really needed??
+    // We need to have fine grained per PG lock and take only that.
+    std::scoped_lock lock_guard(_pg_lock, _shard_lock);
+    auto pg_iter = _pg_map.find(shard.info.placement_group);
+    RELEASE_ASSERT(pg_iter != _pg_map.end(), "Missing PG info");
+    auto& shards = pg_iter->second->shards_;
     auto iter = shards.emplace(shards.end(), shard);
     auto [_, happened] = _shard_map.emplace(shard.info.id, iter);
     RELEASE_ASSERT(happened, "duplicated shard info");
 
     // following part is must for follower members or when member is restarted;
     auto sequence_num = get_sequence_num_from_shard_id(shard.info.id);
-    if (sequence_num > pg->shard_sequence_num_) { pg->shard_sequence_num_ = sequence_num; }
+    if (sequence_num > pg_iter->second->shard_sequence_num_) { pg_iter->second->shard_sequence_num_ = sequence_num; }
 }
 
 void HSHomeObject::do_commit_seal_shard(const Shard& shard) {

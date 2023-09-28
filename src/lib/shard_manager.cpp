@@ -14,10 +14,11 @@ ShardManager::AsyncResult< ShardInfo > HomeObjectImpl::create_shard(pg_id_t pg_o
 
 ShardManager::AsyncResult< InfoList > HomeObjectImpl::list_shards(pg_id_t pgid) const {
     return _defer().thenValue([this, pgid](auto) mutable -> ShardManager::Result< InfoList > {
-        auto v = get_pg(pgid);
-        if (v.hasError()) { return folly::makeUnexpected(ShardError::UNKNOWN_PG); }
+        std::shared_lock lock_guard(_pg_lock);
+        auto iter = _pg_map.find(pgid);
+        if (iter == _pg_map.cend()) { return folly::makeUnexpected(ShardError::UNKNOWN_PG); }
+        auto& pg = iter->second;
 
-        PG const* pg = v.value();
         auto info_l = std::list< ShardInfo >();
         for (auto const& shard : pg->shards_) {
             LOGDEBUG("Listing Shard {}", shard.info.id);

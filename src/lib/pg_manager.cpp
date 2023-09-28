@@ -36,11 +36,4 @@ PGManager::NullAsyncResult HomeObjectImpl::replace_member(pg_id_t id, peer_id_t 
 
     return _replace_member(id, old_member, new_member);
 }
-
-PGManager::Result< PG const* > HomeObjectImpl::get_pg(pg_id_t pg) const {
-    std::shared_lock lock_guard(_pg_lock);
-    auto iter = _pg_map.find(pg);
-    if (iter == _pg_map.cend()) { return folly::makeUnexpected(PGError::UNKNOWN_PG); }
-    return iter->second.get();
-}
 } // namespace homeobject

@@ -13,6 +13,21 @@ class ReplicationService;
 
 namespace homeobject {
 
+template < typename T >
+using shared = std::shared_ptr< T >;
+
+template < typename T >
+using cshared = const std::shared_ptr< T >;
+
+template < typename T >
+using unique = std::unique_ptr< T >;
+
+template < typename T >
+using intrusive = boost::intrusive_ptr< T >;
+
+template < typename T >
+using cintrusive = const boost::intrusive_ptr< T >;
+
 constexpr size_t pg_width = sizeof(pg_id_t) * 8;
 constexpr size_t shard_width = (sizeof(shard_id_t) * 8) - pg_width;
 constexpr size_t shard_mask = std::numeric_limits< homeobject::shard_id_t >::max() >> pg_width;
@@ -38,9 +53,9 @@ struct PG {
     PG(PG const& pg) = delete;
     PG(PG&& pg) = default;
     PG& operator=(PG const& pg) = delete;
+    PG& operator=(PG&& pg) = default;
     virtual ~PG() = default;
 
-    std::shared_mutex mtx_;
     PGInfo pg_info_;
     uint64_t shard_sequence_num_{0};
     ShardList shards_;
@@ -76,7 +91,7 @@ protected:
 
     ///
     mutable std::shared_mutex _pg_lock;
-    std::map< pg_id_t, std::shared_ptr< PG > > _pg_map;
+    std::map< pg_id_t, shared< PG > > _pg_map;
 
     mutable std::shared_mutex _shard_lock;
     std::map< shard_id_t, ShardIterator > _shard_map;
@@ -99,7 +114,6 @@ public:
     peer_id_t our_uuid() const final { return _our_id; }
 
     /// PgManager
-    PGManager::Result< PG const* > get_pg(pg_id_t pgid) const;
     PGManager::NullAsyncResult create_pg(PGInfo&& pg_info) final;
     PGManager::NullAsyncResult replace_member(pg_id_t id, peer_id_t const& old_member,
                                               PGMember const& new_member) final;

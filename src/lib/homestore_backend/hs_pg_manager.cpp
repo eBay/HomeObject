@@ -51,7 +51,7 @@ PGManager::NullAsyncResult HSHomeObject::_create_pg(PGInfo&& pg_info, std::set< 
     return hs_repl_service()
         .create_repl_dev(pg_info.replica_set_uuid, std::move(peers), std::make_unique< ReplicationStateMachine >(this))
         .thenValue([this, pg_info = std::move(pg_info)](auto&& v) -> PGManager::NullResult {
-            if (v.hasError()) { return folly::makeUnexpected(PGError::INVALID_ARG); }
+            if (v.hasError()) { return folly::makeUnexpected(toPgError(v.error())); }
             add_pg_to_map(std::make_shared< HS_PG >(std::move(pg_info), std::move(v.value())));
             return folly::Unit();
         });
@@ -67,7 +67,8 @@ void HSHomeObject::add_pg_to_map(shared< HS_PG > hs_pg) {
                    "PGInfo replica set uuid mismatch with ReplDev instance for {}",
                    boost::uuids::to_string(hs_pg->pg_info_.replica_set_uuid));
     auto lg = std::scoped_lock(_pg_lock);
-    auto [it1, _] = _pg_map.try_emplace(hs_pg->pg_info_.id, std::move(hs_pg));
+    auto id = hs_pg->pg_info_.id;
+    auto [it1, _] = _pg_map.try_emplace(id, std::move(hs_pg));
     RELEASE_ASSERT(_pg_map.end() != it1, "Unknown map insert error!");
 }
 
@@ -115,6 +116,7 @@ void HSHomeObject::on_pg_meta_blk_found(sisl::byte_view const& buf, void* meta_c
         .open_repl_dev(pg_sb->replica_set_uuid, std::make_unique< ReplicationStateMachine >(this))
         .thenValue([this, pg_sb = std::move(pg_sb)](auto&& v) {
             if (v.hasError()) {
+                // TODO: We need to raise an alert here, since without pg repl_dev all operations on that pg will fail
                 LOGERROR("open_repl_dev for group_id={} has failed", boost::uuids::to_string(pg_sb->replica_set_uuid));
                 return;
             }

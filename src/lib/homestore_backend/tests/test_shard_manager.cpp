@@ -335,7 +335,7 @@ TEST_F(ShardManagerWithShardsTesting, MockSealShard) {
     auto pg_iter = ho->_pg_map.find(_pg_id);
     EXPECT_TRUE(pg_iter != ho->_pg_map.end());
     auto& pg = pg_iter->second;
-    EXPECT_EQ(1, pg.shards.size());
+    EXPECT_EQ(1, pg->shards.size());
     auto& check_shard = *pg.shards.begin();
     EXPECT_EQ(ShardInfo::State::SEALED, check_shard.info.state);
     EXPECT_TRUE(check_shard.metablk_cookie != nullptr);
@@ -368,8 +368,8 @@ TEST_F(ShardManagerWithShardsTesting, ShardManagerRecovery) {
     auto pg_iter = ho->_pg_map.find(_pg_id);
     EXPECT_TRUE(pg_iter != ho->_pg_map.end());
     auto& pg = pg_iter->second;
-    EXPECT_EQ(1, pg.shards.size());
-    auto& check_shard = *pg.shards.begin();
+    EXPECT_EQ(1, pg->shards.size());
+    auto& check_shard = *pg->shards.begin();
     void* saved_metablk = check_shard.metablk_cookie;
     pg_iter->second.shards.clear();
     ho->_shard_map.clear();

@@ -31,21 +31,6 @@ using peer_id_t = boost::uuids::uuid;
 using pg_id_t = uint16_t;
 using shard_id_t = uint64_t;
 
-template < typename T >
-using shared = std::shared_ptr< T >;
-
-template < typename T >
-using cshared = const std::shared_ptr< T >;
-
-template < typename T >
-using unique = std::unique_ptr< T >;
-
-template < typename T >
-using intrusive = boost::intrusive_ptr< T >;
-
-template < typename T >
-using cintrusive = const boost::intrusive_ptr< T >;
-
 template < class E >
 class Manager {
 public:
