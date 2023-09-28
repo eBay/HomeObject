@@ -19,12 +19,12 @@ SISL_LOGGING_INIT(logging, HOMEOBJECT_LOG_MODS)
 SISL_OPTIONS_ENABLE(logging)
 
 using homeobject::Blob;
-using homeobject::blob_id;
+using homeobject::blob_id_t;
 using homeobject::BlobError;
-using homeobject::peer_id;
+using homeobject::peer_id_t;
 
 class FixtureApp : public homeobject::HomeObjectApplication {
-    std::string path_{"/tmp/test_homestore.data"};
+    std::string path_{"/tmp/test_homestore.data." + std::to_string(rand())};
 
 public:
     FixtureApp() {
@@ -49,10 +49,10 @@ public:
         return device_info;
     }
 
-    homeobject::peer_id discover_svcid(std::optional< homeobject::peer_id > const& p) const override {
+    homeobject::peer_id_t discover_svcid(std::optional< homeobject::peer_id_t > const& p) const override {
         return p.value();
     }
-    std::string lookup_peer(homeobject::peer_id const&) const override { return "test_fixture.com"; }
+    std::string lookup_peer(homeobject::peer_id_t const&) const override { return "test_fixture.com"; }
 };
 
 class TestFixture : public ::testing::Test {
@@ -61,10 +61,10 @@ class TestFixture : public ::testing::Test {
 public:
     homeobject::ShardInfo _shard_1;
     homeobject::ShardInfo _shard_2;
-    homeobject::pg_id _pg_id{1u};
-    peer_id _peer1;
-    peer_id _peer2;
-    blob_id _blob_id;
+    homeobject::pg_id_t _pg_id{1u};
+    peer_id_t _peer1;
+    peer_id_t _peer2;
+    blob_id_t _blob_id;
 
     void SetUp() override {
         app = std::make_shared< FixtureApp >();

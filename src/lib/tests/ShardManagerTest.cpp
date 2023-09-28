@@ -4,7 +4,7 @@
 #include <homeobject/shard_manager.hpp>
 #include "lib/tests/fixture_app.hpp"
 
-using homeobject::shard_id;
+using homeobject::shard_id_t;
 using homeobject::ShardError;
 using homeobject::ShardInfo;
 

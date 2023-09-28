@@ -7,7 +7,7 @@
 
 namespace homeobject {
 
-ENUM(ReplicationMessageType, uint16_t, PG_MESSAGE = 0, SHARD_MESSAGE, BLOB_MESSAGE, UNKNOWN_MESSAGE);
+VENUM(ReplicationMessageType, uint16_t, PG_MESSAGE = 0, SHARD_MESSAGE = 1, BLOB_MESSAGE = 2, UNKNOWN_MESSAGE = 3);
 
 // magic num comes from the first 8 bytes of 'echo homeobject_replication | md5sum'
 static constexpr uint64_t HOMEOBJECT_REPLICATION_MAGIC = 0x11153ca24efc8d34;
