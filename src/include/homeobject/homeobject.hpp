@@ -22,16 +22,16 @@ public:
     virtual std::list< std::filesystem::path > devices() const = 0;
 
     // Callback made after determining if a SvcId exists or not during initialization, will consume response
-    virtual peer_id discover_svcid(std::optional< peer_id > const& found) const = 0;
+    virtual peer_id_t discover_svcid(std::optional< peer_id_t > const& found) const = 0;
 
     // When RAFT operations take place, we must map the SvcId to a gethostbyaddr() value (IP)
-    virtual std::string lookup_peer(peer_id const&) const = 0;
+    virtual std::string lookup_peer(peer_id_t const&) const = 0;
 };
 
 class HomeObject {
 public:
     virtual ~HomeObject() = default;
-    virtual peer_id our_uuid() const = 0;
+    virtual peer_id_t our_uuid() const = 0;
     virtual std::shared_ptr< BlobManager > blob_manager() = 0;
     virtual std::shared_ptr< PGManager > pg_manager() = 0;
     virtual std::shared_ptr< ShardManager > shard_manager() = 0;

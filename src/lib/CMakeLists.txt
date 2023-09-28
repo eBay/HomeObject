@@ -12,6 +12,9 @@ target_link_libraries(${PROJECT_NAME}_core
             ${COMMON_DEPS}
         )
 
+if(BUILD_TESTING)
+add_subdirectory(tests)
+endif()
 
-add_subdirectory(homestore)
-add_subdirectory(memory)
+add_subdirectory(homestore_backend)
+add_subdirectory(memory_backend)

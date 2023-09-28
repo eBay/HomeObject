@@ -1,10 +1,12 @@
-#include "homeobject.hpp"
-#include "replication_message.hpp"
-
 #include <homestore/homestore.hpp>
 #include <homestore/blkdata_service.hpp>
 #include <homestore/meta_service.hpp>
 #include <homestore/replication_service.hpp>
+
+#include "hs_homeobject.hpp"
+#include "replication_message.hpp"
+#include "replication_state_machine.hpp"
+#include "lib/homeobject_impl.hpp"
 
 namespace homeobject {
 
@@ -12,24 +14,24 @@ uint64_t ShardManager::max_shard_size() { return Gi; }
 
 uint64_t ShardManager::max_shard_num_in_pg() { return ((uint64_t)0x01) << shard_width; }
 
-shard_id HSHomeObject::generate_new_shard_id(pg_id pg) {
+shard_id_t HSHomeObject::generate_new_shard_id(pg_id_t pgid) {
     std::scoped_lock lock_guard(_pg_lock);
-    auto iter = _pg_map.find(pg);
+    auto iter = _pg_map.find(pgid);
     RELEASE_ASSERT(iter != _pg_map.end(), "Missing pg info");
-    auto new_sequence_num = ++(iter->second.shard_sequence_num);
+    auto new_sequence_num = ++(iter->second->shard_sequence_num_);
     RELEASE_ASSERT(new_sequence_num < ShardManager::max_shard_num_in_pg(),
                    "new shard id must be less than ShardManager::max_shard_num_in_pg()");
-    return make_new_shard_id(pg, new_sequence_num);
+    return make_new_shard_id(pgid, new_sequence_num);
 }
 
-uint64_t HSHomeObject::get_sequence_num_from_shard_id(uint64_t shard_id) {
-    return shard_id & (max_shard_num_in_pg() - 1);
+uint64_t HSHomeObject::get_sequence_num_from_shard_id(uint64_t shard_id_t) {
+    return shard_id_t & (max_shard_num_in_pg() - 1);
 }
 
 std::string HSHomeObject::serialize_shard(const Shard& shard) const {
     nlohmann::json j;
     j["shard_info"]["shard_id"] = shard.info.id;
-    j["shard_info"]["pg_id"] = shard.info.placement_group;
+    j["shard_info"]["pg_id_t"] = shard.info.placement_group;
     j["shard_info"]["state"] = shard.info.state;
     j["shard_info"]["created_time"] = shard.info.created_time;
     j["shard_info"]["modified_time"] = shard.info.last_modified_time;
@@ -43,8 +45,8 @@ std::string HSHomeObject::serialize_shard(const Shard& shard) const {
 Shard HSHomeObject::deserialize_shard(const char* json_str, size_t str_size) const {
     auto shard_json = nlohmann::json::parse(json_str, json_str + str_size);
     ShardInfo shard_info;
-    shard_info.id = shard_json["shard_info"]["shard_id"].get< shard_id >();
-    shard_info.placement_group = shard_json["shard_info"]["pg_id"].get< pg_id >();
+    shard_info.id = shard_json["shard_info"]["shard_id"].get< shard_id_t >();
+    shard_info.placement_group = shard_json["shard_info"]["pg_id_t"].get< pg_id_t >();
     shard_info.state = static_cast< ShardInfo::State >(shard_json["shard_info"]["state"].get< int >());
     shard_info.created_time = shard_json["shard_info"]["created_time"].get< uint64_t >();
     shard_info.last_modified_time = shard_json["shard_info"]["modified_time"].get< uint64_t >();
@@ -56,27 +58,30 @@ Shard HSHomeObject::deserialize_shard(const char* json_str, size_t str_size) con
     return shard;
 }
 
-ShardManager::Result< ShardInfo > HSHomeObject::_create_shard(pg_id pg_owner, uint64_t size_bytes) {
-    auto pg = _get_pg(pg_owner);
-    if (!bool(pg)) {
-        LOGWARN("failed to create shard with non-exist pg [{}]", pg_owner);
-        return folly::makeUnexpected(ShardError::UNKNOWN_PG);
+ShardManager::Result< ShardInfo > HSHomeObject::_create_shard(pg_id_t pg_owner, uint64_t size_bytes) {
+    shared< homestore::ReplDev > repl_dev;
+    {
+        std::shared_lock lock_guard(_pg_lock);
+        auto iter = _pg_map.find(pg_owner);
+        if (iter == _pg_map.end()) {
+            LOGWARN("failed to create shard with non-exist pg [{}]", pg_owner);
+            return folly::makeUnexpected(ShardError::UNKNOWN_PG);
+        }
+        repl_dev = std::static_pointer_cast< HS_PG >(iter->second)->repl_dev_;
     }
 
-    homestore::ReplicationService* replication_service =
-        (homestore::ReplicationService*)(&homestore::HomeStore::instance()->repl_service());
-    auto repl_dev = replication_service->get_replica_dev(pg.value().repl_dev_uuid);
-    if (!bool(repl_dev)) {
-        LOGWARN("failed to get replica set instance for pg [{}]", pg_owner);
-        return folly::makeUnexpected(ShardError::UNKNOWN_PG);
+    if (!repl_dev) {
+        LOGWARN("failed to get repl dev instance for pg [{}]", pg_owner);
+        return folly::makeUnexpected(ShardError::PG_NOT_READY);
     }
 
     auto new_shard_id = generate_new_shard_id(pg_owner);
     auto create_time = get_current_timestamp();
     auto shard_info =
         ShardInfo(new_shard_id, pg_owner, ShardInfo::State::OPEN, create_time, create_time, size_bytes, size_bytes, 0);
-    std::string create_shard_message = serialize_shard(Shard(shard_info));
-
+    std::string const create_shard_message = serialize_shard(Shard(shard_info));
+    const uint32_t needed_size = sizeof(ReplicationMessageHeader) + create_shard_message.size();
+    auto req = repl_result_ctx< ShardManager::Result< ShardInfo > >::make(needed_size);
     // round up msg size to homestore datasvc blk size
     const auto datasvc_blk_size = homestore::HomeStore::instance()->data_service().get_blk_size();
     auto msg_size = create_shard_message.size();
@@ -108,12 +113,13 @@ ShardManager::Result< ShardInfo > HSHomeObject::_create_shard(pg_id pg_owner, ui
     return info;
 }
 
-ShardManager::Result< ShardInfo > HSHomeObject::_seal_shard(shard_id id) {
+ShardManager::Result< ShardInfo > HSHomeObject::_seal_shard(shard_id_t id) {
     return folly::makeUnexpected(ShardError::UNKNOWN_SHARD);
 }
 
 void HSHomeObject::on_shard_message_commit(int64_t lsn, sisl::blob const& header, sisl::blob const&,
-                                           homestore::MultiBlkId const& blkids, void* user_ctx,
+                                           homestore::MultiBlkId const& blkids,
+                                           cintrusive< homestore::repl_req_ctx >& hs_ctx),
                                            homestore::ReplDev& repl_dev) {
     folly::Promise< ShardManager::Result< ShardInfo > >* promise = nullptr;
     // user_ctx will be nullptr when:
@@ -134,7 +140,7 @@ void HSHomeObject::on_shard_message_commit(int64_t lsn, sisl::blob const& header
     sisl::sg_list value;
     value.size = value_size;
     value.iovs.emplace_back(iovec{.iov_base = value_buf, .iov_len = value_size});
-
+    
     repl_dev.async_read(blkids, value, value_size)
         .thenValue([this, header, msg_header, blkids, value_buf, value_size, promise](auto&& err) {
             if (err ||
@@ -175,20 +181,24 @@ void HSHomeObject::on_shard_message_commit(int64_t lsn, sisl::blob const& header
             iomanager.iobuf_free(value_buf);
             if (promise) { promise->setValue(ShardManager::Result< ShardInfo >(shard.info)); }
         });
+
+    if (ctx) { ctx->promise_.setValue(ShardManager::Result< ShardInfo >(shard.info)); }
 }
 
 void HSHomeObject::do_commit_new_shard(const Shard& shard) {
+    // TODO: We are taking a global lock for all pgs to create shard. Is it really needed??
+    // We need to have fine grained per PG lock and take only that.
     std::scoped_lock lock_guard(_pg_lock, _shard_lock);
     auto pg_iter = _pg_map.find(shard.info.placement_group);
     RELEASE_ASSERT(pg_iter != _pg_map.end(), "Missing PG info");
-    auto& shards = pg_iter->second.shards;
+    auto& shards = pg_iter->second->shards_;
     auto iter = shards.emplace(shards.end(), shard);
     auto [_, happened] = _shard_map.emplace(shard.info.id, iter);
     RELEASE_ASSERT(happened, "duplicated shard info");
 
     // following part give follower members a chance to catch up shard sequence num;
     auto sequence_num = get_sequence_num_from_shard_id(shard.info.id);
-    if (sequence_num > pg_iter->second.shard_sequence_num) { pg_iter->second.shard_sequence_num = sequence_num; }
+    if (sequence_num > pg_iter->second->shard_sequence_num_) { pg_iter->second->shard_sequence_num_ = sequence_num; }
 }
 
 void HSHomeObject::do_commit_seal_shard(const Shard& shard) {
@@ -198,7 +208,7 @@ void HSHomeObject::do_commit_seal_shard(const Shard& shard) {
     *(shard_iter->second) = shard;
 }
 
-void* HSHomeObject::get_shard_metablk(shard_id id) const {
+void* HSHomeObject::get_shard_metablk(shard_id_t id) const {
     std::scoped_lock lock_guard(_shard_lock);
     auto shard_iter = _shard_map.find(id);
     if (shard_iter == _shard_map.end()) { return nullptr; }

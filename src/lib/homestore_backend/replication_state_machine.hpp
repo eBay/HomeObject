@@ -1,28 +1,40 @@
 #pragma once
 
-#include "homeobject.hpp"
-
-#include <homestore/replication_service.hpp>
+#include <folly/futures/Future.h>
 #include <homestore/replication/repl_dev.h>
+#include "hs_homeobject.hpp"
 
 namespace homeobject {
 
-class HomeObjectImpl;
+class HSHomeObject;
 
-class HOReplServiceCallbacks : public homestore::ReplServiceCallbacks {
-    HSHomeObject* _home_object{nullptr};
+struct ho_repl_ctx : public homestore::repl_req_ctx {
+    sisl::io_blob_safe hdr_buf_;
 
-public:
-    explicit HOReplServiceCallbacks(HSHomeObject* home_object) : _home_object(home_object) {}
-    virtual ~HOReplServiceCallbacks() = default;
-    virtual std::unique_ptr< homestore::ReplDevListener >
-    on_repl_dev_init(homestore::cshared< homestore::ReplDev >& rs);
+    ho_repl_ctx(uint32_t size) : homestore::repl_req_ctx{}, hdr_buf_{size} {}
+    template < typename T >
+    T* to() {
+        return r_cast< T* >(this);
+    }
+};
+
+template < typename T >
+struct repl_result_ctx : public ho_repl_ctx {
+    folly::Promise< T > promise_;
+
+    template < typename... Args >
+    static intrusive< repl_result_ctx< T > > make(Args&&... args) {
+        return intrusive< repl_result_ctx< T > >{new repl_result_ctx< T >(std::forward< Args >(args)...)};
+    }
+
+    repl_result_ctx(uint32_t hdr_size) : ho_repl_ctx{hdr_size} {}
+    folly::SemiFuture< T > result() { return promise_.getSemiFuture(); }
 };
 
 class ReplicationStateMachine : public homestore::ReplDevListener {
 public:
-    explicit ReplicationStateMachine(HSHomeObject* home_object, homestore::ReplDev& repl_dev) :
-            _home_object(home_object), _repl_dev(repl_dev) {}
+
+    explicit ReplicationStateMachine(HSHomeObject* home_object) : _home_object(home_object) {}
 
     virtual ~ReplicationStateMachine() = default;
 
@@ -37,8 +49,9 @@ public:
     /// @param blkids - List of blkids where data is written to the storage engine.
     /// @param ctx - User contenxt passed as part of the replica_set::write() api
     ///
-    virtual void on_commit(int64_t lsn, sisl::blob const& header, sisl::blob const& key,
-                           homestore::MultiBlkId const& blkids, void* ctx) override;
+
+    void on_commit(int64_t lsn, sisl::blob const& header, sisl::blob const& key, homestore::MultiBlkId const& blkids,
+                   cintrusive< homestore::repl_req_ctx >& ctx) override;
 
     /// @brief Called when the log entry has been received by the replica dev.
     ///
@@ -55,10 +68,12 @@ public:
     /// currently in pre-commit, but yet to be committed.
     ///
     /// @param lsn - The log sequence number
-    /// @param header - Header originally passed with repl_dev::write() api
-    /// @param key - Key originally passed with repl_dev::write() api
-    /// @param ctx - User contenxt passed as part of the repl_dev::write() api
-    virtual void on_pre_commit(int64_t lsn, const sisl::blob& header, const sisl::blob& key, void* ctx) override;
+
+    /// @param header - Header originally passed with replica_set::write() api
+    /// @param key - Key originally passed with replica_set::write() api
+    /// @param ctx - User contenxt passed as part of the replica_set::write() api
+    bool on_pre_commit(int64_t lsn, const sisl::blob& header, const sisl::blob& key,
+                       cintrusive< homestore::repl_req_ctx >& ctx) override;
 
     /// @brief Called when the log entry has been rolled back by the replica set.
     ///
@@ -70,10 +85,11 @@ public:
     /// NOTE: Listener should do the free any resources created as part of pre-commit.
     ///
     /// @param lsn - The log sequence number getting rolled back
-    /// @param header - Header originally passed with repl_dev::write() api
-    /// @param key - Key originally passed with repl_dev::write() api
-    /// @param ctx - User contenxt passed as part of the repl_dev::write() api
-    virtual void on_rollback(int64_t lsn, const sisl::blob& header, const sisl::blob& key, void* ctx) override;
+    /// @param header - Header originally passed with replica_set::write() api
+    /// @param key - Key originally passed with replica_set::write() api
+    /// @param ctx - User contenxt passed as part of the replica_set::write() api
+    void on_rollback(int64_t lsn, const sisl::blob& header, const sisl::blob& key,
+                     cintrusive< homestore::repl_req_ctx >& ctx) override;
 
     /// @brief Called when replication module is trying to allocate a block to write the value
     ///
@@ -83,14 +99,15 @@ public:
     ///
     /// @param header Header originally passed with repl_dev::write() api on the leader
     /// @return Expected to return blk_alloc_hints for this write
-    virtual homestore::blk_alloc_hints get_blk_alloc_hints(sisl::blob const& header, void* user_ctx) override;
+
+    homestore::blk_alloc_hints get_blk_alloc_hints(sisl::blob const& header,
+                                                   cintrusive< homestore::repl_req_ctx >& ctx) override;
 
     /// @brief Called when the replica set is being stopped
-    virtual void on_replica_stop() override;
+    void on_replica_stop() override;
 
 private:
     HSHomeObject* _home_object;
-    homestore::ReplDev&  _repl_dev;
 };
 
 } // namespace homeobject

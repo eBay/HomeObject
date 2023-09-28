@@ -1,10 +1,12 @@
-#include "homeobject.hpp"
-#include "replication_state_machine.hpp"
-
 #include <homestore/homestore.hpp>
 #include <homestore/index_service.hpp>
 #include <homestore/meta_service.hpp>
+#include <homestore/replication_service.hpp>
 #include <iomgr/io_environment.hpp>
+
+#include <homeobject/homeobject.hpp>
+#include "hs_homeobject.hpp"
+#include "heap_chunk_selector.h"
 
 namespace homeobject {
 
@@ -14,7 +16,6 @@ extern std::shared_ptr< HomeObject > init_homeobject(std::weak_ptr< HomeObjectAp
     LOGINFOMOD(homeobject, "Initializing HomeObject");
     auto instance = std::make_shared< HSHomeObject >(std::move(application));
     instance->init_homestore();
-    instance->init_repl_svc();
     return instance;
 }
 
@@ -42,27 +43,24 @@ void HSHomeObject::init_homestore() {
     _chunk_selector = std::make_shared< HeapChunkSelector >();
 
     using namespace homestore;
-    auto hsi = HomeStore::instance();
-    // when enable replication service of homestore, log service will be enabled automatically.
-    // and meta service is already enabled by default.
-    hsi->with_repl_data_service(repl_impl_type::solo, std::make_unique< HOReplServiceCallbacks >(this),
-                                _chunk_selector);
-
-    bool need_format = hsi->start(hs_input_params{.devices = device_info, .app_mem_size = app_mem_size},
+    bool need_format = HomeStore::instance()
+                           ->with_index_service(nullptr)
+                           .with_repl_data_service(repl_impl_type::solo, std::make_shared< HeapChunkSelector >())
+                           .start(hs_input_params{.devices = device_info, .app_mem_size = app_mem_size},
                                   [this]() { register_homestore_metablk_callback(); });
-
-    /// TODO how should this work?
-    LOGWARN("Persistence Looks Vacant, Formatting!!");
     if (need_format) {
-        hsi->format_and_start(std::map< uint32_t, hs_format_params >{
+        LOGWARN("Seems like we are booting/starting first time, Formatting!!");
+        HomeStore::instance()->format_and_start({
             {HS_SERVICE::META, hs_format_params{.size_pct = 5.0}},
             {HS_SERVICE::LOG_REPLICATED, hs_format_params{.size_pct = 10.0}},
-            {HS_SERVICE::LOG_LOCAL, hs_format_params{.size_pct = 5.0}},
-            {HS_SERVICE::INDEX, hs_format_params{.size_pct = 30.0}},
+            {HS_SERVICE::LOG_LOCAL, hs_format_params{.size_pct = 0.1}}, // TODO: Remove this after HS disables LOG_LOCAL
             {HS_SERVICE::REPLICATION,
-             hs_format_params{.size_pct = 50.0,
-                              .alloc_type = homestore::blk_allocator_type_t::append,
-                              .chunk_sel_type = homestore::chunk_selector_type_t::CUSTOM}},
+             hs_format_params{.size_pct = 80.0,
+                              .num_chunks = 65000,
+                              .block_size = 1024,
+                              .alloc_type = blk_allocator_type_t::append,
+                              .chunk_sel_type = chunk_selector_type_t::CUSTOM}},
+            {HS_SERVICE::INDEX, hs_format_params{.size_pct = 5.0}},
         });
     }
 }
@@ -75,18 +73,16 @@ void HSHomeObject::register_homestore_metablk_callback() {
         [this](homestore::meta_blk* mblk, sisl::byte_view buf, size_t size) {
             on_shard_meta_blk_found(mblk, buf, size);
         },
-        [this](bool success) { on_shard_meta_blk_recover_completed(success); }, true);
-}
 
-void HomeObjectImpl::init_repl_svc() {
-    auto lg = std::scoped_lock(_repl_lock);
-    if (!_repl_svc) {
-        // TODO this should come from persistence.
-        LOGINFOMOD(homeobject, "First time start-up...initiating request for SvcId.");
-        _our_id = _application.lock()->discover_svcid(std::nullopt);
-        LOGINFOMOD(homeobject, "SvcId received: {}", to_string(_our_id));
-        _repl_svc = home_replication::create_repl_service([](auto) { return nullptr; });
-    }
+        [this](bool success) { on_shard_meta_blk_recover_completed(success); },
+        true);
+
+    HomeStore::instance()->meta_service().register_handler(
+        "PGManager",
+        [this](homestore::meta_blk* mblk, sisl::byte_view buf, size_t size) {
+            on_pg_meta_blk_found(std::move(buf), voidptr_cast(mblk));
+        },
+        nullptr, true);
 }
 
 HSHomeObject::~HSHomeObject() {
@@ -103,6 +99,7 @@ void HSHomeObject::on_shard_meta_blk_found(homestore::meta_blk* mblk, sisl::byte
     // deleted too.
     do_commit_new_shard(shard);
 }
+
 
 void HSHomeObject::on_shard_meta_blk_recover_completed(bool success) {
     // Find all shard with opening state and excluede their binding chunks from the HeapChunkSelector;

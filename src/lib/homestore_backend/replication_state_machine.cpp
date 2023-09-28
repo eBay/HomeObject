@@ -9,7 +9,7 @@ HOReplServiceCallbacks::on_repl_dev_init(homestore::cshared< homestore::ReplDev 
 }
 
 void ReplicationStateMachine::on_commit(int64_t lsn, const sisl::blob& header, const sisl::blob& key,
-                                        homestore::MultiBlkId const& blkids, void* ctx) {
+                                        const homestore::MultiBlkId& pbas, cintrusive< homestore::repl_req_ctx >& ctx) {
     LOGINFO("applying raft log commit with lsn:{}", lsn);
     const ReplicationMessageHeader* msg_header = r_cast< const ReplicationMessageHeader* >(header.bytes);
     switch (msg_header->msg_type) {
@@ -26,7 +26,8 @@ void ReplicationStateMachine::on_commit(int64_t lsn, const sisl::blob& header, c
     }
 }
 
-void ReplicationStateMachine::on_pre_commit(int64_t lsn, sisl::blob const& header, sisl::blob const& key, void* ctx) {
+bool ReplicationStateMachine::on_pre_commit(int64_t lsn, sisl::blob const& header, sisl::blob const& key,
+                                            cintrusive< homestore::repl_req_ctx >& ctx) {
     LOGINFO("on_pre_commit with lsn:{}", lsn);
     // For shard creation, since homestore repldev inside will write shard header to data service first before this
     // function is called. So there is nothing is needed to do and we can get the binding chunk_id with the newly shard
@@ -37,7 +38,9 @@ void ReplicationStateMachine::on_rollback(int64_t lsn, sisl::blob const& header,
     LOGINFO("on_rollback  with lsn:{}", lsn);
 }
 
-homestore::blk_alloc_hints ReplicationStateMachine::get_blk_alloc_hints(sisl::blob const& header, void* user_ctx) {
+homestore::blk_alloc_hints ReplicationStateMachine::get_blk_alloc_hints(sisl::blob const& header,
+                                                                        cintrusive< homestore::repl_req_ctx >& ctx) {
+    // TODO: Return blk_alloc_hints specific to create shard or blob put
     const ReplicationMessageHeader* msg_header = r_cast< const ReplicationMessageHeader* >(header.bytes);
     if (msg_header->header_crc != msg_header->calculate_crc()) {
         LOGWARN("replication message header is corrupted with crc error and can not get blk alloc hints");
@@ -72,7 +75,7 @@ homestore::blk_alloc_hints ReplicationStateMachine::get_blk_alloc_hints(sisl::bl
     }
     }
 
-    return homestore::blk_alloc_hints();
+    return homestore::blk_alloc_hints();  
 }
 
 void ReplicationStateMachine::on_replica_stop() {}

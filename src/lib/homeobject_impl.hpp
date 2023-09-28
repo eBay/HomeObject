@@ -7,20 +7,34 @@
 
 #include <sisl/logging/logging.h>
 
-namespace home_replication {
+namespace homestore {
 class ReplicationService;
 }
 
 namespace homeobject {
 
-constexpr size_t pg_width = sizeof(pg_id) * 8;
-constexpr size_t shard_width = (sizeof(shard_id) * 8) - pg_width;
-constexpr size_t shard_mask = std::numeric_limits< homeobject::shard_id >::max() >> pg_width;
+template < typename T >
+using shared = std::shared_ptr< T >;
 
-inline shard_id make_new_shard_id(pg_id pg, shard_id next_shard) { return ((uint64_t)pg << shard_width) | next_shard; }
+template < typename T >
+using cshared = const std::shared_ptr< T >;
 
-inline bool operator<(ShardInfo const& lhs, ShardInfo const& rhs) { return lhs.id < rhs.id; }
-inline bool operator==(ShardInfo const& lhs, ShardInfo const& rhs) { return lhs.id == rhs.id; }
+template < typename T >
+using unique = std::unique_ptr< T >;
+
+template < typename T >
+using intrusive = boost::intrusive_ptr< T >;
+
+template < typename T >
+using cintrusive = const boost::intrusive_ptr< T >;
+
+constexpr size_t pg_width = sizeof(pg_id_t) * 8;
+constexpr size_t shard_width = (sizeof(shard_id_t) * 8) - pg_width;
+constexpr size_t shard_mask = std::numeric_limits< homeobject::shard_id_t >::max() >> pg_width;
+
+inline shard_id_t make_new_shard_id(pg_id_t pg, shard_id_t next_shard) {
+    return ((uint64_t)pg << shard_width) | next_shard;
+}
 
 struct Shard {
     explicit Shard(ShardInfo info) : info(std::move(info)) {}
@@ -32,12 +46,19 @@ struct Shard {
 using ShardList = std::list< Shard >;
 using ShardIterator = ShardList::iterator;
 
+struct PGReplDevBase {};
+
 struct PG {
-    explicit PG(PGInfo info) : pg_info(std::move(info)) {}
-    PGInfo pg_info;
-    uint64_t shard_sequence_num{0};
-    ShardList shards;
-    boost::uuids::uuid repl_dev_uuid; // will be filled when pg_creation is based on HS SoloReplDev
+    explicit PG(PGInfo info) : pg_info_(std::move(info)) {}
+    PG(PG const& pg) = delete;
+    PG(PG&& pg) = default;
+    PG& operator=(PG const& pg) = delete;
+    PG& operator=(PG&& pg) = default;
+    virtual ~PG() = default;
+
+    PGInfo pg_info_;
+    uint64_t shard_sequence_num_{0};
+    ShardList shards_;
 };
 
 class HomeObjectImpl : public HomeObject,
@@ -47,34 +68,34 @@ class HomeObjectImpl : public HomeObject,
                        public std::enable_shared_from_this< HomeObjectImpl > {
 
     /// Implementation defines these
-    virtual PGManager::NullAsyncResult _create_pg(PGInfo&& pg_info, std::set< std::string, std::less<> >&& peers) = 0;
-    virtual ShardManager::Result< ShardInfo > _create_shard(pg_id, uint64_t size_bytes) = 0;
-    virtual ShardManager::Result< ShardInfo > _seal_shard(shard_id) = 0;
+    virtual ShardManager::Result< ShardInfo > _create_shard(pg_id_t, uint64_t size_bytes) = 0;
+    virtual ShardManager::Result< ShardInfo > _seal_shard(shard_id_t) = 0;
 
-    virtual BlobManager::Result< blob_id > _put_blob(ShardInfo const&, Blob&&) = 0;
-    virtual BlobManager::Result< Blob > _get_blob(ShardInfo const&, blob_id) const = 0;
-    virtual BlobManager::NullResult _del_blob(ShardInfo const&, blob_id) = 0;
+    virtual BlobManager::Result< blob_id_t > _put_blob(ShardInfo const&, Blob&&) = 0;
+    virtual BlobManager::Result< Blob > _get_blob(ShardInfo const&, blob_id_t) const = 0;
+    virtual BlobManager::NullResult _del_blob(ShardInfo const&, blob_id_t) = 0;
     ///
-    folly::Future< ShardManager::Result< Shard > > _get_shard(shard_id id) const;
+    folly::Future< ShardManager::Result< Shard > > _get_shard(shard_id_t id) const;
     auto _defer() const { return folly::makeSemiFuture().via(folly::getGlobalCPUExecutor()); }
+
+    virtual PGManager::NullAsyncResult _create_pg(PGInfo&& pg_info, std::set< std::string, std::less<> > peers) = 0;
+    virtual PGManager::NullAsyncResult _replace_member(pg_id_t id, peer_id_t const& old_member,
+                                                       PGMember const& new_member) = 0;
 
 protected:
     std::mutex _repl_lock;
-    std::shared_ptr< home_replication::ReplicationService > _repl_svc;
-    // std::shared_ptr<homestore::ReplicationService> _repl_svc;
-    peer_id _our_id;
+    peer_id_t _our_id;
 
     /// Our SvcId retrieval and SvcId->IP mapping
     std::weak_ptr< HomeObjectApplication > _application;
 
     ///
     mutable std::shared_mutex _pg_lock;
-    std::map< pg_id, PG > _pg_map;
+    std::map< pg_id_t, shared< PG > > _pg_map;
 
     mutable std::shared_mutex _shard_lock;
-    std::map< shard_id, ShardIterator > _shard_map;
+    std::map< shard_id_t, ShardIterator > _shard_map;
     ///
-    PGManager::Result< PG > _get_pg(pg_id pg);
 
 public:
     explicit HomeObjectImpl(std::weak_ptr< HomeObjectApplication >&& application) :
@@ -86,31 +107,29 @@ public:
     HomeObjectImpl& operator=(const HomeObjectImpl&) = delete;
     HomeObjectImpl& operator=(HomeObjectImpl&&) noexcept = delete;
 
-    // This is public but not exposed in the API above
-    void init_repl_svc();
-
-    std::shared_ptr< home_replication::ReplicationService > get_repl_svc() { return _repl_svc; }
-
     std::shared_ptr< BlobManager > blob_manager() final;
     std::shared_ptr< PGManager > pg_manager() final;
     std::shared_ptr< ShardManager > shard_manager() final;
 
-    peer_id our_uuid() const final { return _our_id; }
+    peer_id_t our_uuid() const final { return _our_id; }
 
     /// PgManager
     PGManager::NullAsyncResult create_pg(PGInfo&& pg_info) final;
-    PGManager::NullAsyncResult replace_member(pg_id id, peer_id const& old_member, PGMember const& new_member) final;
+    PGManager::NullAsyncResult replace_member(pg_id_t id, peer_id_t const& old_member,
+                                              PGMember const& new_member) final;
 
     /// ShardManager
-    ShardManager::AsyncResult< ShardInfo > get_shard(shard_id id) const final;
-    ShardManager::AsyncResult< ShardInfo > create_shard(pg_id pg_owner, uint64_t size_bytes) final;
-    ShardManager::AsyncResult< InfoList > list_shards(pg_id pg) const final;
-    ShardManager::AsyncResult< ShardInfo > seal_shard(shard_id id) final;
+    ShardManager::AsyncResult< ShardInfo > get_shard(shard_id_t id) const final;
+    ShardManager::AsyncResult< ShardInfo > create_shard(pg_id_t pg_owner, uint64_t size_bytes) final;
+    ShardManager::AsyncResult< InfoList > list_shards(pg_id_t pg) const final;
+    ShardManager::AsyncResult< ShardInfo > seal_shard(shard_id_t id) final;
     uint64_t get_current_timestamp();
+
     /// BlobManager
-    BlobManager::AsyncResult< blob_id > put(shard_id shard, Blob&&) final;
-    BlobManager::AsyncResult< Blob > get(shard_id shard, blob_id const& blob, uint64_t off, uint64_t len) const final;
-    BlobManager::NullAsyncResult del(shard_id shard, blob_id const& blob) final;
+    BlobManager::AsyncResult< blob_id_t > put(shard_id_t shard, Blob&&) final;
+    BlobManager::AsyncResult< Blob > get(shard_id_t shard, blob_id_t const& blob, uint64_t off,
+                                         uint64_t len) const final;
+    BlobManager::NullAsyncResult del(shard_id_t shard, blob_id_t const& blob) final;
 };
 
 } // namespace homeobject

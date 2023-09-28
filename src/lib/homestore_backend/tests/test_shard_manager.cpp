@@ -14,12 +14,11 @@
 // will allow unit tests to access object private/protected for validation;
 #define protected public
 
-#include "lib/homestore/homeobject.hpp"
-#include "lib/homestore/replication_message.hpp"
-#include "lib/homestore/replication_state_machine.hpp"
-#include "mocks/mock_replica_set.hpp"
+#include "lib/homestore_backend/hs_homeobject.hpp"
+#include "lib/homestore_backend/replication_message.hpp"
+#include "lib/homestore_backend/replication_state_machine.hpp"
 
-using homeobject::shard_id;
+using homeobject::shard_id_t;
 using homeobject::ShardError;
 using homeobject::ShardInfo;
 
@@ -43,18 +42,18 @@ public:
         device_info.emplace_back(std::filesystem::canonical(fpath));
         return device_info;
     }
-    homeobject::peer_id discover_svcid(std::optional< homeobject::peer_id > const&) const override {
+    homeobject::peer_id_t discover_svcid(std::optional< homeobject::peer_id_t > const&) const override {
         return boost::uuids::random_generator()();
     }
-    std::string lookup_peer(homeobject::peer_id const&) const override { return "test_fixture.com"; }
+    std::string lookup_peer(homeobject::peer_id_t const&) const override { return "test_fixture.com"; }
 };
 
 class ShardManagerTesting : public ::testing::Test {
 public:
-    homeobject::pg_id _pg_id{1u};
-    homeobject::peer_id _peer1;
-    homeobject::peer_id _peer2;
-    homeobject::shard_id _shard_id{100u};
+    homeobject::pg_id_t _pg_id{1u};
+    homeobject::peer_id_t _peer1;
+    homeobject::peer_id_t _peer2;
+    homeobject::shard_id_t _shard_id{100u};
 
     void SetUp() override {
         app = std::make_shared< FixtureApp >();
@@ -123,9 +122,9 @@ TEST_F(ShardManagerTesting, CreateShardAndValidateMembers) {
     auto pg_iter = ho->_pg_map.find(_pg_id);
     EXPECT_TRUE(pg_iter != ho->_pg_map.end());
     auto& pg = pg_iter->second;
-    EXPECT_TRUE(pg.shard_sequence_num == 1);
-    EXPECT_EQ(1, pg.shards.size());
-    auto& shard = *pg.shards.begin();
+    EXPECT_TRUE(pg->shard_sequence_num_ == 1);
+    EXPECT_EQ(1, pg->shards_.size());
+    auto& shard = *pg->shards_.begin();
     EXPECT_TRUE(shard.info == shard_info);
     EXPECT_TRUE(shard.metablk_cookie != nullptr);
 }
@@ -161,6 +160,7 @@ TEST_F(ShardManagerTesting, SealUnknownShard) {
 }
 
 TEST_F(ShardManagerTesting, ShardManagerRecovery) {
+
     auto e = _home_object->shard_manager()->create_shard(_pg_id, Mi).get();
     ASSERT_TRUE(!!e);
     ShardInfo shard_info = e.value();
@@ -171,8 +171,8 @@ TEST_F(ShardManagerTesting, ShardManagerRecovery) {
     EXPECT_EQ(_pg_id, shard_info.placement_group);
 
     nlohmann::json shard_json;
-    shard_json["shard_info"]["shard_id"] = shard_info.id;
-    shard_json["shard_info"]["pg_id"] = shard_info.placement_group;
+    shard_json["shard_info"]["shard_id_t"] = shard_info.id;
+    shard_json["shard_info"]["pg_id_t"] = shard_info.placement_group;
     shard_json["shard_info"]["state"] = shard_info.state;
     shard_json["shard_info"]["created_time"] = shard_info.created_time;
     shard_json["shard_info"]["modified_time"] = shard_info.last_modified_time;
@@ -187,8 +187,8 @@ TEST_F(ShardManagerTesting, ShardManagerRecovery) {
     auto pg_iter = ho->_pg_map.find(_pg_id);
     EXPECT_TRUE(pg_iter != ho->_pg_map.end());
     auto& pg = pg_iter->second;
-    EXPECT_EQ(1, pg.shards.size());
-    auto& check_shard = *pg.shards.begin();
+    EXPECT_EQ(1, pg->shards.size());
+    auto& check_shard = *pg->shards.begin();
     void* saved_metablk = check_shard.metablk_cookie;
     pg_iter->second.shards.clear();
     ho->_shard_map.clear();

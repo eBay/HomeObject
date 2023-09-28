@@ -117,4 +117,16 @@ void HeapChunkSelector::build_per_dev_chunk_heap(const std::unordered_set< chunk
         if (excludingChunks.find(p.first) == excludingChunks.end()) { add_chunk_internal(p.first); }
     };
 }
+
+homestore::blk_alloc_hints HeapChunkSelector::chunk_to_hints(chunk_num_t chunk_id) const {
+    auto iter = m_chunks.find(chunk_id);
+    if (iter == m_chunks.end()) {
+        LOGWARNMOD(homeobject, "No chunk found for chunk_id {}, will return default blk alloc hints", chunk_id);
+        return homestore::blk_alloc_hints();
+    }
+    homestore::blk_alloc_hints hints;
+    hints.pdev_id_hint = VChunk(iter->second).get_pdev_id();
+    return hints;
+}
+
 } // namespace homeobject
