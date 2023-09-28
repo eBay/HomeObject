@@ -231,6 +231,7 @@ public:
 class ShardManagerTestingRecovery : public ::testing::Test {
 public:
     void SetUp() override { app = std::make_shared< FixtureAppWithRecovery >(); }
+
 protected:
     std::shared_ptr< FixtureApp > app;
 };
@@ -238,7 +239,7 @@ protected:
 TEST_F(ShardManagerTestingRecovery, ShardManagerRecovery) {
     // prepare the env first;
     const std::string fpath{"/tmp/test_homestore.data"};
-    if (std::filesystem::exists(fpath)) { std::filesystem::remove(fpath);}
+    if (std::filesystem::exists(fpath)) { std::filesystem::remove(fpath); }
     LOGINFO("creating device files with size {} ", homestore::in_bytes(2 * Gi));
     LOGINFO("creating {} device file", fpath);
     std::ofstream ofs{fpath, std::ios::binary | std::ios::out | std::ios::trunc};
@@ -265,7 +266,7 @@ TEST_F(ShardManagerTestingRecovery, ShardManagerRecovery) {
     EXPECT_EQ(Mi, shard_info.total_capacity_bytes);
     EXPECT_EQ(Mi, shard_info.available_capacity_bytes);
     EXPECT_EQ(0ul, shard_info.deleted_capacity_bytes);
-    EXPECT_EQ(_pg_id, shard_info.placement_group);    
+    EXPECT_EQ(_pg_id, shard_info.placement_group);
 
     homeobject::HSHomeObject* ho = dynamic_cast< homeobject::HSHomeObject* >(_home_object.get());
     auto pg_iter = ho->_pg_map.find(_pg_id);
@@ -287,10 +288,16 @@ TEST_F(ShardManagerTestingRecovery, ShardManagerRecovery) {
     pg_iter = ho->_pg_map.find(_pg_id);
     EXPECT_TRUE(pg_iter != ho->_pg_map.end());
     EXPECT_EQ(1, pg_iter->second->shards_.size());
-    auto hs_shard = dp_cast<homeobject::HSHomeObject::HS_Shard>(pg_iter->second->shards_.front());
+    auto hs_shard = dp_cast< homeobject::HSHomeObject::HS_Shard >(pg_iter->second->shards_.front());
     EXPECT_TRUE(hs_shard->info == shard_info);
     EXPECT_TRUE(hs_shard->sb_->id == shard_info.id);
-    EXPECT_TRUE(hs_shard->sb_->id == shard_info.id);
+    EXPECT_TRUE(hs_shard->sb_->placement_group == shard_info.placement_group);
+    EXPECT_TRUE(hs_shard->sb_->state == shard_info.state);
+    EXPECT_TRUE(hs_shard->sb_->created_time == shard_info.created_time);
+    EXPECT_TRUE(hs_shard->sb_->last_modified_time == shard_info.last_modified_time);
+    EXPECT_TRUE(hs_shard->sb_->available_capacity_bytes == shard_info.available_capacity_bytes);
+    EXPECT_TRUE(hs_shard->sb_->total_capacity_bytes == shard_info.total_capacity_bytes);
+    EXPECT_TRUE(hs_shard->sb_->deleted_capacity_bytes == shard_info.deleted_capacity_bytes);
 }
 
 int main(int argc, char* argv[]) {

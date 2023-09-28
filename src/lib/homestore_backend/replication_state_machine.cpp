@@ -40,7 +40,7 @@ homestore::blk_alloc_hints ReplicationStateMachine::get_blk_alloc_hints(sisl::bl
     switch (msg_header->msg_type) {
     case ReplicationMessageType::CREATE_SHARD_MSG: {
         auto list_shard_result = home_object_->shard_manager()->list_shards(msg_header->pg_id).get();
-        if (!list_shard_result) {
+        if (sisl_unlikely(!list_shard_result)) {
             LOGWARNMOD(homeobject, "list shards failed from pg {}", msg_header->pg_id);
             break;
         }
