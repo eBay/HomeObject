@@ -119,7 +119,10 @@ void HSHomeObject::on_shard_message_commit(int64_t lsn, sisl::blob const& header
     }
 
     // hs_ctx will be nullptr when HS is restarting and replay all commited log entries from the last checkpoint;
-    // and then we need re-read value from PBA;
+    // but do we really need to handle this for create_shard or seal_shard?
+    // because this raft log had been commit before HO restarts and commit result is already saved in HS metablks
+    // when HS restarts, all PG/Shard infos will be recovered from HS metablks and if we commit again, it will cause duplication;
+#if 0     
     sisl::sg_list value;
     value.size = blkids.blk_count() * repl_dev->get_blk_size();
     auto value_buf = iomanager.iobuf_alloc(512, value.size);
@@ -135,6 +138,7 @@ void HSHomeObject::on_shard_message_commit(int64_t lsn, sisl::blob const& header
         }
         iomanager.iobuf_free(r_cast< uint8_t* >(value.iovs[0].iov_base));
     });
+#endif    
 }
 
 void HSHomeObject::do_shard_message_commit(int64_t lsn, const ReplicationMessageHeader& header,

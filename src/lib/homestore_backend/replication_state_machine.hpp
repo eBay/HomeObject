@@ -100,7 +100,6 @@ public:
     ///
     /// @param header Header originally passed with repl_dev::write() api on the leader
     /// @return Expected to return blk_alloc_hints for this write
-
     homestore::blk_alloc_hints get_blk_alloc_hints(sisl::blob const& header,
                                                    cintrusive< homestore::repl_req_ctx >& ctx) override;
 

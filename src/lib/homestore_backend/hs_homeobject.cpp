@@ -60,6 +60,7 @@ void HSHomeObject::init_homestore() {
             {HS_SERVICE::INDEX, hs_format_params{.size_pct = 5.0}},
         });
     }
+
     LOGINFO("Initialize and start HomeStore is successfully");
 }
 
@@ -69,7 +70,6 @@ void HSHomeObject::register_homestore_metablk_callback() {
     HomeStore::instance()->meta_service().register_handler(
         "ShardManager",
         [this](homestore::meta_blk* mblk, sisl::byte_view buf, size_t size) { on_shard_meta_blk_found(mblk, buf); },
-
         [this](bool success) { on_shard_meta_blk_recover_completed(success); }, true);
 
     HomeStore::instance()->meta_service().register_handler(
