@@ -9,11 +9,11 @@ namespace homeobject {
 
 #define WITH_ROUTE(blob)                                                                                               \
     auto const route = BlobRoute{_shard.id, (blob)};                                                                   \
-    LOGTRACEMOD(homeobject, "[route={}]", route);
+    LOGT("[route={}]", route);
 
 #define IF_BLOB_ALIVE                                                                                                  \
     if (auto blob_it = shard.btree_.find(route); shard.btree_.end() == blob_it || !blob_it->second) {                  \
-        LOGWARNMOD(homeobject, "[route={}] missing", route);                                                           \
+        LOGW("[route={}] missing", route);                                                                             \
         return folly::makeUnexpected(BlobError::UNKNOWN_BLOB);                                                         \
     } else
 
@@ -40,9 +40,8 @@ BlobManager::NullResult MemoryHomeObject::_del_blob(ShardInfo const& _shard, blo
     WITH_SHARD
     WITH_ROUTE(_blob)
     IF_BLOB_ALIVE {
-        auto del_blob = BlobExt();
-        del_blob.blob_ = blob_it->second.blob_;
-        shard.btree_.assign_if_equal(route, blob_it->second, std::move(del_blob));
+        shard.btree_.assign_if_equal(route, blob_it->second,
+                                     BlobExt{.state_ = BlobState::DELETED, .blob_ = blob_it->second.blob_});
         return folly::Unit();
     }
 }

@@ -63,13 +63,13 @@ ShardManager::Result< ShardInfo > HSHomeObject::_create_shard(pg_id_t pg_owner, 
         std::shared_lock lock_guard(_pg_lock);
         auto iter = _pg_map.find(pg_owner);
         if (iter == _pg_map.end()) {
-            LOGWARN("failed to create shard with non-exist pg [{}]", pg_owner);
+            LOGW("failed to create shard with non-exist pg [{}]", pg_owner);
             return folly::makeUnexpected(ShardError::UNKNOWN_PG);
         }
-        repl_dev = std::static_pointer_cast< HS_PG >(iter->second)->repl_dev_;
+        repl_dev = static_cast< HS_PG* >(iter->second.get())->repl_dev_;
     }
     if (!repl_dev) {
-        LOGWARN("failed to get repl dev instance for pg [{}]", pg_owner);
+        LOGW("failed to get repl dev instance for pg [{}]", pg_owner);
         return folly::makeUnexpected(ShardError::PG_NOT_READY);
     }
 
@@ -109,7 +109,7 @@ bool HSHomeObject::precheck_and_decode_shard_msg(int64_t lsn, sisl::blob const& 
                                                  std::string* msg) {
     const ReplicationMessageHeader* msg_header = r_cast< const ReplicationMessageHeader* >(header.bytes);
     if (msg_header->header_crc != msg_header->calculate_crc()) {
-        LOGWARN("replication message header is corrupted with crc error, lsn:{}", lsn);
+        LOGW("replication message header is corrupted with crc error, lsn:{}", lsn);
         return false;
     }
 
@@ -118,7 +118,7 @@ bool HSHomeObject::precheck_and_decode_shard_msg(int64_t lsn, sisl::blob const& 
 
     auto crc = crc32_ieee(init_crc32, r_cast< const uint8_t* >(shard_msg.c_str()), shard_msg.size());
     if (msg_header->payload_crc != crc) {
-        LOGWARN("replication message body is corrupted with crc error, lsn:{}", lsn);
+        LOGW("replication message body is corrupted with crc error, lsn:{}", lsn);
         return false;
     }
     *msg = std::move(shard_msg);
@@ -187,7 +187,7 @@ void HSHomeObject::on_shard_message_commit(int64_t lsn, sisl::blob const& header
         std::scoped_lock lock_guard(_flying_shard_lock);
         auto iter = _flying_shards.find(lsn);
         if (iter == _flying_shards.end()) {
-            LOGWARN("can not find flying shards on lsn {}", lsn);
+            LOGW("can not find flying shards on lsn {}", lsn);
             if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(ShardError::UNKNOWN)); }
             return;
         }

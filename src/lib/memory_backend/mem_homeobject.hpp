@@ -52,7 +52,7 @@ class MemoryHomeObject : public HomeObjectImpl {
     ShardIndex& _find_index(shard_id_t) const;
 
 public:
-    using HomeObjectImpl::HomeObjectImpl;
+    MemoryHomeObject(std::weak_ptr< HomeObjectApplication >&& application);
     ~MemoryHomeObject() override = default;
 };
 

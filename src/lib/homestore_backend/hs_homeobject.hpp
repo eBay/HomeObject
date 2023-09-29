@@ -71,7 +71,7 @@ private:
     void register_homestore_metablk_callback();
     void* get_shard_metablk(shard_id_t id);
     void on_pg_meta_blk_found(sisl::byte_view const& buf, void* meta_cookie);
-    void add_pg_to_map(shared< HS_PG > hs_pg);
+    void add_pg_to_map(unique< HS_PG > hs_pg);
 
 public:
     using HomeObjectImpl::HomeObjectImpl;
