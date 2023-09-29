@@ -5,7 +5,7 @@ namespace homeobject {
 
 void ReplicationStateMachine::on_commit(int64_t lsn, const sisl::blob& header, const sisl::blob& key,
                                         const homestore::MultiBlkId& pbas, cintrusive< homestore::repl_req_ctx >& ctx) {
-    LOGINFO("applying raft log commit with lsn:{}", lsn);
+    LOGI("applying raft log commit with lsn:{}", lsn);
     const ReplicationMessageHeader* msg_header = r_cast< const ReplicationMessageHeader* >(header.bytes);
 
     switch (msg_header->message_type) {
@@ -24,7 +24,7 @@ void ReplicationStateMachine::on_commit(int64_t lsn, const sisl::blob& header, c
 bool ReplicationStateMachine::on_pre_commit(int64_t lsn, sisl::blob const& header, sisl::blob const& key,
                                             cintrusive< homestore::repl_req_ctx >& ctx) {
     bool ret{false};
-    LOGINFO("on_pre_commit with lsn:{}", lsn);
+    LOGI("on_pre_commit with lsn:{}", lsn);
     const ReplicationMessageHeader* msg_header = r_cast< const ReplicationMessageHeader* >(header.bytes);
 
     switch (msg_header->message_type) {
@@ -43,7 +43,7 @@ bool ReplicationStateMachine::on_pre_commit(int64_t lsn, sisl::blob const& heade
 
 void ReplicationStateMachine::on_rollback(int64_t lsn, sisl::blob const& header, sisl::blob const& key,
                                           cintrusive< homestore::repl_req_ctx >& ctx) {
-    LOGINFO("rollback with lsn:{}", lsn);
+    LOGI("rollback with lsn:{}", lsn);
     const ReplicationMessageHeader* msg_header = r_cast< const ReplicationMessageHeader* >(header.bytes);
 
     switch (msg_header->message_type) {

@@ -7,6 +7,13 @@
 
 #include <sisl/logging/logging.h>
 
+#define LOGT(...) LOGTRACEMOD(homeobject, ##__VA_ARGS__)
+#define LOGD(...) LOGDEBUGMOD(homeobject, ##__VA_ARGS__)
+#define LOGI(...) LOGINFOMOD(homeobject, ##__VA_ARGS__)
+#define LOGW(...) LOGWARNMOD(homeobject, ##__VA_ARGS__)
+#define LOGE(...) LOGERRORMOD(homeobject, ##__VA_ARGS__)
+#define LOGC(...) LOGCRITICALMOD(homeobject, ##__VA_ARGS__)
+
 namespace homestore {
 class ReplicationService;
 }

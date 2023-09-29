@@ -13,7 +13,7 @@ namespace homeobject {
 const std::string HSHomeObject::s_shard_info_sub_type = "shard_info";
 
 extern std::shared_ptr< HomeObject > init_homeobject(std::weak_ptr< HomeObjectApplication >&& application) {
-    LOGINFOMOD(homeobject, "Initializing HomeObject");
+    LOGI("Initializing HomeObject");
     auto instance = std::make_shared< HSHomeObject >(std::move(application));
     instance->init_homestore();
     return instance;
@@ -28,12 +28,12 @@ void HSHomeObject::init_homestore() {
     auto app = _application.lock();
     RELEASE_ASSERT(app, "HomeObjectApplication lifetime unexpected!");
 
-    LOGINFO("Starting iomgr with {} threads, spdk: {}", app->threads(), false);
+    LOGI("Starting iomgr with {} threads, spdk: {}", app->threads(), false);
     ioenvironment.with_iomgr(iomgr::iomgr_params{.num_threads = app->threads(), .is_spdk = app->spdk_mode()});
 
     /// TODO Where should this come from?
     const uint64_t app_mem_size = 2 * Gi;
-    LOGINFO("Initialize and start HomeStore with app_mem_size = {}", homestore::in_bytes(app_mem_size));
+    LOGI("Initialize and start HomeStore with app_mem_size = {}", homestore::in_bytes(app_mem_size));
 
     std::vector< homestore::dev_info > device_info;
     for (auto const& path : app->devices()) {
@@ -47,7 +47,7 @@ void HSHomeObject::init_homestore() {
                            .start(hs_input_params{.devices = device_info, .app_mem_size = app_mem_size},
                                   [this]() { register_homestore_metablk_callback(); });
     if (need_format) {
-        LOGWARN("Seems like we are booting/starting first time, Formatting!!");
+        LOGW("Seems like we are booting/starting first time, Formatting!!");
         HomeStore::instance()->format_and_start({
             {HS_SERVICE::META, hs_format_params{.size_pct = 5.0}},
             {HS_SERVICE::LOG_REPLICATED, hs_format_params{.size_pct = 10.0}},
