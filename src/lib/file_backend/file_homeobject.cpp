@@ -5,6 +5,8 @@
 #include <filesystem>
 #include <system_error>
 
+#include <boost/uuid/random_generator.hpp>
+
 SISL_OPTION_GROUP(homeobject_file,
                   (max_filesize, "", "max_filesize", "Maximum File (Shard) size",
                    cxxopts::value< uint32_t >()->default_value("1024"), "mb"))
@@ -24,6 +26,8 @@ void FileHomeObject::_recover() {
         LOGI("discovered [pg_dir={}]", pg_dir.string());
         auto pgid = std::stoul(pg_dir.filename().string());
         LOGI("discovered [pg_dir={}] [pg_id={}]", pg_dir.string(), pgid);
+        auto pg = PGInfo(pgid);
+        pg.replica_set_uuid = boost::uuids::random_generator()();
         auto [it, happened] = _pg_map.try_emplace(pgid, std::make_unique< PG >(PGInfo(pgid)));
         auto& s_list = it->second->shards_;
         RELEASE_ASSERT(happened, "Unknown map insert error!");
