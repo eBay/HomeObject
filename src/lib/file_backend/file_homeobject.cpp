@@ -40,14 +40,14 @@ void FileHomeObject::_recover() {
             auto shard_json = nlohmann::json::parse(j_str);
 
             auto info = ShardInfo();
-            info.id = shard_json["id"].get< shard_id_t >();
+            info.id = shard_json["shard_id"].get< shard_id_t >();
             info.placement_group = shard_json["pg_id"].get< pg_id_t >();
             info.state = shard_json["state"].get< ShardInfo::State >();
             info.created_time = shard_json["created_time"].get< uint64_t >();
-            info.last_modified_time = shard_json["last_modified_time"].get< uint64_t >();
-            info.available_capacity_bytes = shard_json["available_capacity_bytes"].get< uint64_t >();
-            info.total_capacity_bytes = shard_json["total_capacity_bytes"].get< uint64_t >();
-            info.deleted_capacity_bytes = shard_json["deleted_capacity_bytes"].get< uint64_t >();
+            info.last_modified_time = shard_json["modified_time"].get< uint64_t >();
+            info.available_capacity_bytes = shard_json["available_capacity"].get< uint64_t >();
+            info.total_capacity_bytes = shard_json["total_capacity"].get< uint64_t >();
+            info.deleted_capacity_bytes = shard_json["deleted_capacity"].get< uint64_t >();
 
             auto iter = s_list.emplace(s_list.end(), Shard(info));
             auto [_, s_happened] = _shard_map.emplace(info.id, iter);
