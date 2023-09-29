@@ -19,6 +19,8 @@ extern std::shared_ptr< HomeObject > init_homeobject(std::weak_ptr< HomeObjectAp
 void FileHomeObject::_recover() {
     for (auto const& pg_dir_e : std::filesystem::directory_iterator{file_store_}) {
         auto pg_dir = pg_dir_e.path();
+        if (pg_dir.filename().string() == "svc_id") continue;
+        LOGI("discovered [pg_dir={}]", pg_dir.string());
         auto pgid = std::stoul(pg_dir.filename().string());
         LOGI("discovered [pg_dir={}] [pg_id={}]", pg_dir.string(), pgid);
         auto [it, happened] = _pg_map.try_emplace(pgid, std::make_unique< PG >(PGInfo(pgid)));
@@ -60,8 +62,22 @@ void FileHomeObject::_recover() {
 FileHomeObject::FileHomeObject(std::weak_ptr< HomeObjectApplication >&& application,
                                std::filesystem::path const& root) :
         HomeObjectImpl::HomeObjectImpl(std::move(application)), file_store_(root) {
-    if (std::filesystem::exists(file_store_)) _recover();
+    auto const id_file = file_store_ / "svc_id";
+    if (std::filesystem::exists(file_store_)) {
+        auto id_fd = open(id_file.string().c_str(), O_RDONLY);
+        auto err = pread(id_fd, &_our_id, sizeof(_our_id), 0ull);
+        RELEASE_ASSERT(0 < err, "Failed to write to: {}", id_file.string());
+        LOGI("recovering: {}", to_string(_our_id));
+        _recover();
+    }
     _our_id = _application.lock()->discover_svcid(_our_id);
+    std::filesystem::create_directories(file_store_);
+    std::ofstream ofs{id_file, std::ios::binary | std::ios::out | std::ios::trunc};
+    std::filesystem::resize_file(id_file, 4 * Ki);
+    auto id_fd = open(id_file.string().c_str(), O_WRONLY);
+    RELEASE_ASSERT(0 < id_fd, "Failed to open: {}", id_file.string());
+    auto err = pwrite(id_fd, &_our_id, sizeof(_our_id), 0ull);
+    RELEASE_ASSERT(0 < err, "Failed to write to: {}", id_file.string());
 }
 
 } // namespace homeobject
