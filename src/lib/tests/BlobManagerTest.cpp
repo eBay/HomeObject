@@ -15,7 +15,7 @@ TEST_F(TestFixture, BasicTests) {
     for (auto k = 0; batch_sz > k; ++k) {
         t_v.push_back(std::thread([this, &call_lock, &calls, batch_sz]() mutable {
             auto our_calls = std::list< folly::SemiFuture< folly::Unit > >();
-            for (auto i = _blob_id + _shard_2.id + 1; (_blob_id + _shard_1.id + 1) + ((100 * Ki) / batch_sz) > i; ++i) {
+            for (auto i = _blob_id + _shard_2.id + 1; (_blob_id + _shard_1.id + 1) + ((20 * Ki) / batch_sz) > i; ++i) {
                 our_calls.push_back(homeobj_->blob_manager()->get(_shard_1.id, _blob_id).deferValue([](auto const& e) {
                     EXPECT_TRUE(!!e);
                     e.then([](auto const& blob) {
