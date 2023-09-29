@@ -22,12 +22,6 @@ using std::filesystem::path;
         return folly::makeUnexpected(BlobError::UNKNOWN_BLOB);                                                         \
     } else
 
-#define WITH_SHARD_FILE(mode)                                                                                          \
-    auto const shard_file = file_store_ / path(fmt::format("{:04x}", (_shard.id >> homeobject::shard_width))) /        \
-        path(fmt::format("{:012x}", (_shard.id & homeobject::shard_mask)));                                            \
-    auto shard_fd = open(shard_file.string().c_str(), (mode));                                                         \
-    RELEASE_ASSERT(shard_fd >= 0, "Failed to open Shard {}", shard_file.string());
-
 // Write (move) Blob to FILE
 BlobManager::Result< blob_id_t > FileHomeObject::_put_blob(ShardInfo const& _shard, Blob&& _blob) {
     WITH_SHARD
@@ -41,17 +35,16 @@ BlobManager::Result< blob_id_t > FileHomeObject::_put_blob(ShardInfo const& _sha
     auto const t_size = sizeof(size_t) + h_size + _blob.body.size;
 
     WITH_ROUTE(shard.shard_offset_.fetch_add(t_size, std::memory_order_relaxed))
-    WITH_SHARD_FILE(O_WRONLY)
+    if (route.blob + t_size > max_shard_size()) return folly::makeUnexpected(BlobError::INVALID_ARG);
 
-    auto err = pwrite(shard_fd, &h_size, sizeof(h_size), route.blob);
-    RELEASE_ASSERT(0 < err, "Failed to write to: {}", shard_file.string());
-    err = pwrite(shard_fd, serialize.c_str(), h_size, sizeof(h_size) + route.blob);
-    RELEASE_ASSERT(0 < err, "Failed to write to: {}", shard_file.string());
-    err = pwrite(shard_fd, _blob.body.bytes, _blob.body.size, sizeof(h_size) + h_size + route.blob);
-    RELEASE_ASSERT(0 < err, "Failed to write to: {}", shard_file.string());
+    auto err = pwrite(shard.fd_, &h_size, sizeof(h_size), route.blob);
+    RELEASE_ASSERT(0 < err, "failed to write to: {route=}", route);
+    err = pwrite(shard.fd_, serialize.c_str(), h_size, sizeof(h_size) + route.blob);
+    RELEASE_ASSERT(0 < err, "failed to write to: {route=}", route);
+    err = pwrite(shard.fd_, _blob.body.bytes, _blob.body.size, sizeof(h_size) + h_size + route.blob);
+    RELEASE_ASSERT(0 < err, "failed to write to: {route=}", route);
     auto [_, happened] = shard.btree_.try_emplace(route, true);
     RELEASE_ASSERT(happened, "Generated duplicate BlobRoute!");
-    close(shard_fd);
     return route.blob;
 }
 
@@ -76,17 +69,15 @@ BlobManager::Result< Blob > FileHomeObject::_get_blob(ShardInfo const& _shard, b
     WITH_SHARD
     WITH_ROUTE(_blob)
     IF_BLOB_ALIVE {
-        WITH_SHARD_FILE(O_RDONLY)
-        auto blob_json = _read_blob_header(shard_fd, route.blob);
+        auto blob_json = _read_blob_header(shard.fd_, route.blob);
 
         auto const body_size = blob_json["body_size"].get< uint64_t >();
         auto b = Blob{sisl::io_blob_safe(body_size), "", 0};
-        auto err = pread(shard_fd, b.body.bytes, body_size, route.blob);
-        RELEASE_ASSERT(0 < err, "Failed to read from: {}", shard_file.string());
+        auto err = pread(shard.fd_, b.body.bytes, body_size, route.blob);
+        RELEASE_ASSERT(0 < err, "Failed to read from: [route={}]", route);
 
         b.user_key = blob_json["user_key"].get< std::string >();
         b.object_off = blob_json["object_off"].get< uint64_t >();
-        close(shard_fd);
         return b;
     }
 }

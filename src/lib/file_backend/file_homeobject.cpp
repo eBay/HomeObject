@@ -72,8 +72,8 @@ void FileHomeObject::_recover() {
                 blob_id += blob_size;
             }
             LOGI("[shard={}] reconstituted to: [offset={}]", info.id, blob_id);
+            it->second->fd_ = shard_fd;
             it->second->shard_offset_.store(blob_id);
-            close(shard_fd);
 
             auto iter = s_list.emplace(s_list.end(), Shard(info));
             auto [_, s_happened] = _shard_map.emplace(info.id, iter);

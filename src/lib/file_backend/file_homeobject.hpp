@@ -13,7 +13,9 @@ namespace homeobject {
 
 struct ShardIndex {
     folly::ConcurrentHashMap< BlobRoute, bool > btree_;
+    int fd_{-1};
     std::atomic< blob_id_t > shard_offset_{0ull};
+    ~ShardIndex();
 };
 
 class FileHomeObject : public HomeObjectImpl {

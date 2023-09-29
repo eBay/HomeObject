@@ -39,7 +39,7 @@ ShardManager::Result< ShardInfo > FileHomeObject::_create_shard(pg_id_t pg_owner
     std::filesystem::resize_file(shard_file, max_shard_size());
     RELEASE_ASSERT(std::filesystem::exists(shard_file), "Shard Path Failed Creation! [path={}]", shard_file.string());
 
-    auto shard_fd = open(shard_file.string().c_str(), O_WRONLY);
+    auto shard_fd = open(shard_file.string().c_str(), O_RDWR);
     RELEASE_ASSERT(shard_fd >= 0, "Failed to open Shard {}", shard_file.string());
 
     nlohmann::json j;
@@ -59,9 +59,9 @@ ShardManager::Result< ShardInfo > FileHomeObject::_create_shard(pg_id_t pg_owner
     RELEASE_ASSERT(0 < err, "Failed to write to: {}", shard_file.string());
 
     auto [it, happened] = index_.try_emplace(info.id, std::make_unique< ShardIndex >());
+    it->second->fd_ = shard_fd;
     RELEASE_ASSERT(happened, "Could not create BTree!");
     it->second->shard_offset_.store(sizeof(hdr_len) + serialize.size());
-    close(shard_fd);
     return info;
 }
 
@@ -74,6 +74,10 @@ ShardManager::Result< ShardInfo > FileHomeObject::_seal_shard(shard_id_t id) {
     auto& shard_info = (*shard_it->second).info;
     shard_info.state = ShardInfo::State::SEALED;
     return shard_info;
+}
+
+ShardIndex::~ShardIndex() {
+    if (fd_ > 0) close(fd_);
 }
 
 } // namespace homeobject
