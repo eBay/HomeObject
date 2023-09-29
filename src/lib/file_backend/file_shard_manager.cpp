@@ -9,7 +9,9 @@ namespace homeobject {
 
 using std::filesystem::path;
 
-uint64_t ShardManager::max_shard_size() { return Gi; }
+uint64_t ShardManager::max_shard_size() {
+    return (SISL_OPTIONS.count("max_filesize") > 0) ? SISL_OPTIONS["max_filesize"].as< uint32_t >() * Mi : 1 * Gi;
+}
 
 ///
 // Each Shard is stored as a FILE on the system. We defer creating the "PG" (directory) until

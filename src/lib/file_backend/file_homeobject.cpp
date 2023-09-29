@@ -2,6 +2,10 @@
 
 #include <boost/uuid/random_generator.hpp>
 
+SISL_OPTION_GROUP(homeobject_file,
+                  (max_filesize, "", "max_filesize", "Maximum File (Shard) size",
+                   cxxopts::value< uint32_t >()->default_value("1024"), "mb"))
+
 namespace homeobject {
 
 /// NOTE: We give ourselves the option to provide a different HR instance here than libhomeobject.a
