@@ -67,7 +67,7 @@ nlohmann::json FileHomeObject::_read_blob_header(int shard_fd, blob_id_t& blob_i
     try {
         if (0 <= err) return nlohmann::json::parse(j_str);
         LOGE("failed to read: {}", strerror(errno));
-    } catch (nlohmann::exception const&) { LOGT("no blob @ [blob_id={}]", blob_id); }
+    } catch (nlohmann::json::exception const&) { LOGT("no blob @ [blob_id={}]", blob_id); }
     return nlohmann::json{};
 }
 
