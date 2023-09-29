@@ -30,10 +30,8 @@ ShardManager::Result< ShardInfo > FileHomeObject::_create_shard(pg_id_t pg_owner
         RELEASE_ASSERT(s_happened, "Duplicate Shard insertion!");
     }
 
-    auto const shard_path = file_store_ / path(fmt::format("{:04x}", (info.id >> homeobject::shard_width)));
-    std::filesystem::create_directories(shard_path);
-
-    auto const shard_file = shard_path / path(fmt::format("{:012x}", (info.id & homeobject::shard_mask)));
+    auto const pg_path = file_store_ / path(fmt::format("{:04x}", (info.id >> homeobject::shard_width)));
+    auto const shard_file = pg_path / path(fmt::format("{:012x}", (info.id & homeobject::shard_mask)));
     RELEASE_ASSERT(!std::filesystem::exists(shard_file), "Shard Path Exists! [path={}]", shard_file.string());
     std::ofstream ofs{shard_file, std::ios::binary | std::ios::out | std::ios::trunc};
     std::filesystem::resize_file(shard_file, max_shard_size());
