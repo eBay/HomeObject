@@ -1,7 +1,5 @@
 #include "mem_homeobject.hpp"
 
-#include <boost/uuid/random_generator.hpp>
-
 namespace homeobject {
 
 /// NOTE: We give ourselves the option to provide a different HR instance here than libhomeobject.a
