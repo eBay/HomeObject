@@ -89,7 +89,7 @@ private:
 private:
     static homestore::ReplicationService& hs_repl_service() { return homestore::hs()->repl_service(); }
 
-    void add_pg_to_map(shared< HS_PG > hs_pg);
+    void add_pg_to_map(unique< HS_PG > hs_pg);
     shard_id_t generate_new_shard_id(pg_id_t pg);
     uint64_t get_sequence_num_from_shard_id(uint64_t shard_id_t);
 

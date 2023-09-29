@@ -4,7 +4,7 @@
 namespace homeobject {
 void ReplicationStateMachine::on_commit(int64_t lsn, const sisl::blob& header, const sisl::blob& key,
                                         const homestore::MultiBlkId& pbas, cintrusive< homestore::repl_req_ctx >& ctx) {
-    LOGINFO("applying raft log commit with lsn:{}", lsn);
+    LOGI("applying raft log commit with lsn:{}", lsn);
     const ReplicationMessageHeader* msg_header = r_cast< const ReplicationMessageHeader* >(header.bytes);
     switch (msg_header->msg_type) {
     case ReplicationMessageType::CREATE_SHARD_MSG:
@@ -22,7 +22,7 @@ void ReplicationStateMachine::on_commit(int64_t lsn, const sisl::blob& header, c
 
 bool ReplicationStateMachine::on_pre_commit(int64_t lsn, sisl::blob const&, sisl::blob const&,
                                             cintrusive< homestore::repl_req_ctx >&) {
-    LOGINFO("on_pre_commit with lsn:{}", lsn);
+    LOGI("on_pre_commit with lsn:{}", lsn);
     // For shard creation, since homestore repldev inside will write shard header to data service first before this
     // function is called. So there is nothing is needed to do and we can get the binding chunk_id with the newly shard
     // from the blkid in on_commit()
@@ -31,7 +31,7 @@ bool ReplicationStateMachine::on_pre_commit(int64_t lsn, sisl::blob const&, sisl
 
 void ReplicationStateMachine::on_rollback(int64_t lsn, sisl::blob const&, sisl::blob const&,
                                           cintrusive< homestore::repl_req_ctx >&) {
-    LOGINFO("on_rollback  with lsn:{}", lsn);
+    LOGI("on_rollback  with lsn:{}", lsn);
 }
 
 homestore::blk_alloc_hints ReplicationStateMachine::get_blk_alloc_hints(sisl::blob const& header,

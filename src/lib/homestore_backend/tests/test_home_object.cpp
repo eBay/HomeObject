@@ -31,7 +31,7 @@ public:
     bool spdk_mode() const override { return false; }
     uint32_t threads() const override { return 2; }
     std::list< std::filesystem::path > devices() const override {
-        LOGINFO("creating {} device file with size={}", fpath_, homestore::in_bytes(2 * Gi));
+        LOGI("creating {} device file with size={}", fpath_, homestore::in_bytes(2 * Gi));
         if (std::filesystem::exists(fpath_)) { std::filesystem::remove(fpath_); }
         std::ofstream ofs{fpath_, std::ios::binary | std::ios::out | std::ios::trunc};
         std::filesystem::resize_file(fpath_, 2 * Gi);

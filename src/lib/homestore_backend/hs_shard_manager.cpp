@@ -61,14 +61,14 @@ ShardManager::Result< ShardInfo > HSHomeObject::_create_shard(pg_id_t pg_owner, 
         std::shared_lock lock_guard(_pg_lock);
         auto iter = _pg_map.find(pg_owner);
         if (iter == _pg_map.end()) {
-            LOGWARN("failed to create shard with non-exist pg [{}]", pg_owner);
+            LOGW("failed to create shard with non-exist pg [{}]", pg_owner);
             return folly::makeUnexpected(ShardError::UNKNOWN_PG);
         }
-        repl_dev = std::static_pointer_cast< HS_PG >(iter->second)->repl_dev_;
+        repl_dev = static_cast< HS_PG* >(iter->second.get())->repl_dev_;
     }
 
     if (!repl_dev) {
-        LOGWARN("failed to get repl dev instance for pg [{}]", pg_owner);
+        LOGW("failed to get repl dev instance for pg [{}]", pg_owner);
         return folly::makeUnexpected(ShardError::PG_NOT_READY);
     }
 
@@ -144,6 +144,7 @@ void HSHomeObject::on_shard_message_commit(int64_t lsn, sisl::blob const& header
 
 void HSHomeObject::do_shard_message_commit(int64_t lsn, ReplicationMessageHeader& header,
                                            homestore::MultiBlkId const& blkids, sisl::blob value,
+
                                            cintrusive< homestore::repl_req_ctx >& hs_ctx) {
     repl_result_ctx< ShardManager::Result< ShardInfo > >* ctx{nullptr};
     if (hs_ctx != nullptr) {
@@ -155,6 +156,7 @@ void HSHomeObject::do_shard_message_commit(int64_t lsn, ReplicationMessageHeader
         if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(ShardError::INVALID_ARG)); }
         return;
     }
+
 
     if (crc32_ieee(init_crc32, value.bytes, value.size) != header.payload_crc) {
         // header & value is inconsistent;

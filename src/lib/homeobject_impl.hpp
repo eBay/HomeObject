@@ -7,6 +7,13 @@
 
 #include <sisl/logging/logging.h>
 
+#define LOGT(...) LOGTRACEMOD(homeobject, ##__VA_ARGS__)
+#define LOGD(...) LOGDEBUGMOD(homeobject, ##__VA_ARGS__)
+#define LOGI(...) LOGINFOMOD(homeobject, ##__VA_ARGS__)
+#define LOGW(...) LOGWARNMOD(homeobject, ##__VA_ARGS__)
+#define LOGE(...) LOGERRORMOD(homeobject, ##__VA_ARGS__)
+#define LOGC(...) LOGCRITICALMOD(homeobject, ##__VA_ARGS__)
+
 namespace homestore {
 class ReplicationService;
 }
@@ -89,7 +96,7 @@ protected:
 
     ///
     mutable std::shared_mutex _pg_lock;
-    std::map< pg_id_t, shared< PG > > _pg_map;
+    std::map< pg_id_t, unique< PG > > _pg_map;
 
     mutable std::shared_mutex _shard_lock;
     std::map< shard_id_t, ShardIterator > _shard_map;

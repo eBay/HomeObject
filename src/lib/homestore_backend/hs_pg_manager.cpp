@@ -52,7 +52,7 @@ PGManager::NullAsyncResult HSHomeObject::_create_pg(PGInfo&& pg_info, std::set< 
         .create_repl_dev(pg_info.replica_set_uuid, std::move(peers), std::make_unique< ReplicationStateMachine >(this))
         .thenValue([this, pg_info = std::move(pg_info)](auto&& v) -> PGManager::NullResult {
             if (v.hasError()) { return folly::makeUnexpected(toPgError(v.error())); }
-            add_pg_to_map(std::make_shared< HS_PG >(std::move(pg_info), std::move(v.value())));
+            add_pg_to_map(std::make_unique< HS_PG >(std::move(pg_info), std::move(v.value())));
             return folly::Unit();
         });
 }
@@ -62,7 +62,7 @@ PGManager::NullAsyncResult HSHomeObject::_replace_member(pg_id_t id, peer_id_t c
     return folly::makeSemiFuture< PGManager::NullResult >(folly::makeUnexpected(PGError::UNSUPPORTED_OP));
 }
 
-void HSHomeObject::add_pg_to_map(shared< HS_PG > hs_pg) {
+void HSHomeObject::add_pg_to_map(unique< HS_PG > hs_pg) {
     RELEASE_ASSERT(hs_pg->pg_info_.replica_set_uuid == hs_pg->repl_dev_->group_id(),
                    "PGInfo replica set uuid mismatch with ReplDev instance for {}",
                    boost::uuids::to_string(hs_pg->pg_info_.replica_set_uuid));
@@ -117,11 +117,11 @@ void HSHomeObject::on_pg_meta_blk_found(sisl::byte_view const& buf, void* meta_c
         .thenValue([this, pg_sb = std::move(pg_sb)](auto&& v) {
             if (v.hasError()) {
                 // TODO: We need to raise an alert here, since without pg repl_dev all operations on that pg will fail
-                LOGERROR("open_repl_dev for group_id={} has failed", boost::uuids::to_string(pg_sb->replica_set_uuid));
+                LOGE("open_repl_dev for group_id={} has failed", boost::uuids::to_string(pg_sb->replica_set_uuid));
                 return;
             }
-            add_pg_to_map(std::make_shared< HS_PG >(pg_sb, std::move(v.value())));
 
+            add_pg_to_map(std::make_unique< HS_PG >(pg_sb, std::move(v.value())));
             // check if any shard recovery is pending by this pg;
             std::scoped_lock lock_guard(recovery_mutex_);
             auto iter = pending_recovery_shards_.find(pg_sb->id);
