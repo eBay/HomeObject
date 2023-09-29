@@ -1,7 +1,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 
-#include "homeobject.hpp"
+#include "file_homeobject.hpp"
 
 namespace homeobject {
 
@@ -29,7 +29,7 @@ using std::filesystem::path;
     RELEASE_ASSERT(shard_fd >= 0, "Failed to open Shard {}", shard_file.string());
 
 // Write (move) Blob to FILE
-BlobManager::Result< blob_id > FileHomeObject::_put_blob(ShardInfo const& _shard, Blob&& _blob) {
+BlobManager::Result< blob_id_t > FileHomeObject::_put_blob(ShardInfo const& _shard, Blob&& _blob) {
     WITH_SHARD
 
     nlohmann::json j;
@@ -56,7 +56,7 @@ BlobManager::Result< blob_id > FileHomeObject::_put_blob(ShardInfo const& _shard
 }
 
 // Lookup and duplicate underyling Blob for user; only *safe* because we defer GC.
-BlobManager::Result< Blob > FileHomeObject::_get_blob(ShardInfo const& _shard, blob_id _blob) const {
+BlobManager::Result< Blob > FileHomeObject::_get_blob(ShardInfo const& _shard, blob_id_t _blob) const {
     WITH_SHARD
     WITH_ROUTE(_blob)
     IF_BLOB_ALIVE {
@@ -83,7 +83,7 @@ BlobManager::Result< Blob > FileHomeObject::_get_blob(ShardInfo const& _shard, b
 }
 
 // Tombstone entry
-BlobManager::NullResult FileHomeObject::_del_blob(ShardInfo const& _shard, blob_id _blob) {
+BlobManager::NullResult FileHomeObject::_del_blob(ShardInfo const& _shard, blob_id_t _blob) {
     WITH_SHARD
     WITH_ROUTE(_blob)
     IF_BLOB_ALIVE {

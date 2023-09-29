@@ -1,4 +1,4 @@
-#include "homeobject.hpp"
+#include "mem_homeobject.hpp"
 
 namespace homeobject {
 
@@ -9,16 +9,16 @@ namespace homeobject {
 
 #define WITH_ROUTE(blob)                                                                                               \
     auto const route = BlobRoute{_shard.id, (blob)};                                                                   \
-    LOGTRACEMOD(homeobject, "[route={}]", route);
+    LOGT("[route={}]", route);
 
 #define IF_BLOB_ALIVE                                                                                                  \
     if (auto blob_it = shard.btree_.find(route); shard.btree_.end() == blob_it || !blob_it->second) {                  \
-        LOGWARNMOD(homeobject, "[route={}] missing", route);                                                           \
+        LOGW("[route={}] missing", route);                                                                             \
         return folly::makeUnexpected(BlobError::UNKNOWN_BLOB);                                                         \
     } else
 
 // Write (move) Blob to new BlobExt on heap and Insert BlobExt to Index
-BlobManager::Result< blob_id > MemoryHomeObject::_put_blob(ShardInfo const& _shard, Blob&& _blob) {
+BlobManager::Result< blob_id_t > MemoryHomeObject::_put_blob(ShardInfo const& _shard, Blob&& _blob) {
     WITH_SHARD
     WITH_ROUTE(shard.shard_seq_num_++)
 
@@ -29,20 +29,19 @@ BlobManager::Result< blob_id > MemoryHomeObject::_put_blob(ShardInfo const& _sha
 }
 
 // Lookup BlobExt and duplicate underyling Blob for user; only *safe* because we defer GC.
-BlobManager::Result< Blob > MemoryHomeObject::_get_blob(ShardInfo const& _shard, blob_id _blob) const {
+BlobManager::Result< Blob > MemoryHomeObject::_get_blob(ShardInfo const& _shard, blob_id_t _blob) const {
     WITH_SHARD
     WITH_ROUTE(_blob)
     IF_BLOB_ALIVE { return blob_it->second.blob_->clone(); }
 }
 
 // Tombstone BlobExt entry
-BlobManager::NullResult MemoryHomeObject::_del_blob(ShardInfo const& _shard, blob_id _blob) {
+BlobManager::NullResult MemoryHomeObject::_del_blob(ShardInfo const& _shard, blob_id_t _blob) {
     WITH_SHARD
     WITH_ROUTE(_blob)
     IF_BLOB_ALIVE {
-        auto del_blob = BlobExt();
-        del_blob.blob_ = blob_it->second.blob_;
-        shard.btree_.assign_if_equal(route, blob_it->second, std::move(del_blob));
+        shard.btree_.assign_if_equal(route, blob_it->second,
+                                     BlobExt{.state_ = BlobState::DELETED, .blob_ = blob_it->second.blob_});
         return folly::Unit();
     }
 }

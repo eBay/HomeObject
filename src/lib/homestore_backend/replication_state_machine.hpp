@@ -1,17 +1,42 @@
 #pragma once
 
-#include "homeobject.hpp"
-#include "mocks/repl_service.h"
+#include <folly/futures/Future.h>
+#include <homestore/replication/repl_dev.h>
+#include "hs_homeobject.hpp"
 
 namespace homeobject {
 
-class HomeObjectImpl;
+class HSHomeObject;
 
-class ReplicationStateMachine : public home_replication::ReplicaSetListener {
+struct ho_repl_ctx : public homestore::repl_req_ctx {
+    sisl::io_blob_safe hdr_buf_;
+
+    ho_repl_ctx(uint32_t size) : homestore::repl_req_ctx{}, hdr_buf_{size} {}
+    template < typename T >
+    T* to() {
+        return r_cast< T* >(this);
+    }
+};
+
+template < typename T >
+struct repl_result_ctx : public ho_repl_ctx {
+    folly::Promise< T > promise_;
+
+    template < typename... Args >
+    static intrusive< repl_result_ctx< T > > make(Args&&... args) {
+        return intrusive< repl_result_ctx< T > >{new repl_result_ctx< T >(std::forward< Args >(args)...)};
+    }
+
+    repl_result_ctx(uint32_t hdr_size) : ho_repl_ctx{hdr_size} {}
+    folly::SemiFuture< T > result() { return promise_.getSemiFuture(); }
+};
+
+class ReplicationStateMachine : public homestore::ReplDevListener {
 public:
     explicit ReplicationStateMachine(HSHomeObject* home_object) : _home_object(home_object) {}
 
-    ~ReplicationStateMachine() = default;
+    virtual ~ReplicationStateMachine() = default;
+
     /// @brief Called when the log entry has been committed in the replica set.
     ///
     /// This function is called from a dedicated commit thread which is different from the original thread calling
@@ -23,8 +48,8 @@ public:
     /// @param pbas - List of pbas where data is written to the storage engine.
     /// @param ctx - User contenxt passed as part of the replica_set::write() api
     ///
-    virtual void on_commit(int64_t lsn, const sisl::blob& header, const sisl::blob& key,
-                           const home_replication::pba_list_t& pbas, void* ctx);
+    void on_commit(int64_t lsn, sisl::blob const& header, sisl::blob const& key, homestore::MultiBlkId const& blkids,
+                   cintrusive< homestore::repl_req_ctx >& ctx) override;
 
     /// @brief Called when the log entry has been received by the replica set.
     ///
@@ -44,7 +69,8 @@ public:
     /// @param header - Header originally passed with replica_set::write() api
     /// @param key - Key originally passed with replica_set::write() api
     /// @param ctx - User contenxt passed as part of the replica_set::write() api
-    virtual void on_pre_commit(int64_t lsn, const sisl::blob& header, const sisl::blob& key, void* ctx);
+    bool on_pre_commit(int64_t lsn, const sisl::blob& header, const sisl::blob& key,
+                       cintrusive< homestore::repl_req_ctx >& ctx) override;
 
     /// @brief Called when the log entry has been rolled back by the replica set.
     ///
@@ -59,10 +85,22 @@ public:
     /// @param header - Header originally passed with replica_set::write() api
     /// @param key - Key originally passed with replica_set::write() api
     /// @param ctx - User contenxt passed as part of the replica_set::write() api
-    virtual void on_rollback(int64_t lsn, const sisl::blob& header, const sisl::blob& key, void* ctx);
+    void on_rollback(int64_t lsn, const sisl::blob& header, const sisl::blob& key,
+                     cintrusive< homestore::repl_req_ctx >& ctx) override;
+
+    /// @brief Called when replication module is trying to allocate a block to write the value
+    ///
+    /// This function can be called both on leader and follower when it is trying to allocate a block to write the
+    /// value. Caller is expected to provide hints for allocation based on the header supplied as part of original
+    /// write. In cases where caller don't care about the hints can return default blk_alloc_hints.
+    ///
+    /// @param header Header originally passed with repl_dev::write() api on the leader
+    /// @return Expected to return blk_alloc_hints for this write
+    homestore::blk_alloc_hints get_blk_alloc_hints(sisl::blob const& header,
+                                                   cintrusive< homestore::repl_req_ctx >& ctx) override;
 
     /// @brief Called when the replica set is being stopped
-    virtual void on_replica_stop();
+    void on_replica_stop() override;
 
 private:
     HSHomeObject* _home_object;

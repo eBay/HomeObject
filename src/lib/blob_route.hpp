@@ -11,8 +11,8 @@ namespace homeobject {
 // A Key used in the IndexService (BTree). The inclusion of Shard allows BlobRoutes
 // to appear in a different Index should the Blob (Shard) be moved between Pgs.
 struct BlobRoute {
-    shard_id shard;
-    blob_id blob;
+    shard_id_t shard;
+    blob_id_t blob;
     auto operator<=>(BlobRoute const&) const = default;
 };
 
@@ -37,6 +37,6 @@ struct formatter< homeobject::BlobRoute > {
 template <>
 struct std::hash< homeobject::BlobRoute > {
     std::size_t operator()(homeobject::BlobRoute const& r) const noexcept {
-        return boost::hash_value< homeobject::blob_id >(std::make_pair(r.shard, r.blob));
+        return boost::hash_value< homeobject::blob_id_t >(std::make_pair(r.shard, r.blob));
     }
 };

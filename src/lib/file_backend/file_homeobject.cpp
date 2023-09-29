@@ -1,4 +1,4 @@
-#include "homeobject.hpp"
+#include "file_homeobject.hpp"
 
 #include <boost/uuid/random_generator.hpp>
 
@@ -8,18 +8,13 @@ namespace homeobject {
 extern std::shared_ptr< HomeObject > init_homeobject(std::weak_ptr< HomeObjectApplication >&& application) {
     auto devices = application.lock()->devices();
     auto instance = std::make_shared< FileHomeObject >(std::move(application), *devices.begin());
-    instance->init_repl_svc();
     return instance;
 }
 
-void HomeObjectImpl::init_repl_svc() {
-    auto lg = std::scoped_lock(_repl_lock);
-    if (!_repl_svc) {
-        _our_id = boost::uuids::random_generator()();
-        LOGINFOMOD(homeobject, "SvcId faked: {}", to_string(_our_id));
-        _our_id = _application.lock()->discover_svcid(_our_id);
-        _repl_svc = home_replication::create_repl_service([](auto) { return nullptr; });
-    }
+FileHomeObject::FileHomeObject(std::weak_ptr< HomeObjectApplication >&& application,
+                               std::filesystem::path const& root) :
+        HomeObjectImpl::HomeObjectImpl(std::move(application)), file_store_(root) {
+    _our_id = _application.lock()->discover_svcid(_our_id);
 }
 
 } // namespace homeobject

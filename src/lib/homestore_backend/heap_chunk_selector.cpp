@@ -22,7 +22,7 @@ void HeapChunkSelector::add_chunk(csharedChunk& chunk) { m_chunks.emplace(VChunk
 void HeapChunkSelector::add_chunk_internal(const chunk_num_t chunkID) {
     if (m_chunks.find(chunkID) == m_chunks.end()) {
         // sanity check
-        LOGWARN("No chunk found for ChunkID {}", chunkID);
+        LOGWARNMOD(homeobject, "No chunk found for ChunkID {}", chunkID);
         return;
     }
     const auto& chunk = m_chunks[chunkID];
@@ -44,7 +44,7 @@ void HeapChunkSelector::add_chunk_internal(const chunk_num_t chunkID) {
 csharedChunk HeapChunkSelector::select_chunk(homestore::blk_count_t count, const homestore::blk_alloc_hints& hint) {
     auto& chunkIdHint = hint.chunk_id_hint;
     if (chunkIdHint.has_value()) {
-        LOGWARN("should not allocated a chunk with exiting chunk_id {} in hint!", chunkIdHint.value());
+        LOGWARNMOD(homeobject, "should not allocated a chunk with exiting chunk_id {} in hint!", chunkIdHint.value());
         return nullptr;
     }
 
@@ -62,7 +62,7 @@ csharedChunk HeapChunkSelector::select_chunk(homestore::blk_count_t count, const
                                  return lhs.second->available_blk_count.load() < rhs.second->available_blk_count.load();
                              });
         if (it == m_per_dev_heap.end()) {
-            LOGWARN("No pdev found for new pg");
+            LOGWARNMOD(homeobject, "No pdev found for new pg");
             return nullptr;
         }
         pdevID = it->first;
@@ -72,7 +72,7 @@ csharedChunk HeapChunkSelector::select_chunk(homestore::blk_count_t count, const
 
     auto it = m_per_dev_heap.find(pdevID);
     if (it == m_per_dev_heap.end()) {
-        LOGWARN("No pdev found for pdev {}", pdevID);
+        LOGWARNMOD(homeobject, "No pdev found for pdev {}", pdevID);
         return nullptr;
     }
 
@@ -90,7 +90,7 @@ csharedChunk HeapChunkSelector::select_chunk(homestore::blk_count_t count, const
         auto& avalableBlkCounter = it->second->available_blk_count;
         avalableBlkCounter.fetch_sub(vchunk.available_blks());
     } else {
-        LOGWARN("No pdev found for pdev {}", pdevID);
+        LOGWARNMOD(homeobject, "No pdev found for pdev {}", pdevID);
     }
 
     return vchunk.get_internal_chunk();
@@ -106,7 +106,7 @@ void HeapChunkSelector::release_chunk(const chunk_num_t chunkID) {
     const auto& it = m_chunks.find(chunkID);
     if (it == m_chunks.end()) {
         // sanity check
-        LOGWARN("No chunk found for ChunkID {}", chunkID);
+        LOGWARNMOD(homeobject, "No chunk found for ChunkID {}", chunkID);
     } else {
         add_chunk_internal(chunkID);
     }
