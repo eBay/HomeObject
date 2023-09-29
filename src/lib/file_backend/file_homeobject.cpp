@@ -46,6 +46,7 @@ void FileHomeObject::_recover() {
             RELEASE_ASSERT(0 < err, "Failed to read from: {}", shard_file);
             auto shard_json = nlohmann::json::parse(j_str);
 
+            // Reconsitute the ShardInfo
             auto info = ShardInfo();
             info.id = shard_json["shard_id"].get< shard_id_t >();
             info.placement_group = shard_json["pg_id"].get< pg_id_t >();
@@ -56,10 +57,27 @@ void FileHomeObject::_recover() {
             info.total_capacity_bytes = shard_json["total_capacity"].get< uint64_t >();
             info.deleted_capacity_bytes = shard_json["deleted_capacity"].get< uint64_t >();
 
+            auto [it, happened] = index_.try_emplace(info.id, std::make_unique< ShardIndex >());
+            RELEASE_ASSERT(happened, "duplicate Shard recovery!");
+
+            // Scan Shard for shard_offset_ (next blob_id)
+            auto blob_id = sizeof(h_size) + h_size;
+            while (max_shard_size() > blob_id) {
+                auto route = BlobRoute{info.id, blob_id};
+                auto blob_hdr = _read_blob_header(shard_fd, blob_id);
+                if (blob_hdr.is_null()) break;
+                auto blob_size = blob_hdr["body_size"].get< uint64_t >();
+                LOGT("found [blob={}], [user_key={}], [size={}]", route, blob_hdr["user_key"].get< std::string >(),
+                     blob_size);
+                blob_id += blob_size;
+            }
+            LOGI("[shard={}] reconstituted to: [offset={}]", info.id, blob_id);
+            it->second->shard_offset_.store(blob_id);
+            close(shard_fd);
+
             auto iter = s_list.emplace(s_list.end(), Shard(info));
             auto [_, s_happened] = _shard_map.emplace(info.id, iter);
-            RELEASE_ASSERT(s_happened, "Duplicate Shard insertion!");
-            close(shard_fd);
+            RELEASE_ASSERT(s_happened, "duplicate Shard recovery!");
         }
     }
 }
@@ -71,6 +89,7 @@ FileHomeObject::FileHomeObject(std::weak_ptr< HomeObjectApplication >&& applicat
     if (std::filesystem::exists(file_store_)) {
         auto id_fd = open(id_file.string().c_str(), O_RDONLY);
         auto err = pread(id_fd, &_our_id, sizeof(_our_id), 0ull);
+        close(id_fd);
         RELEASE_ASSERT(0 < err, "Failed to write to: {}", id_file.string());
         LOGI("recovering: {}", to_string(_our_id));
         _recover();

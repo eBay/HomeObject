@@ -41,6 +41,7 @@ class FileHomeObject : public HomeObjectImpl {
                                                PGMember const& new_member) override;
     ///
 
+    static nlohmann::json _read_blob_header(int shard_fd, blob_id_t& blob_id);
     void _recover();
 
 public:

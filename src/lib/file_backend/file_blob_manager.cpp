@@ -13,7 +13,7 @@ using std::filesystem::path;
     auto& shard = *index_it->second;
 
 #define WITH_ROUTE(blob)                                                                                               \
-    auto const route = BlobRoute{_shard.id, (blob)};                                                                   \
+    auto route = BlobRoute{_shard.id, (blob)};                                                                         \
     LOGTRACEMOD(homeobject, "[route={}]", route);
 
 #define IF_BLOB_ALIVE                                                                                                  \
@@ -55,24 +55,33 @@ BlobManager::Result< blob_id_t > FileHomeObject::_put_blob(ShardInfo const& _sha
     return route.blob;
 }
 
+nlohmann::json FileHomeObject::_read_blob_header(int shard_fd, blob_id_t& blob_id) {
+    size_t h_size = 0ull;
+    auto err = pread(shard_fd, &h_size, sizeof(h_size), blob_id);
+    RELEASE_ASSERT(0 < err, "failed to read from shard");
+    blob_id += sizeof(h_size);
+
+    auto j_str = std::string(h_size, '\0');
+    err = pread(shard_fd, const_cast< char* >(j_str.c_str()), h_size, blob_id);
+    blob_id += h_size;
+    try {
+        if (0 <= err) return nlohmann::json::parse(j_str);
+        LOGE("failed to read: {}", strerror(errno));
+    } catch (nlohmann::exception const&) { LOGT("no blob @ [blob_id={}]", blob_id); }
+    return nlohmann::json{};
+}
+
 // Lookup and duplicate underyling Blob for user; only *safe* because we defer GC.
 BlobManager::Result< Blob > FileHomeObject::_get_blob(ShardInfo const& _shard, blob_id_t _blob) const {
     WITH_SHARD
     WITH_ROUTE(_blob)
     IF_BLOB_ALIVE {
         WITH_SHARD_FILE(O_RDONLY)
-        size_t h_size = 0ull;
-        auto err = pread(shard_fd, &h_size, sizeof(h_size), route.blob);
-        RELEASE_ASSERT(0 < err, "Failed to read from: {}", shard_file.string());
-
-        auto j_str = std::string(h_size, '\0');
-        err = pread(shard_fd, const_cast< char* >(j_str.c_str()), h_size, sizeof(h_size) + route.blob);
-        RELEASE_ASSERT(0 < err, "Failed to read from: {}", shard_file.string());
-        auto blob_json = nlohmann::json::parse(j_str);
+        auto blob_json = _read_blob_header(shard_fd, route.blob);
 
         auto const body_size = blob_json["body_size"].get< uint64_t >();
         auto b = Blob{sisl::io_blob_safe(body_size), "", 0};
-        err = pread(shard_fd, b.body.bytes, body_size, sizeof(h_size) + h_size + route.blob);
+        auto err = pread(shard_fd, b.body.bytes, body_size, route.blob);
         RELEASE_ASSERT(0 < err, "Failed to read from: {}", shard_file.string());
 
         b.user_key = blob_json["user_key"].get< std::string >();
