@@ -98,8 +98,8 @@ ShardManager::Result< ShardInfo > HSHomeObject::_create_shard(pg_id_t pg_owner, 
     repl_dev->async_alloc_write(header, sisl::blob{}, value, req);
     auto info = req->result().get();
     if (!bool(info)) {
-        LOGWARN("create new shard [{}] on pg [{}] is failed with error:{}", new_shard_id & shard_mask, pg_owner,
-                info.error());
+        LOGW("create new shard [{}] on pg [{}] is failed with error:{}", new_shard_id & shard_mask, pg_owner,
+             info.error());
     }
     return info;
 }
@@ -132,7 +132,7 @@ void HSHomeObject::on_shard_message_commit(int64_t lsn, sisl::blob const& header
     ReplicationMessageHeader msg_header = *r_cast< const ReplicationMessageHeader* >(header.bytes);
     repl_dev->async_read(blkids, value, value.size).thenValue([this, lsn, msg_header, blkids, value](auto&& err) {
         if (err) {
-            LOGWARNMOD(homeobject, "failed to read data from homestore pba, lsn:{}", lsn);
+            LOGW(homeobject, "failed to read data from homestore pba, lsn:{}", lsn);
         } else {
             sisl::blob value_blob(r_cast< uint8_t* >(value.iovs[0].iov_base), value.size);
             do_shard_message_commit(lsn, msg_header, blkids, value_blob, nullptr);
@@ -152,15 +152,14 @@ void HSHomeObject::do_shard_message_commit(int64_t lsn, ReplicationMessageHeader
     }
 
     if (header.corrupted()) {
-        LOGWARNMOD(homeobject, "replication message header is corrupted with crc error, lsn:{}", lsn);
+        LOGW("replication message header is corrupted with crc error, lsn:{}", lsn);
         if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(ShardError::INVALID_ARG)); }
         return;
     }
 
-
     if (crc32_ieee(init_crc32, value.bytes, value.size) != header.payload_crc) {
         // header & value is inconsistent;
-        LOGWARNMOD(homeobject, "replication message header is inconsistent with value, lsn:{}", lsn);
+        LOGW("replication message header is inconsistent with value, lsn:{}", lsn);
         if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(ShardError::INVALID_ARG)); }
         return;
     }

@@ -61,7 +61,7 @@ void HSHomeObject::init_homestore() {
         });
     }
 
-    LOGINFO("Initialize and start HomeStore is successfully");
+    LOGI("Initialize and start HomeStore is successfully");
 }
 
 void HSHomeObject::register_homestore_metablk_callback() {

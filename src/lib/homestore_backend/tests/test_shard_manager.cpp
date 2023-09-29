@@ -183,7 +183,7 @@ TEST_F(ShardManagerTesting, MockSealShard) {
     auto seal_shard_msg = j.dump();
 
     homeobject::HSHomeObject* ho = dynamic_cast< homeobject::HSHomeObject* >(_home_object.get());
-    auto* pg = s_cast<homeobject::HSHomeObject::HS_PG* >(ho->_pg_map[_pg_id].get());
+    auto* pg = s_cast< homeobject::HSHomeObject::HS_PG* >(ho->_pg_map[_pg_id].get());
     auto repl_dev = pg->repl_dev_;
     const auto msg_size = sisl::round_up(seal_shard_msg.size(), repl_dev->get_blk_size());
     auto req = homeobject::repl_result_ctx< ShardManager::Result< ShardInfo > >::make(msg_size, 512 /*alignment*/);
@@ -244,8 +244,8 @@ TEST_F(ShardManagerTestingRecovery, ShardManagerRecovery) {
     auto app_with_recovery = dp_cast< FixtureAppWithRecovery >(app);
     const std::string fpath = app_with_recovery->path();
     if (std::filesystem::exists(fpath)) { std::filesystem::remove(fpath); }
-    LOGINFO("creating device files with size {} ", homestore::in_bytes(2 * Gi));
-    LOGINFO("creating {} device file", fpath);
+    LOGI("creating device files with size {} ", homestore::in_bytes(2 * Gi));
+    LOGI("creating {} device file", fpath);
     std::ofstream ofs{fpath, std::ios::binary | std::ios::out | std::ios::trunc};
     std::filesystem::resize_file(fpath, 2 * Gi);
 
@@ -282,7 +282,7 @@ TEST_F(ShardManagerTestingRecovery, ShardManagerRecovery) {
     // release the homeobject and homestore will be shutdown automatically.
     _home_object.reset();
 
-    LOGINFO("restart home_object");
+    LOGI("restart home_object");
     // re-create the homeobject and pg infos and shard infos will be recover automatically.
     _home_object = homeobject::init_homeobject(std::weak_ptr< homeobject::HomeObjectApplication >(app));
     ho = dynamic_cast< homeobject::HSHomeObject* >(_home_object.get());
