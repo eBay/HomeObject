@@ -66,7 +66,7 @@ ShardManager::Result< ShardInfo > HSHomeObject::_create_shard(pg_id_t pg_owner, 
             LOGW("failed to create shard with non-exist pg [{}]", pg_owner);
             return folly::makeUnexpected(ShardError::UNKNOWN_PG);
         }
-        repl_dev = std::static_pointer_cast< HS_PG >(iter->second)->repl_dev_;
+        repl_dev = static_cast< HS_PG* >(iter->second.get())->repl_dev_;
     }
     if (!repl_dev) {
         LOGW("failed to get repl dev instance for pg [{}]", pg_owner);

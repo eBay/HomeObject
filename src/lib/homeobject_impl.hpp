@@ -98,7 +98,7 @@ protected:
 
     ///
     mutable std::shared_mutex _pg_lock;
-    std::map< pg_id_t, shared< PG > > _pg_map;
+    std::map< pg_id_t, unique< PG > > _pg_map;
 
     mutable std::shared_mutex _shard_lock;
     std::map< shard_id_t, ShardIterator > _shard_map;
