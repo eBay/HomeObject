@@ -28,7 +28,7 @@ void FileHomeObject::_recover() {
         LOGI("discovered [pg_dir={}] [pg_id={}]", pg_dir.string(), pgid);
         auto pg = PGInfo(pgid);
         pg.replica_set_uuid = boost::uuids::random_generator()();
-        auto [it, happened] = _pg_map.try_emplace(pgid, std::make_unique< PG >(PGInfo(pgid)));
+        auto [it, happened] = _pg_map.try_emplace(pgid, std::make_unique< PG >(std::move(pg)));
         auto& s_list = it->second->shards_;
         RELEASE_ASSERT(happened, "Unknown map insert error!");
         for (auto const& shard_file_e : std::filesystem::directory_iterator{pg_dir_e}) {
