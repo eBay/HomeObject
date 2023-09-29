@@ -129,7 +129,7 @@ void HSHomeObject::on_shard_message_commit(int64_t lsn, sisl::blob const& header
     auto value_buf = iomanager.iobuf_alloc(512, value.size);
     value.iovs.push_back(iovec{.iov_base = value_buf, .iov_len = value.size});
     // header will be released when this function returns, but we still need the header when async_read() finished.
-    const ReplicationMessageHeader msg_header = *r_cast< const ReplicationMessageHeader* >(header.bytes);
+    ReplicationMessageHeader msg_header = *r_cast< const ReplicationMessageHeader* >(header.bytes);
     repl_dev->async_read(blkids, value, value.size).thenValue([this, lsn, msg_header, blkids, value](auto&& err) {
         if (err) {
             LOGWARNMOD(homeobject, "failed to read data from homestore pba, lsn:{}", lsn);
@@ -142,7 +142,7 @@ void HSHomeObject::on_shard_message_commit(int64_t lsn, sisl::blob const& header
 #endif
 }
 
-void HSHomeObject::do_shard_message_commit(int64_t lsn, const ReplicationMessageHeader& header,
+void HSHomeObject::do_shard_message_commit(int64_t lsn, ReplicationMessageHeader& header,
                                            homestore::MultiBlkId const& blkids, sisl::blob value,
                                            cintrusive< homestore::repl_req_ctx >& hs_ctx) {
     repl_result_ctx< ShardManager::Result< ShardInfo > >* ctx{nullptr};
@@ -190,8 +190,8 @@ void HSHomeObject::add_new_shard_to_map(ShardPtr shard) {
     auto pg_iter = _pg_map.find(shard->info.placement_group);
     RELEASE_ASSERT(pg_iter != _pg_map.end(), "Missing PG info");
     auto& shards = pg_iter->second->shards_;
-    shards.emplace_back(shard);
-    auto [_, happened] = _shard_map.emplace(shard->info.id, shard);
+    auto iter = shards.emplace(shards.end(), shard);
+    auto [_, happened] = _shard_map.emplace(shard->info.id, iter);
     RELEASE_ASSERT(happened, "duplicated shard info");
 
     // following part gives follower members a chance to catch up shard sequence num;
@@ -203,7 +203,7 @@ void HSHomeObject::update_shard_in_map(const ShardInfo& shard_info) {
     std::scoped_lock lock_guard(_shard_lock);
     auto shard_iter = _shard_map.find(shard_info.id);
     RELEASE_ASSERT(shard_iter != _shard_map.end(), "Missing shard info");
-    auto hs_shard = dp_cast< HS_Shard >(shard_iter->second);
+    auto hs_shard = dp_cast< HS_Shard >(*(shard_iter->second));
     hs_shard->update_info(shard_info);
 }
 
@@ -211,7 +211,7 @@ ShardManager::Result< homestore::chunk_num_t > HSHomeObject::get_shard_chunk(sha
     std::scoped_lock lock_guard(_shard_lock);
     auto shard_iter = _shard_map.find(id);
     if (shard_iter == _shard_map.end()) { return folly::makeUnexpected(ShardError::UNKNOWN_SHARD); }
-    auto hs_shard = dp_cast< HS_Shard >(shard_iter->second);
+    auto hs_shard = dp_cast< HS_Shard >(*(shard_iter->second));
     return hs_shard->sb_->chunk_id;
 }
 

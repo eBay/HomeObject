@@ -17,9 +17,9 @@ ShardManager::Result< ShardInfo > MemoryHomeObject::_create_shard(pg_id_t pg_own
         auto& s_list = pg_it->second->shards_;
         info.id = make_new_shard_id(pg_owner, s_list.size());
         auto shard = std::make_shared< Shard >(info);
-        s_list.emplace(s_list.end(), shard);
+        auto iter = s_list.emplace(s_list.end(), shard);
         LOGDEBUG("Creating Shard [{}]: in Pg [{}] of Size [{}b]", info.id & shard_mask, pg_owner, size_bytes);
-        auto [_, s_happened] = _shard_map.emplace(info.id, shard);
+        auto [_, s_happened] = _shard_map.emplace(info.id, iter);
         RELEASE_ASSERT(s_happened, "Duplicate Shard insertion!");
     }
     auto [it, happened] = index_.try_emplace(info.id, std::make_unique< ShardIndex >());
@@ -31,7 +31,7 @@ ShardManager::Result< ShardInfo > MemoryHomeObject::_seal_shard(shard_id_t id) {
     auto lg = std::scoped_lock(_shard_lock);
     auto shard_it = _shard_map.find(id);
     RELEASE_ASSERT(_shard_map.end() != shard_it, "Missing ShardIterator!");
-    auto& shard_info = shard_it->second->info;
+    auto& shard_info = (*shard_it->second)->info;
     shard_info.state = ShardInfo::State::SEALED;
     return shard_info;
 }

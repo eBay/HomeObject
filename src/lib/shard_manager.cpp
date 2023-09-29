@@ -31,23 +31,23 @@ ShardManager::AsyncResult< InfoList > HomeObjectImpl::list_shards(pg_id_t pgid) 
 ShardManager::AsyncResult< ShardInfo > HomeObjectImpl::seal_shard(shard_id_t id) {
     return _get_shard(id).thenValue([this](auto const e) mutable -> ShardManager::Result< ShardInfo > {
         if (!e) return folly::makeUnexpected(ShardError::UNKNOWN_SHARD);
-        if (ShardInfo::State::SEALED == e.value().info.state) return e.value().info;
-        return _seal_shard(e.value().info.id);
+        if (ShardInfo::State::SEALED == e.value()->info.state) return e.value()->info;
+        return _seal_shard(e.value()->info.id);
     });
 }
 
 ShardManager::AsyncResult< ShardInfo > HomeObjectImpl::get_shard(shard_id_t id) const {
     return _get_shard(id).thenValue([this](auto const e) mutable -> ShardManager::Result< ShardInfo > {
         if (!e) { return folly::makeUnexpected(e.error()); }
-        return e.value().info;
+        return e.value()->info;
     });
 }
 
 ///
 // This is used as a first call for many operations and initializes the Future.
 //
-folly::Future< ShardManager::Result< Shard > > HomeObjectImpl::_get_shard(shard_id_t id) const {
-    return _defer().thenValue([this, id](auto) -> ShardManager::Result< Shard > {
+folly::Future< ShardManager::Result< ShardPtr > > HomeObjectImpl::_get_shard(shard_id_t id) const {
+    return _defer().thenValue([this, id](auto) -> ShardManager::Result< ShardPtr > {
         auto lg = std::shared_lock(_shard_lock);
         if (auto it = _shard_map.find(id); _shard_map.end() != it) return *(it->second);
         return folly::makeUnexpected(ShardError::UNKNOWN_SHARD);

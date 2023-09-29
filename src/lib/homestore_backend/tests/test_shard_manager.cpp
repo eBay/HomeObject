@@ -219,13 +219,16 @@ TEST_F(ShardManagerTesting, MockSealShard) {
 }
 
 class FixtureAppWithRecovery : public FixtureApp {
+    std::string fpath_{"/tmp/test_shard_manager.data.{}" + std::to_string(rand())};
+
 public:
     std::list< std::filesystem::path > devices() const override {
-        const std::string fpath{"/tmp/test_homestore.data"};
         auto device_info = std::list< std::filesystem::path >();
-        device_info.emplace_back(std::filesystem::canonical(fpath));
+        device_info.emplace_back(std::filesystem::canonical(fpath_));
         return device_info;
     }
+
+    std::string path() const { return fpath_; }
 };
 
 class ShardManagerTestingRecovery : public ::testing::Test {
@@ -238,7 +241,8 @@ protected:
 
 TEST_F(ShardManagerTestingRecovery, ShardManagerRecovery) {
     // prepare the env first;
-    const std::string fpath{"/tmp/test_homestore.data"};
+    auto app_with_recovery = dp_cast< FixtureAppWithRecovery >(app);
+    const std::string fpath = app_with_recovery->path();
     if (std::filesystem::exists(fpath)) { std::filesystem::remove(fpath); }
     LOGINFO("creating device files with size {} ", homestore::in_bytes(2 * Gi));
     LOGINFO("creating {} device file", fpath);

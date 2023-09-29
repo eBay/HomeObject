@@ -44,6 +44,7 @@ struct Shard {
 
 using ShardPtr = shared< Shard >;
 using ShardPtrList = std::list< ShardPtr >;
+using ShardIterator = ShardPtrList::iterator;
 
 struct PG {
     explicit PG(PGInfo info) : pg_info_(std::move(info)) {}
@@ -72,7 +73,7 @@ class HomeObjectImpl : public HomeObject,
     virtual BlobManager::Result< Blob > _get_blob(ShardInfo const&, blob_id_t) const = 0;
     virtual BlobManager::NullResult _del_blob(ShardInfo const&, blob_id_t) = 0;
     ///
-    folly::Future< ShardManager::Result< Shard > > _get_shard(shard_id_t id) const;
+    folly::Future< ShardManager::Result< ShardPtr > > _get_shard(shard_id_t id) const;
     auto _defer() const { return folly::makeSemiFuture().via(folly::getGlobalCPUExecutor()); }
 
     virtual PGManager::NullAsyncResult _create_pg(PGInfo&& pg_info, std::set< std::string, std::less<> > peers) = 0;
@@ -91,7 +92,7 @@ protected:
     std::map< pg_id_t, shared< PG > > _pg_map;
 
     mutable std::shared_mutex _shard_lock;
-    std::map< shard_id_t, ShardPtr > _shard_map;
+    std::map< shard_id_t, ShardIterator > _shard_map;
     ///
 
 public:

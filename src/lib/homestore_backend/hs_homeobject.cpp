@@ -90,19 +90,19 @@ void HSHomeObject::on_shard_meta_blk_found(homestore::meta_blk* mblk, sisl::byte
     homestore::superblk< shard_info_superblk > sb;
     sb.load(buf, mblk);
 
-    bool pg_is_recovery = false;
+    bool pg_is_recovered = false;
     {
         std::scoped_lock lock_guard(_pg_lock);
-        pg_is_recovery = _pg_map.find(sb->placement_group) != _pg_map.end();
+        pg_is_recovered = _pg_map.find(sb->placement_group) != _pg_map.end();
     }
 
-    if (pg_is_recovery) {
+    if (pg_is_recovered) {
         auto hs_shard = std::make_shared< HS_Shard >(sb);
         add_new_shard_to_map(hs_shard);
         return;
     }
 
-    // There is no guarantee that pg info will be recovery before shard recovery
+    // There is no guarantee that pg info will be recovered before shard recovery
     std::scoped_lock lock_guard(recovery_mutex_);
     pending_recovery_shards_[sb->placement_group].push_back(std::move(sb));
 }

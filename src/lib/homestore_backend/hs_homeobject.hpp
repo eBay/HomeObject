@@ -97,9 +97,8 @@ private:
     static std::string serialize_shard_info(const ShardInfo& info);
     void add_new_shard_to_map(ShardPtr shard);
     void update_shard_in_map(const ShardInfo& shard_info);
-    void do_shard_message_commit(int64_t lsn, const ReplicationMessageHeader& header,
-                                 homestore::MultiBlkId const& blkids, sisl::blob value,
-                                 cintrusive< homestore::repl_req_ctx >& hs_ctx);
+    void do_shard_message_commit(int64_t lsn, ReplicationMessageHeader& header, homestore::MultiBlkId const& blkids,
+                                 sisl::blob value, cintrusive< homestore::repl_req_ctx >& hs_ctx);
     // recover part
     void register_homestore_metablk_callback();
     void on_pg_meta_blk_found(sisl::byte_view const& buf, void* meta_cookie);
