@@ -68,15 +68,15 @@ BlobManager::Result< Blob > FileHomeObject::_get_blob(ShardInfo const& _shard, b
         auto j_str = std::string(h_size, '\0');
         err = pread(shard_fd, const_cast< char* >(j_str.c_str()), h_size, sizeof(h_size) + route.blob);
         RELEASE_ASSERT(0 < err, "Failed to read from: {}", shard_file.string());
-        auto shard_json = nlohmann::json::parse(j_str);
+        auto blob_json = nlohmann::json::parse(j_str);
 
-        auto const body_size = shard_json["body_size"].get< uint64_t >();
+        auto const body_size = blob_json["body_size"].get< uint64_t >();
         auto b = Blob{sisl::io_blob_safe(body_size), "", 0};
         err = pread(shard_fd, b.body.bytes, body_size, sizeof(h_size) + h_size + route.blob);
         RELEASE_ASSERT(0 < err, "Failed to read from: {}", shard_file.string());
 
-        b.user_key = shard_json["user_key"].get< std::string >();
-        b.object_off = shard_json["object_off"].get< uint64_t >();
+        b.user_key = blob_json["user_key"].get< std::string >();
+        b.object_off = blob_json["object_off"].get< uint64_t >();
         close(shard_fd);
         return b;
     }

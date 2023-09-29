@@ -52,12 +52,16 @@ ShardManager::Result< ShardInfo > FileHomeObject::_create_shard(pg_id_t pg_owner
     j["available_capacity"] = info.available_capacity_bytes;
     j["deleted_capacity"] = info.deleted_capacity_bytes;
     auto serialize = j.dump();
-    auto err = pwrite(shard_fd, serialize.c_str(), serialize.size(), 0ull);
+    auto hdr_len = serialize.size();
+    auto err = pwrite(shard_fd, &hdr_len, sizeof(hdr_len), 0ull);
+    RELEASE_ASSERT(0 < err, "Failed to write to: {}", shard_file.string());
+    err = pwrite(shard_fd, serialize.c_str(), serialize.size(), sizeof(hdr_len));
     RELEASE_ASSERT(0 < err, "Failed to write to: {}", shard_file.string());
 
     auto [it, happened] = index_.try_emplace(info.id, std::make_unique< ShardIndex >());
     RELEASE_ASSERT(happened, "Could not create BTree!");
-    it->second->shard_offset_.store(serialize.size());
+    it->second->shard_offset_.store(sizeof(hdr_len) + serialize.size());
+    close(shard_fd);
     return info;
 }
 

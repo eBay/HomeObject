@@ -41,6 +41,8 @@ class FileHomeObject : public HomeObjectImpl {
                                                PGMember const& new_member) override;
     ///
 
+    void _recover();
+
 public:
     FileHomeObject(std::weak_ptr< HomeObjectApplication >&& application, std::filesystem::path const& root);
     ~FileHomeObject() override = default;
