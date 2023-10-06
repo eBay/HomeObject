@@ -277,7 +277,7 @@ TEST_F(ShardManagerTestingRecovery, ShardManagerRecovery) {
     EXPECT_TRUE(pg_iter != ho->_pg_map.end());
     auto& pg_result = pg_iter->second;
     EXPECT_EQ(1, pg_result->shards_.size());
-    auto check_shard = pg_result->shards_.front();
+    auto check_shard = pg_result->shards_.front().get();
     EXPECT_EQ(ShardInfo::State::OPEN, check_shard->info.state);
     // release the homeobject and homestore will be shutdown automatically.
     _home_object.reset();
@@ -292,7 +292,7 @@ TEST_F(ShardManagerTestingRecovery, ShardManagerRecovery) {
     pg_iter = ho->_pg_map.find(_pg_id);
     EXPECT_TRUE(pg_iter != ho->_pg_map.end());
     EXPECT_EQ(1, pg_iter->second->shards_.size());
-    auto hs_shard = dp_cast< homeobject::HSHomeObject::HS_Shard >(pg_iter->second->shards_.front());
+    auto hs_shard = d_cast< homeobject::HSHomeObject::HS_Shard* >(pg_iter->second->shards_.front().get());
     EXPECT_TRUE(hs_shard->info == shard_info);
     EXPECT_TRUE(hs_shard->sb_->id == shard_info.id);
     EXPECT_TRUE(hs_shard->sb_->placement_group == shard_info.placement_group);

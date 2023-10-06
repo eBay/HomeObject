@@ -39,19 +39,12 @@ homestore::blk_alloc_hints ReplicationStateMachine::get_blk_alloc_hints(sisl::bl
     const ReplicationMessageHeader* msg_header = r_cast< const ReplicationMessageHeader* >(header.bytes);
     switch (msg_header->msg_type) {
     case ReplicationMessageType::CREATE_SHARD_MSG: {
-        auto list_shard_result = home_object_->shard_manager()->list_shards(msg_header->pg_id).get();
-        if (sisl_unlikely(!list_shard_result)) {
-            LOGWARNMOD(homeobject, "list shards failed from pg {}", msg_header->pg_id);
-            break;
-        }
-
-        if (list_shard_result.value().empty()) {
+        auto any_allocated_chunk_id = home_object_->get_any_chunk_id(msg_header->pg_id);
+        if (!any_allocated_chunk_id.has_value()) {
             // pg is empty without any shards, we leave the decision the HeapChunkSelector to select a pdev
             // with most available space and then select one chunk based on that pdev
         } else {
-            auto chunk_id = home_object_->get_shard_chunk(list_shard_result.value().back().id);
-            RELEASE_ASSERT(!!chunk_id, "unknown shard id to get binded chunk");
-            return home_object_->chunk_selector()->chunk_to_hints(chunk_id.value());
+            return home_object_->chunk_selector()->chunk_to_hints(any_allocated_chunk_id.value());
         }
         break;
     }

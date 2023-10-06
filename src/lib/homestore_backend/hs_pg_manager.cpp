@@ -127,8 +127,7 @@ void HSHomeObject::on_pg_meta_blk_found(sisl::byte_view const& buf, void* meta_c
             auto iter = pending_recovery_shards_.find(pg_sb->id);
             if (iter != pending_recovery_shards_.end()) {
                 for (auto& sb : iter->second) {
-                    auto hs_shard = std::make_shared< HS_Shard >(sb);
-                    add_new_shard_to_map(hs_shard);
+                    add_new_shard_to_map(std::make_unique< HS_Shard >(sb));
                 }
                 pending_recovery_shards_.erase(iter);
             }

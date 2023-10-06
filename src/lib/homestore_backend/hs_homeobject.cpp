@@ -97,8 +97,7 @@ void HSHomeObject::on_shard_meta_blk_found(homestore::meta_blk* mblk, sisl::byte
     }
 
     if (pg_is_recovered) {
-        auto hs_shard = std::make_shared< HS_Shard >(sb);
-        add_new_shard_to_map(hs_shard);
+        add_new_shard_to_map(std::make_unique< HS_Shard >(sb));
         return;
     }
 
@@ -115,7 +114,7 @@ void HSHomeObject::on_shard_meta_blk_recover_completed(bool success) {
     for (auto& pair : _pg_map) {
         for (auto& shard : pair.second->shards_) {
             if (shard->info.state == ShardInfo::State::OPEN) {
-                excluding_chunks.emplace(dp_cast< HS_Shard >(shard)->sb_->chunk_id);
+                excluding_chunks.emplace(d_cast< HS_Shard* >(shard.get())->sb_->chunk_id);
             }
         }
     }

@@ -49,7 +49,7 @@ struct Shard {
     ShardInfo info;
 };
 
-using ShardPtr = shared< Shard >;
+using ShardPtr = unique< Shard >;
 using ShardPtrList = std::list< ShardPtr >;
 using ShardIterator = ShardPtrList::iterator;
 
@@ -73,14 +73,14 @@ class HomeObjectImpl : public HomeObject,
                        public std::enable_shared_from_this< HomeObjectImpl > {
 
     /// Implementation defines these
-    virtual ShardManager::Result< ShardInfo > _create_shard(pg_id_t, uint64_t size_bytes) = 0;
+    virtual ShardManager::AsyncResult< ShardInfo > _create_shard(pg_id_t, uint64_t size_bytes) = 0;
     virtual ShardManager::Result< ShardInfo > _seal_shard(shard_id_t) = 0;
 
     virtual BlobManager::Result< blob_id_t > _put_blob(ShardInfo const&, Blob&&) = 0;
     virtual BlobManager::Result< Blob > _get_blob(ShardInfo const&, blob_id_t) const = 0;
     virtual BlobManager::NullResult _del_blob(ShardInfo const&, blob_id_t) = 0;
     ///
-    folly::Future< ShardManager::Result< ShardPtr > > _get_shard(shard_id_t id) const;
+    folly::Future< ShardManager::Result< ShardInfo > > _get_shard(shard_id_t id) const;
     auto _defer() const { return folly::makeSemiFuture().via(folly::getGlobalCPUExecutor()); }
 
     virtual PGManager::NullAsyncResult _create_pg(PGInfo&& pg_info, std::set< std::string, std::less<> > peers) = 0;

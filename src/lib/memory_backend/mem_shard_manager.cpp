@@ -6,7 +6,7 @@ namespace homeobject {
 
 uint64_t ShardManager::max_shard_size() { return Gi; }
 
-ShardManager::Result< ShardInfo > MemoryHomeObject::_create_shard(pg_id_t pg_owner, uint64_t size_bytes) {
+ShardManager::AsyncResult< ShardInfo > MemoryHomeObject::_create_shard(pg_id_t pg_owner, uint64_t size_bytes) {
     auto const now = get_current_timestamp();
     auto info = ShardInfo(0ull, pg_owner, ShardInfo::State::OPEN, now, now, size_bytes, size_bytes, 0);
     {
@@ -16,8 +16,7 @@ ShardManager::Result< ShardInfo > MemoryHomeObject::_create_shard(pg_id_t pg_own
 
         auto& s_list = pg_it->second->shards_;
         info.id = make_new_shard_id(pg_owner, s_list.size());
-        auto shard = std::make_shared< Shard >(info);
-        auto iter = s_list.emplace(s_list.end(), shard);
+        auto iter = s_list.emplace(s_list.end(), std::make_unique< Shard >(info));
         LOGDEBUG("Creating Shard [{}]: in Pg [{}] of Size [{}b]", info.id & shard_mask, pg_owner, size_bytes);
         auto [_, s_happened] = _shard_map.emplace(info.id, iter);
         RELEASE_ASSERT(s_happened, "Duplicate Shard insertion!");

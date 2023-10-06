@@ -19,7 +19,7 @@ namespace homeobject {
 
 class HSHomeObject : public HomeObjectImpl {
     /// Overridable Helpers
-    ShardManager::Result< ShardInfo > _create_shard(pg_id_t, uint64_t size_bytes) override;
+    ShardManager::AsyncResult< ShardInfo > _create_shard(pg_id_t, uint64_t size_bytes) override;
     ShardManager::Result< ShardInfo > _seal_shard(shard_id_t) override;
 
     BlobManager::Result< blob_id_t > _put_blob(ShardInfo const&, Blob&&) override;
@@ -62,7 +62,7 @@ public:
     struct HS_PG : public PG {
         homestore::superblk< pg_info_superblk > pg_sb_;
         shared< homestore::ReplDev > repl_dev_;
-
+        std::optional< homestore::chunk_num_t > any_allocated_chunk_id_{};
         HS_PG(PGInfo info, shared< homestore::ReplDev > rdev);
         HS_PG(homestore::superblk< pg_info_superblk > const& sb, shared< homestore::ReplDev > rdev);
         virtual ~HS_PG() = default;
@@ -74,7 +74,7 @@ public:
         homestore::superblk< shard_info_superblk > sb_;
         HS_Shard(ShardInfo info, homestore::chunk_num_t chunk_id);
         HS_Shard(homestore::superblk< shard_info_superblk > const& sb);
-        virtual ~HS_Shard() = default;
+        ~HS_Shard() override = default;
 
         void update_info(const ShardInfo& info);
         void write_sb();
@@ -95,7 +95,7 @@ private:
 
     static ShardInfo deserialize_shard_info(const char* shard_info_str, size_t size);
     static std::string serialize_shard_info(const ShardInfo& info);
-    void add_new_shard_to_map(ShardPtr shard);
+    void add_new_shard_to_map(ShardPtr&& shard);
     void update_shard_in_map(const ShardInfo& shard_info);
     void do_shard_message_commit(int64_t lsn, ReplicationMessageHeader& header, homestore::MultiBlkId const& blkids,
                                  sisl::blob value, cintrusive< homestore::repl_req_ctx >& hs_ctx);
@@ -115,6 +115,8 @@ public:
                                  homestore::ReplDev* repl_dev, cintrusive< homestore::repl_req_ctx >& hs_ctx);
 
     ShardManager::Result< homestore::chunk_num_t > get_shard_chunk(shard_id_t id) const;
+
+    std::optional< homestore::chunk_num_t > get_any_chunk_id(pg_id_t const pg);
 
     shared< HeapChunkSelector > chunk_selector() { return chunk_selector_; }
 };

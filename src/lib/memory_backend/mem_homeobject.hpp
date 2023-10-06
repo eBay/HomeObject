@@ -35,7 +35,7 @@ class MemoryHomeObject : public HomeObjectImpl {
 
     /// Helpers
     // ShardManager
-    ShardManager::Result< ShardInfo > _create_shard(pg_id_t, uint64_t size_bytes) override;
+    ShardManager::AsyncResult< ShardInfo > _create_shard(pg_id_t, uint64_t size_bytes) override;
     ShardManager::Result< ShardInfo > _seal_shard(shard_id_t) override;
 
     // BlobManager
