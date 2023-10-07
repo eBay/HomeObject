@@ -102,7 +102,6 @@ void HSHomeObject::on_shard_meta_blk_found(homestore::meta_blk* mblk, sisl::byte
     }
 
     // There is no guarantee that pg info will be recovered before shard recovery
-    std::scoped_lock lock_guard(recovery_mutex_);
     pending_recovery_shards_[sb->placement_group].push_back(std::move(sb));
 }
 

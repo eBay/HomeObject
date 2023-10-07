@@ -83,7 +83,6 @@ public:
 
 private:
     shared< HeapChunkSelector > chunk_selector_;
-    std::shared_mutex recovery_mutex_;
     std::map< pg_id_t, std::list< homestore::superblk< shard_info_superblk > > > pending_recovery_shards_;
 
 private:
