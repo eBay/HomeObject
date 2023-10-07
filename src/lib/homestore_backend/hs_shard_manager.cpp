@@ -188,12 +188,12 @@ void HSHomeObject::update_shard_in_map(const ShardInfo& shard_info) {
     hs_shard->update_info(shard_info);
 }
 
-ShardManager::Result< homestore::chunk_num_t > HSHomeObject::get_shard_chunk(shard_id_t id) const {
+std::optional< homestore::chunk_num_t > HSHomeObject::get_shard_chunk(shard_id_t id) const {
     std::scoped_lock lock_guard(_shard_lock);
     auto shard_iter = _shard_map.find(id);
-    if (shard_iter == _shard_map.end()) { return folly::makeUnexpected(ShardError::UNKNOWN_SHARD); }
+    if (shard_iter == _shard_map.end()) { return std::nullopt; }
     auto hs_shard = d_cast< HS_Shard* >((*shard_iter->second).get());
-    return hs_shard->sb_->chunk_id;
+    return std::make_optional< homestore::chunk_num_t >(hs_shard->sb_->chunk_id);
 }
 
 std::optional< homestore::chunk_num_t > HSHomeObject::get_any_chunk_id(pg_id_t const pg_id) {
@@ -207,7 +207,7 @@ std::optional< homestore::chunk_num_t > HSHomeObject::get_any_chunk_id(pg_id_t c
     }
 
     auto& shards = pg->shards_;
-    if (shards.empty()) { return std::optional< homestore::chunk_num_t >(); }
+    if (shards.empty()) { return std::nullopt; }
     auto hs_shard = d_cast< HS_Shard* >(shards.front().get());
     // cache it;
     pg->any_allocated_chunk_id_ = hs_shard->sb_->chunk_id;

@@ -51,7 +51,7 @@ homestore::blk_alloc_hints ReplicationStateMachine::get_blk_alloc_hints(sisl::bl
 
     case ReplicationMessageType::SEAL_SHARD_MSG: {
         auto chunk_id = home_object_->get_shard_chunk(msg_header->shard_id);
-        RELEASE_ASSERT(!!chunk_id, "unknown shard id to get binded chunk");
+        RELEASE_ASSERT(chunk_id.has_value(), "unknown shard id to get binded chunk");
         homestore::blk_alloc_hints hints;
         hints.chunk_id_hint = chunk_id.value();
         return hints;

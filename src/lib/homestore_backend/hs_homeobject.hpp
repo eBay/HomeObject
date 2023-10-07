@@ -114,7 +114,7 @@ public:
     void on_shard_message_commit(int64_t lsn, sisl::blob const& header, homestore::MultiBlkId const& blkids,
                                  homestore::ReplDev* repl_dev, cintrusive< homestore::repl_req_ctx >& hs_ctx);
 
-    ShardManager::Result< homestore::chunk_num_t > get_shard_chunk(shard_id_t id) const;
+    std::optional< homestore::chunk_num_t > get_shard_chunk(shard_id_t id) const;
 
     std::optional< homestore::chunk_num_t > get_any_chunk_id(pg_id_t const pg);
 

@@ -120,6 +120,62 @@ TEST_F(ShardManagerTesting, CreateShardSuccess) {
     EXPECT_EQ(_pg_id, shard_info.placement_group);
 }
 
+TEST_F(ShardManagerTesting, CreateMultiShards) {
+    auto e = _home_object->shard_manager()->create_shard(_pg_id, Mi).get();
+    ASSERT_TRUE(!!e);
+    homeobject::HSHomeObject* ho = dynamic_cast< homeobject::HSHomeObject* >(_home_object.get());
+    auto chunk_num_1 = ho->get_shard_chunk(e.value().id);
+    ASSERT_TRUE(chunk_num_1.has_value());
+
+    // create another shard again.
+    e = _home_object->shard_manager()->create_shard(_pg_id, Mi).get();
+    ASSERT_TRUE(!!e);
+    auto chunk_num_2 = ho->get_shard_chunk(e.value().id);
+    ASSERT_TRUE(chunk_num_2.has_value());
+
+    // check if both chunk is on the same pdev;
+    auto alloc_hint1 = ho->chunk_selector()->chunk_to_hints(chunk_num_1.value());
+    auto alloc_hint2 = ho->chunk_selector()->chunk_to_hints(chunk_num_2.value());
+    ASSERT_TRUE(alloc_hint1.pdev_id_hint.has_value());
+    ASSERT_TRUE(alloc_hint2.pdev_id_hint.has_value());
+    ASSERT_TRUE(alloc_hint1.pdev_id_hint.value() == alloc_hint2.pdev_id_hint.value());
+}
+
+TEST_F(ShardManagerTesting, CreateMultiShardsOnMultiPG) {
+    // create another PG;
+    auto peer1 = _home_object->our_uuid();
+    auto peer2 = boost::uuids::random_generator()();
+
+    auto new_pg_id = static_cast< homeobject::pg_id_t >(_pg_id + 1);
+    auto info = homeobject::PGInfo(_pg_id + 1);
+    info.members.insert(homeobject::PGMember{peer1, "peer1", 1});
+    info.members.insert(homeobject::PGMember{peer2, "peer2", 0});
+    EXPECT_TRUE(_home_object->pg_manager()->create_pg(std::move(info)).get());
+
+    std::vector< homeobject::pg_id_t > pgs{_pg_id, new_pg_id};
+
+    for (const auto pg : pgs) {
+        auto e = _home_object->shard_manager()->create_shard(pg, Mi).get();
+        ASSERT_TRUE(!!e);
+        homeobject::HSHomeObject* ho = dynamic_cast< homeobject::HSHomeObject* >(_home_object.get());
+        auto chunk_num_1 = ho->get_shard_chunk(e.value().id);
+        ASSERT_TRUE(chunk_num_1.has_value());
+
+        // create another shard again.
+        e = _home_object->shard_manager()->create_shard(_pg_id, Mi).get();
+        ASSERT_TRUE(!!e);
+        auto chunk_num_2 = ho->get_shard_chunk(e.value().id);
+        ASSERT_TRUE(chunk_num_2.has_value());
+
+        // check if both chunk is on the same pdev;
+        auto alloc_hint1 = ho->chunk_selector()->chunk_to_hints(chunk_num_1.value());
+        auto alloc_hint2 = ho->chunk_selector()->chunk_to_hints(chunk_num_2.value());
+        ASSERT_TRUE(alloc_hint1.pdev_id_hint.has_value());
+        ASSERT_TRUE(alloc_hint2.pdev_id_hint.has_value());
+        ASSERT_TRUE(alloc_hint1.pdev_id_hint.value() == alloc_hint2.pdev_id_hint.value());
+    }
+}
+
 TEST_F(ShardManagerTesting, CreateShardAndValidateMembers) {
     auto e = _home_object->shard_manager()->create_shard(_pg_id, Mi).get();
     ASSERT_TRUE(!!e);

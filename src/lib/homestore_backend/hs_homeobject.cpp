@@ -52,7 +52,7 @@ void HSHomeObject::init_homestore() {
             {HS_SERVICE::LOG_REPLICATED, hs_format_params{.size_pct = 10.0}},
             {HS_SERVICE::LOG_LOCAL, hs_format_params{.size_pct = 0.1}}, // TODO: Remove this after HS disables LOG_LOCAL
             {HS_SERVICE::REPLICATION,
-             hs_format_params{.size_pct = 80.0,
+             hs_format_params{.size_pct = 79.0,
                               .num_chunks = 65000,
                               .block_size = 1024,
                               .alloc_type = blk_allocator_type_t::append,
