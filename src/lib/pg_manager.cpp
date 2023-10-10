@@ -17,7 +17,6 @@ PGManager::NullAsyncResult HomeObjectImpl::create_pg(PGInfo&& pg_info) {
         peers.insert(to_string(member.id));
     }
     if (!saw_ourself || !saw_leader) return folly::makeUnexpected(PGError::INVALID_ARG);
-
     return _create_pg(std::move(pg_info), std::move(peers));
 }
 
