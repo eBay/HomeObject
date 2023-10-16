@@ -278,6 +278,60 @@ TEST_F(HomeObjectFixture, BasicPutGetBlob) {
     }
 }
 
+TEST_F(HomeObjectFixture, SealShard) {
+    // Create a pg, shard, put blob should succeed, seal and put blob again should fail.
+    // Recover and put blob again should fail.
+    pg_id_t pg_id{1};
+    create_pg(pg_id);
+
+    auto s = _obj_inst->shard_manager()->create_shard(pg_id, 64 * Mi).get();
+    ASSERT_TRUE(!!s);
+    auto shard_info = s.value();
+    auto shard_id = shard_info.id;
+    s = _obj_inst->shard_manager()->get_shard(shard_id).get();
+    ASSERT_TRUE(!!s);
+
+    LOGINFO("Got shard {}", shard_id);
+    shard_info = s.value();
+    EXPECT_EQ(shard_info.id, shard_id);
+    EXPECT_EQ(shard_info.placement_group, pg_id);
+    EXPECT_EQ(shard_info.state, ShardInfo::State::OPEN);
+    auto b = _obj_inst->blob_manager()->put(shard_id, Blob{sisl::io_blob_safe(512u, 512u), "test_blob", 0ul}).get();
+    ASSERT_TRUE(!!b);
+    LOGINFO("Put blob {}", b.value());
+
+    s = _obj_inst->shard_manager()->seal_shard(shard_id).get();
+    ASSERT_TRUE(!!s);
+    shard_info = s.value();
+    EXPECT_EQ(shard_info.id, shard_id);
+    EXPECT_EQ(shard_info.placement_group, pg_id);
+    EXPECT_EQ(shard_info.state, ShardInfo::State::SEALED);
+    LOGINFO("Sealed shard {}", shard_id);
+
+    b = _obj_inst->blob_manager()->put(shard_id, Blob{sisl::io_blob_safe(512u, 512u), "test_blob", 0ul}).get();
+    ASSERT_TRUE(!b);
+    ASSERT_EQ(b.error(), BlobError::SEALED_SHARD);
+    LOGINFO("Put blob {}", b.error());
+
+    // Restart homeobject
+    restart();
+
+    // Verify shard is sealed.
+    s = _obj_inst->shard_manager()->get_shard(shard_id).get();
+    ASSERT_TRUE(!!s);
+
+    LOGINFO("After restart shard {}", shard_id);
+    shard_info = s.value();
+    EXPECT_EQ(shard_info.id, shard_id);
+    EXPECT_EQ(shard_info.placement_group, pg_id);
+    EXPECT_EQ(shard_info.state, ShardInfo::State::SEALED);
+
+    b = _obj_inst->blob_manager()->put(shard_id, Blob{sisl::io_blob_safe(512u, 512u), "test_blob", 0ul}).get();
+    ASSERT_TRUE(!b);
+    ASSERT_EQ(b.error(), BlobError::SEALED_SHARD);
+    LOGINFO("Put blob {}", b.error());
+}
+
 int main(int argc, char* argv[]) {
     int parsed_argc = argc;
     ::testing::InitGoogleTest(&parsed_argc, argv);

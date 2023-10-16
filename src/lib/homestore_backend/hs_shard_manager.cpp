@@ -102,8 +102,54 @@ ShardManager::AsyncResult< ShardInfo > HSHomeObject::_create_shard(pg_id_t pg_ow
     });
 }
 
-ShardManager::Result< ShardInfo > HSHomeObject::_seal_shard(shard_id_t id) {
-    return folly::makeUnexpected(ShardError::UNKNOWN_SHARD);
+ShardManager::AsyncResult< ShardInfo > HSHomeObject::_seal_shard(shard_id_t shard_id) {
+    pg_id_t pg_id;
+    ShardInfo shard_info;
+    {
+        std::scoped_lock lock_guard(_shard_lock);
+        auto shard_iter = _shard_map.find(shard_id);
+        RELEASE_ASSERT(shard_iter != _shard_map.end(), "shard id not found");
+        auto hs_shard = d_cast< HS_Shard* >((*shard_iter->second).get());
+        shard_info = hs_shard->info;
+        pg_id = hs_shard->info.placement_group;
+    }
+
+    shared< homestore::ReplDev > repl_dev;
+    {
+        std::shared_lock lock_guard(_pg_lock);
+        auto iter = _pg_map.find(pg_id);
+        RELEASE_ASSERT(iter != _pg_map.end(), "PG not found");
+        repl_dev = static_cast< HS_PG* >(iter->second.get())->repl_dev_;
+        RELEASE_ASSERT(repl_dev != nullptr, "Repl dev null");
+    }
+
+    shard_info.state = ShardInfo::State::SEALED;
+    auto seal_shard_message = serialize_shard_info(shard_info);
+    const auto msg_size = sisl::round_up(seal_shard_message.size(), repl_dev->get_blk_size());
+    auto req = repl_result_ctx< ShardManager::Result< ShardInfo > >::make(msg_size, 512 /*alignment*/);
+    auto buf_ptr = req->hdr_buf_.bytes;
+    std::memset(buf_ptr, 0, msg_size);
+    std::memcpy(buf_ptr, seal_shard_message.c_str(), seal_shard_message.size());
+
+    req->header_.msg_type = ReplicationMessageType::SEAL_SHARD_MSG;
+    req->header_.pg_id = pg_id;
+    req->header_.shard_id = shard_id;
+    req->header_.payload_size = msg_size;
+    req->header_.payload_crc = crc32_ieee(init_crc32, buf_ptr, msg_size);
+    req->header_.seal();
+    sisl::blob header;
+    header.bytes = r_cast< uint8_t* >(&req->header_);
+    header.size = sizeof(req->header_);
+    sisl::sg_list value;
+    value.size = msg_size;
+    value.iovs.push_back(iovec(buf_ptr, msg_size));
+
+    // replicate this seal shard message to PG members;
+    repl_dev->async_alloc_write(header, sisl::blob{}, value, req);
+    return req->result().deferValue([this](auto const& e) -> ShardManager::Result< ShardInfo > {
+        if (!e) return folly::makeUnexpected(e.error());
+        return e.value();
+    });
 }
 
 void HSHomeObject::on_shard_message_commit(int64_t lsn, sisl::blob const& header, homestore::MultiBlkId const& blkids,

@@ -26,7 +26,7 @@ ShardManager::AsyncResult< ShardInfo > MemoryHomeObject::_create_shard(pg_id_t p
     return info;
 }
 
-ShardManager::Result< ShardInfo > MemoryHomeObject::_seal_shard(shard_id_t id) {
+ShardManager::AsyncResult< ShardInfo > MemoryHomeObject::_seal_shard(shard_id_t id) {
     auto lg = std::scoped_lock(_shard_lock);
     auto shard_it = _shard_map.find(id);
     RELEASE_ASSERT(_shard_map.end() != shard_it, "Missing ShardIterator!");
