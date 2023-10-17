@@ -10,11 +10,14 @@ namespace homeobject {
 ///
 // A Key used in the IndexService (BTree). The inclusion of Shard allows BlobRoutes
 // to appear in a different Index should the Blob (Shard) be moved between Pgs.
+#pragma pack(1)
 struct BlobRoute {
     shard_id_t shard;
     blob_id_t blob;
     auto operator<=>(BlobRoute const&) const = default;
+    sisl::blob to_blob() const { return sisl::blob{uintptr_cast(const_cast< BlobRoute* >(this)), sizeof(*this)}; }
 };
+#pragma pack()
 
 } // namespace homeobject
 

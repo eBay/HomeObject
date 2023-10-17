@@ -75,7 +75,7 @@ void FileHomeObject::_recover() {
             it->second->fd_ = shard_fd;
             it->second->shard_offset_.store(blob_id);
 
-            auto iter = s_list.emplace(s_list.end(), Shard(info));
+            auto iter = s_list.emplace(s_list.end(), std::make_unique< Shard >(info));
             auto [_, s_happened] = _shard_map.emplace(info.id, iter);
             RELEASE_ASSERT(s_happened, "duplicate Shard recovery!");
         }

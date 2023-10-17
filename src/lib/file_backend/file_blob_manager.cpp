@@ -23,7 +23,7 @@ using std::filesystem::path;
     } else
 
 // Write (move) Blob to FILE
-BlobManager::Result< blob_id_t > FileHomeObject::_put_blob(ShardInfo const& _shard, Blob&& _blob) {
+BlobManager::AsyncResult< blob_id_t > FileHomeObject::_put_blob(ShardInfo const& _shard, Blob&& _blob) {
     WITH_SHARD
 
     nlohmann::json j;
@@ -65,25 +65,29 @@ nlohmann::json FileHomeObject::_read_blob_header(int shard_fd, blob_id_t& blob_i
 }
 
 // Lookup and duplicate underyling Blob for user; only *safe* because we defer GC.
-BlobManager::Result< Blob > FileHomeObject::_get_blob(ShardInfo const& _shard, blob_id_t _blob) const {
+BlobManager::AsyncResult< Blob > FileHomeObject::_get_blob(ShardInfo const& _shard, blob_id_t _blob, uint64_t off,
+                                                           uint64_t len) const {
     WITH_SHARD
     WITH_ROUTE(_blob)
     IF_BLOB_ALIVE {
         auto blob_json = _read_blob_header(shard.fd_, route.blob);
-
-        auto const body_size = blob_json["body_size"].get< uint64_t >();
-        auto b = Blob{sisl::io_blob_safe(body_size), "", 0};
-        auto err = pread(shard.fd_, b.body.bytes, body_size, route.blob);
-        RELEASE_ASSERT(0 < err, "Failed to read from: [route={}]", route);
-
-        b.user_key = blob_json["user_key"].get< std::string >();
-        b.object_off = blob_json["object_off"].get< uint64_t >();
+        auto body_size = blob_json["body_size"].get< uint64_t >();
+        if ((off < body_size) && (0 < len))
+            len = (off + len) > body_size ? (body_size - off) : len;
+        else
+            len = 0;
+        auto b = Blob{sisl::io_blob_safe(len), blob_json["user_key"].get< std::string >(),
+                      blob_json["object_off"].get< uint64_t >()};
+        if (0 < len) {
+            auto err = pread(shard.fd_, b.body.bytes, len, route.blob + off);
+            RELEASE_ASSERT(0 < err, "Failed to read from: [route={}]", route);
+        }
         return b;
     }
 }
 
 // Tombstone entry
-BlobManager::NullResult FileHomeObject::_del_blob(ShardInfo const& _shard, blob_id_t _blob) {
+BlobManager::NullAsyncResult FileHomeObject::_del_blob(ShardInfo const& _shard, blob_id_t _blob) {
     WITH_SHARD
     WITH_ROUTE(_blob)
     IF_BLOB_ALIVE {
