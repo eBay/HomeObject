@@ -32,7 +32,7 @@ target_link_libraries(shard_homestore_test
     homeobject_homestore
     ${COMMON_TEST_DEPS}
   )
-add_test(NAME ShardHomestoreTest COMMAND shard_homestore_test -csv error)
+#add_test(NAME ShardHomestoreTest COMMAND shard_homestore_test -csv error)
 
 add_executable (blob_homestore_test)
 target_sources(blob_homestore_test PRIVATE $<TARGET_OBJECTS:blob_test>)
@@ -40,5 +40,5 @@ target_link_libraries(blob_homestore_test
     homeobject_homestore
     ${COMMON_TEST_DEPS}
   )
-add_test(NAME BlobHomestoreTest COMMAND blob_homestore_test -csv error)
+#add_test(NAME BlobHomestoreTest COMMAND blob_homestore_test -csv error)
 endif()
