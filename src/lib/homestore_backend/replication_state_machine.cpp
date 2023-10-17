@@ -12,13 +12,19 @@ void ReplicationStateMachine::on_commit(int64_t lsn, const sisl::blob& header, c
         home_object_->on_shard_message_commit(lsn, header, pbas, repl_dev(), ctx);
         break;
     }
-    case ReplicationMessageType::PUT_BLOB_MSG:
+
+    case ReplicationMessageType::PUT_BLOB_MSG: {
+        home_object_->on_blob_put_commit(lsn, header, key, pbas, ctx);
+        break;
+    }
     case ReplicationMessageType::DEL_BLOB_MSG:
+        break;
     default: {
         break;
     }
     }
 }
+
 
 bool ReplicationStateMachine::on_pre_commit(int64_t lsn, sisl::blob const&, sisl::blob const&,
                                             cintrusive< homestore::repl_req_ctx >&) {
@@ -58,6 +64,7 @@ homestore::blk_alloc_hints ReplicationStateMachine::get_blk_alloc_hints(sisl::bl
     }
 
     case ReplicationMessageType::PUT_BLOB_MSG:
+        return home_object_->blob_put_get_blk_alloc_hints(header, ctx);
     case ReplicationMessageType::DEL_BLOB_MSG:
     default: {
         break;

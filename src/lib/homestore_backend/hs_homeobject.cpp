@@ -1,12 +1,13 @@
 #include <homestore/homestore.hpp>
-#include <homestore/index_service.hpp>
 #include <homestore/meta_service.hpp>
 #include <homestore/replication_service.hpp>
+#include <homestore/index_service.hpp>
 #include <iomgr/io_environment.hpp>
 
 #include <homeobject/homeobject.hpp>
 #include "hs_homeobject.hpp"
 #include "heap_chunk_selector.h"
+#include "index_kv.hpp"
 
 namespace homeobject {
 
@@ -41,7 +42,7 @@ void HSHomeObject::init_homestore() {
     chunk_selector_ = std::make_shared< HeapChunkSelector >();
     using namespace homestore;
     bool need_format = HomeStore::instance()
-                           ->with_index_service(nullptr)
+                           ->with_index_service(std::make_unique< BlobIndexServiceCallbacks >(this))
                            .with_repl_data_service(repl_impl_type::solo, chunk_selector_)
                            .start(hs_input_params{.devices = device_info, .app_mem_size = app_mem_size},
                                   [this]() { register_homestore_metablk_callback(); });
@@ -119,6 +120,15 @@ void HSHomeObject::on_shard_meta_blk_recover_completed(bool success) {
     }
 
     chunk_selector_->build_per_dev_chunk_heap(excluding_chunks);
+}
+
+std::string hex_bytes(uint8_t* bytes, size_t len) {
+    std::stringstream ss;
+    ss << std::hex;
+    for (size_t i = 0; i < len; i++) {
+        ss << std::setw(2) << std::setfill('0') << (int)bytes[i];
+    }
+    return ss.str();
 }
 
 } // namespace homeobject
