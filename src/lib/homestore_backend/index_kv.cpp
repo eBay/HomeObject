@@ -67,7 +67,7 @@ HSHomeObject::get_from_index_table(shared< BlobIndexTable > index_table, shard_i
     auto status = index_table->get(get_req);
     if (status != homestore::btree_status_t::success) {
         LOGERROR("Failed to get from index table {}", index_key.to_string());
-        return folly::makeUnexpected(BlobError::INDEX_ERROR);
+        return folly::makeUnexpected(BlobError::UNKNOWN_BLOB);
     }
 
     return index_value.pbas();
