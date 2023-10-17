@@ -26,7 +26,7 @@ using BlobIndexTable = homestore::IndexTable< BlobRouteKey, BlobRouteValue >;
 class HSHomeObject : public HomeObjectImpl {
     /// Overridable Helpers
     ShardManager::AsyncResult< ShardInfo > _create_shard(pg_id_t, uint64_t size_bytes) override;
-    ShardManager::AsyncResult< ShardInfo > _seal_shard(shard_id_t) override;
+    ShardManager::AsyncResult< ShardInfo > _seal_shard(ShardInfo const&) override;
 
     BlobManager::AsyncResult< blob_id_t > _put_blob(ShardInfo const&, Blob&&) override;
     BlobManager::AsyncResult< Blob > _get_blob(ShardInfo const&, blob_id_t, uint64_t off = 0,

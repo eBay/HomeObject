@@ -31,7 +31,7 @@ ShardManager::AsyncResult< ShardInfo > HomeObjectImpl::seal_shard(shard_id_t id)
     return _get_shard(id).thenValue([this](auto const e) mutable -> ShardManager::AsyncResult< ShardInfo > {
         if (!e) return folly::makeUnexpected(ShardError::UNKNOWN_SHARD);
         if (ShardInfo::State::SEALED == e.value().state) return e.value();
-        return _seal_shard(e.value().id);
+        return _seal_shard(e.value());
     });
 }
 

@@ -102,17 +102,10 @@ ShardManager::AsyncResult< ShardInfo > HSHomeObject::_create_shard(pg_id_t pg_ow
     });
 }
 
-ShardManager::AsyncResult< ShardInfo > HSHomeObject::_seal_shard(shard_id_t shard_id) {
-    pg_id_t pg_id;
-    ShardInfo shard_info;
-    {
-        std::scoped_lock lock_guard(_shard_lock);
-        auto shard_iter = _shard_map.find(shard_id);
-        RELEASE_ASSERT(shard_iter != _shard_map.end(), "shard id not found");
-        auto hs_shard = d_cast< HS_Shard* >((*shard_iter->second).get());
-        shard_info = hs_shard->info;
-        pg_id = hs_shard->info.placement_group;
-    }
+ShardManager::AsyncResult< ShardInfo > HSHomeObject::_seal_shard(ShardInfo const& info) {
+    auto& pg_id = info.placement_group;
+    auto& shard_id = info.id;
+    ShardInfo shard_info = info;
 
     shared< homestore::ReplDev > repl_dev;
     {
@@ -146,10 +139,7 @@ ShardManager::AsyncResult< ShardInfo > HSHomeObject::_seal_shard(shard_id_t shar
 
     // replicate this seal shard message to PG members;
     repl_dev->async_alloc_write(header, sisl::blob{}, value, req);
-    return req->result().deferValue([this](auto const& e) -> ShardManager::Result< ShardInfo > {
-        if (!e) return folly::makeUnexpected(e.error());
-        return e.value();
-    });
+    return req->result();
 }
 
 void HSHomeObject::on_shard_message_commit(int64_t lsn, sisl::blob const& header, homestore::MultiBlkId const& blkids,
@@ -198,6 +188,9 @@ void HSHomeObject::do_shard_message_commit(int64_t lsn, ReplicationMessageHeader
     }
 
     case ReplicationMessageType::SEAL_SHARD_MSG: {
+        auto chunk_id = get_shard_chunk(shard_info.id);
+        RELEASE_ASSERT(chunk_id.has_value(), "Chunk id not found");
+        chunk_selector()->release_chunk(chunk_id.value());
         update_shard_in_map(shard_info);
         break;
     }
