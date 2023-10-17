@@ -75,17 +75,13 @@ class HomeObjectImpl : public HomeObject,
     /// Implementation defines these
     virtual ShardManager::AsyncResult< ShardInfo > _create_shard(pg_id_t, uint64_t size_bytes) = 0;
     virtual ShardManager::Result< ShardInfo > _seal_shard(shard_id_t) = 0;
-
     virtual BlobManager::Result< blob_id_t > _put_blob(ShardInfo const&, Blob&&) = 0;
     virtual BlobManager::Result< Blob > _get_blob(ShardInfo const&, blob_id_t) const = 0;
     virtual BlobManager::NullResult _del_blob(ShardInfo const&, blob_id_t) = 0;
-    ///
-    folly::Future< ShardManager::Result< ShardInfo > > _get_shard(shard_id_t id) const;
-    auto _defer() const { return folly::makeSemiFuture().via(folly::getGlobalCPUExecutor()); }
-
     virtual PGManager::NullAsyncResult _create_pg(PGInfo&& pg_info, std::set< std::string, std::less<> > peers) = 0;
     virtual PGManager::NullAsyncResult _replace_member(pg_id_t id, peer_id_t const& old_member,
                                                        PGMember const& new_member) = 0;
+    ///
 
 protected:
     std::mutex _repl_lock;
