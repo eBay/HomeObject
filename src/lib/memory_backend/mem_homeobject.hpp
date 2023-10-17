@@ -39,9 +39,10 @@ class MemoryHomeObject : public HomeObjectImpl {
     ShardManager::Result< ShardInfo > _seal_shard(shard_id_t) override;
 
     // BlobManager
-    BlobManager::Result< blob_id_t > _put_blob(ShardInfo const&, Blob&&) override;
-    BlobManager::Result< Blob > _get_blob(ShardInfo const&, blob_id_t) const override;
-    BlobManager::NullResult _del_blob(ShardInfo const&, blob_id_t) override;
+    BlobManager::AsyncResult< blob_id_t > _put_blob(ShardInfo const&, Blob&&) override;
+    BlobManager::AsyncResult< Blob > _get_blob(ShardInfo const&, blob_id_t, uint64_t off = 0,
+                                          uint64_t len = 0) const override;
+    BlobManager::NullAsyncResult _del_blob(ShardInfo const&, blob_id_t) override;
     ///
 
     // PGManager

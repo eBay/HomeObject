@@ -9,8 +9,8 @@
 
 namespace homeobject {
 
-ENUM(BlobError, uint16_t, UNKNOWN = 1, TIMEOUT, INVALID_ARG, NOT_LEADER, UNKNOWN_SHARD, UNKNOWN_BLOB,
-     CHECKSUM_MISMATCH);
+ENUM(BlobError, uint16_t, UNKNOWN = 1, TIMEOUT, INVALID_ARG, NOT_LEADER, UNKNOWN_SHARD, UNKNOWN_BLOB, CHECKSUM_MISMATCH,
+     READ_FAILED, INDEX_ERROR);
 
 struct Blob {
     Blob(sisl::io_blob_safe b, std::string const& u, uint64_t o) : body(std::move(b)), user_key(u), object_off(o) {}
@@ -18,8 +18,8 @@ struct Blob {
     Blob clone() const;
 
     sisl::io_blob_safe body;
-    std::string user_key;
-    uint64_t object_off;
+    std::string user_key{};
+    uint64_t object_off{};
     std::optional< peer_id_t > current_leader{std::nullopt};
 };
 
