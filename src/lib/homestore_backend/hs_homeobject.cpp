@@ -1,3 +1,7 @@
+#include "hs_homeobject.hpp"
+
+#include <spdlog/fmt/bin_to_hex.h>
+
 #include <homestore/homestore.hpp>
 #include <homestore/meta_service.hpp>
 #include <homestore/replication_service.hpp>
@@ -5,7 +9,6 @@
 #include <iomgr/io_environment.hpp>
 
 #include <homeobject/homeobject.hpp>
-#include "hs_homeobject.hpp"
 #include "heap_chunk_selector.h"
 #include "index_kv.hpp"
 
@@ -122,13 +125,6 @@ void HSHomeObject::on_shard_meta_blk_recover_completed(bool success) {
     chunk_selector_->build_per_dev_chunk_heap(excluding_chunks);
 }
 
-std::string hex_bytes(uint8_t* bytes, size_t len) {
-    std::stringstream ss;
-    ss << std::hex;
-    for (size_t i = 0; i < len; i++) {
-        ss << std::setw(2) << std::setfill('0') << (int)bytes[i];
-    }
-    return ss.str();
-}
+std::string hex_bytes(uint8_t* bytes, size_t len) { return fmt::format("{}", spdlog::to_hex(bytes, bytes + len)); }
 
 } // namespace homeobject
