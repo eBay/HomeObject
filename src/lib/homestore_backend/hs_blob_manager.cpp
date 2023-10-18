@@ -2,6 +2,7 @@
 #include "replication_message.hpp"
 #include "replication_state_machine.hpp"
 #include "lib/homeobject_impl.hpp"
+#include "lib/blob_route.hpp"
 
 SISL_LOGGING_DECL(blobmgr)
 
@@ -128,7 +129,7 @@ void HSHomeObject::on_blob_put_commit(int64_t lsn, sisl::blob const& header, sis
 
     auto msg_header = r_cast< ReplicationMessageHeader* >(header.bytes);
     if (msg_header->corrupted()) {
-        LOGERROR("replication message header is corrupted with crc error, lsn:{}", lsn);
+        LOGE("replication message header is corrupted with crc error, lsn:{}", lsn);
         if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(BlobError::CHECKSUM_MISMATCH)); }
         return;
     }
@@ -150,7 +151,7 @@ void HSHomeObject::on_blob_put_commit(int64_t lsn, sisl::blob const& header, sis
     // Write to index table with key {shard id, blob id } and value {pba}.
     auto r = add_to_index_table(index_table, blob_info);
     if (r.hasError()) {
-        LOGERROR("Failed to insert into index table for blob {} err {}", lsn, r.error());
+        LOGE("Failed to insert into index table for blob {} err {}", lsn, r.error());
         ctx->promise_.setValue(folly::makeUnexpected(r.error()));
         return;
     }
@@ -176,7 +177,7 @@ BlobManager::AsyncResult< Blob > HSHomeObject::_get_blob(ShardInfo const& shard,
 
     auto r = get_from_index_table(index_table, shard.id, blob_id);
     if (!r) {
-        LOGWARN("Blob not found in index id {} shard {}", blob_id, shard.id);
+        LOGW("Blob not found in index id {} shard {}", blob_id, shard.id);
         return folly::makeUnexpected(r.error());
     }
 
@@ -193,20 +194,19 @@ BlobManager::AsyncResult< Blob > HSHomeObject::_get_blob(ShardInfo const& shard,
         .thenValue([this, blob_id, req_len, req_offset, shard, multi_blkids,
                     iov_base](auto&& result) mutable -> BlobManager::AsyncResult< Blob > {
             if (result) {
-                LOGERROR("Failed to read blob {} shard {} err {}", blob_id, shard.id, result.value());
+                LOGE("Failed to read blob {} shard {} err {}", blob_id, shard.id, result.value());
                 return folly::makeUnexpected(BlobError::READ_FAILED);
             }
 
+            auto const b_route = BlobRoute{blob_id, shard.id};
             BlobHeader* header = (BlobHeader*)iov_base.get();
             if (!header->valid()) {
-                LOGERROR("Invalid header found for blob {} shard {}", blob_id, shard.id);
-                LOGERROR("Blob header {}", header->to_string());
+                LOGE("Invalid header found for [route={}] [header={}]", b_route, header->to_string());
                 return folly::makeUnexpected(BlobError::READ_FAILED);
             }
 
             if (header->shard_id != shard.id) {
-                LOGERROR("Invalid shard id found in header for blob {} shard {}", blob_id, shard.id);
-                LOGERROR("Blob header {}", header->to_string());
+                LOGE("Invalid shard id found in header for [route={}] [header={}]", b_route, header->to_string());
                 return folly::makeUnexpected(BlobError::READ_FAILED);
             }
 
@@ -225,15 +225,15 @@ BlobManager::AsyncResult< Blob > HSHomeObject::_get_blob(ShardInfo const& shard,
             compute_blob_payload_hash(header->hash_algorithm, blob_bytes, blob_size, user_key_bytes, user_key_size,
                                       computed_hash, BlobHeader::blob_max_hash_len);
             if (std::memcmp(computed_hash, header->hash, BlobHeader::blob_max_hash_len) != 0) {
-                LOGERROR("Hash mismatch for blob {} shard {}", blob_id, shard.id);
-                LOGERROR("Computed: {} Header: {}", hex_bytes(computed_hash, BlobHeader::blob_max_hash_len),
-                         hex_bytes(header->hash, BlobHeader::blob_max_hash_len));
+                LOGE("Hash mismatch for [route={}] [header={}] [comp={} != read={}]", b_route, header->to_string(),
+                     hex_bytes(computed_hash, BlobHeader::blob_max_hash_len),
+                     hex_bytes(header->hash, BlobHeader::blob_max_hash_len));
                 return folly::makeUnexpected(BlobError::CHECKSUM_MISMATCH);
             }
 
             if (req_offset + req_len > blob_size) {
-                LOGERROR("Invalid offset length request in get blob {} offset {} len {} size {}", blob_id, req_offset,
-                         req_len, blob_size);
+                LOGE("Invalid offset length request in get blob {} offset {} len {} size {}", blob_id, req_offset,
+                     req_len, blob_size);
                 return folly::makeUnexpected(BlobError::INVALID_ARG);
             }
 
@@ -265,7 +265,7 @@ homestore::blk_alloc_hints HSHomeObject::blob_put_get_blk_alloc_hints(sisl::blob
 
     auto msg_header = r_cast< ReplicationMessageHeader* >(header.bytes);
     if (msg_header->corrupted()) {
-        LOGERROR("replication message header is corrupted with crc error shard:{}", msg_header->shard_id);
+        LOGE("replication message header is corrupted with crc error shard:{}", msg_header->shard_id);
         if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(BlobError::CHECKSUM_MISMATCH)); }
         return {};
     }
@@ -275,7 +275,7 @@ homestore::blk_alloc_hints HSHomeObject::blob_put_get_blk_alloc_hints(sisl::blob
     RELEASE_ASSERT(shard_iter != _shard_map.end(), "Couldnt find shard id");
     auto hs_shard = d_cast< HS_Shard* >((*shard_iter->second).get());
     auto chunk_id = hs_shard->sb_->chunk_id;
-    LOGINFO("Got shard id {} chunk id {}", msg_header->shard_id, chunk_id);
+    LOGI("Got shard id {} chunk id {}", msg_header->shard_id, chunk_id);
     homestore::blk_alloc_hints hints;
     hints.chunk_id_hint = chunk_id;
     return hints;

@@ -15,7 +15,8 @@ TEST_F(TestFixture, BasicTests) {
     for (auto k = 0; batch_sz > k; ++k) {
         t_v.push_back(std::thread([this, &call_lock, &calls, batch_sz]() mutable {
             auto our_calls = std::list< folly::SemiFuture< folly::Unit > >();
-            for (auto i = _blob_id + _shard_2.id + 1; (_blob_id + _shard_1.id + 1) + ((100 * Ki) / batch_sz) > i; ++i) {
+            for (auto i = _blob_id + _shard_2.id + 1;
+                 (_blob_id + _shard_1.id + 1) + (SISL_OPTIONS["num_iters"].as< uint64_t >() / batch_sz) > i; ++i) {
                 our_calls.push_back(homeobj_->blob_manager()->get(_shard_1.id, _blob_id).deferValue([](auto const& e) {
                     EXPECT_TRUE(!!e);
                     e.then([](auto const& blob) {
@@ -67,7 +68,7 @@ TEST_F(TestFixture, BasicTests) {
 int main(int argc, char* argv[]) {
     int parsed_argc = argc;
     ::testing::InitGoogleTest(&parsed_argc, argv);
-    SISL_OPTIONS_LOAD(parsed_argc, argv, logging);
+    SISL_OPTIONS_LOAD(parsed_argc, argv, logging, blob_manager_test);
     sisl::logging::SetLogger(std::string(argv[0]));
     spdlog::set_pattern("[%D %T.%e] [%n] [%^%l%$] [%t] %v");
     parsed_argc = 1;
