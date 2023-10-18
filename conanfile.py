@@ -9,7 +9,7 @@ required_conan_version = ">=1.50.0"
 
 class HomeObjectConan(ConanFile):
     name = "homeobject"
-    version = "0.12.0"
+    version = "0.12.1"
     homepage = "https://github.com/eBay/HomeObject"
     description = "Blob Store built on HomeReplication"
     topics = ("ebay")
@@ -96,7 +96,7 @@ class HomeObjectConan(ConanFile):
     def package_info(self):
         self.cpp_info.names["cmake_find_package"] = "HomeObject"
         self.cpp_info.names["cmake_find_package_multi"] = "HomeObject"
-        self.cpp_info.components["homestore"].libs = ["homeobject"]
+        self.cpp_info.components["homestore"].libs = ["homeobject_homestore"]
         self.cpp_info.components["homestore"].requires = ["homestore::homestore"]
         self.cpp_info.components["memory"].libs = ["homeobject_memory"]
         self.cpp_info.components["memory"].requires = ["homestore::homestore"]
