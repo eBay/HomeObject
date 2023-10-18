@@ -73,7 +73,7 @@ class HomeObjectConan(ConanFile):
             if self.options.sanitize:
                 definitions['MEMORY_SANITIZER_ON'] = 'ON'
             elif self.options.coverage:
-                definitions['BUILD_COVERAGE'] = 'ON'
+                definitions['CODE_COVERAGE'] = 'ON'
 
         cmake = CMake(self)
         cmake.configure(defs=definitions)

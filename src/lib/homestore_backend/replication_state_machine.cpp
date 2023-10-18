@@ -25,7 +25,6 @@ void ReplicationStateMachine::on_commit(int64_t lsn, const sisl::blob& header, c
     }
 }
 
-
 bool ReplicationStateMachine::on_pre_commit(int64_t lsn, sisl::blob const&, sisl::blob const&,
                                             cintrusive< homestore::repl_req_ctx >&) {
     LOGI("on_pre_commit with lsn:{}", lsn);

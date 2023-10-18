@@ -16,7 +16,12 @@
 #include <homeobject/blob_manager.hpp>
 
 SISL_LOGGING_INIT(logging, HOMEOBJECT_LOG_MODS)
-SISL_OPTIONS_ENABLE(logging)
+
+SISL_OPTION_GROUP(blob_manager_test,
+                  (num_iters, "", "num_iters", "number of iterations per loop",
+                   ::cxxopts::value< uint64_t >()->default_value("100000"), "number"));
+
+SISL_OPTIONS_ENABLE(logging, blob_manager_test)
 
 using homeobject::Blob;
 using homeobject::blob_id_t;

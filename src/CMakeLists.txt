@@ -3,7 +3,6 @@ cmake_minimum_required (VERSION 3.11)
 find_package(Threads QUIET REQUIRED)
 find_package(sisl QUIET REQUIRED)
 find_package(homestore QUIET REQUIRED)
-find_package(GTest QUIET REQUIRED)
 
 link_directories(${spdk_LIB_DIRS} ${dpdk_LIB_DIRS})
 

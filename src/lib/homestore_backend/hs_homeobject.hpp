@@ -4,13 +4,13 @@
 #include <mutex>
 
 #include <homestore/homestore.hpp>
+#include <homestore/index/index_table.hpp>
 #include <homestore/superblk_handler.hpp>
 #include <homestore/replication/repl_dev.h>
 
 #include "heap_chunk_selector.h"
 #include "lib/homeobject_impl.hpp"
 #include "replication_message.hpp"
-#include "index_kv.hpp"
 
 namespace homestore {
 struct meta_blk;
@@ -21,6 +21,8 @@ namespace homeobject {
 
 std::string hex_bytes(uint8_t* bytes, size_t len);
 
+class BlobRouteKey;
+class BlobRouteValue;
 using BlobIndexTable = homestore::IndexTable< BlobRouteKey, BlobRouteValue >;
 
 class HSHomeObject : public HomeObjectImpl {
@@ -126,9 +128,9 @@ public:
 
         bool valid() const { return magic == blob_header_magic || version <= blob_header_version; }
         std::string to_string() {
-            return fmt::format("magic={:#x} version={} algo={} hash={} shard={} blob_size={} user_size={}", magic, version,
-                               (uint8_t)hash_algorithm, hex_bytes(hash, blob_max_hash_len), shard_id, blob_size,
-                               user_key_size);
+            return fmt::format("magic={:#x} version={} algo={} hash={} shard={} blob_size={} user_size={}", magic,
+                               version, (uint8_t)hash_algorithm, hex_bytes(hash, blob_max_hash_len), shard_id,
+                               blob_size, user_key_size);
         }
     };
 #pragma pack()
@@ -207,7 +209,7 @@ public:
     BlobIndexServiceCallbacks(HSHomeObject* home_object) : home_object_(home_object) {}
     std::shared_ptr< homestore::IndexTableBase >
     on_index_table_found(const homestore::superblk< homestore::index_table_sb >& sb) override {
-        LOGINFO("Recovered index table to index service");
+        LOGI("Recovered index table to index service");
         return home_object_->recover_index_table(sb);
     }
 

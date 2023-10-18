@@ -15,9 +15,7 @@ struct BlobRoute {
     shard_id_t shard;
     blob_id_t blob;
     auto operator<=>(BlobRoute const&) const = default;
-    sisl::blob to_blob() const {
-        return sisl::blob{uintptr_cast(const_cast< BlobRoute* >(this)), sizeof(*this)};
-    }
+    sisl::blob to_blob() const { return sisl::blob{uintptr_cast(const_cast< BlobRoute* >(this)), sizeof(*this)}; }
 };
 #pragma pack()
 
