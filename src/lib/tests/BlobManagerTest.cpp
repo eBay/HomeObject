@@ -57,7 +57,7 @@ TEST_F(TestFixture, BasicTests) {
     auto p_e =
         homeobj_->blob_manager()->put(_shard_1.id, Blob{sisl::io_blob_safe(4 * Ki, 512u), "test_blob", 4 * Mi}).get();
     ASSERT_TRUE(!p_e);
-    EXPECT_EQ(BlobError::INVALID_ARG, p_e.error());
+    EXPECT_EQ(BlobError::SEALED_SHARD, p_e.error());
 
     EXPECT_TRUE(homeobj_->blob_manager()->del(_shard_1.id, _blob_id).get());
     EXPECT_EQ(BlobError::UNKNOWN_BLOB, homeobj_->blob_manager()->get(_shard_1.id, _blob_id).get().error());

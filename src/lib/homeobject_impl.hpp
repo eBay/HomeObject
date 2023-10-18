@@ -74,7 +74,7 @@ class HomeObjectImpl : public HomeObject,
 
     /// Implementation defines these
     virtual ShardManager::AsyncResult< ShardInfo > _create_shard(pg_id_t, uint64_t size_bytes) = 0;
-    virtual ShardManager::Result< ShardInfo > _seal_shard(shard_id_t) = 0;
+    virtual ShardManager::AsyncResult< ShardInfo > _seal_shard(ShardInfo const&) = 0;
 
     virtual BlobManager::AsyncResult< blob_id_t > _put_blob(ShardInfo const&, Blob&&) = 0;
     virtual BlobManager::AsyncResult< Blob > _get_blob(ShardInfo const&, blob_id_t, uint64_t off = 0,
