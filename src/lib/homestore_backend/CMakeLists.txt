@@ -25,6 +25,7 @@ target_link_libraries(pg_homestore_test
     ${COMMON_TEST_DEPS}
   )
 add_test(NAME PGHomestoreTest COMMAND pg_homestore_test -csv error)
+set_property(TEST PGHomestoreTest PROPERTY RUN_SERIAL 1)
 
 add_executable (shard_homestore_test)
 target_sources(shard_homestore_test PRIVATE $<TARGET_OBJECTS:shard_test>)
@@ -33,6 +34,7 @@ target_link_libraries(shard_homestore_test
     ${COMMON_TEST_DEPS}
   )
 add_test(NAME ShardHomestoreTest COMMAND shard_homestore_test -csv error)
+set_property(TEST ShardHomestoreTest PROPERTY RUN_SERIAL 1)
 
 add_executable (blob_homestore_test)
 target_sources(blob_homestore_test PRIVATE $<TARGET_OBJECTS:blob_test>)
@@ -41,4 +43,5 @@ target_link_libraries(blob_homestore_test
     ${COMMON_TEST_DEPS}
   )
 #add_test(NAME BlobHomestoreTest COMMAND blob_homestore_test -csv error --num_iters 100)
+#set_property(TEST BlobHomestoreTest PROPERTY RUN_SERIAL 1)
 endif()

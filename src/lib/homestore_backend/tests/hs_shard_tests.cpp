@@ -19,118 +19,19 @@
 #include "lib/homestore_backend/replication_message.hpp"
 #include "lib/homestore_backend/replication_state_machine.hpp"
 
+#include "lib/tests/fixture_app.hpp"
+
 using homeobject::shard_id_t;
 using homeobject::ShardError;
 using homeobject::ShardInfo;
 using homeobject::ShardManager;
 
-SISL_LOGGING_INIT(logging, HOMEOBJECT_LOG_MODS)
-SISL_OPTIONS_ENABLE(logging)
-
-class FixtureApp : public homeobject::HomeObjectApplication {
-private:
-    std::string fpath_{"/tmp/test_shard_manager.data.{}" + std::to_string(rand())};
-
-public:
-    bool spdk_mode() const override { return false; }
-    uint32_t threads() const override { return 2; }
-    std::list< std::filesystem::path > devices() const override {
-        LOGI("creating {} device file with size={}", fpath_, homestore::in_bytes(2 * Gi));
-        if (std::filesystem::exists(fpath_)) { std::filesystem::remove(fpath_); }
-        std::ofstream ofs{fpath_, std::ios::binary | std::ios::out | std::ios::trunc};
-        std::filesystem::resize_file(fpath_, 2 * Gi);
-
-        auto device_info = std::list< std::filesystem::path >();
-        device_info.emplace_back(std::filesystem::canonical(fpath_));
-        return device_info;
-    }
-
-    ~FixtureApp() {
-        if (std::filesystem::exists(fpath_)) { std::filesystem::remove(fpath_); }
-    }
-
-    homeobject::peer_id_t discover_svcid(std::optional< homeobject::peer_id_t > const&) const override {
-        return boost::uuids::random_generator()();
-    }
-    std::string lookup_peer(homeobject::peer_id_t const&) const override { return "test_fixture.com"; }
-};
-
-class ShardManagerTesting : public ::testing::Test {
-public:
-    homeobject::pg_id_t _pg_id{1u};
-    homeobject::peer_id_t _peer1;
-    homeobject::peer_id_t _peer2;
-    homeobject::shard_id_t _shard_id{100u};
-
-    void SetUp() override {
-        app = std::make_shared< FixtureApp >();
-        _home_object = homeobject::init_homeobject(std::weak_ptr< homeobject::HomeObjectApplication >(app));
-        _peer1 = _home_object->our_uuid();
-        _peer2 = boost::uuids::random_generator()();
-
-        auto info = homeobject::PGInfo(_pg_id);
-        info.members.insert(homeobject::PGMember{_peer1, "peer1", 1});
-        info.members.insert(homeobject::PGMember{_peer2, "peer2", 0});
-        EXPECT_TRUE(_home_object->pg_manager()->create_pg(std::move(info)).get());
-    }
-
-protected:
-    std::shared_ptr< FixtureApp > app;
-    std::shared_ptr< homeobject::HomeObject > _home_object;
-};
-
-TEST_F(ShardManagerTesting, CreateShardTooBig) {
-    EXPECT_EQ(ShardError::INVALID_ARG,
-              _home_object->shard_manager()
-                  ->create_shard(_pg_id, homeobject::ShardManager::max_shard_size() + 1)
-                  .get()
-                  .error());
-}
-
-TEST_F(ShardManagerTesting, CreateShardTooSmall) {
-    EXPECT_EQ(ShardError::INVALID_ARG, _home_object->shard_manager()->create_shard(_pg_id, 0ul).get().error());
-}
-
-TEST_F(ShardManagerTesting, CreateShardWithUnknownPG) {
-    EXPECT_EQ(ShardError::UNKNOWN_PG, _home_object->shard_manager()->create_shard(_pg_id + 1, Mi).get().error());
-}
-
-TEST_F(ShardManagerTesting, GetUnknownShard) {
-    EXPECT_EQ(ShardError::UNKNOWN_SHARD, _home_object->shard_manager()->get_shard(_shard_id).get().error());
-}
-
-TEST_F(ShardManagerTesting, ListShardsNoPg) {
-    EXPECT_EQ(ShardError::UNKNOWN_PG, _home_object->shard_manager()->list_shards(_pg_id + 1).get().error());
-}
-
-TEST_F(ShardManagerTesting, ListShardsOnEmptyPg) {
-    auto e = _home_object->shard_manager()->list_shards(_pg_id).get();
-    ASSERT_TRUE(!!e);
-    e.then([this](auto const& info_list) { ASSERT_EQ(info_list.size(), 0); });
-}
-
-TEST_F(ShardManagerTesting, CreateShardSuccess) {
-    auto e = _home_object->shard_manager()->create_shard(_pg_id, Mi).get();
-    ASSERT_TRUE(!!e);
-    ShardInfo shard_info = e.value();
-    EXPECT_EQ(ShardInfo::State::OPEN, shard_info.state);
-    EXPECT_EQ(Mi, shard_info.total_capacity_bytes);
-    EXPECT_EQ(Mi, shard_info.available_capacity_bytes);
-    EXPECT_EQ(0ul, shard_info.deleted_capacity_bytes);
-    EXPECT_EQ(_pg_id, shard_info.placement_group);
-}
-
-TEST_F(ShardManagerTesting, CreateMultiShards) {
-    auto e = _home_object->shard_manager()->create_shard(_pg_id, Mi).get();
-    ASSERT_TRUE(!!e);
-    homeobject::HSHomeObject* ho = dynamic_cast< homeobject::HSHomeObject* >(_home_object.get());
-    auto chunk_num_1 = ho->get_shard_chunk(e.value().id);
+TEST_F(TestFixture, CreateMultiShards) {
+    homeobject::HSHomeObject* ho = dynamic_cast< homeobject::HSHomeObject* >(homeobj_.get());
+    auto chunk_num_1 = ho->get_shard_chunk(_shard_1.id);
     ASSERT_TRUE(chunk_num_1.has_value());
 
-    // create another shard again.
-    e = _home_object->shard_manager()->create_shard(_pg_id, Mi).get();
-    ASSERT_TRUE(!!e);
-    auto chunk_num_2 = ho->get_shard_chunk(e.value().id);
+    auto chunk_num_2 = ho->get_shard_chunk(_shard_2.id);
     ASSERT_TRUE(chunk_num_2.has_value());
 
     // check if both chunk is on the same pdev;
@@ -141,28 +42,28 @@ TEST_F(ShardManagerTesting, CreateMultiShards) {
     ASSERT_TRUE(alloc_hint1.pdev_id_hint.value() == alloc_hint2.pdev_id_hint.value());
 }
 
-TEST_F(ShardManagerTesting, CreateMultiShardsOnMultiPG) {
+TEST_F(TestFixture, CreateMultiShardsOnMultiPG) {
     // create another PG;
-    auto peer1 = _home_object->our_uuid();
+    auto peer1 = homeobj_->our_uuid();
     auto peer2 = boost::uuids::random_generator()();
 
     auto new_pg_id = static_cast< homeobject::pg_id_t >(_pg_id + 1);
     auto info = homeobject::PGInfo(_pg_id + 1);
     info.members.insert(homeobject::PGMember{peer1, "peer1", 1});
     info.members.insert(homeobject::PGMember{peer2, "peer2", 0});
-    EXPECT_TRUE(_home_object->pg_manager()->create_pg(std::move(info)).get());
+    EXPECT_TRUE(homeobj_->pg_manager()->create_pg(std::move(info)).get());
 
     std::vector< homeobject::pg_id_t > pgs{_pg_id, new_pg_id};
 
     for (const auto pg : pgs) {
-        auto e = _home_object->shard_manager()->create_shard(pg, Mi).get();
+        auto e = homeobj_->shard_manager()->create_shard(pg, Mi).get();
         ASSERT_TRUE(!!e);
-        homeobject::HSHomeObject* ho = dynamic_cast< homeobject::HSHomeObject* >(_home_object.get());
+        homeobject::HSHomeObject* ho = dynamic_cast< homeobject::HSHomeObject* >(homeobj_.get());
         auto chunk_num_1 = ho->get_shard_chunk(e.value().id);
         ASSERT_TRUE(chunk_num_1.has_value());
 
         // create another shard again.
-        e = _home_object->shard_manager()->create_shard(_pg_id, Mi).get();
+        e = homeobj_->shard_manager()->create_shard(_pg_id, Mi).get();
         ASSERT_TRUE(!!e);
         auto chunk_num_2 = ho->get_shard_chunk(e.value().id);
         ASSERT_TRUE(chunk_num_2.has_value());
@@ -176,55 +77,8 @@ TEST_F(ShardManagerTesting, CreateMultiShardsOnMultiPG) {
     }
 }
 
-TEST_F(ShardManagerTesting, CreateShardAndValidateMembers) {
-    auto e = _home_object->shard_manager()->create_shard(_pg_id, Mi).get();
-    ASSERT_TRUE(!!e);
-    ShardInfo shard_info = e.value();
-    homeobject::HSHomeObject* ho = dynamic_cast< homeobject::HSHomeObject* >(_home_object.get());
-    EXPECT_TRUE(ho != nullptr);
-    auto pg_iter = ho->_pg_map.find(_pg_id);
-    EXPECT_TRUE(pg_iter != ho->_pg_map.end());
-    auto& pg = pg_iter->second;
-    EXPECT_TRUE(pg->shard_sequence_num_ == 1);
-    EXPECT_EQ(1, pg->shards_.size());
-    auto& shard = *pg->shards_.begin();
-    EXPECT_TRUE(shard->info == shard_info);
-}
-
-TEST_F(ShardManagerTesting, GetKnownShard) {
-    auto e = _home_object->shard_manager()->create_shard(_pg_id, Mi).get();
-    ASSERT_TRUE(!!e);
-    ShardInfo shard_info = e.value();
-    auto future = _home_object->shard_manager()->get_shard(shard_info.id).get();
-    future.then([this, shard_info](auto const& info) {
-        EXPECT_TRUE(info.id == shard_info.id);
-        EXPECT_TRUE(info.placement_group == _pg_id);
-        EXPECT_EQ(info.state, ShardInfo::State::OPEN);
-    });
-}
-
-TEST_F(ShardManagerTesting, ListShards) {
-    auto e = _home_object->shard_manager()->create_shard(_pg_id, Mi).get();
-    ASSERT_TRUE(!!e);
-    ShardInfo shard_info = e.value();
-    auto list_shard_result = _home_object->shard_manager()->list_shards(_pg_id).get();
-    ASSERT_TRUE(!!list_shard_result);
-    list_shard_result.then([this, shard_info](auto const& info_list) {
-        ASSERT_EQ(info_list.size(), 1);
-        EXPECT_TRUE(info_list.begin()->id == shard_info.id);
-        EXPECT_TRUE(info_list.begin()->placement_group == _pg_id);
-        EXPECT_EQ(info_list.begin()->state, ShardInfo::State::OPEN);
-    });
-}
-
-TEST_F(ShardManagerTesting, SealUnknownShard) {
-    EXPECT_EQ(ShardError::UNKNOWN_SHARD, _home_object->shard_manager()->seal_shard(1000).get().error());
-}
-
-TEST_F(ShardManagerTesting, MockSealShard) {
-    auto e = _home_object->shard_manager()->create_shard(_pg_id, Mi).get();
-    ASSERT_TRUE(!!e);
-    ShardInfo shard_info = e.value();
+TEST_F(TestFixture, MockSealShard) {
+    ShardInfo shard_info = _shard_1;
     shard_info.state = ShardInfo::State::SEALED;
 
     nlohmann::json j;
@@ -238,7 +92,7 @@ TEST_F(ShardManagerTesting, MockSealShard) {
     j["shard_info"]["deleted_capacity"] = shard_info.deleted_capacity_bytes;
     auto seal_shard_msg = j.dump();
 
-    homeobject::HSHomeObject* ho = dynamic_cast< homeobject::HSHomeObject* >(_home_object.get());
+    homeobject::HSHomeObject* ho = dynamic_cast< homeobject::HSHomeObject* >(homeobj_.get());
     auto* pg = s_cast< homeobject::HSHomeObject::HS_PG* >(ho->_pg_map[_pg_id].get());
     auto repl_dev = pg->repl_dev_;
     const auto msg_size = sisl::round_up(seal_shard_msg.size(), repl_dev->get_blk_size());
@@ -269,7 +123,7 @@ TEST_F(ShardManagerTesting, MockSealShard) {
     auto pg_iter = ho->_pg_map.find(_pg_id);
     EXPECT_TRUE(pg_iter != ho->_pg_map.end());
     auto& pg_result = pg_iter->second;
-    EXPECT_EQ(1, pg_result->shards_.size());
+    EXPECT_EQ(2, pg_result->shards_.size());
     auto& check_shard = pg_result->shards_.front();
     EXPECT_EQ(ShardInfo::State::SEALED, check_shard->info.state);
 }
