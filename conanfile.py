@@ -3,7 +3,8 @@ from conan import ConanFile
 from conan.errors import ConanInvalidConfiguration
 from conan.tools.files import copy
 from conan.tools.build import check_min_cppstd
-from conans import CMake
+from conan.tools.cmake import CMakeToolchain, CMakeDeps, CMake, cmake_layout
+
 
 required_conan_version = ">=1.50.0"
 
@@ -33,11 +34,17 @@ class HomeObjectConan(ConanFile):
                 'testing': True,
             }
 
-    generators = "cmake", "cmake_find_package"
-    exports_sources = ("CMakeLists.txt", "cmake/*", "src/*", "LICENSE")
+    generators = "CMakeToolchain", "CMakeDeps"
+
+    def export_sources(self):
+        copy(self, "LICENSE", self.recipe_folder, self.export_sources_folder)
+        copy(self, "CMakeLists.txt", self.recipe_folder, self.export_sources_folder)
+        copy(self, "cmake/*", self.recipe_folder, self.export_sources_folder)
+        copy(self, "src/*", self.recipe_folder, self.export_sources_folder)
 
     def build_requirements(self):
-        self.build_requires("gtest/1.14.0")
+        if self.options.testing:
+            self.test_requires("gtest/1.14.0")
 
     def requirements(self):
         self.requires("homestore/[~=4,      include_prerelease=True]@oss/master")
@@ -45,10 +52,12 @@ class HomeObjectConan(ConanFile):
         self.requires("lz4/1.9.4", override=True)
 
     def validate(self):
-        if self.info.settings.os in ["Macos", "Windows"]:
-            raise ConanInvalidConfiguration("{} Builds are unsupported".format(self.info.settings.os))
-        if self.info.settings.compiler.cppstd:
-            check_min_cppstd(self, 20)
+        if self.settings.os in ["Macos", "Windows"]:
+            raise ConanInvalidConfiguration("{} Builds are unsupported".format(self.settings.os))
+        check_min_cppstd(self, 20)
+
+    def layout(self):
+        cmake_layout(self)
 
     def configure(self):
         if self.options.shared:
