@@ -226,7 +226,7 @@ BlobManager::AsyncResult< Blob > HSHomeObject::_get_blob(ShardInfo const& shard,
                                       computed_hash, BlobHeader::blob_max_hash_len);
             if (std::memcmp(computed_hash, header->hash, BlobHeader::blob_max_hash_len) != 0) {
                 LOGE("Hash mismatch for [route={}] [header={}] [computed={}]", b_route, header->to_string(),
-                     hex_bytes(computed_hash, BlobHeader::blob_max_hash_len));
+                     spdlog::to_hex(computed_hash, computed_hash + BlobHeader::blob_max_hash_len));
                 return folly::makeUnexpected(BlobError::CHECKSUM_MISMATCH);
             }
 

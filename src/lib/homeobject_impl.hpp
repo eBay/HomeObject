@@ -82,7 +82,6 @@ class HomeObjectImpl : public HomeObject,
     virtual BlobManager::NullAsyncResult _del_blob(ShardInfo const&, blob_id_t) = 0;
     ///
     folly::Future< ShardManager::Result< ShardInfo > > _get_shard(shard_id_t id) const;
-    auto _defer() const { return folly::makeSemiFuture().via(folly::getGlobalCPUExecutor()); }
 
     virtual PGManager::NullAsyncResult _create_pg(PGInfo&& pg_info, std::set< std::string, std::less<> > peers) = 0;
     virtual PGManager::NullAsyncResult _replace_member(pg_id_t id, peer_id_t const& old_member,

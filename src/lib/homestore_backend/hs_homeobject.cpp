@@ -125,6 +125,4 @@ void HSHomeObject::on_shard_meta_blk_recover_completed(bool success) {
     chunk_selector_->build_per_dev_chunk_heap(excluding_chunks);
 }
 
-std::string hex_bytes(uint8_t* bytes, size_t len) { return fmt::format("{}", spdlog::to_hex(bytes, bytes + len)); }
-
 } // namespace homeobject
