@@ -47,6 +47,7 @@ BlobManager::AsyncResult< blob_id_t > HSHomeObject::_put_blob(ShardInfo const& s
     blob_header->hash_algorithm = BlobHeader::HashAlgorithm::CRC32;
     blob_header->blob_size = blob.body.size;
     blob_header->user_key_size = blob.user_key.size();
+    blob_header->object_offset = blob.object_off;
     sgs.iovs.emplace_back(iovec{.iov_base = blob_header, .iov_len = blob_header_size});
     sgs.size += blob_header_size;
 
@@ -97,8 +98,8 @@ BlobManager::AsyncResult< blob_id_t > HSHomeObject::_put_blob(ShardInfo const& s
     }
 
     // Compute the checksum of blob and metadata.
-    compute_blob_payload_hash(blob_header->hash_algorithm, blob.body.bytes, blob.body.size, user_key_bytes,
-                              user_key_size, blob_header->hash, BlobHeader::blob_max_hash_len);
+    compute_blob_payload_hash(blob_header->hash_algorithm, blob.body.bytes, blob.body.size, (uint8_t*)blob.user_key.data(),
+                              blob.user_key.size(), blob_header->hash, BlobHeader::blob_max_hash_len);
 
     repl_dev->async_alloc_write(req->hdr_buf_, sisl::blob{}, sgs, req);
     return req->result().deferValue([this, header, blob_header, blob = std::move(blob), blob_bytes, blob_copied,
@@ -245,13 +246,13 @@ BlobManager::AsyncResult< Blob > HSHomeObject::_get_blob(ShardInfo const& shard,
             // Copy the metadata if its present.
             std::string user_key{};
             if (header->user_key_offset != 0) {
-                user_key.reserve(user_key_size);
+                user_key.resize(user_key_size);
                 std::memcpy(user_key.data(), user_key_bytes, user_key_size);
             }
 
             LOGTRACEMOD(blobmgr, "Blob get success for blob {} shard {} blkid {}", blob_id, shard.id,
                         multi_blkids.to_string());
-            return Blob(std::move(body), std::move(user_key), 0);
+            return Blob(std::move(body), std::move(user_key), header->object_offset);
         });
 }
 
