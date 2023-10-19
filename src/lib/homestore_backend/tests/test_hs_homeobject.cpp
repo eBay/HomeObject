@@ -203,13 +203,13 @@ TEST_F(HomeObjectFixture, BasicPutGetBlob) {
             if (k % 2 == 0) alignment = 256;
 
             std::string user_key;
-            user_key.reserve(rand_user_key_size(rnd_engine));
+            user_key.resize(rand_user_key_size(rnd_engine));
             BitsGenerator::gen_random_bits(user_key.size(), (uint8_t*)user_key.data());
             auto blob_size = rand_blob_size(rnd_engine);
-            homeobject::Blob put_blob{sisl::io_blob_safe(blob_size, alignment), user_key, 0ul};
+            homeobject::Blob put_blob{sisl::io_blob_safe(blob_size, alignment), user_key, 42ul};
             BitsGenerator::gen_random_bits(put_blob.body);
             // Keep a copy of random payload to verify later.
-            homeobject::Blob clone{sisl::io_blob_safe(blob_size, alignment), user_key, 0ul};
+            homeobject::Blob clone{sisl::io_blob_safe(blob_size, alignment), user_key, 42ul};
             std::memcpy(clone.body.bytes, put_blob.body.bytes, put_blob.body.size);
             auto b = _obj_inst->blob_manager()->put(shard_id, std::move(put_blob)).get();
             ASSERT_TRUE(!!b);
@@ -231,7 +231,9 @@ TEST_F(HomeObjectFixture, BasicPutGetBlob) {
                 hex_bytes(result.body.bytes, std::min(10u, result.body.size)));
         EXPECT_EQ(blob.body.size, result.body.size);
         EXPECT_EQ(std::memcmp(result.body.bytes, blob.body.bytes, result.body.size), 0);
+        EXPECT_EQ(result.user_key.size(), blob.user_key.size());
         EXPECT_EQ(blob.user_key, result.user_key);
+        EXPECT_EQ(blob.object_off, result.object_off);
     }
 
     // for (uint64_t i = 1; i <= num_pgs; i++) {
@@ -274,7 +276,9 @@ TEST_F(HomeObjectFixture, BasicPutGetBlob) {
                 len, hex_bytes(result.body.bytes, std::min(len, 10u)));
         EXPECT_EQ(result.body.size, len);
         EXPECT_EQ(std::memcmp(result.body.bytes, blob.body.bytes + off, result.body.size), 0);
+        EXPECT_EQ(result.user_key.size(), blob.user_key.size());
         EXPECT_EQ(blob.user_key, result.user_key);
+        EXPECT_EQ(blob.object_off, result.object_off);
     }
 }
 
