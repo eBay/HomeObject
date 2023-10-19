@@ -22,6 +22,8 @@ using homeobject::PGMember;
 using homeobject::ShardError;
 using namespace homeobject;
 
+#define hex_bytes(buffer, len) fmt::format("{}", spdlog::to_hex((buffer), (buffer) + (len)))
+
 SISL_LOGGING_INIT(logging, HOMEOBJECT_LOG_MODS)
 SISL_OPTIONS_ENABLE(logging, test_home_object)
 
@@ -127,15 +129,6 @@ public:
         app->set_restart();
         _obj_inst = homeobject::init_homeobject(std::weak_ptr< homeobject::HomeObjectApplication >(app));
         std::this_thread::sleep_for(std::chrono::seconds{1});
-    }
-
-    std::string hex_bytes(uint8_t* bytes, size_t len) {
-        std::stringstream ss;
-        ss << std::hex;
-        for (size_t k = 0; k < len; k++) {
-            ss << std::setw(2) << std::setfill('0') << (int)bytes[k];
-        }
-        return ss.str();
     }
 };
 
