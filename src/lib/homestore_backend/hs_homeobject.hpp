@@ -19,8 +19,6 @@ class IndexTableBase;
 
 namespace homeobject {
 
-std::string hex_bytes(uint8_t* bytes, size_t len);
-
 class BlobRouteKey;
 class BlobRouteValue;
 using BlobIndexTable = homestore::IndexTable< BlobRouteKey, BlobRouteValue >;
@@ -129,9 +127,9 @@ public:
 
         bool valid() const { return magic == blob_header_magic || version <= blob_header_version; }
         std::string to_string() {
-            return fmt::format("magic={:#x} version={} algo={} hash={} shard={} blob_size={} user_size={}", magic,
-                               version, (uint8_t)hash_algorithm, hex_bytes(hash, blob_max_hash_len), shard_id,
-                               blob_size, user_key_size);
+            return fmt::format("magic={:#x} version={} shard={} blob_size={} user_size={} algo={} hash={}\n", magic,
+                               version, shard_id, blob_size, user_key_size, (uint8_t)hash_algorithm,
+                               spdlog::to_hex(hash, hash + blob_max_hash_len));
         }
     };
 #pragma pack()

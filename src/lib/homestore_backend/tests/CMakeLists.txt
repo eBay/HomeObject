@@ -2,14 +2,14 @@ cmake_minimum_required(VERSION 3.13)
 
 include_directories (BEFORE .)
 
-add_executable(test_hs_homeobject)
-target_sources(test_hs_homeobject PRIVATE test_hs_homeobject.cpp)
-target_link_libraries(test_hs_homeobject
+add_executable(hs_blob_tests)
+target_sources(hs_blob_tests PRIVATE hs_blob_tests.cpp)
+target_link_libraries(hs_blob_tests
             homeobject_homestore
             ${COMMON_TEST_DEPS}
         )
-add_test(NAME HSHomeObject COMMAND ${CMAKE_BINARY_DIR}/bin/test_hs_homeobject)
-set_property(TEST HSHomeObject PROPERTY RUN_SERIAL 1)
+add_test(NAME HSBlobTests COMMAND ${CMAKE_BINARY_DIR}/bin/hs_blob_tests)
+set_property(TEST HSBlobTests PROPERTY RUN_SERIAL 1)
 
 add_executable (hs_shard_tests)
 target_sources(hs_shard_tests PRIVATE hs_shard_tests.cpp)

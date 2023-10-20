@@ -98,8 +98,9 @@ BlobManager::AsyncResult< blob_id_t > HSHomeObject::_put_blob(ShardInfo const& s
     }
 
     // Compute the checksum of blob and metadata.
-    compute_blob_payload_hash(blob_header->hash_algorithm, blob.body.bytes, blob.body.size, (uint8_t*)blob.user_key.data(),
-                              blob.user_key.size(), blob_header->hash, BlobHeader::blob_max_hash_len);
+    compute_blob_payload_hash(blob_header->hash_algorithm, blob.body.bytes, blob.body.size,
+                              (uint8_t*)blob.user_key.data(), blob.user_key.size(), blob_header->hash,
+                              BlobHeader::blob_max_hash_len);
 
     repl_dev->async_alloc_write(req->hdr_buf_, sisl::blob{}, sgs, req);
     return req->result().deferValue([this, header, blob_header, blob = std::move(blob), blob_bytes, blob_copied,
@@ -227,7 +228,7 @@ BlobManager::AsyncResult< Blob > HSHomeObject::_get_blob(ShardInfo const& shard,
                                       computed_hash, BlobHeader::blob_max_hash_len);
             if (std::memcmp(computed_hash, header->hash, BlobHeader::blob_max_hash_len) != 0) {
                 LOGE("Hash mismatch for [route={}] [header={}] [computed={}]", b_route, header->to_string(),
-                     hex_bytes(computed_hash, BlobHeader::blob_max_hash_len));
+                     spdlog::to_hex(computed_hash, computed_hash + BlobHeader::blob_max_hash_len));
                 return folly::makeUnexpected(BlobError::CHECKSUM_MISMATCH);
             }
 
