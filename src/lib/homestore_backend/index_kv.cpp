@@ -66,8 +66,8 @@ HSHomeObject::get_from_index_table(shared< BlobIndexTable > index_table, shard_i
     homestore::BtreeSingleGetRequest get_req{&index_key, &index_value};
     auto status = index_table->get(get_req);
     if (status != homestore::btree_status_t::success) {
-        LOGERROR("Failed to get from index table {}", index_key.to_string());
-        return folly::makeUnexpected(BlobError::INDEX_ERROR);
+        LOGERROR("Failed to get from index table [route={}]", index_key);
+        return folly::makeUnexpected(BlobError::UNKNOWN_BLOB);
     }
 
     return index_value.pbas();
@@ -78,12 +78,12 @@ void HSHomeObject::print_btree_index(pg_id_t pg_id) {
     {
         std::shared_lock lock_guard(_pg_lock);
         auto iter = _pg_map.find(pg_id);
-        RELEASE_ASSERT (iter != _pg_map.end(), "Unknown PG");
+        RELEASE_ASSERT(iter != _pg_map.end(), "Unknown PG");
         index_table = static_cast< HS_PG* >(iter->second.get())->index_table_;
         RELEASE_ASSERT(index_table != nullptr, "Index table not intialized");
     }
 
-    LOGINFO("Index UUID {}", boost::uuids::to_string(index_table->uuid()));
+    LOGI("Index UUID {}", boost::uuids::to_string(index_table->uuid()));
     index_table->print_tree();
 }
 

@@ -16,7 +16,16 @@
 #include <homeobject/blob_manager.hpp>
 
 SISL_LOGGING_INIT(logging, HOMEOBJECT_LOG_MODS)
-SISL_OPTIONS_ENABLE(logging)
+
+SISL_OPTION_GROUP(
+    test_home_object,
+    (num_iters, "", "num_iters", "number of iterations per loop",
+     ::cxxopts::value< uint64_t >()->default_value("100000"), "number"),
+    (num_pgs, "", "num_pgs", "number of pgs", ::cxxopts::value< uint64_t >()->default_value("10"), "number"),
+    (num_shards, "", "num_shards", "number of shards", ::cxxopts::value< uint64_t >()->default_value("20"), "number"),
+    (num_blobs, "", "num_blobs", "number of blobs", ::cxxopts::value< uint64_t >()->default_value("50"), "number"));
+
+SISL_OPTIONS_ENABLE(logging, test_home_object)
 
 using homeobject::Blob;
 using homeobject::blob_id_t;
@@ -24,7 +33,7 @@ using homeobject::BlobError;
 using homeobject::peer_id_t;
 
 class FixtureApp : public homeobject::HomeObjectApplication {
-    std::string path_{"/tmp/test_homestore.data." + std::to_string(rand())};
+    std::string path_{"/tmp/homobject_test.data." + std::to_string(rand())};
 
 public:
     FixtureApp() {
@@ -38,7 +47,7 @@ public:
     uint32_t threads() const override { return 2; }
 
     void clean() {
-        if (std::filesystem::exists(path_)) { std::filesystem::remove_all(path_); }
+        if (std::filesystem::exists(path_)) std::filesystem::remove_all(path_);
     }
 
     std::list< std::filesystem::path > devices() const override {
@@ -97,6 +106,13 @@ public:
         auto o_e = homeobj_->blob_manager()->put(_shard_1.id, Blob{std::move(blob_data), "test_blob", 4 * Mi}).get();
         EXPECT_TRUE(!!o_e);
         o_e.then([this](auto&& b) mutable { _blob_id = std::move(b); });
+
+        g_e = homeobj_->blob_manager()->get(_shard_1.id, _blob_id).get();
+        EXPECT_TRUE(!!g_e);
+        g_e.then([](auto&& blob) {
+            EXPECT_STREQ(blob.user_key.c_str(), "test_blob");
+            EXPECT_EQ(blob.object_off, 4 * Mi);
+        });
     }
 
 protected:

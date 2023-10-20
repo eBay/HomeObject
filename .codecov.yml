@@ -5,5 +5,5 @@ codecov:
 ignore:
   - "**/*_generated.h"
   - "src/mocks/**"
-  - "src/lib/homestore/tests/**"
+  - "src/lib/homestore_backend/tests/**"
   - "src/lib/tests/**"

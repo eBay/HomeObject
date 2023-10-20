@@ -73,7 +73,7 @@ class HomeObjectConan(ConanFile):
             if self.options.sanitize:
                 definitions['MEMORY_SANITIZER_ON'] = 'ON'
             elif self.options.coverage:
-                definitions['BUILD_COVERAGE'] = 'ON'
+                definitions['CODE_COVERAGE'] = 'ON'
 
         cmake = CMake(self)
         cmake.configure(defs=definitions)
@@ -96,7 +96,7 @@ class HomeObjectConan(ConanFile):
     def package_info(self):
         self.cpp_info.names["cmake_find_package"] = "HomeObject"
         self.cpp_info.names["cmake_find_package_multi"] = "HomeObject"
-        self.cpp_info.components["homestore"].libs = ["homeobject"]
+        self.cpp_info.components["homestore"].libs = ["homeobject_homestore"]
         self.cpp_info.components["homestore"].requires = ["homestore::homestore"]
         self.cpp_info.components["memory"].libs = ["homeobject_memory"]
         self.cpp_info.components["memory"].requires = ["homestore::homestore"]

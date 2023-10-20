@@ -66,10 +66,10 @@ ShardManager::AsyncResult< ShardInfo > FileHomeObject::_create_shard(pg_id_t pg_
 }
 
 ///
-// Shard STATE is managed through the FILE stat (rw/ro)
-ShardManager::Result< ShardInfo > FileHomeObject::_seal_shard(shard_id_t id) {
+// Shard STATE is managed through the FILE stat (rw/ro) TODO
+ShardManager::AsyncResult< ShardInfo > FileHomeObject::_seal_shard(ShardInfo const& shard) {
     auto lg = std::scoped_lock(_shard_lock);
-    auto shard_it = _shard_map.find(id);
+    auto shard_it = _shard_map.find(shard.id);
     RELEASE_ASSERT(_shard_map.end() != shard_it, "Missing ShardIterator!");
     auto& shard_info = (*shard_it->second)->info;
     shard_info.state = ShardInfo::State::SEALED;

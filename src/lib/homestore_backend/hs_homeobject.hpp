@@ -4,13 +4,13 @@
 #include <mutex>
 
 #include <homestore/homestore.hpp>
+#include <homestore/index/index_table.hpp>
 #include <homestore/superblk_handler.hpp>
 #include <homestore/replication/repl_dev.h>
 
 #include "heap_chunk_selector.h"
 #include "lib/homeobject_impl.hpp"
 #include "replication_message.hpp"
-#include "index_kv.hpp"
 
 namespace homestore {
 struct meta_blk;
@@ -19,14 +19,14 @@ class IndexTableBase;
 
 namespace homeobject {
 
-std::string hex_bytes(uint8_t* bytes, size_t len);
-
+class BlobRouteKey;
+class BlobRouteValue;
 using BlobIndexTable = homestore::IndexTable< BlobRouteKey, BlobRouteValue >;
 
 class HSHomeObject : public HomeObjectImpl {
     /// Overridable Helpers
     ShardManager::AsyncResult< ShardInfo > _create_shard(pg_id_t, uint64_t size_bytes) override;
-    ShardManager::Result< ShardInfo > _seal_shard(shard_id_t) override;
+    ShardManager::AsyncResult< ShardInfo > _seal_shard(ShardInfo const&) override;
 
     BlobManager::AsyncResult< blob_id_t > _put_blob(ShardInfo const&, Blob&&) override;
     BlobManager::AsyncResult< Blob > _get_blob(ShardInfo const&, blob_id_t, uint64_t off = 0,
@@ -121,14 +121,15 @@ public:
         uint8_t hash[blob_max_hash_len]{};
         shard_id_t shard_id;
         uint32_t blob_size{};
+        uint64_t object_offset{};   // Offset of this blob in the object. Provided by GW.
         uint32_t user_key_offset{}; // Offset of metadata stored after the blob data.
         uint32_t user_key_size{};
 
         bool valid() const { return magic == blob_header_magic || version <= blob_header_version; }
         std::string to_string() {
-            return fmt::format("magic={:#x} version={} algo={} hash={} shard={} blob_size={} user_size={}", magic, version,
-                               (uint8_t)hash_algorithm, hex_bytes(hash, blob_max_hash_len), shard_id, blob_size,
-                               user_key_size);
+            return fmt::format("magic={:#x} version={} shard={} blob_size={} user_size={} algo={} hash={}\n", magic,
+                               version, shard_id, blob_size, user_key_size, (uint8_t)hash_algorithm,
+                               spdlog::to_hex(hash, hash + blob_max_hash_len));
         }
     };
 #pragma pack()
@@ -207,7 +208,7 @@ public:
     BlobIndexServiceCallbacks(HSHomeObject* home_object) : home_object_(home_object) {}
     std::shared_ptr< homestore::IndexTableBase >
     on_index_table_found(const homestore::superblk< homestore::index_table_sb >& sb) override {
-        LOGINFO("Recovered index table to index service");
+        LOGI("Recovered index table to index service");
         return home_object_->recover_index_table(sb);
     }
 

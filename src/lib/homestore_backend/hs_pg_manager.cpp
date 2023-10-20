@@ -63,7 +63,7 @@ PGManager::NullAsyncResult HSHomeObject::_create_pg(PGInfo&& pg_info, std::set< 
             RELEASE_ASSERT(index_table_pg_map_.count(uuid_str) == 0, "duplicate index table found");
             index_table_pg_map_[uuid_str] = PgIndexTable{pg_id, index_table};
 
-            LOGINFO("Index table created for pg {} uuid {}", pg_id, uuid_str);
+            LOGI("Index table created for pg {} uuid {}", pg_id, uuid_str);
             hs_pg->index_table_ = index_table;
             // Add to index service, so that it gets cleaned up when index service is shutdown.
             homestore::hs()->index_service().add_index_table(index_table);

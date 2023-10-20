@@ -1,7 +1,6 @@
 #pragma once
 
 #include <homestore/btree/btree_kv.hpp>
-#include <homestore/index/index_table.hpp>
 #include <homestore/index/index_internal.hpp>
 #include <homestore/index_service.hpp>
 #include <homestore/blk.h>
@@ -14,7 +13,6 @@ private:
     BlobRoute key_;
 
 public:
-
     BlobRouteKey() = default;
     BlobRouteKey(const BlobRoute key) : key_(key) {}
     BlobRouteKey(const BlobRouteKey& other) : BlobRouteKey(other.serialize(), true) {}
@@ -27,7 +25,7 @@ public:
     };
     virtual void clone(const homestore::BtreeKey& other) override { key_ = ((BlobRouteKey&)other).key_; }
 
-    virtual ~BlobRouteKey() = default;
+    ~BlobRouteKey() override = default;
 
     int compare(const homestore::BtreeKey& o) const override {
         const BlobRouteKey& other = s_cast< const BlobRouteKey& >(o);
@@ -76,9 +74,7 @@ public:
     }
 
     uint32_t serialized_size() const override { return pbas_.serialized_size(); }
-    static uint32_t get_fixed_size() {
-        return homestore::MultiBlkId::expected_serialized_size(1 /* num_pieces */);
-    }
+    static uint32_t get_fixed_size() { return homestore::MultiBlkId::expected_serialized_size(1 /* num_pieces */); }
 
     void deserialize(const sisl::blob& b, bool copy) override { pbas_.deserialize(b, copy); }
     std::string to_string() const override { return fmt::format("{}", pbas_.to_string()); }
@@ -94,3 +90,18 @@ private:
 };
 
 } // namespace homeobject
+
+namespace fmt {
+template <>
+struct formatter< homeobject::BlobRouteKey > {
+    template < typename ParseContext >
+    constexpr auto parse(ParseContext& ctx) {
+        return ctx.begin();
+    }
+
+    template < typename FormatContext >
+    auto format(homeobject::BlobRouteKey const& r, FormatContext& ctx) {
+        return format_to(ctx.out(), "{}", r.key());
+    }
+};
+} // namespace fmt
