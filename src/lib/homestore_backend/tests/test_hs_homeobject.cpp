@@ -13,6 +13,8 @@
 #include "lib/homestore_backend/hs_homeobject.hpp"
 #include "bits_generator.hpp"
 
+#include "lib/tests/fixture_app.hpp"
+
 using namespace std::chrono_literals;
 
 using homeobject::BlobError;
@@ -23,55 +25,6 @@ using homeobject::ShardError;
 using namespace homeobject;
 
 #define hex_bytes(buffer, len) fmt::format("{}", spdlog::to_hex((buffer), (buffer) + (len)))
-
-SISL_LOGGING_INIT(logging, HOMEOBJECT_LOG_MODS)
-SISL_OPTIONS_ENABLE(logging, test_home_object)
-
-SISL_OPTION_GROUP(
-    test_home_object,
-    (num_pgs, "", "num_pgs", "number of pgs", ::cxxopts::value< uint64_t >()->default_value("10"), "number"),
-    (num_shards, "", "num_shards", "number of shards", ::cxxopts::value< uint64_t >()->default_value("20"), "number"),
-    (num_blobs, "", "num_blobs", "number of blobs", ::cxxopts::value< uint64_t >()->default_value("50"), "number"));
-
-class FixtureApp : public homeobject::HomeObjectApplication {
-private:
-    std::string fpath_{fmt::format("/tmp/test_home_object.data.{}", std::to_string(rand()))};
-
-public:
-    bool spdk_mode() const override { return false; }
-    uint32_t threads() const override { return 2; }
-    void set_restart(bool r = true) { restart_ = r; }
-    std::list< std::filesystem::path > devices() const override {
-        if (!restart_) {
-            /* create files */
-            LOGINFO("creating {} device file with size={}", fpath_, homestore::in_bytes(2 * Gi));
-            if (std::filesystem::exists(fpath_)) { std::filesystem::remove(fpath_); }
-            std::ofstream ofs{fpath_, std::ios::binary | std::ios::out | std::ios::trunc};
-            std::filesystem::resize_file(fpath_, 2 * Gi);
-        } else {
-            LOGINFO("Skipping create device files");
-        }
-
-        auto device_info = std::list< std::filesystem::path >();
-        device_info.emplace_back(std::filesystem::canonical(fpath_));
-        return device_info;
-    }
-
-    ~FixtureApp() {
-        if (!fpath_.empty()) { std::filesystem::remove(fpath_); }
-    }
-
-    homeobject::peer_id_t discover_svcid(std::optional< homeobject::peer_id_t > const&) const override {
-        return boost::uuids::random_generator()();
-    }
-
-    /// TODO
-    /// This will have to work if we test replication in the future
-    std::string lookup_peer(homeobject::peer_id_t const&) const override { return "test_fixture.com"; }
-
-private:
-    bool restart_{false};
-};
 
 TEST(HomeObject, BasicEquivalence) {
     auto app = std::make_shared< FixtureApp >();
@@ -126,46 +79,12 @@ public:
     void restart() {
         LOGINFO("Restarting homeobject.");
         _obj_inst.reset();
-        app->set_restart();
         _obj_inst = homeobject::init_homeobject(std::weak_ptr< homeobject::HomeObjectApplication >(app));
         std::this_thread::sleep_for(std::chrono::seconds{1});
     }
 };
 
-TEST_F(HomeObjectFixture, TestValidations) {
-    EXPECT_EQ(_obj_inst->pg_manager()->create_pg(PGInfo(0u)).get().error(), PGError::INVALID_ARG);
-    auto info = PGInfo(0u);
-    info.members.insert(PGMember{boost::uuids::random_generator()()});
-    EXPECT_EQ(_obj_inst->pg_manager()->create_pg(std::move(info)).get().error(), PGError::INVALID_ARG);
-    EXPECT_EQ(_obj_inst->pg_manager()
-                  ->replace_member(0, boost::uuids::random_generator()(),
-                                   homeobject::PGMember{boost::uuids::random_generator()(), "new_member", 1})
-                  .get()
-                  .error(),
-              PGError::UNSUPPORTED_OP);
-    EXPECT_EQ(ShardError::UNKNOWN_PG, _obj_inst->shard_manager()->create_shard(1, 1000).get().error());
-    EXPECT_EQ(ShardError::INVALID_ARG, _obj_inst->shard_manager()->create_shard(1, 0).get().error());
-    EXPECT_EQ(ShardError::INVALID_ARG, _obj_inst->shard_manager()->create_shard(1, 2 * Gi).get().error());
-    EXPECT_EQ(ShardError::UNKNOWN_PG, _obj_inst->shard_manager()->list_shards(1).get().error());
-    EXPECT_EQ(ShardError::UNKNOWN_SHARD, _obj_inst->shard_manager()->get_shard(1).get().error());
-    EXPECT_EQ(ShardError::UNKNOWN_SHARD, _obj_inst->shard_manager()->seal_shard(1).get().error());
-}
-
-TEST_F(HomeObjectFixture, PutBlobMissingShard) {
-    EXPECT_EQ(
-        BlobError::UNKNOWN_SHARD,
-        _obj_inst->blob_manager()->put(1, homeobject::Blob{sisl::io_blob_safe(4096), "user_key", 0ul}).get().error());
-}
-
-TEST_F(HomeObjectFixture, GetBlobMissingShard) {
-    EXPECT_EQ(BlobError::UNKNOWN_SHARD, _obj_inst->blob_manager()->get(1, 0u, 0ul, UINT64_MAX).get().error());
-}
-
-TEST_F(HomeObjectFixture, DeleteBlobMissingShard) {
-    EXPECT_EQ(BlobError::UNKNOWN_SHARD, _obj_inst->blob_manager()->del(1, 0u).get().error());
-}
-
-TEST_F(HomeObjectFixture, BasicPutGetBlob) {
+TEST_F(HomeObjectFixture, BasicPutGetBlobWRestart) {
     auto num_pgs = SISL_OPTIONS["num_pgs"].as< uint64_t >();
     auto num_shards_per_pg = SISL_OPTIONS["num_shards"].as< uint64_t >() / num_pgs;
     auto num_blobs_per_shard = SISL_OPTIONS["num_blobs"].as< uint64_t >() / num_shards_per_pg;
@@ -275,7 +194,7 @@ TEST_F(HomeObjectFixture, BasicPutGetBlob) {
     }
 }
 
-TEST_F(HomeObjectFixture, SealShard) {
+TEST_F(HomeObjectFixture, SealShardWithRestart) {
     // Create a pg, shard, put blob should succeed, seal and put blob again should fail.
     // Recover and put blob again should fail.
     pg_id_t pg_id{1};

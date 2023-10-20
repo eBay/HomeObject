@@ -98,8 +98,9 @@ BlobManager::AsyncResult< blob_id_t > HSHomeObject::_put_blob(ShardInfo const& s
     }
 
     // Compute the checksum of blob and metadata.
-    compute_blob_payload_hash(blob_header->hash_algorithm, blob.body.bytes, blob.body.size, (uint8_t*)blob.user_key.data(),
-                              blob.user_key.size(), blob_header->hash, BlobHeader::blob_max_hash_len);
+    compute_blob_payload_hash(blob_header->hash_algorithm, blob.body.bytes, blob.body.size,
+                              (uint8_t*)blob.user_key.data(), blob.user_key.size(), blob_header->hash,
+                              BlobHeader::blob_max_hash_len);
 
     repl_dev->async_alloc_write(req->hdr_buf_, sisl::blob{}, sgs, req);
     return req->result().deferValue([this, header, blob_header, blob = std::move(blob), blob_bytes, blob_copied,

@@ -70,7 +70,7 @@ TEST_F(TestFixture, BasicTests) {
 int main(int argc, char* argv[]) {
     int parsed_argc = argc;
     ::testing::InitGoogleTest(&parsed_argc, argv);
-    SISL_OPTIONS_LOAD(parsed_argc, argv, logging, blob_manager_test);
+    SISL_OPTIONS_LOAD(parsed_argc, argv, logging, test_home_object);
     sisl::logging::SetLogger(std::string(argv[0]));
     spdlog::set_pattern("[%D %T.%e] [%n] [%^%l%$] [%t] %v");
     parsed_argc = 1;

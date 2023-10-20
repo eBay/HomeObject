@@ -17,11 +17,15 @@
 
 SISL_LOGGING_INIT(logging, HOMEOBJECT_LOG_MODS)
 
-SISL_OPTION_GROUP(blob_manager_test,
-                  (num_iters, "", "num_iters", "number of iterations per loop",
-                   ::cxxopts::value< uint64_t >()->default_value("100000"), "number"));
+SISL_OPTION_GROUP(
+    test_home_object,
+    (num_iters, "", "num_iters", "number of iterations per loop",
+     ::cxxopts::value< uint64_t >()->default_value("100000"), "number"),
+    (num_pgs, "", "num_pgs", "number of pgs", ::cxxopts::value< uint64_t >()->default_value("10"), "number"),
+    (num_shards, "", "num_shards", "number of shards", ::cxxopts::value< uint64_t >()->default_value("20"), "number"),
+    (num_blobs, "", "num_blobs", "number of blobs", ::cxxopts::value< uint64_t >()->default_value("50"), "number"));
 
-SISL_OPTIONS_ENABLE(logging, blob_manager_test)
+SISL_OPTIONS_ENABLE(logging, test_home_object)
 
 using homeobject::Blob;
 using homeobject::blob_id_t;
@@ -29,7 +33,7 @@ using homeobject::BlobError;
 using homeobject::peer_id_t;
 
 class FixtureApp : public homeobject::HomeObjectApplication {
-    std::string path_{"/tmp/test_homestore.data." + std::to_string(rand())};
+    std::string path_{"/tmp/homobject_test.data." + std::to_string(rand())};
 
 public:
     FixtureApp() {
@@ -45,7 +49,7 @@ public:
     uint32_t threads() const override { return 2; }
 
     void clean() {
-        if (std::filesystem::exists(path_)) { std::filesystem::remove(path_); }
+        if (std::filesystem::exists(path_)) std::filesystem::remove(path_);
     }
 
     std::list< std::filesystem::path > devices() const override {
