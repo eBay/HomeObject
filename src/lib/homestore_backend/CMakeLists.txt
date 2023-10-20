@@ -42,6 +42,6 @@ target_link_libraries(blob_homestore_test
     homeobject_homestore
     ${COMMON_TEST_DEPS}
   )
-add_test(NAME BlobHomestoreTest COMMAND blob_homestore_test -csv error --num_iters 1000)
+add_test(NAME BlobHomestoreTest COMMAND blob_homestore_test -csv error --executor immediate)
 set_property(TEST BlobHomestoreTest PROPERTY RUN_SERIAL 1)
 endif()

@@ -19,13 +19,13 @@ SISL_LOGGING_INIT(logging, HOMEOBJECT_LOG_MODS)
 
 SISL_OPTION_GROUP(
     test_home_object,
-    (num_iters, "", "num_iters", "number of iterations per loop",
-     ::cxxopts::value< uint64_t >()->default_value("100000"), "number"),
+    (num_iters, "", "num_iters", "number of iterations per loop", ::cxxopts::value< uint64_t >()->default_value("1000"),
+     "number"),
     (num_pgs, "", "num_pgs", "number of pgs", ::cxxopts::value< uint64_t >()->default_value("10"), "number"),
     (num_shards, "", "num_shards", "number of shards", ::cxxopts::value< uint64_t >()->default_value("20"), "number"),
     (num_blobs, "", "num_blobs", "number of blobs", ::cxxopts::value< uint64_t >()->default_value("50"), "number"));
 
-SISL_OPTIONS_ENABLE(logging, test_home_object)
+SISL_OPTIONS_ENABLE(logging, homeobject_options, test_home_object)
 
 using homeobject::Blob;
 using homeobject::blob_id_t;

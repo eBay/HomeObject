@@ -35,5 +35,6 @@ target_link_libraries(blob_memory_test
     homeobject_memory
     ${COMMON_TEST_DEPS}
   )
-add_test(NAME BlobMemoryTest COMMAND blob_memory_test -csv error)
+add_test(NAME BlobMemoryTestCPU COMMAND blob_memory_test -csv error --num_iters 20000 --executor cpu)
+add_test(NAME BlobMemoryTestImmediate COMMAND blob_memory_test -csv error --executor io)
 endif()
