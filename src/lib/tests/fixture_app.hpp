@@ -104,6 +104,13 @@ public:
                        .get();
         EXPECT_TRUE(!!o_e);
         o_e.then([this](auto&& b) mutable { _blob_id = std::move(b); });
+
+        g_e = homeobj_->blob_manager()->get(_shard_1.id, _blob_id).get();
+        EXPECT_TRUE(!!g_e);
+        g_e.then([](auto&& blob) {
+            EXPECT_STREQ(blob.user_key.c_str(), "test_blob");
+            EXPECT_EQ(blob.object_off, 4 * Mi);
+        });
     }
 
 protected:
