@@ -2,7 +2,14 @@
 
 #include <gtest/gtest.h>
 
+#include <sisl/options/options.h>
+#include <sisl/logging/logging.h>
+#include <folly/init/Init.h>
+
 #include <memory>
+
+SISL_LOGGING_INIT(logging, HOMEOBJECT_LOG_MODS)
+SISL_OPTIONS_ENABLE(logging)
 
 namespace homestore {
 
@@ -115,4 +122,15 @@ TEST_F(HeapChunkSelectorTest, test_release_chunk) {
     chunk2 = HCS.select_chunk(count, hints);
     ASSERT_EQ(chunk2->get_pdev_id(), 1);
     ASSERT_EQ(chunk2->available_blks(), 2);
+}
+
+int main(int argc, char* argv[]) {
+    int parsed_argc = argc;
+    ::testing::InitGoogleTest(&parsed_argc, argv);
+    SISL_OPTIONS_LOAD(parsed_argc, argv, logging);
+    sisl::logging::SetLogger(std::string(argv[0]));
+    spdlog::set_pattern("[%D %T.%e] [%n] [%^%l%$] [%t] %v");
+    parsed_argc = 1;
+    auto f = ::folly::Init(&parsed_argc, &argv, true);
+    return RUN_ALL_TESTS();
 }

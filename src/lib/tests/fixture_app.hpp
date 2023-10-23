@@ -19,7 +19,7 @@ using homeobject::blob_id_t;
 using homeobject::peer_id_t;
 
 class FixtureApp : public homeobject::HomeObjectApplication {
-    std::string path_{"/tmp/homobject_test.data"};
+    std::string path_{"/tmp/homeobject_test.data"};
 
 public:
     FixtureApp();
