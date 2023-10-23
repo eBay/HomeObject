@@ -1,16 +1,11 @@
 #include <string>
 
 #include <boost/uuid/random_generator.hpp>
-#include <boost/uuid/uuid_io.hpp>
-#include <folly/init/Init.h>
 
 #include <homestore/blkdata_service.hpp>
 #include <homestore/logstore_service.hpp>
 
 #include <gtest/gtest.h>
-
-#include <sisl/logging/logging.h>
-#include <sisl/options/options.h>
 
 // will allow unit tests to access object private/protected for validation;
 #define protected public
@@ -212,15 +207,4 @@ TEST_F(ShardManagerTestingRecovery, ShardManagerRecovery) {
     EXPECT_TRUE(hs_shard->sb_->available_capacity_bytes == shard_info.available_capacity_bytes);
     EXPECT_TRUE(hs_shard->sb_->total_capacity_bytes == shard_info.total_capacity_bytes);
     EXPECT_TRUE(hs_shard->sb_->deleted_capacity_bytes == shard_info.deleted_capacity_bytes);
-}
-
-int main(int argc, char* argv[]) {
-    int parsed_argc = argc;
-    ::testing::InitGoogleTest(&parsed_argc, argv);
-    SISL_OPTIONS_LOAD(parsed_argc, argv, logging, homeobject_options, test_home_object);
-    sisl::logging::SetLogger(std::string(argv[0]));
-    spdlog::set_pattern("[%D %T.%e] [%n] [%^%l%$] [%t] %v");
-    parsed_argc = 1;
-    auto f = ::folly::Init(&parsed_argc, &argv, true);
-    return RUN_ALL_TESTS();
 }

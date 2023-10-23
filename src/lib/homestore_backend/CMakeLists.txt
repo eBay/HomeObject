@@ -18,30 +18,15 @@ target_link_libraries("${PROJECT_NAME}_homestore"
 if(BUILD_TESTING)
     add_subdirectory(tests)
 
-add_executable (pg_homestore_test)
-target_sources(pg_homestore_test PRIVATE $<TARGET_OBJECTS:pg_test>)
-target_link_libraries(pg_homestore_test
-    homeobject_homestore
-    ${COMMON_TEST_DEPS}
-  )
-add_test(NAME PGHomestoreTest COMMAND pg_homestore_test -csv error)
-set_property(TEST PGHomestoreTest PROPERTY RUN_SERIAL 1)
-
-add_executable (shard_homestore_test)
-target_sources(shard_homestore_test PRIVATE $<TARGET_OBJECTS:shard_test>)
-target_link_libraries(shard_homestore_test
-    homeobject_homestore
-    ${COMMON_TEST_DEPS}
-  )
-add_test(NAME ShardHomestoreTest COMMAND shard_homestore_test -csv error)
-set_property(TEST ShardHomestoreTest PROPERTY RUN_SERIAL 1)
-
-add_executable (blob_homestore_test)
-target_sources(blob_homestore_test PRIVATE $<TARGET_OBJECTS:blob_test>)
-target_link_libraries(blob_homestore_test
-    homeobject_homestore
-    ${COMMON_TEST_DEPS}
-  )
-add_test(NAME BlobHomestoreTest COMMAND blob_homestore_test -csv error --executor immediate)
-set_property(TEST BlobHomestoreTest PROPERTY RUN_SERIAL 1)
+    add_executable (homestore_test)
+    target_sources(homestore_test PRIVATE
+        $<TARGET_OBJECTS:homestore_tests>
+        $<TARGET_OBJECTS:test_fixture>
+        )
+    target_link_libraries(homestore_test
+        homeobject_homestore
+        ${COMMON_TEST_DEPS}
+      )
+    add_test(NAME HomestoreTest COMMAND homestore_test -csv error --executor immediate)
+    set_property(TEST HomestoreTest PROPERTY RUN_SERIAL 1)
 endif()

@@ -13,28 +13,12 @@ target_link_libraries("${PROJECT_NAME}_memory"
 )
 
 if(BUILD_TESTING)
-add_executable (pg_memory_test)
-target_sources(pg_memory_test PRIVATE $<TARGET_OBJECTS:pg_test>)
-target_link_libraries(pg_memory_test
+add_executable (memory_test)
+target_sources(memory_test PRIVATE $<TARGET_OBJECTS:test_fixture>)
+target_link_libraries(memory_test
     homeobject_memory
     ${COMMON_TEST_DEPS}
   )
-add_test(NAME PGMemoryTest COMMAND pg_memory_test -csv error)
-
-add_executable (shard_memory_test)
-target_sources(shard_memory_test PRIVATE $<TARGET_OBJECTS:shard_test>)
-target_link_libraries(shard_memory_test
-    homeobject_memory
-    ${COMMON_TEST_DEPS}
-  )
-add_test(NAME ShardMemoryTest COMMAND shard_memory_test -csv error)
-
-add_executable (blob_memory_test)
-target_sources(blob_memory_test PRIVATE $<TARGET_OBJECTS:blob_test>)
-target_link_libraries(blob_memory_test
-    homeobject_memory
-    ${COMMON_TEST_DEPS}
-  )
-add_test(NAME BlobMemoryTestCPU COMMAND blob_memory_test -csv error --num_iters 20000 --executor cpu)
-add_test(NAME BlobMemoryTestImmediate COMMAND blob_memory_test -csv error --executor io)
+add_test(NAME MemoryTestCPU COMMAND memory_test -csv error --executor cpu --num_iters 20000)
+add_test(NAME MemoryTestIO COMMAND memory_test -csv error --executor io --num_iters 20000)
 endif()

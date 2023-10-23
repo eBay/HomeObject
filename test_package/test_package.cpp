@@ -5,7 +5,7 @@
 
 SISL_LOGGING_INIT(HOMEOBJECT_LOG_MODS)
 
-SISL_OPTIONS_ENABLE(logging, homeobject_options)
+SISL_OPTIONS_ENABLE(logging, homeobject)
 
 class TestApp : public homeobject::HomeObjectApplication {
 public:
@@ -19,7 +19,7 @@ public:
 };
 
 int main(int argc, char** argv) {
-    SISL_OPTIONS_LOAD(argc, argv, logging, homeobject_options)
+    SISL_OPTIONS_LOAD(argc, argv, logging, homeobject)
     sisl::logging::SetLogger(std::string(argv[0]));
     spdlog::set_pattern("[%D %T%z] [%^%l%$] [%n] [%t] %v");
 

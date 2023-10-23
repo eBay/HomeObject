@@ -2,7 +2,7 @@
 
 #include <algorithm>
 
-SISL_OPTION_GROUP(homeobject_options,
+SISL_OPTION_GROUP(homeobject,
                   (executor_type, "", "executor", "Executor to use for Future deferal",
                    ::cxxopts::value< std::string >()->default_value("immediate"), "immediate|cpu|io"));
 
