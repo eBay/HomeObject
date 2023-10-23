@@ -1,12 +1,13 @@
 #include <mutex>
-
-#include <folly/init/Init.h>
 #include <folly/executors/GlobalExecutor.h>
 
 #include <homeobject/blob_manager.hpp>
 #include "lib/tests/fixture_app.hpp"
 
-TEST_F(TestFixture, BasicTests) {
+using homeobject::Blob;
+using homeobject::BlobError;
+
+TEST_F(TestFixture, BasicBlobTests) {
     auto const batch_sz = 4;
     std::mutex call_lock;
     auto calls = std::list< folly::SemiFuture< folly::Unit > >();
@@ -65,15 +66,4 @@ TEST_F(TestFixture, BasicTests) {
     homeobj_->blob_manager()->del(_shard_1.id, _blob_id).get();
     homeobj_->blob_manager()->get(_shard_1.id, _blob_id).get();
     homeobj_->blob_manager()->del(_shard_1.id, _blob_id).get();
-}
-
-int main(int argc, char* argv[]) {
-    int parsed_argc = argc;
-    ::testing::InitGoogleTest(&parsed_argc, argv);
-    SISL_OPTIONS_LOAD(parsed_argc, argv, logging, test_home_object);
-    sisl::logging::SetLogger(std::string(argv[0]));
-    spdlog::set_pattern("[%D %T.%e] [%n] [%^%l%$] [%t] %v");
-    parsed_argc = 1;
-    auto f = ::folly::Init(&parsed_argc, &argv, true);
-    return RUN_ALL_TESTS();
 }

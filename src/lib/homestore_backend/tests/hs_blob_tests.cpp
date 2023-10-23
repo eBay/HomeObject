@@ -1,19 +1,13 @@
 #include <chrono>
 #include <cmath>
-#include <condition_variable>
 #include <mutex>
 
-#include <folly/init/Init.h>
-#include <gtest/gtest.h>
-#include <sisl/logging/logging.h>
-#include <sisl/options/options.h>
-
 #include <boost/uuid/random_generator.hpp>
+#include <gtest/gtest.h>
 
 #include "lib/homestore_backend/hs_homeobject.hpp"
-#include "bits_generator.hpp"
-
 #include "lib/tests/fixture_app.hpp"
+#include "bits_generator.hpp"
 
 using namespace std::chrono_literals;
 
@@ -246,15 +240,4 @@ TEST_F(HomeObjectFixture, SealShardWithRestart) {
     ASSERT_TRUE(!b);
     ASSERT_EQ(b.error(), BlobError::SEALED_SHARD);
     LOGINFO("Put blob {}", b.error());
-}
-
-int main(int argc, char* argv[]) {
-    int parsed_argc = argc;
-    ::testing::InitGoogleTest(&parsed_argc, argv);
-    SISL_OPTIONS_LOAD(parsed_argc, argv, logging, test_home_object);
-    sisl::logging::SetLogger(std::string(argv[0]));
-    spdlog::set_pattern("[%D %T.%e] [%n] [%^%l%$] [%t] %v");
-    parsed_argc = 1;
-    auto f = ::folly::Init(&parsed_argc, &argv, true);
-    return RUN_ALL_TESTS();
 }

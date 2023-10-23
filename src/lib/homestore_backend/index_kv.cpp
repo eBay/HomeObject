@@ -66,7 +66,7 @@ HSHomeObject::get_from_index_table(shared< BlobIndexTable > index_table, shard_i
     homestore::BtreeSingleGetRequest get_req{&index_key, &index_value};
     auto status = index_table->get(get_req);
     if (status != homestore::btree_status_t::success) {
-        LOGERROR("Failed to get from index table [route={}]", index_key);
+        LOGDEBUG("Failed to get from index table [route={}]", index_key);
         return folly::makeUnexpected(BlobError::UNKNOWN_BLOB);
     }
 

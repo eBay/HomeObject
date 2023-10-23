@@ -4,6 +4,7 @@ add_flags("-Wno-unused-parameter")
 
 add_library(${PROJECT_NAME}_core OBJECT)
 target_sources(${PROJECT_NAME}_core PRIVATE
+            homeobject_impl.cpp
             blob_manager.cpp
             shard_manager.cpp
             pg_manager.cpp
