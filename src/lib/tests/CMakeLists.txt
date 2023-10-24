@@ -6,7 +6,7 @@ target_sources(test_fixture PRIVATE
     ShardManagerTest.cpp
     PGManagerTest.cpp
     fixture_app.cpp
-    )
+)
 target_link_libraries(test_fixture
     ${COMMON_TEST_DEPS}
-  )
+)
