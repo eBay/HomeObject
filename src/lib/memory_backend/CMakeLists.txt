@@ -6,6 +6,7 @@ target_sources("${PROJECT_NAME}_memory" PRIVATE
     mem_blob_manager.cpp
     mem_shard_manager.cpp
     mem_pg_manager.cpp
+    $<TARGET_OBJECTS:${PROJECT_NAME}_core>
 )
 target_link_libraries("${PROJECT_NAME}_memory"
     ${COMMON_DEPS}
@@ -15,7 +16,6 @@ if(BUILD_TESTING)
 add_executable (memory_test)
 target_sources(memory_test PRIVATE
     $<TARGET_OBJECTS:test_fixture>
-    $<TARGET_OBJECTS:${PROJECT_NAME}_core>
 )
 target_link_libraries(memory_test
     homeobject_memory

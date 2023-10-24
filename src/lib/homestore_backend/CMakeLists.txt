@@ -9,6 +9,7 @@ target_sources("${PROJECT_NAME}_homestore" PRIVATE
     index_kv.cpp
     heap_chunk_selector.cpp
     replication_state_machine.cpp
+    $<TARGET_OBJECTS:${PROJECT_NAME}_core>
 )
 target_link_libraries("${PROJECT_NAME}_homestore"
     ${COMMON_DEPS}
@@ -21,7 +22,6 @@ add_executable (homestore_test)
 target_sources(homestore_test PRIVATE
     $<TARGET_OBJECTS:homestore_tests>
     $<TARGET_OBJECTS:test_fixture>
-    $<TARGET_OBJECTS:${PROJECT_NAME}_core>
 )
 target_link_libraries(homestore_test
     homeobject_homestore
