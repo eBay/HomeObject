@@ -351,6 +351,7 @@ void HSHomeObject::on_blob_del_commit(int64_t lsn, sisl::blob const& header, sis
     auto r = delete_from_index_table(index_table, blob_info.shard_id, blob_info.blob_id);
     if (!r) {
         LOGW("fail to delete blob id {} shard {}", blob_info.blob_id, blob_info.shard_id);
+        if (ctx) ctx->promise_.setValue(folly::makeUnexpected(r.error()));
         return;
     }
 
