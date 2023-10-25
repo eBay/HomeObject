@@ -194,6 +194,8 @@ public:
     // Blob manager related.
     void on_blob_put_commit(int64_t lsn, sisl::blob const& header, sisl::blob const& key,
                             const homestore::MultiBlkId& pbas, cintrusive< homestore::repl_req_ctx >& hs_ctx);
+    void on_blob_del_commit(int64_t lsn, sisl::blob const& header, sisl::blob const& key,
+                            cintrusive< homestore::repl_req_ctx >& hs_ctx);
     homestore::blk_alloc_hints blob_put_get_blk_alloc_hints(sisl::blob const& header,
                                                             cintrusive< homestore::repl_req_ctx >& ctx);
     void compute_blob_payload_hash(BlobHeader::HashAlgorithm algorithm, const uint8_t* blob_bytes, size_t blob_size,
@@ -205,6 +207,8 @@ public:
     BlobManager::NullResult add_to_index_table(shared< BlobIndexTable > index_table, const BlobInfo& blob_info);
     BlobManager::Result< homestore::MultiBlkId > get_from_index_table(shared< BlobIndexTable > index_table,
                                                                       shard_id_t shard_id, blob_id_t blob_id) const;
+    BlobManager::Result< homestore::MultiBlkId > delete_from_index_table(shared< BlobIndexTable > index_table,
+                                                                         shard_id_t shard_id, blob_id_t blob_id) const;
 
     void print_btree_index(pg_id_t pg_id);
 };

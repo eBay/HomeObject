@@ -282,8 +282,81 @@ homestore::blk_alloc_hints HSHomeObject::blob_put_get_blk_alloc_hints(sisl::blob
     return hints;
 }
 
-BlobManager::NullAsyncResult HSHomeObject::_del_blob(ShardInfo const&, blob_id_t) {
-    return folly::makeUnexpected(BlobError::UNKNOWN);
+BlobManager::NullAsyncResult HSHomeObject::_del_blob(ShardInfo const& shard, blob_id_t blob_id) {
+    auto& pg_id = shard.placement_group;
+    shared< homestore::ReplDev > repl_dev;
+    {
+        std::shared_lock lock_guard(_pg_lock);
+        auto iter = _pg_map.find(pg_id);
+        RELEASE_ASSERT(iter != _pg_map.end(), "PG not found");
+        repl_dev = static_cast< HS_PG* >(iter->second.get())->repl_dev_;
+    }
+
+    RELEASE_ASSERT(repl_dev != nullptr, "Repl dev instance null");
+
+    auto req = repl_result_ctx< BlobManager::Result< BlobInfo > >::make(sizeof(blob_id_t), io_align);
+
+    req->header_.msg_type = ReplicationMessageType::DEL_BLOB_MSG;
+    req->header_.payload_size = 0;
+    req->header_.payload_crc = 0;
+    req->header_.shard_id = shard.id;
+    req->header_.pg_id = pg_id;
+    req->header_.seal();
+    sisl::blob header;
+    header.bytes = r_cast< uint8_t* >(&req->header_);
+    header.size = sizeof(req->header_);
+
+    memcpy(req->hdr_buf_.bytes, &blob_id, sizeof(blob_id_t));
+
+    repl_dev->async_alloc_write(header, req->hdr_buf_, sisl::sg_list{}, req);
+    return req->result().deferValue([](const auto& result) -> folly::Expected< folly::Unit, BlobError > {
+        if (result.hasError()) { return folly::makeUnexpected(result.error()); }
+        auto blob_info = result.value();
+        LOGTRACEMOD(blobmgr, "Delete blob success,  shard_id {} , blob_id {}", blob_info.shard_id, blob_info.blob_id);
+
+        return folly::Unit();
+    });
+}
+
+void HSHomeObject::on_blob_del_commit(int64_t lsn, sisl::blob const& header, sisl::blob const& key,
+                                      cintrusive< homestore::repl_req_ctx >& hs_ctx) {
+    repl_result_ctx< BlobManager::Result< BlobInfo > >* ctx{nullptr};
+    if (hs_ctx != nullptr) {
+        ctx = boost::static_pointer_cast< repl_result_ctx< BlobManager::Result< BlobInfo > > >(hs_ctx).get();
+    }
+
+    auto msg_header = r_cast< ReplicationMessageHeader* >(header.bytes);
+    if (msg_header->corrupted()) {
+        LOGERROR("replication message header is corrupted with crc error, lsn:{}", lsn);
+        if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(BlobError::CHECKSUM_MISMATCH)); }
+        return;
+    }
+
+    shared< BlobIndexTable > index_table;
+    shared< homestore::ReplDev > repl_dev;
+    {
+        std::shared_lock lock_guard(_pg_lock);
+        auto iter = _pg_map.find(msg_header->pg_id);
+        RELEASE_ASSERT(iter != _pg_map.end(), "PG not found");
+        index_table = static_cast< HS_PG* >(iter->second.get())->index_table_;
+        repl_dev = static_cast< HS_PG* >(iter->second.get())->repl_dev_;
+        RELEASE_ASSERT(index_table != nullptr, "Index table not intialized");
+        RELEASE_ASSERT(repl_dev != nullptr, "Repl dev instance null");
+    }
+
+    BlobInfo blob_info;
+    blob_info.shard_id = msg_header->shard_id;
+    blob_info.blob_id = *r_cast< blob_id_t* >(key.bytes);
+
+    auto r = delete_from_index_table(index_table, blob_info.shard_id, blob_info.blob_id);
+    if (!r) {
+        LOGW("fail to delete blob id {} shard {}", blob_info.blob_id, blob_info.shard_id);
+        return;
+    }
+
+    auto& multiBlks = r.value();
+    repl_dev->async_free_blks(lsn, multiBlks);
+    if (ctx) { ctx->promise_.setValue(BlobManager::Result< BlobInfo >(blob_info)); }
 }
 
 void HSHomeObject::compute_blob_payload_hash(BlobHeader::HashAlgorithm algorithm, const uint8_t* blob_bytes,

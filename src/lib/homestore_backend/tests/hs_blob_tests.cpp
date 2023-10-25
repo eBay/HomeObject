@@ -78,7 +78,7 @@ public:
     }
 };
 
-TEST_F(HomeObjectFixture, BasicPutGetBlobWRestart) {
+TEST_F(HomeObjectFixture, BasicPutGetDelBlobWRestart) {
     auto num_pgs = SISL_OPTIONS["num_pgs"].as< uint64_t >();
     auto num_shards_per_pg = SISL_OPTIONS["num_shards"].as< uint64_t >() / num_pgs;
     auto num_blobs_per_shard = SISL_OPTIONS["num_blobs"].as< uint64_t >() / num_shards_per_pg;
@@ -185,6 +185,34 @@ TEST_F(HomeObjectFixture, BasicPutGetBlobWRestart) {
         EXPECT_EQ(result.user_key.size(), blob.user_key.size());
         EXPECT_EQ(blob.user_key, result.user_key);
         EXPECT_EQ(blob.object_off, result.object_off);
+    }
+
+    // Delete all blobs
+    for (const auto& [id, blob] : blob_map) {
+        int64_t shard_id = std::get< 1 >(id), blob_id = std::get< 2 >(id);
+        auto g = _obj_inst->blob_manager()->del(shard_id, blob_id).get();
+        ASSERT_TRUE(g);
+        LOGINFO("delete blob shard {} blob {}", shard_id, blob_id);
+    }
+
+    // After delete all blobs, get should fail
+    for (const auto& [id, blob] : blob_map) {
+        int64_t shard_id = std::get< 1 >(id), blob_id = std::get< 2 >(id);
+        auto g = _obj_inst->blob_manager()->get(shard_id, blob_id).get();
+        ASSERT_TRUE(!g);
+    }
+
+    LOGINFO("Flushing CP.");
+    trigger_cp(true /* wait */);
+
+    // Restart homeobject
+    restart();
+
+    // After restart, for all deleted blobs, get should fail
+    for (const auto& [id, blob] : blob_map) {
+        int64_t shard_id = std::get< 1 >(id), blob_id = std::get< 2 >(id);
+        auto g = _obj_inst->blob_manager()->get(shard_id, blob_id).get();
+        ASSERT_TRUE(!g);
     }
 }
 
