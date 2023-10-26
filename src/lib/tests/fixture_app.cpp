@@ -25,7 +25,7 @@ FixtureApp::FixtureApp() {
 
 homeobject::peer_id_t FixtureApp::discover_svcid(std::optional< homeobject::peer_id_t > const& p) const {
     auto const& new_id = p.value();
-    return (boost::uuids::uuid() == new_id) ? boost::uuids::random_generator()() : new_id;
+    return new_id.is_nil() ? boost::uuids::random_generator()() : new_id;
 }
 
 void TestFixture::SetUp() {
