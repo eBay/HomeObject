@@ -17,7 +17,7 @@ namespace homeobject {
 // HSHomeObject's own SuperBlock. Currently this only contains the SvcId SM
 // receives so we can set HomeObject::_our_id upon recovery
 struct svc_info_superblk_t {
-    peer_id_t svc_id;
+    peer_id_t svc_id_;
 };
 
 extern std::shared_ptr< HomeObject > init_homeobject(std::weak_ptr< HomeObjectApplication >&& application) {
@@ -78,7 +78,7 @@ void HSHomeObject::init_homestore() {
         // Create a superblock that contains our SvcId
         auto svc_sb = homestore::superblk< svc_info_superblk_t >(_svc_meta_name);
         svc_sb.create(sizeof(svc_info_superblk_t));
-        svc_sb->svc_id = _our_id;
+        svc_sb->svc_id_ = _our_id;
         svc_sb.write();
     } else {
         RELEASE_ASSERT(!_our_id.is_nil(), "No SvcId read after HomeStore recovery!");
@@ -97,7 +97,7 @@ void HSHomeObject::register_homestore_metablk_callback() {
         [this](homestore::meta_blk* mblk, sisl::byte_view buf, size_t size) {
             auto svc_sb = homestore::superblk< svc_info_superblk_t >(_svc_meta_name);
             svc_sb.load(buf, mblk);
-            _our_id = svc_sb->svc_id;
+            _our_id = svc_sb->svc_id_;
             LOGI("Found existing SvcId: [{}]", to_string(_our_id));
         },
         nullptr, true);
