@@ -14,6 +14,12 @@
 
 namespace homeobject {
 
+// HSHomeObject's own SuperBlock. Currently this only contains the SvcId SM
+// receives so we can set HomeObject::_our_id upon recovery
+struct svc_info_superblk_t {
+    peer_id_t svc_id;
+};
+
 extern std::shared_ptr< HomeObject > init_homeobject(std::weak_ptr< HomeObjectApplication >&& application) {
     LOGI("Initializing HomeObject");
     auto instance = std::make_shared< HSHomeObject >(std::move(application));
@@ -49,8 +55,13 @@ void HSHomeObject::init_homestore() {
                            .with_repl_data_service(repl_impl_type::solo, chunk_selector_)
                            .start(hs_input_params{.devices = device_info, .app_mem_size = app_mem_size},
                                   [this]() { register_homestore_metablk_callback(); });
+
+    // We either recoverd a UUID and no FORMAT is needed, or we need one for a later superblock
     if (need_format) {
-        LOGW("Seems like we are booting/starting first time, Formatting!!");
+        _our_id = _application.lock()->discover_svcid(boost::uuids::uuid());
+        RELEASE_ASSERT(!_our_id.is_nil(), "Received no SvcId and need FORMAT!");
+        LOGW("We are starting for the first time on [{}], Formatting!!", to_string(_our_id));
+
         HomeStore::instance()->format_and_start({
             {HS_SERVICE::META, hs_format_params{.size_pct = 5.0}},
             {HS_SERVICE::LOG_REPLICATED, hs_format_params{.size_pct = 10.0}},
@@ -63,8 +74,18 @@ void HSHomeObject::init_homestore() {
                               .chunk_sel_type = chunk_selector_type_t::CUSTOM}},
             {HS_SERVICE::INDEX, hs_format_params{.size_pct = 5.0}},
         });
-    }
 
+        // Create a superblock that contains our SvcId
+        auto svc_sb = homestore::superblk< svc_info_superblk_t >(_svc_meta_name);
+        svc_sb.create(sizeof(svc_info_superblk_t));
+        svc_sb->svc_id = _our_id;
+        svc_sb.write();
+    } else {
+        RELEASE_ASSERT(!_our_id.is_nil(), "No SvcId read after HomeStore recovery!");
+        auto const new_id = _application.lock()->discover_svcid(_our_id);
+        RELEASE_ASSERT(new_id == _our_id, "Received new SvcId [{}] AFTER recovery of [{}]?!", to_string(new_id),
+                       to_string(_our_id));
+    }
     LOGI("Initialize and start HomeStore is successfully");
 }
 
@@ -72,12 +93,22 @@ void HSHomeObject::register_homestore_metablk_callback() {
     // register some callbacks for metadata recovery;
     using namespace homestore;
     HomeStore::instance()->meta_service().register_handler(
-        "ShardManager",
+        _svc_meta_name,
+        [this](homestore::meta_blk* mblk, sisl::byte_view buf, size_t size) {
+            auto svc_sb = homestore::superblk< svc_info_superblk_t >(_svc_meta_name);
+            svc_sb.load(buf, mblk);
+            _our_id = svc_sb->svc_id;
+            LOGI("Found existing SvcId: [{}]", to_string(_our_id));
+        },
+        nullptr, true);
+
+    HomeStore::instance()->meta_service().register_handler(
+        _shard_meta_name,
         [this](homestore::meta_blk* mblk, sisl::byte_view buf, size_t size) { on_shard_meta_blk_found(mblk, buf); },
         [this](bool success) { on_shard_meta_blk_recover_completed(success); }, true);
 
     HomeStore::instance()->meta_service().register_handler(
-        "PGManager",
+        _pg_meta_name,
         [this](homestore::meta_blk* mblk, sisl::byte_view buf, size_t size) {
             on_pg_meta_blk_found(std::move(buf), voidptr_cast(mblk));
         },

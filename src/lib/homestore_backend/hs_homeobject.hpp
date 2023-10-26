@@ -24,6 +24,12 @@ class BlobRouteValue;
 using BlobIndexTable = homestore::IndexTable< BlobRouteKey, BlobRouteValue >;
 
 class HSHomeObject : public HomeObjectImpl {
+    /// NOTE: Be wary to change these as they effect on-disk format!
+    inline static const std::string _svc_meta_name = "HomeObject";
+    inline static const std::string _pg_meta_name = "PGManager";
+    inline static const std::string _shard_meta_name = "ShardManager";
+    ///
+
     /// Overridable Helpers
     ShardManager::AsyncResult< ShardInfo > _create_shard(pg_id_t, uint64_t size_bytes) override;
     ShardManager::AsyncResult< ShardInfo > _seal_shard(ShardInfo const&) override;
@@ -165,7 +171,7 @@ private:
 
 public:
     using HomeObjectImpl::HomeObjectImpl;
-    ~HSHomeObject();
+    ~HSHomeObject() override;
 
     void init_homestore();
 

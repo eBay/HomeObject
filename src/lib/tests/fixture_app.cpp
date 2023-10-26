@@ -18,9 +18,14 @@ SISL_OPTIONS_ENABLE(logging, iomgr, homeobject, test_home_object)
 
 FixtureApp::FixtureApp() {
     clean();
-    LOGINFO("creating device {} file with size {} ", path_, homestore::in_bytes(2 * Gi));
+    LOGWARN("creating device {} file with size {} ", path_, homestore::in_bytes(2 * Gi));
     std::ofstream ofs{path_, std::ios::binary | std::ios::out | std::ios::trunc};
     std::filesystem::resize_file(path_, 2 * Gi);
+}
+
+homeobject::peer_id_t FixtureApp::discover_svcid(std::optional< homeobject::peer_id_t > const& p) const {
+    auto const& new_id = p.value();
+    return (boost::uuids::uuid() == new_id) ? boost::uuids::random_generator()() : new_id;
 }
 
 void TestFixture::SetUp() {
