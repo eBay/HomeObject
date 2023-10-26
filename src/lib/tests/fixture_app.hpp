@@ -38,9 +38,7 @@ public:
         return device_info;
     }
 
-    homeobject::peer_id_t discover_svcid(std::optional< homeobject::peer_id_t > const& p) const override {
-        return p.value();
-    }
+    homeobject::peer_id_t discover_svcid(std::optional< homeobject::peer_id_t > const& p) const override;
     std::string lookup_peer(homeobject::peer_id_t const&) const override { return "test_fixture.com"; }
 };
 

@@ -254,7 +254,7 @@ std::optional< homestore::chunk_num_t > HSHomeObject::get_any_chunk_id(pg_id_t c
 }
 
 HSHomeObject::HS_Shard::HS_Shard(ShardInfo shard_info, homestore::chunk_num_t chunk_id) :
-        Shard(std::move(shard_info)), sb_("ShardManager") {
+        Shard(std::move(shard_info)), sb_(_shard_meta_name) {
     sb_.create(sizeof(shard_info_superblk));
     sb_->chunk_id = chunk_id;
     write_sb();

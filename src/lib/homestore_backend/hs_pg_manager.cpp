@@ -173,7 +173,7 @@ PGInfo HSHomeObject::HS_PG::pg_info_from_sb(homestore::superblk< pg_info_superbl
 }
 
 HSHomeObject::HS_PG::HS_PG(PGInfo info, shared< homestore::ReplDev > rdev, shared< BlobIndexTable > index_table) :
-        PG{std::move(info)}, pg_sb_{"PGManager"}, repl_dev_{std::move(rdev)}, index_table_(index_table) {
+        PG{std::move(info)}, pg_sb_{_pg_meta_name}, repl_dev_{std::move(rdev)}, index_table_(index_table) {
     pg_sb_.create(sizeof(pg_info_superblk) + ((pg_info_.members.size() - 1) * sizeof(pg_members)));
     pg_sb_->id = pg_info_.id;
     pg_sb_->num_members = pg_info_.members.size();
