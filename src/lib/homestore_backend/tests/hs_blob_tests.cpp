@@ -5,6 +5,8 @@
 #include <boost/uuid/random_generator.hpp>
 #include <gtest/gtest.h>
 
+#define protected public
+
 #include "lib/homestore_backend/hs_homeobject.hpp"
 #include "lib/tests/fixture_app.hpp"
 #include "bits_generator.hpp"
@@ -200,6 +202,24 @@ TEST_F(HomeObjectFixture, BasicPutGetDelBlobWRestart) {
         int64_t shard_id = std::get< 1 >(id), blob_id = std::get< 2 >(id);
         auto g = _obj_inst->blob_manager()->get(shard_id, blob_id).get();
         ASSERT_TRUE(!g);
+    }
+
+    // all the deleted blobs should be tombstone in index table
+    auto hs_homeobject = dynamic_cast< HSHomeObject* >(_obj_inst.get());
+    for (const auto& [id, blob] : blob_map) {
+        int64_t pg_id = std::get< 0 >(id), shard_id = std::get< 1 >(id), blob_id = std::get< 2 >(id);
+        shared< BlobIndexTable > index_table;
+        {
+            std::shared_lock lock_guard(hs_homeobject->_pg_lock);
+            auto iter = hs_homeobject->_pg_map.find(pg_id);
+            ASSERT_TRUE(iter != hs_homeobject->_pg_map.end());
+            index_table = static_cast< HSHomeObject::HS_PG* >(iter->second.get())->index_table_;
+        }
+
+        auto g = hs_homeobject->get_blob_from_index_table(index_table, shard_id, blob_id,
+                                                          HSHomeObject::BlobState::TOMBSTONE);
+        ASSERT_TRUE(g);
+        ASSERT_TRUE(g.value() == HSHomeObject::tombstone_pbas);
     }
 
     LOGINFO("Flushing CP.");

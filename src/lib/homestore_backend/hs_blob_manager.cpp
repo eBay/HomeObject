@@ -177,7 +177,7 @@ BlobManager::AsyncResult< Blob > HSHomeObject::_get_blob(ShardInfo const& shard,
     RELEASE_ASSERT(repl_dev != nullptr, "Repl dev instance null");
     RELEASE_ASSERT(index_table != nullptr, "Index table instance null");
 
-    auto r = get_from_index_table(index_table, shard.id, blob_id);
+    auto r = get_blob_from_index_table(index_table, shard.id, blob_id, BlobState::ALIVE);
     if (!r) {
         LOGW("Blob not found in index [route={}]", BlobRoute{blob_id, shard.id});
         return folly::makeUnexpected(r.error());
@@ -348,9 +348,10 @@ void HSHomeObject::on_blob_del_commit(int64_t lsn, sisl::blob const& header, sis
     blob_info.shard_id = msg_header->shard_id;
     blob_info.blob_id = *r_cast< blob_id_t* >(key.bytes);
 
-    auto r = delete_from_index_table(index_table, blob_info.shard_id, blob_info.blob_id);
+    auto r = move_to_tombstone(index_table, blob_info);
     if (!r) {
-        LOGW("fail to delete blob id {} shard {}", blob_info.blob_id, blob_info.shard_id);
+        LOGW("fail to move blob to tombstone,  blob_id {}, shard_id {}, {}", blob_info.blob_id, blob_info.shard_id,
+             r.error());
         if (ctx) ctx->promise_.setValue(folly::makeUnexpected(r.error()));
         return;
     }

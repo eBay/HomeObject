@@ -10,7 +10,7 @@
 namespace homeobject {
 
 ENUM(BlobError, uint16_t, UNKNOWN = 1, TIMEOUT, INVALID_ARG, NOT_LEADER, UNKNOWN_SHARD, UNKNOWN_BLOB, CHECKSUM_MISMATCH,
-     READ_FAILED, INDEX_ERROR, SEALED_SHARD);
+     READ_FAILED, INDEX_ERROR, SEALED_SHARD, TOMBSTONE_BLOB, ALIVE);
 
 struct Blob {
     Blob(sisl::io_blob_safe b, std::string const& u, uint64_t o) : body(std::move(b)), user_key(u), object_off(o) {}
