@@ -75,13 +75,13 @@ HSHomeObject::get_blob_from_index_table(shared< BlobIndexTable > index_table, sh
 
     // blob get API
     if (state == BlobState::ALIVE) {
-        if (pbas == tombstone_pbas) { return folly::makeUnexpected(BlobError::TOMBSTONE_BLOB); }
+        if (pbas == tombstone_pbas) { return folly::makeUnexpected(BlobError::INDEX_ERROR); }
         return pbas;
     }
 
     // get tombstone, only used by test for now, can be used by GC thread if needed
     if (state == BlobState::TOMBSTONE) {
-        if (!(pbas == tombstone_pbas)) { return folly::makeUnexpected(BlobError::ALIVE); }
+        if (!(pbas == tombstone_pbas)) { return folly::makeUnexpected(BlobError::INDEX_ERROR); }
     }
 
     // used for GC thread to range scan index table
