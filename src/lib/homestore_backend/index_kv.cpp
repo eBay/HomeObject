@@ -84,23 +84,7 @@ HSHomeObject::get_blob_from_index_table(shared< BlobIndexTable > index_table, sh
         if (!(pbas == tombstone_pbas)) { return folly::makeUnexpected(BlobError::INDEX_ERROR); }
     }
 
-    // used for GC thread to range scan index table
     return pbas;
-}
-
-// this is used for GC thread to delete tombstone blobid from btree
-BlobManager::NullResult HSHomeObject::delete_from_index_table(shared< BlobIndexTable > index_table, shard_id_t shard_id,
-                                                              blob_id_t blob_id) {
-    BlobRouteKey index_key{BlobRoute{shard_id, blob_id}};
-    BlobRouteValue index_value;
-    homestore::BtreeSingleRemoveRequest del_req{&index_key, &index_value};
-    auto status = index_table->remove(del_req);
-    if (status != homestore::btree_status_t::success) {
-        LOGDEBUG("Failed to delete from index table [route={}]", index_key);
-        return folly::makeUnexpected(BlobError::UNKNOWN_BLOB);
-    }
-
-    return folly::Unit();
 }
 
 BlobManager::Result< homestore::MultiBlkId > HSHomeObject::move_to_tombstone(shared< BlobIndexTable > index_table,

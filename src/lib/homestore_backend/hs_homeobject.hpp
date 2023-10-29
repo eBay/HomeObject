@@ -220,9 +220,6 @@ public:
                                                                            shard_id_t shard_id, blob_id_t blob_id,
                                                                            BlobState) const;
 
-    BlobManager::NullResult delete_from_index_table(shared< BlobIndexTable > index_table, shard_id_t shard_id,
-                                                    blob_id_t blob_id);
-
     BlobManager::Result< homestore::MultiBlkId > move_to_tombstone(shared< BlobIndexTable > index_table,
                                                                    const BlobInfo& blob_info);
     void print_btree_index(pg_id_t pg_id);
