@@ -153,10 +153,26 @@ void HSHomeObject::on_shard_message_commit(int64_t lsn, sisl::blob const& header
     }
 
     // hs_ctx will be nullptr when HS is restarting and replay all commited log entries from the last checkpoint;
-    // but do we really need to handle this for create_shard or seal_shard?
-    // because this raft log had been commit before HO restarts and commit result is already saved in HS metablks
-    // when HS restarts, all PG/Shard infos will be recovered from HS metablks and if we commit again, it will cause
-    // duplication;
+    // most of time, the create_shard/seal_shard on_commit() is already completed before restarting/crash and shard info
+    // is already be written into metablk, so we need to do nothing in this case to avoid duplication when replay this
+    // journal log. but there is still a smaller chance that HO is stopped/crashed before writing metablk is called or
+    // completed and we need to recover shard info from journal log in such case.
+    sisl::sg_list value;
+    value.size = blkids.blk_count() * repl_dev->get_blk_size();
+    auto value_buf = iomanager.iobuf_alloc(512, value.size);
+    value.iovs.push_back(iovec{.iov_base = value_buf, .iov_len = value.size});
+    // header will be released when this function returns, but we still need the header when async_read() finished.
+    auto header_ptr = r_cast< const ReplicationMessageHeader* >(header.bytes);
+    repl_dev->async_read(blkids, value, value.size)
+        .thenValue([this, lsn, msg_header = *header_ptr, blkids, value](auto&& err) mutable {
+            if (err) {
+                LOGW("failed to read data from homestore pba, lsn:{}", lsn);
+            } else {
+                sisl::blob value_blob(r_cast< uint8_t* >(value.iovs[0].iov_base), value.size);
+                do_shard_message_commit(lsn, msg_header, blkids, value_blob, nullptr);
+            }
+            iomanager.iobuf_free(r_cast< uint8_t* >(value.iovs[0].iov_base));
+        });
 }
 
 void HSHomeObject::do_shard_message_commit(int64_t lsn, ReplicationMessageHeader& header,
@@ -183,15 +199,33 @@ void HSHomeObject::do_shard_message_commit(int64_t lsn, ReplicationMessageHeader
     auto shard_info = deserialize_shard_info(r_cast< const char* >(value.bytes), value.size);
     switch (header.msg_type) {
     case ReplicationMessageType::CREATE_SHARD_MSG: {
-        add_new_shard_to_map(std::make_unique< HS_Shard >(shard_info, blkids.chunk_num()));
+        bool shard_exist = false;
+        {
+            std::scoped_lock lock_guard(_shard_lock);
+            shard_exist = (_shard_map.find(shard_info.id) != _shard_map.end());
+        }
+
+        if (!shard_exist) { add_new_shard_to_map(std::make_unique< HS_Shard >(shard_info, blkids.chunk_num())); }
+
         break;
     }
 
     case ReplicationMessageType::SEAL_SHARD_MSG: {
-        auto chunk_id = get_shard_chunk(shard_info.id);
-        RELEASE_ASSERT(chunk_id.has_value(), "Chunk id not found");
-        chunk_selector()->release_chunk(chunk_id.value());
-        update_shard_in_map(shard_info);
+        ShardInfo::State state;
+        {
+            std::scoped_lock lock_guard(_shard_lock);
+            auto iter = _shard_map.find(shard_info.id);
+            RELEASE_ASSERT(iter != _shard_map.end(), "Missing shard info");
+            state = (*iter->second)->info.state;
+        }
+
+        if (state == ShardInfo::State::OPEN) {
+            auto chunk_id = get_shard_chunk(shard_info.id);
+            RELEASE_ASSERT(chunk_id.has_value(), "Chunk id not found");
+            chunk_selector()->release_chunk(chunk_id.value());
+            update_shard_in_map(shard_info);
+        }
+
         break;
     }
     default: {
