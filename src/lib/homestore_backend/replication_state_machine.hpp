@@ -33,6 +33,26 @@ struct repl_result_ctx : public ho_repl_ctx {
     folly::SemiFuture< T > result() { return promise_.getSemiFuture(); }
 };
 
+struct put_blob_ctx {
+    ReplicationMessageHeader* repl_header_;
+    sisl::io_blob_safe blob_header_;
+    sisl::io_blob_safe blob_data_;
+    sisl::io_blob_safe blob_metadata_;
+    sisl::io_blob_safe blob_padding_;
+
+    put_blob_ctx() :
+            blob_header_{nullptr, 0, false},
+            blob_data_{nullptr, 0, false},
+            blob_metadata_{nullptr, 0, false},
+            blob_padding_{nullptr, 0, false} {}
+
+    ~put_blob_ctx() = default;
+    put_blob_ctx(put_blob_ctx const&) = delete;
+    put_blob_ctx& operator=(put_blob_ctx const&) = delete;
+    put_blob_ctx(put_blob_ctx&&) = default;
+    put_blob_ctx& operator=(put_blob_ctx&&) = default;
+};
+
 class ReplicationStateMachine : public homestore::ReplDevListener {
 public:
     explicit ReplicationStateMachine(HSHomeObject* home_object) : home_object_(home_object) {}

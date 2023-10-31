@@ -24,23 +24,24 @@ BlobManager::AsyncResult< blob_id_t > HSHomeObject::_put_blob(ShardInfo const& s
     const uint32_t needed_size = sizeof(ReplicationMessageHeader);
     auto req = repl_result_ctx< BlobManager::Result< BlobInfo > >::make(needed_size, io_align);
 
+    put_blob_ctx put_ctx;
     uint8_t* raw_ptr = req->hdr_buf_.bytes;
-    ReplicationMessageHeader* header = new (raw_ptr) ReplicationMessageHeader();
-    header->msg_type = ReplicationMessageType::PUT_BLOB_MSG;
-    header->payload_size = 0;
-    header->payload_crc = 0;
-    header->shard_id = shard.id;
-    header->pg_id = pg_id;
-    header->header_crc = header->calculate_crc();
+    put_ctx.repl_header_ = new (raw_ptr) ReplicationMessageHeader();
+    put_ctx.repl_header_->msg_type = ReplicationMessageType::PUT_BLOB_MSG;
+    put_ctx.repl_header_->payload_size = 0;
+    put_ctx.repl_header_->payload_crc = 0;
+    put_ctx.repl_header_->shard_id = shard.id;
+    put_ctx.repl_header_->pg_id = pg_id;
+    put_ctx.repl_header_->header_crc = put_ctx.repl_header_->calculate_crc();
 
     auto dev_block_size = repl_dev->get_blk_size();
-    bool blob_copied = false, user_key_copied = false;
     sisl::sg_list sgs;
     sgs.size = 0;
 
     // Create blob header.
     auto blob_header_size = sisl::round_up(sizeof(BlobHeader), io_align);
-    auto blob_header = r_cast< BlobHeader* >(iomanager.iobuf_alloc(io_align, blob_header_size));
+    put_ctx.blob_header_ = sisl::io_blob_safe(blob_header_size, io_align);
+    auto blob_header = r_cast< BlobHeader* >(put_ctx.blob_header_.bytes);
     blob_header->magic = BlobHeader::blob_header_magic;
     blob_header->version = BlobHeader::blob_header_version;
     blob_header->shard_id = shard.id;
@@ -58,9 +59,9 @@ BlobManager::AsyncResult< blob_id_t > HSHomeObject::_put_blob(ShardInfo const& s
         // If address or size is not aligned, align it and create a separate buffer
         // and do expensive memcpy.
         blob_size = sisl::round_up(blob_size, io_align);
-        blob_bytes = iomanager.iobuf_alloc(io_align, blob_size);
+        put_ctx.blob_data_ = sisl::io_blob_safe(blob_size, io_align);
+        blob_bytes = put_ctx.blob_data_.bytes;
         std::memcpy(blob_bytes, blob.body.bytes, blob.body.size);
-        blob_copied = true;
     }
 
     sgs.iovs.emplace_back(iovec{.iov_base = blob_bytes, .iov_len = blob_size});
@@ -75,9 +76,9 @@ BlobManager::AsyncResult< blob_id_t > HSHomeObject::_put_blob(ShardInfo const& s
         if ((reinterpret_cast< uintptr_t >(user_key_bytes) % io_align != 0) || (user_key_size % io_align != 0)) {
             // If address or size is not aligned, create a separate buffer and do expensive memcpy.
             user_key_size = sisl::round_up(user_key_size, io_align);
-            user_key_bytes = r_cast< uint8_t* >(iomanager.iobuf_alloc(io_align, user_key_size));
+            put_ctx.blob_metadata_ = sisl::io_blob_safe(user_key_size, io_align);
+            user_key_bytes = put_ctx.blob_metadata_.bytes;
             std::memcpy(user_key_bytes, blob.user_key.data(), blob.user_key.size());
-            user_key_copied = true;
         }
 
         sgs.iovs.emplace_back(iovec{.iov_base = user_key_bytes, .iov_len = user_key_size});
@@ -88,12 +89,11 @@ BlobManager::AsyncResult< blob_id_t > HSHomeObject::_put_blob(ShardInfo const& s
 
     // Check if any padding of zeroes needs to be added to be aligned to device block size.
     auto pad_len = sisl::round_up(sgs.size, dev_block_size) - sgs.size;
-    uint8_t* pad_zeroes = nullptr;
     if (pad_len != 0) {
         // TODO reuse a single pad zero buffer of len dev_block_size
-        pad_zeroes = r_cast< uint8_t* >(iomanager.iobuf_alloc(io_align, pad_len));
-        std::memset(pad_zeroes, 0, pad_len);
-        sgs.iovs.emplace_back(iovec{.iov_base = pad_zeroes, .iov_len = pad_len});
+        put_ctx.blob_padding_ = sisl::io_blob_safe(pad_len, io_align);
+        std::memset(put_ctx.blob_padding_.bytes, 0, pad_len);
+        sgs.iovs.emplace_back(iovec{.iov_base = put_ctx.blob_padding_.bytes, .iov_len = pad_len});
         sgs.size += pad_len;
     }
 
@@ -103,14 +103,9 @@ BlobManager::AsyncResult< blob_id_t > HSHomeObject::_put_blob(ShardInfo const& s
                               BlobHeader::blob_max_hash_len);
 
     repl_dev->async_alloc_write(req->hdr_buf_, sisl::blob{}, sgs, req);
-    return req->result().deferValue([this, header, blob_header, blob = std::move(blob), blob_bytes, blob_copied,
-                                     user_key_bytes, user_key_copied,
-                                     pad_zeroes](const auto& result) -> BlobManager::AsyncResult< blob_id_t > {
-        header->~ReplicationMessageHeader();
-        iomanager.iobuf_free(r_cast< uint8_t* >(blob_header));
-        if (blob_copied) { iomanager.iobuf_free(blob_bytes); }
-        if (user_key_copied) { iomanager.iobuf_free(r_cast< uint8_t* >(user_key_bytes)); }
-        if (pad_zeroes) { iomanager.iobuf_free(r_cast< uint8_t* >(pad_zeroes)); }
+    return req->result().deferValue([ctx = std::move(put_ctx)](
+                                        const auto& result) -> BlobManager::AsyncResult< blob_id_t > {
+        ctx.repl_header_->~ReplicationMessageHeader();
 
         if (result.hasError()) { return folly::makeUnexpected(result.error()); }
         auto blob_info = result.value();
