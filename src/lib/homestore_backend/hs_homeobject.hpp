@@ -126,6 +126,7 @@ public:
         HashAlgorithm hash_algorithm;
         uint8_t hash[blob_max_hash_len]{};
         shard_id_t shard_id;
+        blob_id_t blob_id;
         uint32_t blob_size{};
         uint64_t object_offset{};   // Offset of this blob in the object. Provided by GW.
         uint32_t user_key_offset{}; // Offset of metadata stored after the blob data.

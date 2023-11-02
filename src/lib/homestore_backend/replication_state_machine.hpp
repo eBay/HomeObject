@@ -33,6 +33,19 @@ struct repl_result_ctx : public ho_repl_ctx {
     folly::SemiFuture< T > result() { return promise_.getSemiFuture(); }
 };
 
+template < typename T >
+struct put_result_ctx : public repl_result_ctx< T > {
+    blob_id_t blob_id_;
+
+    template < typename... Args >
+    static intrusive< put_result_ctx< T > > make(Args&&... args) {
+        return intrusive< put_result_ctx< T > >{new put_result_ctx< T >(std::forward< Args >(args)...)};
+    }
+
+    put_result_ctx(uint32_t hdr_size, uint32_t alignment, blob_id_t const blob_id) :
+            repl_result_ctx< T >{hdr_size, alignment}, blob_id_{blob_id} {}
+};
+
 class ReplicationStateMachine : public homestore::ReplDevListener {
 public:
     explicit ReplicationStateMachine(HSHomeObject* home_object) : home_object_(home_object) {}

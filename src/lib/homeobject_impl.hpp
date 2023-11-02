@@ -63,6 +63,7 @@ struct PG {
 
     PGInfo pg_info_;
     uint64_t shard_sequence_num_{0};
+    std::atomic_uint64_t blob_sequence_num_{0};
     ShardPtrList shards_;
 };
 
