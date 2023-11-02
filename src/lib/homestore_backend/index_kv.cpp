@@ -75,7 +75,7 @@ HSHomeObject::get_blob_from_index_table(shared< BlobIndexTable > index_table, sh
 
     // blob get API
     if (state == BlobState::ALIVE) {
-        if (pbas == tombstone_pbas) { return folly::makeUnexpected(BlobError::INDEX_ERROR); }
+        if (pbas == tombstone_pbas) { return folly::makeUnexpected(BlobError::UNKNOWN_BLOB); }
         return pbas;
     }
 
