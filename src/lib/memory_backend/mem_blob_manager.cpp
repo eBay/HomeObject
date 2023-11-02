@@ -13,8 +13,7 @@ namespace homeobject {
 
 #define IF_BLOB_ALIVE                                                                                                  \
     if (auto blob_it = shard.btree_.find(route); shard.btree_.end() == blob_it || !blob_it->second) {                  \
-        LOGW("[route={}] missing", route);                                                                             \
-        return folly::makeUnexpected(BlobError::UNKNOWN_BLOB);                                                         \
+        LOGD("[route={}] missing", route);                                                                             \
     } else
 
 // Write (move) Blob to new BlobExt on heap and Insert BlobExt to Index
@@ -34,6 +33,7 @@ BlobManager::AsyncResult< Blob > MemoryHomeObject::_get_blob(ShardInfo const& _s
     WITH_SHARD
     WITH_ROUTE(_blob)
     IF_BLOB_ALIVE { return blob_it->second.blob_->clone(); }
+    return folly::makeUnexpected(BlobError::UNKNOWN_BLOB);
 }
 
 // Tombstone BlobExt entry
@@ -43,8 +43,8 @@ BlobManager::NullAsyncResult MemoryHomeObject::_del_blob(ShardInfo const& _shard
     IF_BLOB_ALIVE {
         shard.btree_.assign_if_equal(route, blob_it->second,
                                      BlobExt{.state_ = BlobState::DELETED, .blob_ = blob_it->second.blob_});
-        return folly::Unit();
     }
+    return folly::Unit();
 }
 
 } // namespace homeobject
