@@ -60,31 +60,20 @@ BlobManager::NullResult HSHomeObject::add_to_index_table(shared< BlobIndexTable 
 }
 
 BlobManager::Result< homestore::MultiBlkId >
-HSHomeObject::get_blob_from_index_table(shared< BlobIndexTable > index_table, shard_id_t shard_id, blob_id_t blob_id,
-                                        BlobState state) const {
+HSHomeObject::get_blob_from_index_table(shared< BlobIndexTable > index_table, shard_id_t shard_id,
+                                        blob_id_t blob_id) const {
     BlobRouteKey index_key{BlobRoute{shard_id, blob_id}};
     BlobRouteValue index_value;
     homestore::BtreeSingleGetRequest get_req{&index_key, &index_value};
-    auto status = index_table->get(get_req);
-    if (status != homestore::btree_status_t::success) {
+
+    if (homestore::btree_status_t::success != index_table->get(get_req)) {
         LOGDEBUG("Failed to get from index table [route={}]", index_key);
         return folly::makeUnexpected(BlobError::UNKNOWN_BLOB);
     }
 
-    const auto& pbas = index_value.pbas();
-
     // blob get API
-    if (state == BlobState::ALIVE) {
-        if (pbas == tombstone_pbas) { return folly::makeUnexpected(BlobError::INDEX_ERROR); }
-        return pbas;
-    }
-
-    // get tombstone, only used by test for now, can be used by GC thread if needed
-    if (state == BlobState::TOMBSTONE) {
-        if (!(pbas == tombstone_pbas)) { return folly::makeUnexpected(BlobError::INDEX_ERROR); }
-    }
-
-    return pbas;
+    if (const auto& pbas = index_value.pbas(); pbas != tombstone_pbas) return pbas;
+    return folly::makeUnexpected(BlobError::UNKNOWN_BLOB);
 }
 
 BlobManager::Result< homestore::MultiBlkId > HSHomeObject::move_to_tombstone(shared< BlobIndexTable > index_table,

@@ -177,7 +177,7 @@ BlobManager::AsyncResult< Blob > HSHomeObject::_get_blob(ShardInfo const& shard,
     RELEASE_ASSERT(repl_dev != nullptr, "Repl dev instance null");
     RELEASE_ASSERT(index_table != nullptr, "Index table instance null");
 
-    auto r = get_blob_from_index_table(index_table, shard.id, blob_id, BlobState::ALIVE);
+    auto r = get_blob_from_index_table(index_table, shard.id, blob_id);
     if (!r) {
         LOGW("Blob not found in index [route={}]", BlobRoute{blob_id, shard.id});
         return folly::makeUnexpected(r.error());

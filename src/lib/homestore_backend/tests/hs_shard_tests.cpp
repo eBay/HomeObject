@@ -124,7 +124,7 @@ TEST_F(TestFixture, MockSealShard) {
 }
 
 class FixtureAppWithRecovery : public FixtureApp {
-    std::string fpath_{"/tmp/test_shard_manager.data.{}" + std::to_string(rand())};
+    std::string fpath_{"/tmp/test_shard_manager.data." + std::to_string(rand())};
 
 public:
     std::list< std::filesystem::path > devices() const override {

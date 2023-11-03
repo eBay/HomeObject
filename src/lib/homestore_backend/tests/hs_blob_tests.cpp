@@ -216,10 +216,9 @@ TEST_F(HomeObjectFixture, BasicPutGetDelBlobWRestart) {
             index_table = static_cast< HSHomeObject::HS_PG* >(iter->second.get())->index_table_;
         }
 
-        auto g = hs_homeobject->get_blob_from_index_table(index_table, shard_id, blob_id,
-                                                          HSHomeObject::BlobState::TOMBSTONE);
-        ASSERT_TRUE(g);
-        ASSERT_TRUE(g.value() == HSHomeObject::tombstone_pbas);
+        auto g = hs_homeobject->get_blob_from_index_table(index_table, shard_id, blob_id);
+        ASSERT_FALSE(!!g);
+        EXPECT_EQ(BlobError::UNKNOWN_BLOB, g.error());
     }
 
     LOGINFO("Flushing CP.");

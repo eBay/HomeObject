@@ -43,9 +43,8 @@ TEST_F(TestFixture, BasicBlobTests) {
                         .deferValue([](auto const& e) { EXPECT_TRUE(!!e); }));
                 our_calls.push_back(homeobj_->blob_manager()->del(i, _blob_id).deferValue([](auto const& e) {}));
                 our_calls.push_back(
-                    homeobj_->blob_manager()->del(_shard_1.id, (i - _shard_2.id)).deferValue([](auto const&) {
-                        // TODO enable this with del_blob impl
-                        // EXPECT_EQ(BlobError::UNKNOWN_BLOB, e.error());
+                    homeobj_->blob_manager()->del(_shard_1.id, (i - _shard_2.id)).deferValue([](auto const& e) {
+                        EXPECT_EQ(BlobError::UNKNOWN_BLOB, e.error());
                     }));
             }
 
@@ -59,11 +58,20 @@ TEST_F(TestFixture, BasicBlobTests) {
     EXPECT_TRUE(homeobj_->shard_manager()->seal_shard(_shard_1.id).get());
     auto p_e =
         homeobj_->blob_manager()->put(_shard_1.id, Blob{sisl::io_blob_safe(4 * Ki, 512u), "test_blob", 4 * Mi}).get();
-    ASSERT_TRUE(!p_e);
+    ASSERT_FALSE(!!p_e);
     EXPECT_EQ(BlobError::SEALED_SHARD, p_e.error());
 
-    // TODO EXPECT TRUE when delete implemented
-    homeobj_->blob_manager()->del(_shard_1.id, _blob_id).get();
-    homeobj_->blob_manager()->get(_shard_1.id, _blob_id).get();
-    homeobj_->blob_manager()->del(_shard_1.id, _blob_id).get();
+    // BLOB exists
+    EXPECT_TRUE(homeobj_->blob_manager()->get(_shard_1.id, _blob_id).get());
+
+    // BLOB is deleted
+    EXPECT_TRUE(homeobj_->blob_manager()->del(_shard_1.id, _blob_id).get());
+
+    // BLOB is now unknown
+    auto g_e = homeobj_->blob_manager()->get(_shard_1.id, _blob_id).get();
+    ASSERT_FALSE(!!g_e);
+    EXPECT_EQ(BlobError::UNKNOWN_BLOB, g_e.error());
+
+    // Delete is Idempotent
+    EXPECT_TRUE(homeobj_->blob_manager()->del(_shard_1.id, _blob_id).get());
 }
