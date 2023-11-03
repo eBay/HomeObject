@@ -76,7 +76,7 @@ csharedChunk HeapChunkSelector::select_chunk(homestore::blk_count_t count, const
         return nullptr;
     }
 
-    const auto& vchunk = [it = std::move(it)]() {
+    const auto& vchunk = [it]() {
         auto& heapLock = it->second->mtx;
         auto& heap = it->second->m_heap;
         std::lock_guard< std::mutex > l(heapLock);
@@ -91,6 +91,50 @@ csharedChunk HeapChunkSelector::select_chunk(homestore::blk_count_t count, const
         avalableBlkCounter.fetch_sub(vchunk.available_blks());
     } else {
         LOGWARNMOD(homeobject, "No pdev found for pdev {}", pdevID);
+    }
+
+    return vchunk.get_internal_chunk();
+}
+
+csharedChunk HeapChunkSelector::select_specific_chunk(const chunk_num_t chunkID) {
+    if (m_chunks.find(chunkID) == m_chunks.end()) {
+        // sanity check
+        LOGWARNMOD(homeobject, "No chunk found for ChunkID {}", chunkID);
+        return nullptr;
+    }
+
+    auto pdevID = VChunk(m_chunks[chunkID]).get_pdev_id();
+    auto it = m_per_dev_heap.find(pdevID);
+    if (it == m_per_dev_heap.end()) {
+        LOGWARNMOD(homeobject, "No pdev found for pdev {}", pdevID);
+        return nullptr;
+    }
+
+    const auto& vchunk = [it, chunkID]() {
+        std::vector< VChunk > chunks;
+        VChunk chunk(nullptr);
+        std::lock_guard< std::mutex > l(it->second->mtx);
+        auto& heap = it->second->m_heap;
+        chunks.reserve(heap.size());
+        while (!heap.empty()) {
+            auto c = heap.top();
+            heap.pop();
+            if (c.get_chunk_id() == chunkID) {
+                chunk = c;
+                break;
+            }
+            chunks.push_back(std::move(c));
+        }
+
+        for (auto& c : chunks) {
+            heap.emplace(c);
+        }
+        return chunk;
+    }();
+
+    if (vchunk.get_internal_chunk()) {
+        auto& avalableBlkCounter = it->second->available_blk_count;
+        avalableBlkCounter.fetch_sub(vchunk.available_blks());
     }
 
     return vchunk.get_internal_chunk();
