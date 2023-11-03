@@ -1,5 +1,9 @@
 cmake_minimum_required (VERSION 3.11)
 
+if(NOT ${CMAKE_CURRENT_BINARY_DIR} STREQUAL ${CMAKE_CURRENT_SOURCE_DIR})
+  include_directories(BEFORE ${CMAKE_CURRENT_BINARY_DIR})
+endif()
+
 add_library ("${PROJECT_NAME}_homestore")
 target_sources("${PROJECT_NAME}_homestore" PRIVATE
     hs_homeobject.cpp

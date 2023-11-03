@@ -65,6 +65,7 @@ public:
         uint32_t num_members;
         peer_id_t replica_set_uuid;
         homestore::uuid_t index_table_uuid;
+        uint64_t blob_sequence_num;
         pg_members members[1]; // ISO C++ forbids zero-size array
     };
 
@@ -157,6 +158,7 @@ public:
 
 private:
     shared< HeapChunkSelector > chunk_selector_;
+    iomgr::timer_handle_t ho_timer_thread_handle_;
 
 private:
     static homestore::ReplicationService& hs_repl_service() { return homestore::hs()->repl_service(); }
@@ -177,11 +179,15 @@ private:
     void on_shard_meta_blk_found(homestore::meta_blk* mblk, sisl::byte_view buf);
     void on_shard_meta_blk_recover_completed(bool success);
 
+    void persist_pg_sb();
+
 public:
     using HomeObjectImpl::HomeObjectImpl;
     ~HSHomeObject() override;
 
     void init_homestore();
+
+    void init_timer_thread();
 
     void on_shard_message_commit(int64_t lsn, sisl::blob const& header, homestore::MultiBlkId const& blkids,
                                  homestore::ReplDev* repl_dev, cintrusive< homestore::repl_req_ctx >& hs_ctx);
@@ -222,6 +228,8 @@ public:
     BlobManager::Result< homestore::MultiBlkId > move_to_tombstone(shared< BlobIndexTable > index_table,
                                                                    const BlobInfo& blob_info);
     void print_btree_index(pg_id_t pg_id);
+
+    void trigger_timed_events();
 };
 
 class BlobIndexServiceCallbacks : public homestore::IndexServiceCallbacks {

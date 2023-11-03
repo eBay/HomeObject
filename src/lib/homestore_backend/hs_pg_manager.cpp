@@ -180,6 +180,17 @@ HSHomeObject::HS_PG::HS_PG(PGInfo info, shared< homestore::ReplDev > rdev, share
 
 HSHomeObject::HS_PG::HS_PG(homestore::superblk< HSHomeObject::pg_info_superblk > const& sb,
                            shared< homestore::ReplDev > rdev) :
-        PG{pg_info_from_sb(sb)}, pg_sb_{sb}, repl_dev_{std::move(rdev)} {}
+        PG{pg_info_from_sb(sb)}, pg_sb_{sb}, repl_dev_{std::move(rdev)} {
+    blob_sequence_num_ = sb->blob_sequence_num;
+}
+
+void HSHomeObject::persist_pg_sb() {
+    auto lg = std::shared_lock(_pg_lock);
+    for (auto& [_, pg] : _pg_map) {
+        auto hs_pg = static_cast< HS_PG* >(pg.get());
+        hs_pg->pg_sb_->blob_sequence_num = hs_pg->blob_sequence_num_;
+        hs_pg->pg_sb_.write();
+    }
+}
 
 } // namespace homeobject

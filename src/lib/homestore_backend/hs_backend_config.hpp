@@ -1,6 +1,7 @@
 #pragma once
 
-#include "common/generated/hs_backend_config_generated.h"
+#include <sisl/settings/settings.hpp>
+#include "generated/hs_backend_config_generated.h"
 
 SETTINGS_INIT(homeobjectcfg::HSBackendSettings, hs_backend_config);
 
