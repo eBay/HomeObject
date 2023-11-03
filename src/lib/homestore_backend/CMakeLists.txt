@@ -15,6 +15,14 @@ target_link_libraries("${PROJECT_NAME}_homestore"
     ${COMMON_DEPS}
 )
 
+set(FLATBUFFERS_FLATC_EXECUTABLE ${flatbuffers_LIB_DIRS}/../bin/flatc)
+settings_gen_cpp(
+    ${FLATBUFFERS_FLATC_EXECUTABLE}
+    ${CMAKE_CURRENT_BINARY_DIR}/generated/
+    "${PROJECT_NAME}_homestore"
+    hs_backend_config.fbs
+  )
+
 if(BUILD_TESTING)
 add_subdirectory(tests)
 

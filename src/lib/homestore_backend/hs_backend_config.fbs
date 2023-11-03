@@ -1,0 +1,14 @@
+native_include "sisl/utility/non_null_ptr.hpp";
+
+namespace homeobjectcfg;
+
+attribute "hotswap";
+attribute "deprecated";
+
+
+table HSBackendSettings {
+    // timer thread freq in us
+    backend_timer_us: uint64 = 60000000 (hotswap);
+}
+
+root_type HSBackendSettings;
