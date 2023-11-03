@@ -1,19 +1,15 @@
 #include <chrono>
 #include <cmath>
-#include <condition_variable>
 #include <mutex>
 
-#include <folly/init/Init.h>
-#include <gtest/gtest.h>
-#include <sisl/logging/logging.h>
-#include <sisl/options/options.h>
-
 #include <boost/uuid/random_generator.hpp>
+#include <gtest/gtest.h>
+
+#define protected public
 
 #include "lib/homestore_backend/hs_homeobject.hpp"
-#include "bits_generator.hpp"
-
 #include "lib/tests/fixture_app.hpp"
+#include "bits_generator.hpp"
 
 using namespace std::chrono_literals;
 
@@ -84,7 +80,7 @@ public:
     }
 };
 
-TEST_F(HomeObjectFixture, BasicPutGetBlobWRestart) {
+TEST_F(HomeObjectFixture, BasicPutGetDelBlobWRestart) {
     auto num_pgs = SISL_OPTIONS["num_pgs"].as< uint64_t >();
     auto num_shards_per_pg = SISL_OPTIONS["num_shards"].as< uint64_t >() / num_pgs;
     auto num_blobs_per_shard = SISL_OPTIONS["num_blobs"].as< uint64_t >() / num_shards_per_pg;
@@ -192,6 +188,51 @@ TEST_F(HomeObjectFixture, BasicPutGetBlobWRestart) {
         EXPECT_EQ(blob.user_key, result.user_key);
         EXPECT_EQ(blob.object_off, result.object_off);
     }
+
+    // Delete all blobs
+    for (const auto& [id, blob] : blob_map) {
+        int64_t shard_id = std::get< 1 >(id), blob_id = std::get< 2 >(id);
+        auto g = _obj_inst->blob_manager()->del(shard_id, blob_id).get();
+        ASSERT_TRUE(g);
+        LOGINFO("delete blob shard {} blob {}", shard_id, blob_id);
+    }
+
+    // After delete all blobs, get should fail
+    for (const auto& [id, blob] : blob_map) {
+        int64_t shard_id = std::get< 1 >(id), blob_id = std::get< 2 >(id);
+        auto g = _obj_inst->blob_manager()->get(shard_id, blob_id).get();
+        ASSERT_TRUE(!g);
+    }
+
+    // all the deleted blobs should be tombstone in index table
+    auto hs_homeobject = dynamic_cast< HSHomeObject* >(_obj_inst.get());
+    for (const auto& [id, blob] : blob_map) {
+        int64_t pg_id = std::get< 0 >(id), shard_id = std::get< 1 >(id), blob_id = std::get< 2 >(id);
+        shared< BlobIndexTable > index_table;
+        {
+            std::shared_lock lock_guard(hs_homeobject->_pg_lock);
+            auto iter = hs_homeobject->_pg_map.find(pg_id);
+            ASSERT_TRUE(iter != hs_homeobject->_pg_map.end());
+            index_table = static_cast< HSHomeObject::HS_PG* >(iter->second.get())->index_table_;
+        }
+
+        auto g = hs_homeobject->get_blob_from_index_table(index_table, shard_id, blob_id);
+        ASSERT_FALSE(!!g);
+        EXPECT_EQ(BlobError::UNKNOWN_BLOB, g.error());
+    }
+
+    LOGINFO("Flushing CP.");
+    trigger_cp(true /* wait */);
+
+    // Restart homeobject
+    restart();
+
+    // After restart, for all deleted blobs, get should fail
+    for (const auto& [id, blob] : blob_map) {
+        int64_t shard_id = std::get< 1 >(id), blob_id = std::get< 2 >(id);
+        auto g = _obj_inst->blob_manager()->get(shard_id, blob_id).get();
+        ASSERT_TRUE(!g);
+    }
 }
 
 TEST_F(HomeObjectFixture, SealShardWithRestart) {
@@ -246,15 +287,4 @@ TEST_F(HomeObjectFixture, SealShardWithRestart) {
     ASSERT_TRUE(!b);
     ASSERT_EQ(b.error(), BlobError::SEALED_SHARD);
     LOGINFO("Put blob {}", b.error());
-}
-
-int main(int argc, char* argv[]) {
-    int parsed_argc = argc;
-    ::testing::InitGoogleTest(&parsed_argc, argv);
-    SISL_OPTIONS_LOAD(parsed_argc, argv, logging, test_home_object);
-    sisl::logging::SetLogger(std::string(argv[0]));
-    spdlog::set_pattern("[%D %T.%e] [%n] [%^%l%$] [%t] %v");
-    parsed_argc = 1;
-    auto f = ::folly::Init(&parsed_argc, &argv, true);
-    return RUN_ALL_TESTS();
 }

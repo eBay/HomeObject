@@ -60,17 +60,43 @@ BlobManager::NullResult HSHomeObject::add_to_index_table(shared< BlobIndexTable 
 }
 
 BlobManager::Result< homestore::MultiBlkId >
-HSHomeObject::get_from_index_table(shared< BlobIndexTable > index_table, shard_id_t shard_id, blob_id_t blob_id) const {
+HSHomeObject::get_blob_from_index_table(shared< BlobIndexTable > index_table, shard_id_t shard_id,
+                                        blob_id_t blob_id) const {
     BlobRouteKey index_key{BlobRoute{shard_id, blob_id}};
     BlobRouteValue index_value;
     homestore::BtreeSingleGetRequest get_req{&index_key, &index_value};
-    auto status = index_table->get(get_req);
-    if (status != homestore::btree_status_t::success) {
-        LOGERROR("Failed to get from index table [route={}]", index_key);
+
+    if (homestore::btree_status_t::success != index_table->get(get_req)) {
+        LOGDEBUG("Failed to get from index table [route={}]", index_key);
         return folly::makeUnexpected(BlobError::UNKNOWN_BLOB);
     }
 
-    return index_value.pbas();
+    // blob get API
+    if (const auto& pbas = index_value.pbas(); pbas != tombstone_pbas) return pbas;
+    return folly::makeUnexpected(BlobError::UNKNOWN_BLOB);
+}
+
+BlobManager::Result< homestore::MultiBlkId > HSHomeObject::move_to_tombstone(shared< BlobIndexTable > index_table,
+                                                                             const BlobInfo& blob_info) {
+    BlobRouteKey index_key{BlobRoute{blob_info.shard_id, blob_info.blob_id}};
+    BlobRouteValue index_value_get;
+    homestore::BtreeSingleGetRequest get_req{&index_key, &index_value_get};
+    auto status = index_table->get(get_req);
+    if (status != homestore::btree_status_t::success) {
+        LOGDEBUG("Failed to get from index table [route={}]", index_key);
+        return folly::makeUnexpected(BlobError::UNKNOWN_BLOB);
+    }
+
+    BlobRouteValue index_value_put{tombstone_pbas};
+    homestore::BtreeSinglePutRequest put_req{&index_key, &index_value_put,
+                                             homestore::btree_put_type::REPLACE_ONLY_IF_EXISTS};
+    status = index_table->put(put_req);
+    if (status != homestore::btree_status_t::success) {
+        LOGDEBUG("Failed to move blob to tombstone in index table [route={}]", index_key);
+        return folly::makeUnexpected(BlobError::INDEX_ERROR);
+    }
+
+    return index_value_get.pbas();
 }
 
 void HSHomeObject::print_btree_index(pg_id_t pg_id) {

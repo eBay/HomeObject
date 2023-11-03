@@ -24,6 +24,12 @@ class BlobRouteValue;
 using BlobIndexTable = homestore::IndexTable< BlobRouteKey, BlobRouteValue >;
 
 class HSHomeObject : public HomeObjectImpl {
+    /// NOTE: Be wary to change these as they effect on-disk format!
+    inline static auto const _svc_meta_name = std::string("HomeObject");
+    inline static auto const _pg_meta_name = std::string("PGManager");
+    inline static auto const _shard_meta_name = std::string("ShardManager");
+    ///
+
     /// Overridable Helpers
     ShardManager::AsyncResult< ShardInfo > _create_shard(pg_id_t, uint64_t size_bytes) override;
     ShardManager::AsyncResult< ShardInfo > _seal_shard(ShardInfo const&) override;
@@ -140,6 +146,14 @@ public:
         homestore::MultiBlkId pbas;
     };
 
+    enum class BlobState : uint8_t {
+        ALIVE = 0,
+        TOMBSTONE = 1,
+        ALL = 2,
+    };
+
+    inline const static homestore::MultiBlkId tombstone_pbas{0, 0, 0};
+
 private:
     shared< HeapChunkSelector > chunk_selector_;
     std::map< pg_id_t, std::list< homestore::superblk< shard_info_superblk > > > pending_recovery_shards_;
@@ -165,7 +179,7 @@ private:
 
 public:
     using HomeObjectImpl::HomeObjectImpl;
-    ~HSHomeObject();
+    ~HSHomeObject() override;
 
     void init_homestore();
 
@@ -188,6 +202,8 @@ public:
     // Blob manager related.
     void on_blob_put_commit(int64_t lsn, sisl::blob const& header, sisl::blob const& key,
                             const homestore::MultiBlkId& pbas, cintrusive< homestore::repl_req_ctx >& hs_ctx);
+    void on_blob_del_commit(int64_t lsn, sisl::blob const& header, sisl::blob const& key,
+                            cintrusive< homestore::repl_req_ctx >& hs_ctx);
     homestore::blk_alloc_hints blob_put_get_blk_alloc_hints(sisl::blob const& header,
                                                             cintrusive< homestore::repl_req_ctx >& ctx);
     void compute_blob_payload_hash(BlobHeader::HashAlgorithm algorithm, const uint8_t* blob_bytes, size_t blob_size,
@@ -195,11 +211,16 @@ public:
                                    size_t hash_len) const;
 
     std::shared_ptr< BlobIndexTable > create_index_table();
-    std::shared_ptr< BlobIndexTable > recover_index_table(const homestore::superblk< homestore::index_table_sb >& sb);
-    BlobManager::NullResult add_to_index_table(shared< BlobIndexTable > index_table, const BlobInfo& blob_info);
-    BlobManager::Result< homestore::MultiBlkId > get_from_index_table(shared< BlobIndexTable > index_table,
-                                                                      shard_id_t shard_id, blob_id_t blob_id) const;
 
+    std::shared_ptr< BlobIndexTable > recover_index_table(const homestore::superblk< homestore::index_table_sb >& sb);
+
+    BlobManager::NullResult add_to_index_table(shared< BlobIndexTable > index_table, const BlobInfo& blob_info);
+
+    BlobManager::Result< homestore::MultiBlkId >
+    get_blob_from_index_table(shared< BlobIndexTable > index_table, shard_id_t shard_id, blob_id_t blob_id) const;
+
+    BlobManager::Result< homestore::MultiBlkId > move_to_tombstone(shared< BlobIndexTable > index_table,
+                                                                   const BlobInfo& blob_info);
     void print_btree_index(pg_id_t pg_id);
 };
 

@@ -1,12 +1,12 @@
+#pragma once
+
 #include <filesystem>
 #include <list>
 #include <memory>
 #include <string>
 #include <optional>
-#include <ostream>
 
 #include <gtest/gtest.h>
-#include <boost/uuid/random_generator.hpp>
 #include <sisl/logging/logging.h>
 #include <sisl/options/options.h>
 
@@ -15,32 +15,14 @@
 #include <homeobject/shard_manager.hpp>
 #include <homeobject/blob_manager.hpp>
 
-SISL_LOGGING_INIT(logging, HOMEOBJECT_LOG_MODS)
-
-SISL_OPTION_GROUP(
-    test_home_object,
-    (num_iters, "", "num_iters", "number of iterations per loop",
-     ::cxxopts::value< uint64_t >()->default_value("100000"), "number"),
-    (num_pgs, "", "num_pgs", "number of pgs", ::cxxopts::value< uint64_t >()->default_value("10"), "number"),
-    (num_shards, "", "num_shards", "number of shards", ::cxxopts::value< uint64_t >()->default_value("20"), "number"),
-    (num_blobs, "", "num_blobs", "number of blobs", ::cxxopts::value< uint64_t >()->default_value("50"), "number"));
-
-SISL_OPTIONS_ENABLE(logging, test_home_object)
-
-using homeobject::Blob;
 using homeobject::blob_id_t;
-using homeobject::BlobError;
 using homeobject::peer_id_t;
 
 class FixtureApp : public homeobject::HomeObjectApplication {
-    std::string path_{"/tmp/homobject_test.data." + std::to_string(rand())};
+    std::string path_{"/tmp/homeobject_test.data"};
 
 public:
-    FixtureApp() {
-        clean();
-        LOGINFO("creating device {} file with size {} ", path_, homestore::in_bytes(2 * Gi));
-    }
-
+    FixtureApp();
     ~FixtureApp() override { clean(); }
 
     bool spdk_mode() const override { return false; }
@@ -56,14 +38,12 @@ public:
         return device_info;
     }
 
-    homeobject::peer_id_t discover_svcid(std::optional< homeobject::peer_id_t > const& p) const override {
-        return p.value();
-    }
+    homeobject::peer_id_t discover_svcid(std::optional< homeobject::peer_id_t > const& p) const override;
     std::string lookup_peer(homeobject::peer_id_t const&) const override { return "test_fixture.com"; }
 };
 
 class TestFixture : public ::testing::Test {
-    std::shared_ptr< FixtureApp > app;
+    std::shared_ptr< homeobject::HomeObjectApplication > app;
 
 public:
     homeobject::ShardInfo _shard_1;
@@ -73,47 +53,7 @@ public:
     peer_id_t _peer2;
     blob_id_t _blob_id;
 
-    void SetUp() override {
-        app = std::make_shared< FixtureApp >();
-        homeobj_ = homeobject::init_homeobject(std::weak_ptr< homeobject::HomeObjectApplication >(app));
-        _peer1 = homeobj_->our_uuid();
-        _peer2 = boost::uuids::random_generator()();
-
-        auto info = homeobject::PGInfo(_pg_id);
-        info.members.insert(homeobject::PGMember{_peer1, "peer1", 1});
-        info.members.insert(homeobject::PGMember{_peer2, "peer2", 0});
-
-        LOGDEBUG("Setup Pg");
-        EXPECT_TRUE(homeobj_->pg_manager()->create_pg(std::move(info)).get());
-
-        LOGDEBUG("Setup Shards");
-        auto s_e = homeobj_->shard_manager()->create_shard(_pg_id, Mi).get();
-        ASSERT_TRUE(!!s_e);
-        s_e.then([this](auto&& i) { _shard_1 = std::move(i); });
-
-        s_e = homeobj_->shard_manager()->create_shard(_pg_id, Mi).get();
-        ASSERT_TRUE(!!s_e);
-        s_e.then([this](auto&& i) { _shard_2 = std::move(i); });
-
-        LOGDEBUG("Get on empty Shard: {}", _shard_1.id);
-        auto g_e = homeobj_->blob_manager()->get(_shard_1.id, 0).get();
-        ASSERT_FALSE(g_e);
-        EXPECT_EQ(BlobError::UNKNOWN_BLOB, g_e.error());
-
-        LOGDEBUG("Insert Blob to: {}", _shard_1.id);
-        auto blob_data = sisl::io_blob_safe(4 * Ki, 512u);
-        sprintf((char*)blob_data.bytes, "HELLO, WORLD!");
-        auto o_e = homeobj_->blob_manager()->put(_shard_1.id, Blob{std::move(blob_data), "test_blob", 4 * Mi}).get();
-        EXPECT_TRUE(!!o_e);
-        o_e.then([this](auto&& b) mutable { _blob_id = std::move(b); });
-
-        g_e = homeobj_->blob_manager()->get(_shard_1.id, _blob_id).get();
-        EXPECT_TRUE(!!g_e);
-        g_e.then([](auto&& blob) {
-            EXPECT_STREQ(blob.user_key.c_str(), "test_blob");
-            EXPECT_EQ(blob.object_off, 4 * Mi);
-        });
-    }
+    void SetUp() override;
 
 protected:
     std::shared_ptr< homeobject::HomeObject > homeobj_;

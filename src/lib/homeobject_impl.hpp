@@ -81,8 +81,6 @@ class HomeObjectImpl : public HomeObject,
                                                        uint64_t len = 0) const = 0;
     virtual BlobManager::NullAsyncResult _del_blob(ShardInfo const&, blob_id_t) = 0;
     ///
-    folly::Future< ShardManager::Result< ShardInfo > > _get_shard(shard_id_t id) const;
-    auto _defer() const { return folly::makeSemiFuture().via(folly::getGlobalCPUExecutor()); }
 
     virtual PGManager::NullAsyncResult _create_pg(PGInfo&& pg_info, std::set< std::string, std::less<> > peers) = 0;
     virtual PGManager::NullAsyncResult _replace_member(pg_id_t id, peer_id_t const& old_member,
@@ -95,6 +93,8 @@ protected:
     /// Our SvcId retrieval and SvcId->IP mapping
     std::weak_ptr< HomeObjectApplication > _application;
 
+    folly::Executor::KeepAlive<> executor_;
+
     ///
     mutable std::shared_mutex _pg_lock;
     std::map< pg_id_t, unique< PG > > _pg_map;
@@ -103,9 +103,11 @@ protected:
     std::map< shard_id_t, ShardIterator > _shard_map;
     ///
 
+    auto _defer() const { return folly::makeSemiFuture().via(executor_); }
+    folly::Future< ShardManager::Result< ShardInfo > > _get_shard(shard_id_t id) const;
+
 public:
-    explicit HomeObjectImpl(std::weak_ptr< HomeObjectApplication >&& application) :
-            _application(std::move(application)) {}
+    explicit HomeObjectImpl(std::weak_ptr< HomeObjectApplication >&& application);
 
     ~HomeObjectImpl() override = default;
     HomeObjectImpl(const HomeObjectImpl&) = delete;

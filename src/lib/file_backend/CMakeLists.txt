@@ -13,27 +13,14 @@ target_link_libraries("${PROJECT_NAME}_file"
         )
 
 if(BUILD_TESTING)
-add_executable (pg_file_test)
-target_sources(pg_file_test PRIVATE $<TARGET_OBJECTS:pg_test>)
-target_link_libraries(pg_file_test
+add_executable (file_test)
+target_sources(file_test PRIVATE
+    $<TARGET_OBJECTS:test_fixture>
+)
+target_link_libraries(file_test
     homeobject_file
     ${COMMON_TEST_DEPS}
-  )
-add_test(NAME PGFileTest COMMAND pg_file_test -csv error)
-
-add_executable (shard_file_test)
-target_sources(shard_file_test PRIVATE $<TARGET_OBJECTS:shard_test>)
-target_link_libraries(shard_file_test
-    homeobject_file
-    ${COMMON_TEST_DEPS}
-  )
-add_test(NAME ShardFileTest COMMAND shard_file_test -csv error)
-
-add_executable (blob_file_test)
-target_sources(blob_file_test PRIVATE $<TARGET_OBJECTS:blob_test>)
-target_link_libraries(blob_file_test
-    homeobject_file
-    ${COMMON_TEST_DEPS}
-  )
-add_test(NAME BlobFileTest COMMAND blob_file_test -csv error)
+)
+add_test(NAME FileTestCPU COMMAND memory_test -csv error --executor cpu --num_iters 10000)
+add_test(NAME FileTestIO COMMAND memory_test -csv error --executor io --num_iters 10000)
 endif()

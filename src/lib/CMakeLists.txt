@@ -4,13 +4,14 @@ add_flags("-Wno-unused-parameter")
 
 add_library(${PROJECT_NAME}_core OBJECT)
 target_sources(${PROJECT_NAME}_core PRIVATE
-            blob_manager.cpp
-            shard_manager.cpp
-            pg_manager.cpp
-        )
+    homeobject_impl.cpp
+    blob_manager.cpp
+    shard_manager.cpp
+    pg_manager.cpp
+)
 target_link_libraries(${PROJECT_NAME}_core
-            ${COMMON_DEPS}
-        )
+    ${COMMON_DEPS}
+)
 
 if(BUILD_TESTING)
 add_subdirectory(tests)
