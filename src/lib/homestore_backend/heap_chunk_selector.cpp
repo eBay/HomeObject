@@ -76,15 +76,12 @@ csharedChunk HeapChunkSelector::select_chunk(homestore::blk_count_t count, const
         return nullptr;
     }
 
-    const auto& vchunk = [it]() {
-        auto& heapLock = it->second->mtx;
-        auto& heap = it->second->m_heap;
-        std::lock_guard< std::mutex > l(heapLock);
-        if (heap.empty()) return VChunk(nullptr);
-        VChunk vchunk = heap.top();
+    auto vchunk = VChunk(nullptr);
+    auto& heap = it->second->m_heap;
+    if (auto lock_guard = std::lock_guard< std::mutex >(it->second->mtx); !heap.empty()) {
+        vchunk = heap.top();
         heap.pop();
-        return vchunk;
-    }();
+    }
 
     if (vchunk.get_internal_chunk()) {
         auto& avalableBlkCounter = it->second->available_blk_count;
@@ -103,24 +100,23 @@ csharedChunk HeapChunkSelector::select_specific_chunk(const chunk_num_t chunkID)
         return nullptr;
     }
 
-    auto pdevID = VChunk(m_chunks[chunkID]).get_pdev_id();
+    auto const pdevID = VChunk(m_chunks[chunkID]).get_pdev_id();
     auto it = m_per_dev_heap.find(pdevID);
     if (it == m_per_dev_heap.end()) {
         LOGWARNMOD(homeobject, "No pdev found for pdev {}", pdevID);
         return nullptr;
     }
 
-    const auto& vchunk = [it, chunkID]() {
+    auto vchunk = VChunk(nullptr);
+    auto& heap = it->second->m_heap;
+    if (auto lock_guard = std::lock_guard< std::mutex >(it->second->mtx); !heap.empty()) {
         std::vector< VChunk > chunks;
-        VChunk chunk(nullptr);
-        std::lock_guard< std::mutex > l(it->second->mtx);
-        auto& heap = it->second->m_heap;
         chunks.reserve(heap.size());
         while (!heap.empty()) {
             auto c = heap.top();
             heap.pop();
             if (c.get_chunk_id() == chunkID) {
-                chunk = c;
+                vchunk = c;
                 break;
             }
             chunks.push_back(std::move(c));
@@ -129,8 +125,7 @@ csharedChunk HeapChunkSelector::select_specific_chunk(const chunk_num_t chunkID)
         for (auto& c : chunks) {
             heap.emplace(c);
         }
-        return chunk;
-    }();
+    }
 
     if (vchunk.get_internal_chunk()) {
         auto& avalableBlkCounter = it->second->available_blk_count;
