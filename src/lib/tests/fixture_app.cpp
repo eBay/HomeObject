@@ -1,11 +1,13 @@
-#include <boost/uuid/random_generator.hpp>
-#include <folly/init/Init.h>
+#include "fixture_app.hpp"
+
 #include <ostream>
 
-#include "fixture_app.hpp"
+#include <boost/uuid/random_generator.hpp>
+#include <folly/init/Init.h>
 
 SISL_OPTION_GROUP(
     test_home_object,
+    (init_file, "", "init_file", "Initialize the path", ::cxxopts::value< uint32_t >()->default_value("0"), "Gb"),
     (num_iters, "", "num_iters", "number of iterations per loop", ::cxxopts::value< uint64_t >()->default_value("1000"),
      "number"),
     (num_pgs, "", "num_pgs", "number of pgs", ::cxxopts::value< uint64_t >()->default_value("10"), "number"),
@@ -18,7 +20,11 @@ SISL_OPTIONS_ENABLE(logging, iomgr, homeobject, test_home_object)
 
 FixtureApp::FixtureApp() {
     clean();
-    LOGWARN("creating device {} file with size {} ", path_, homestore::in_bytes(2 * Gi));
+    if (auto init_size = SISL_OPTIONS["init_file"].as< uint32_t >(); 0u < init_size) {
+        LOGWARN("creating device {} file with size {}Gb", path_, homestore::in_bytes(init_size * Gi));
+        std::ofstream ofs{path_, std::ios::binary | std::ios::out | std::ios::trunc};
+        std::filesystem::resize_file(path_, init_size * Gi);
+    }
 }
 
 homeobject::peer_id_t FixtureApp::discover_svcid(std::optional< homeobject::peer_id_t > const& p) const {

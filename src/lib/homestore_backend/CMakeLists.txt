@@ -27,6 +27,6 @@ target_link_libraries(homestore_test
     homeobject_homestore
     ${COMMON_TEST_DEPS}
 )
-add_test(NAME HomestoreTest COMMAND homestore_test -csv error --executor immediate)
+add_test(NAME HomestoreTest COMMAND homestore_test -csv error --executor immediate --init_file 2)
 set_property(TEST HomestoreTest PROPERTY RUN_SERIAL 1)
 endif()
