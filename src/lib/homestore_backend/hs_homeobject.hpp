@@ -65,7 +65,7 @@ public:
         uint32_t num_members;
         peer_id_t replica_set_uuid;
         homestore::uuid_t index_table_uuid;
-        uint64_t blob_sequence_num;
+        blob_id_t blob_sequence_num;
         pg_members members[1]; // ISO C++ forbids zero-size array
     };
 

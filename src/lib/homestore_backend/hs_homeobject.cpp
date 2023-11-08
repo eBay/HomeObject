@@ -1,5 +1,5 @@
-#include "hs_homeobject.hpp"
 
+#include <latch>
 #include <spdlog/fmt/bin_to_hex.h>
 
 #include <homestore/homestore.hpp>
@@ -9,6 +9,7 @@
 #include <iomgr/io_environment.hpp>
 
 #include <homeobject/homeobject.hpp>
+#include "hs_homeobject.hpp"
 #include "heap_chunk_selector.h"
 #include "index_kv.hpp"
 #include "hs_backend_config.hpp"
@@ -92,27 +93,11 @@ void HSHomeObject::init_homestore() {
 }
 
 void HSHomeObject::init_timer_thread() {
-    struct Context {
-        std::condition_variable cv;
-        std::mutex mtx;
-        bool created{false};
-    };
-    auto ctx = std::make_shared< Context >();
-
+    auto ctx = std::latch{1};
     iomanager.create_reactor("ho_timer_thread", iomgr::INTERRUPT_LOOP, 4u, [&ctx](bool is_started) {
-        if (is_started) {
-            {
-                std::unique_lock< std::mutex > lk{ctx->mtx};
-                ctx->created = true;
-            }
-            ctx->cv.notify_one();
-        }
+        if (is_started) { ctx.count_down(); }
     });
-
-    {
-        std::unique_lock< std::mutex > lk{ctx->mtx};
-        ctx->cv.wait(lk, [&ctx] { return ctx->created; });
-    }
+    ctx.wait();
 
     ho_timer_thread_handle_ = iomanager.schedule_global_timer(
         HS_BACKEND_DYNAMIC_CONFIG(backend_timer_us) * 1000, true /*recurring*/, nullptr /*cookie*/,

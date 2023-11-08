@@ -162,7 +162,7 @@ void HSHomeObject::on_blob_put_commit(int64_t lsn, sisl::blob const& header, sis
     auto r = add_to_index_table(index_table, blob_info);
     if (r.hasError()) {
         LOGE("Failed to insert into index table for blob {} err {}", lsn, r.error());
-        ctx->promise_.setValue(folly::makeUnexpected(r.error()));
+        if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(r.error())); }
         return;
     }
 
