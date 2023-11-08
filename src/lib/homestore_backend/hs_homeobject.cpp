@@ -105,14 +105,16 @@ void HSHomeObject::register_homestore_metablk_callback() {
     HomeStore::instance()->meta_service().register_handler(
         _shard_meta_name,
         [this](homestore::meta_blk* mblk, sisl::byte_view buf, size_t size) { on_shard_meta_blk_found(mblk, buf); },
-        [this](bool success) { on_shard_meta_blk_recover_completed(success); }, true);
+        [this](bool success) { on_shard_meta_blk_recover_completed(success); }, true,
+        std::optional< meta_subtype_vec_t >(meta_subtype_vec_t{_pg_meta_name}));
 
     HomeStore::instance()->meta_service().register_handler(
         _pg_meta_name,
         [this](homestore::meta_blk* mblk, sisl::byte_view buf, size_t size) {
             on_pg_meta_blk_found(std::move(buf), voidptr_cast(mblk));
         },
-        nullptr, true);
+        // TODO: move "repl_dev" to homestore::repl_dev and "index" to homestore::index
+        nullptr, true, std::optional< meta_subtype_vec_t >(meta_subtype_vec_t{"repl_dev", "index"}));
 }
 
 HSHomeObject::~HSHomeObject() {
@@ -135,14 +137,9 @@ void HSHomeObject::on_shard_meta_blk_found(homestore::meta_blk* mblk, sisl::byte
         add_new_shard_to_map(std::make_unique< HS_Shard >(sb));
         return;
     }
-
-    // There is no guarantee that pg info will be recovered before shard recovery
-    pending_recovery_shards_[sb->placement_group].push_back(std::move(sb));
 }
 
 void HSHomeObject::on_shard_meta_blk_recover_completed(bool success) {
-    // Find all shard with opening state and excluede their binding chunks from the HeapChunkSelector;
-    RELEASE_ASSERT(pending_recovery_shards_.empty(), "some shards is still pending on recovery");
     std::unordered_set< homestore::chunk_num_t > excluding_chunks;
     std::scoped_lock lock_guard(_pg_lock);
     for (auto& pair : _pg_map) {
