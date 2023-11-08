@@ -93,11 +93,15 @@ void HSHomeObject::init_homestore() {
 }
 
 void HSHomeObject::init_timer_thread() {
-    auto ctx = std::latch{1};
-    iomanager.create_reactor("ho_timer_thread", iomgr::INTERRUPT_LOOP, 4u, [&ctx](bool is_started) {
-        if (is_started) { ctx.count_down(); }
-    });
-    ctx.wait();
+    auto ctx = std::make_shared< std::latch >(1);
+    iomanager.create_reactor("ho_timer_thread", iomgr::INTERRUPT_LOOP, 4u,
+                             [ctx = std::weak_ptr< std::latch >(ctx)](bool is_started) {
+                                 if (auto s_ctx = ctx.lock(); is_started) {
+                                     RELEASE_ASSERT(s_ctx, "latch is null!");
+                                     s_ctx->count_down();
+                                 }
+                             });
+    ctx->wait();
 
     ho_timer_thread_handle_ = iomanager.schedule_global_timer(
         HS_BACKEND_DYNAMIC_CONFIG(backend_timer_us) * 1000, true /*recurring*/, nullptr /*cookie*/,
