@@ -33,15 +33,8 @@ HSHomeObject::recover_index_table(const homestore::superblk< homestore::index_ta
     // Check if PG is already recovered.
     std::scoped_lock lock_guard(index_lock_);
     auto it = index_table_pg_map_.find(uuid_str);
-    if (it != index_table_pg_map_.end()) {
-        std::shared_lock lg(_pg_lock);
-        auto iter = _pg_map.find(it->second.pg_id);
-        RELEASE_ASSERT(iter != _pg_map.end(), "Unknown PG id");
-        // Found a PG, update its index table.
-        static_cast< HS_PG* >(iter->second.get())->index_table_ = index_table;
-    } else {
-        index_table_pg_map_.emplace(uuid_str, PgIndexTable{0, index_table});
-    }
+    RELEASE_ASSERT(it == index_table_pg_map_.end(), "PG should be recovered after IndexTable");
+    index_table_pg_map_.emplace(uuid_str, PgIndexTable{0, index_table});
 
     LOGTRACEMOD(blobmgr, "Recovered index table uuid {}", uuid_str);
     return index_table;

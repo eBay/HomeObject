@@ -137,27 +137,14 @@ void HSHomeObject::on_pg_meta_blk_found(sisl::byte_view const& buf, void* meta_c
             }
 
             auto hs_pg = std::make_unique< HS_PG >(pg_sb, std::move(v.value()));
-
-            // check if any shard recovery is pending by this pg;
-            auto iter = pending_recovery_shards_.find(pg_sb->id);
-            if (iter != pending_recovery_shards_.end()) {
-                for (auto& sb : iter->second) {
-                    add_new_shard_to_map(std::make_unique< HS_Shard >(sb));
-                }
-                pending_recovery_shards_.erase(iter);
-            }
-
             // During PG recovery check if index is already recoverd else
             // add entry in map, so that index recovery can update the PG.
             std::scoped_lock lg(index_lock_);
             auto uuid_str = boost::uuids::to_string(pg_sb->index_table_uuid);
             auto it = index_table_pg_map_.find(uuid_str);
-            if (it != index_table_pg_map_.end()) {
-                hs_pg->index_table_ = it->second.index_table;
-                it->second.pg_id = pg_sb->id;
-            } else {
-                index_table_pg_map_.emplace(uuid_str, PgIndexTable{pg_sb->id, nullptr});
-            }
+            RELEASE_ASSERT(it != index_table_pg_map_.end(), "IndexTable should be recovered before PG");
+            hs_pg->index_table_ = it->second.index_table;
+            it->second.pg_id = pg_sb->id;
 
             add_pg_to_map(std::move(hs_pg));
         });
