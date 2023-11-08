@@ -126,17 +126,7 @@ HSHomeObject::~HSHomeObject() {
 void HSHomeObject::on_shard_meta_blk_found(homestore::meta_blk* mblk, sisl::byte_view buf) {
     homestore::superblk< shard_info_superblk > sb;
     sb.load(buf, mblk);
-
-    bool pg_is_recovered = false;
-    {
-        std::scoped_lock lock_guard(_pg_lock);
-        pg_is_recovered = _pg_map.find(sb->placement_group) != _pg_map.end();
-    }
-
-    if (pg_is_recovered) {
-        add_new_shard_to_map(std::make_unique< HS_Shard >(sb));
-        return;
-    }
+    add_new_shard_to_map(std::make_unique< HS_Shard >(sb));
 }
 
 void HSHomeObject::on_shard_meta_blk_recover_completed(bool success) {
