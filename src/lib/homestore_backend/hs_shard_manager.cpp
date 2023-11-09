@@ -205,7 +205,12 @@ void HSHomeObject::do_shard_message_commit(int64_t lsn, ReplicationMessageHeader
             shard_exist = (_shard_map.find(shard_info.id) != _shard_map.end());
         }
 
-        if (!shard_exist) { add_new_shard_to_map(std::make_unique< HS_Shard >(shard_info, blkids.chunk_num())); }
+        if (!shard_exist) {
+            add_new_shard_to_map(std::make_unique< HS_Shard >(shard_info, blkids.chunk_num()));
+            // select_specific_chunk() will do something only when we are relaying journal after restart, during the
+            // runtime flow chunk is already been be mark busy when we write the shard info to the repldev.
+            chunk_selector_->select_specific_chunk(blkids.chunk_num());
+        }
 
         break;
     }

@@ -184,6 +184,7 @@ TEST_F(ShardManagerTestingRecovery, ShardManagerRecovery) {
     EXPECT_EQ(1, pg_result->shards_.size());
     auto check_shard = pg_result->shards_.front().get();
     EXPECT_EQ(ShardInfo::State::OPEN, check_shard->info.state);
+    auto used_chunk_id = d_cast< homeobject::HSHomeObject::HS_Shard* >(check_shard)->sb_->chunk_id;
     // release the homeobject and homestore will be shutdown automatically.
     _home_object.reset();
 
@@ -192,7 +193,8 @@ TEST_F(ShardManagerTestingRecovery, ShardManagerRecovery) {
     _home_object = homeobject::init_homeobject(std::weak_ptr< homeobject::HomeObjectApplication >(app));
     ho = dynamic_cast< homeobject::HSHomeObject* >(_home_object.get());
     EXPECT_TRUE(ho->_pg_map.size() == 1);
-
+    auto chunk = ho->chunk_selector()->select_specific_chunk(used_chunk_id);
+    EXPECT_TRUE(chunk.get() == nullptr);
     // check shard internal state;
     pg_iter = ho->_pg_map.find(_pg_id);
     EXPECT_TRUE(pg_iter != ho->_pg_map.end());
