@@ -41,6 +41,10 @@ public:
     void foreach_chunks(std::function< void(csharedChunk&) >&& cb) override;
     csharedChunk select_chunk([[maybe_unused]] homestore::blk_count_t nblks, const homestore::blk_alloc_hints& hints);
 
+    // this function will be used by GC flow or recovery flow to mark one specific chunk to be busy, caller should be
+    // responsible to use release_chunk() interface to release it when no longer to use the chunk anymore.
+    csharedChunk select_specific_chunk(const chunk_num_t);
+
     // this function is used to return a chunk back to ChunkSelector when sealing a shard, and will only be used by
     // Homeobject.
     void release_chunk(const chunk_num_t);

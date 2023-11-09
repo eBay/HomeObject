@@ -100,6 +100,33 @@ TEST_F(HeapChunkSelectorTest, test_select_chunk) {
     }
 }
 
+TEST_F(HeapChunkSelectorTest, test_select_specific_chunk) {
+    const chunk_num_t chunk_id = 3;
+    auto chunk = HCS.select_specific_chunk(chunk_id);
+    ASSERT_EQ(chunk->get_pdev_id(), 1);
+    ASSERT_EQ(chunk->get_chunk_id(), chunk_id);
+
+    // select the rest chunks to make sure specific chunk does not exist in HeapChunkSelector anymore.
+    homestore::blk_count_t count = 1;
+    homestore::blk_alloc_hints hints;
+    for (uint32_t i = 1; i < 4; i++) {
+        hints.pdev_id_hint = i;
+        auto chunk_num = 3;
+        if (i == 1) { --chunk_num; }
+        for (int j = chunk_num; j > 0; j--) {
+            auto chunk = HCS.select_chunk(count, hints);
+            ASSERT_EQ(chunk->get_pdev_id(), i);
+            ASSERT_EQ(chunk->available_blks(), j);
+        }
+    }
+
+    // release this chunk to HeapChunkSelector
+    HCS.release_chunk(chunk_id);
+    chunk = HCS.select_chunk(1, homestore::blk_alloc_hints());
+    ASSERT_EQ(1, chunk->get_pdev_id());
+    ASSERT_EQ(chunk_id, chunk->get_chunk_id());
+}
+
 TEST_F(HeapChunkSelectorTest, test_release_chunk) {
     homestore::blk_count_t count = 1;
     homestore::blk_alloc_hints hints;
