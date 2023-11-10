@@ -19,7 +19,14 @@ namespace homeobject {
 // Write (move) Blob to new BlobExt on heap and Insert BlobExt to Index
 BlobManager::AsyncResult< blob_id_t > MemoryHomeObject::_put_blob(ShardInfo const& _shard, Blob&& _blob) {
     WITH_SHARD
-    WITH_ROUTE(shard.shard_seq_num_++)
+    blob_id_t new_blob_id;
+    {
+        auto lg = std::shared_lock(_pg_lock);
+        auto iter = _pg_map.find(_shard.placement_group);
+        RELEASE_ASSERT(iter != _pg_map.end(), "PG not found");
+        new_blob_id = iter->second->blob_sequence_num_.fetch_add(1, std::memory_order_relaxed);
+    }
+    WITH_ROUTE(new_blob_id);
 
     auto [_, happened] =
         shard.btree_.try_emplace(route, BlobExt{.state_ = BlobState::ALIVE, .blob_ = new Blob(std::move(_blob))});

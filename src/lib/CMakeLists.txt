@@ -13,6 +13,8 @@ target_link_libraries(${PROJECT_NAME}_core
     ${COMMON_DEPS}
 )
 
+include(${sisl_INCLUDE_DIRS}/../cmake/settings_gen.cmake)
+
 if(BUILD_TESTING)
 add_subdirectory(tests)
 endif()

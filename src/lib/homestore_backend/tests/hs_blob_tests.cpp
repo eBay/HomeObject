@@ -72,6 +72,67 @@ public:
         }
     }
 
+    using blob_map_t = std::map< std::tuple< pg_id_t, shard_id_t, blob_id_t >, homeobject::Blob >;
+
+    void put_blob(blob_map_t& blob_map, std::vector< std::pair< pg_id_t, shard_id_t > > const& pg_shard_id_vec,
+                  uint64_t const num_blobs_per_shard, uint32_t const max_blob_size) {
+        std::uniform_int_distribution< uint32_t > rand_blob_size{1u, max_blob_size};
+        std::uniform_int_distribution< uint32_t > rand_user_key_size{1u, 1 * 1024};
+
+        for (const auto& id : pg_shard_id_vec) {
+            int64_t pg_id = id.first, shard_id = id.second;
+            for (uint64_t k = 0; k < num_blobs_per_shard; k++) {
+                uint32_t alignment = 512;
+                // Create non 512 byte aligned address to create copy.
+                if (k % 2 == 0) alignment = 256;
+
+                std::string user_key;
+                user_key.resize(rand_user_key_size(rnd_engine));
+                BitsGenerator::gen_random_bits(user_key.size(), (uint8_t*)user_key.data());
+                auto blob_size = rand_blob_size(rnd_engine);
+                homeobject::Blob put_blob{sisl::io_blob_safe(blob_size, alignment), user_key, 42ul};
+                BitsGenerator::gen_random_bits(put_blob.body);
+                // Keep a copy of random payload to verify later.
+                homeobject::Blob clone{sisl::io_blob_safe(blob_size, alignment), user_key, 42ul};
+                std::memcpy(clone.body.bytes, put_blob.body.bytes, put_blob.body.size);
+                auto b = _obj_inst->blob_manager()->put(shard_id, std::move(put_blob)).get();
+                ASSERT_TRUE(!!b);
+                auto blob_id = b.value();
+
+                LOGINFO("Put blob pg {} shard {} blob {} data {}", pg_id, shard_id, blob_id,
+                        hex_bytes(clone.body.bytes, std::min(10u, clone.body.size)));
+                blob_map.insert({{pg_id, shard_id, blob_id}, std::move(clone)});
+            }
+        }
+    }
+
+    void verify_get_blob(blob_map_t const& blob_map, bool const use_random_offset = false) {
+        uint32_t off = 0, len = 0;
+        for (const auto& [id, blob] : blob_map) {
+            int64_t pg_id = std::get< 0 >(id), shard_id = std::get< 1 >(id), blob_id = std::get< 2 >(id);
+            len = blob.body.size;
+            if (use_random_offset) {
+                std::uniform_int_distribution< uint32_t > rand_off_gen{0u, blob.body.size - 1u};
+                std::uniform_int_distribution< uint32_t > rand_len_gen{1u, blob.body.size};
+
+                off = rand_off_gen(rnd_engine);
+                len = rand_len_gen(rnd_engine);
+                if ((off + len) >= blob.body.size) { len = blob.body.size - off; }
+            }
+
+            auto g = _obj_inst->blob_manager()->get(shard_id, blob_id, off, len).get();
+            ASSERT_TRUE(!!g);
+            auto result = std::move(g.value());
+            LOGINFO("After restart get blob pg {} shard {} blob {} off {} len {} data {}", pg_id, shard_id, blob_id,
+                    off, len, hex_bytes(result.body.bytes, std::min(len, 10u)));
+            EXPECT_EQ(result.body.size, len);
+            EXPECT_EQ(std::memcmp(result.body.bytes, blob.body.bytes + off, result.body.size), 0);
+            EXPECT_EQ(result.user_key.size(), blob.user_key.size());
+            EXPECT_EQ(blob.user_key, result.user_key);
+            EXPECT_EQ(blob.object_off, result.object_off);
+        }
+    }
+
     void restart() {
         LOGINFO("Restarting homeobject.");
         _obj_inst.reset();
@@ -85,12 +146,10 @@ TEST_F(HomeObjectFixture, BasicPutGetDelBlobWRestart) {
     auto num_shards_per_pg = SISL_OPTIONS["num_shards"].as< uint64_t >() / num_pgs;
     auto num_blobs_per_shard = SISL_OPTIONS["num_blobs"].as< uint64_t >() / num_shards_per_pg;
     std::vector< std::pair< pg_id_t, shard_id_t > > pg_shard_id_vec;
-    std::map< std::tuple< pg_id_t, shard_id_t, blob_id_t >, homeobject::Blob > blob_map;
+    blob_map_t blob_map;
 
     // Create blob size in range (1, 16kb) and user key in range (1, 1kb)
     const uint32_t max_blob_size = 16 * 1024;
-    std::uniform_int_distribution< uint32_t > rand_blob_size{1u, max_blob_size};
-    std::uniform_int_distribution< uint32_t > rand_user_key_size{1u, 1 * 1024};
 
     for (uint64_t i = 1; i <= num_pgs; i++) {
         create_pg(i /* pg_id */);
@@ -103,46 +162,10 @@ TEST_F(HomeObjectFixture, BasicPutGetDelBlobWRestart) {
     }
 
     // Put blob for all shards in all pg's.
-    for (const auto& id : pg_shard_id_vec) {
-        int64_t pg_id = id.first, shard_id = id.second;
-        for (uint64_t k = 0; k < num_blobs_per_shard; k++) {
-            uint32_t alignment = 512;
-            // Create non 512 byte aligned address to create copy.
-            if (k % 2 == 0) alignment = 256;
-
-            std::string user_key;
-            user_key.resize(rand_user_key_size(rnd_engine));
-            BitsGenerator::gen_random_bits(user_key.size(), (uint8_t*)user_key.data());
-            auto blob_size = rand_blob_size(rnd_engine);
-            homeobject::Blob put_blob{sisl::io_blob_safe(blob_size, alignment), user_key, 42ul};
-            BitsGenerator::gen_random_bits(put_blob.body);
-            // Keep a copy of random payload to verify later.
-            homeobject::Blob clone{sisl::io_blob_safe(blob_size, alignment), user_key, 42ul};
-            std::memcpy(clone.body.bytes, put_blob.body.bytes, put_blob.body.size);
-            auto b = _obj_inst->blob_manager()->put(shard_id, std::move(put_blob)).get();
-            ASSERT_TRUE(!!b);
-            auto blob_id = b.value();
-
-            LOGINFO("Put blob pg {} shard {} blob {} data {}", pg_id, shard_id, blob_id,
-                    hex_bytes(clone.body.bytes, std::min(10u, clone.body.size)));
-            blob_map.insert({{pg_id, shard_id, blob_id}, std::move(clone)});
-        }
-    }
+    put_blob(blob_map, pg_shard_id_vec, num_blobs_per_shard, max_blob_size);
 
     // Verify all get blobs
-    for (const auto& [id, blob] : blob_map) {
-        int64_t pg_id = std::get< 0 >(id), shard_id = std::get< 1 >(id), blob_id = std::get< 2 >(id);
-        auto g = _obj_inst->blob_manager()->get(shard_id, blob_id).get();
-        ASSERT_TRUE(!!g);
-        auto result = std::move(g.value());
-        LOGINFO("Get blob pg {} shard id {} blob id {} size {} data {}", pg_id, shard_id, blob_id, result.body.size,
-                hex_bytes(result.body.bytes, std::min(10u, result.body.size)));
-        EXPECT_EQ(blob.body.size, result.body.size);
-        EXPECT_EQ(std::memcmp(result.body.bytes, blob.body.bytes, result.body.size), 0);
-        EXPECT_EQ(result.user_key.size(), blob.user_key.size());
-        EXPECT_EQ(blob.user_key, result.user_key);
-        EXPECT_EQ(blob.object_off, result.object_off);
-    }
+    verify_get_blob(blob_map);
 
     // for (uint64_t i = 1; i <= num_pgs; i++) {
     //     r_cast< HSHomeObject* >(_obj_inst.get())->print_btree_index(i);
@@ -155,39 +178,13 @@ TEST_F(HomeObjectFixture, BasicPutGetDelBlobWRestart) {
     restart();
 
     // Verify all get blobs after restart
-    for (const auto& [id, blob] : blob_map) {
-        int64_t pg_id = std::get< 0 >(id), shard_id = std::get< 1 >(id), blob_id = std::get< 2 >(id);
-        auto g = _obj_inst->blob_manager()->get(shard_id, blob_id).get();
-        ASSERT_TRUE(!!g);
-        auto result = std::move(g.value());
-        LOGINFO("After restart get blob pg {} shard {} blob {} data {}", pg_id, shard_id, blob_id,
-                hex_bytes(result.body.bytes, std::min(10u, result.body.size)));
-        EXPECT_EQ(result.body.size, blob.body.size);
-        EXPECT_EQ(std::memcmp(result.body.bytes, blob.body.bytes, result.body.size), 0);
-        EXPECT_EQ(blob.user_key, result.user_key);
-    }
+    verify_get_blob(blob_map);
+
+    // Put blob after restart to test the persistance of blob sequence number
+    put_blob(blob_map, pg_shard_id_vec, num_blobs_per_shard, max_blob_size);
 
     // Verify all get blobs with random offset and length.
-    for (const auto& [id, blob] : blob_map) {
-        std::uniform_int_distribution< uint32_t > rand_off_gen{0u, blob.body.size - 1u};
-        std::uniform_int_distribution< uint32_t > rand_len_gen{1u, blob.body.size};
-
-        int64_t pg_id = std::get< 0 >(id), shard_id = std::get< 1 >(id), blob_id = std::get< 2 >(id);
-        auto off = rand_off_gen(rnd_engine);
-        auto len = rand_len_gen(rnd_engine);
-        if ((off + len) >= blob.body.size) { len = blob.body.size - off; }
-
-        auto g = _obj_inst->blob_manager()->get(shard_id, blob_id, off, len).get();
-        ASSERT_TRUE(!!g);
-        auto result = std::move(g.value());
-        LOGINFO("After restart get blob pg {} shard {} blob {} off {} len {} data {}", pg_id, shard_id, blob_id, off,
-                len, hex_bytes(result.body.bytes, std::min(len, 10u)));
-        EXPECT_EQ(result.body.size, len);
-        EXPECT_EQ(std::memcmp(result.body.bytes, blob.body.bytes + off, result.body.size), 0);
-        EXPECT_EQ(result.user_key.size(), blob.user_key.size());
-        EXPECT_EQ(blob.user_key, result.user_key);
-        EXPECT_EQ(blob.object_off, result.object_off);
-    }
+    verify_get_blob(blob_map, true /* use_random_offset */);
 
     // Delete all blobs
     for (const auto& [id, blob] : blob_map) {
