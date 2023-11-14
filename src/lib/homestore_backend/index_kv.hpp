@@ -19,12 +19,6 @@ public:
     BlobRouteKey(const homestore::BtreeKey& other) : BlobRouteKey(other.serialize(), true) {}
     BlobRouteKey(const sisl::blob& b, bool copy) :
             homestore::BtreeKey(), key_{*(r_cast< const BlobRoute* >(b.bytes))} {}
-    BlobRouteKey& operator=(const BlobRouteKey& other) {
-        clone(other);
-        return *this;
-    };
-    virtual void clone(const homestore::BtreeKey& other) override { key_ = ((BlobRouteKey&)other).key_; }
-
     ~BlobRouteKey() override = default;
 
     int compare(const homestore::BtreeKey& o) const override {
@@ -46,7 +40,7 @@ public:
 
     void deserialize(const sisl::blob& b, bool copy) override { key_ = *(r_cast< const BlobRoute* >(b.bytes)); }
 
-    static uint32_t get_estimate_max_size() { return get_fixed_size(); }
+    static uint32_t get_max_size() { return get_fixed_size(); }
     friend std::ostream& operator<<(std::ostream& os, const BlobRouteKey& k) {
         os << fmt::format("{}", k.key());
         return os;
