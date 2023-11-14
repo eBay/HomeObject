@@ -44,8 +44,7 @@ BlobManager::NullResult HSHomeObject::add_to_index_table(shared< BlobIndexTable 
                                                          const BlobInfo& blob_info) {
     BlobRouteKey index_key{BlobRoute{blob_info.shard_id, blob_info.blob_id}};
     BlobRouteValue index_value{blob_info.pbas};
-    homestore::BtreeSinglePutRequest put_req{&index_key, &index_value,
-                                             homestore::btree_put_type::INSERT_ONLY_IF_NOT_EXISTS};
+    homestore::BtreeSinglePutRequest put_req{&index_key, &index_value, homestore::btree_put_type::INSERT};
     auto status = index_table->put(put_req);
     if (status != homestore::btree_status_t::success) { return folly::makeUnexpected(BlobError::INDEX_ERROR); }
 
@@ -81,8 +80,7 @@ BlobManager::Result< homestore::MultiBlkId > HSHomeObject::move_to_tombstone(sha
     }
 
     BlobRouteValue index_value_put{tombstone_pbas};
-    homestore::BtreeSinglePutRequest put_req{&index_key, &index_value_put,
-                                             homestore::btree_put_type::REPLACE_ONLY_IF_EXISTS};
+    homestore::BtreeSinglePutRequest put_req{&index_key, &index_value_put, homestore::btree_put_type::UPDATE};
     status = index_table->put(put_req);
     if (status != homestore::btree_status_t::success) {
         LOGDEBUG("Failed to move blob to tombstone in index table [route={}]", index_key);
