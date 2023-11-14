@@ -212,15 +212,49 @@ public:
     using HomeObjectImpl::HomeObjectImpl;
     ~HSHomeObject() override;
 
+    /**
+     * Initializes the homestore.
+     */
     void init_homestore();
 
+    /**
+     * @brief Initializes a timer thread.
+     *
+     */
     void init_timer_thread();
 
+    /**
+     * @brief Initializes the checkpinting for the home object.
+     *
+     */
+    void init_cp();
+
+    /**
+     * @brief Callback function invoked when a message is committed on a shard.
+     *
+     * @param lsn The logical sequence number of the message.
+     * @param header The header of the message.
+     * @param blkids The IDs of the blocks associated with the message.
+     * @param repl_dev The replication device.
+     * @param hs_ctx The replication request context.
+     */
     void on_shard_message_commit(int64_t lsn, sisl::blob const& header, homestore::MultiBlkId const& blkids,
                                  homestore::ReplDev* repl_dev, cintrusive< homestore::repl_req_ctx >& hs_ctx);
 
+    /**
+     * @brief Retrieves the chunk number associated with the given shard ID.
+     *
+     * @param id The ID of the shard to retrieve the chunk number for.
+     * @return An optional chunk number if the shard ID is valid, otherwise an empty optional.
+     */
     std::optional< homestore::chunk_num_t > get_shard_chunk(shard_id_t id) const;
 
+    /**
+     * @brief Returns any chunk number for the given pg ID.
+     *
+     * @param pg The pg ID to get the chunk number for.
+     * @return An optional chunk number if the pg ID exists, otherwise std::nullopt.
+     */
     std::optional< homestore::chunk_num_t > get_any_chunk_id(pg_id_t const pg);
 
     cshared< HeapChunkSelector > chunk_selector() const { return chunk_selector_; }

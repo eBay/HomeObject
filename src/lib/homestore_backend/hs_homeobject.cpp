@@ -3,6 +3,7 @@
 #include <spdlog/fmt/bin_to_hex.h>
 
 #include <homestore/homestore.hpp>
+#include <homestore/checkpoint/cp_mgr.hpp>
 #include <homestore/meta_service.hpp>
 #include <homestore/replication_service.hpp>
 #include <homestore/index_service.hpp>
@@ -13,6 +14,7 @@
 #include "heap_chunk_selector.h"
 #include "index_kv.hpp"
 #include "hs_backend_config.hpp"
+#include "hs_hmobj_cp.hpp"
 
 namespace homeobject {
 
@@ -27,6 +29,7 @@ extern std::shared_ptr< HomeObject > init_homeobject(std::weak_ptr< HomeObjectAp
     auto instance = std::make_shared< HSHomeObject >(std::move(application));
     instance->init_homestore();
     instance->init_timer_thread();
+    instance->init_cp();
     return instance;
 }
 
@@ -107,6 +110,13 @@ void HSHomeObject::init_timer_thread() {
         HS_BACKEND_DYNAMIC_CONFIG(backend_timer_us) * 1000, true /*recurring*/, nullptr /*cookie*/,
         iomgr::reactor_regex::all_user, [this](void*) { trigger_timed_events(); }, true /* wait_to_schedule */);
     LOGI("homeobject timer thread started successfully with freq {} usec", HS_BACKEND_DYNAMIC_CONFIG(backend_timer_us));
+}
+
+void HSHomeObject::init_cp() {
+    using namespace homestore;
+    // Register to CP for flush dirty buffers;
+    HomeStore::instance()->cp_mgr().register_consumer(cp_consumer_t::HS_CLIENT,
+                                                      std::move(std::make_unique< HomeObjCPCallbacks >()));
 }
 
 void HSHomeObject::trigger_timed_events() { persist_pg_sb(); }
