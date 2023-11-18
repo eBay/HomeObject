@@ -22,6 +22,7 @@ namespace homeobject {
 class BlobRouteKey;
 class BlobRouteValue;
 using BlobIndexTable = homestore::IndexTable< BlobRouteKey, BlobRouteValue >;
+class HomeObjCPContext;
 
 class HSHomeObject : public HomeObjectImpl {
     /// NOTE: Be wary to change these as they effect on-disk format!

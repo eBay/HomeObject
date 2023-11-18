@@ -65,7 +65,7 @@ struct PG {
     std::atomic< blob_id_t > blob_sequence_num_{0ull};
     ShardPtrList shards_;
 };
-
+class HomeObjCPContext;
 class HomeObjectImpl : public HomeObject,
                        public BlobManager,
                        public PGManager,

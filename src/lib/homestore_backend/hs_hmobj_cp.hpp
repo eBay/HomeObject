@@ -17,6 +17,10 @@
 #include <homestore/checkpoint/cp_mgr.hpp>
 #include <homestore/checkpoint/cp.hpp>
 #include <homestore/homestore_decl.hpp>
+#include <folly/concurrency/ConcurrentHashMap.h>
+#include <homeobject/common.hpp>
+
+#include "hs_homeobject.hpp"
 
 using homestore::CPCallbacks;
 using homestore::CPContext;
@@ -28,9 +32,12 @@ using homestore::CP;
 
 namespace homeobject {
 
+class HSHomeObject;
+
 class HomeObjCPCallbacks : public CPCallbacks {
 public:
-    HomeObjCPCallbacks();
+    // HomeObjCPCallbacks(cshared< HomeObjectImpl > home_obj_ptr);
+    HomeObjCPCallbacks() = default;
     virtual ~HomeObjCPCallbacks() = default;
 
 public:
@@ -40,12 +47,27 @@ public:
     int cp_progress_percent() override;
 
 private:
+    // cshared< HomeObjectImpl > home_obj_{nullptr};
 };
 
+//
+// This is a per_cp context for home object.
+// When a new CP is created, a new HomeObjCPContext is created by CP Manager;
+// CP consumer doesn't need to free the dirty list inside this context as it will be automatically freed when this cp is
+// completed (goes out of life cycle) which is controlled by cp manager;
+//
 class HomeObjCPContext : public CPContext {
 public:
     HomeObjCPContext(CP* cp);
     virtual ~HomeObjCPContext() = default;
+
+public:
+    //
+    // HSHomeObject will add the dirty PG sb into this list.
+    // When CP is flushed, this list will be flushed to disk, when CP is completed, this list will be freed.
+    // Consumer needs to make sure anything being dirtied into this list are log protected.
+    //
+    folly::ConcurrentHashMap< pg_id_t, homestore::superblk< HSHomeObject::pg_info_superblk > > pg_dirty_list_;
 };
 
 } // namespace homeobject
