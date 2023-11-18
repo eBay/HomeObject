@@ -56,7 +56,7 @@ jobs:
     if: ${{ github.event_name != 'pull_request' }}
 
   HomeStoreDeps:
-    needs: IOMgrDeps
+    needs: [IOMgrDeps, NuRaftMesgDeps]
     uses: eBay/homestore/.github/workflows/build_dependencies.yml@master
     with:
       branch: master
@@ -68,7 +68,7 @@ jobs:
     if: ${{ github.event_name != 'pull_request' }}
 
   HomeObjectDeps:
-    needs: [HomeStoreDeps, NuRaftMesgDeps]
+    needs: [HomeStoreDeps]
     uses: ./.github/workflows/build_dependencies.yml
     with:
       branch: ${{ github.ref }}

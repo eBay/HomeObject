@@ -124,7 +124,7 @@ PGInfo HSHomeObject::deserialize_pg_info(std::string const& json_str) {
 #endif
 
 void HSHomeObject::on_pg_meta_blk_found(sisl::byte_view const& buf, void* meta_cookie) {
-    homestore::superblk< pg_info_superblk > pg_sb;
+    homestore::superblk< pg_info_superblk > pg_sb(_pg_meta_name);
     pg_sb.load(buf, meta_cookie);
 
     hs_repl_service()

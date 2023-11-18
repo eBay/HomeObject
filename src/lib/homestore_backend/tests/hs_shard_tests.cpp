@@ -169,7 +169,6 @@ TEST_F(ShardManagerTestingRecovery, ShardManagerRecovery) {
     // create one shard;
     auto e = _home_object->shard_manager()->create_shard(_pg_id, Mi).get();
     ASSERT_TRUE(!!e);
-
     ShardInfo shard_info = e.value();
     EXPECT_EQ(ShardInfo::State::OPEN, shard_info.state);
     EXPECT_EQ(Mi, shard_info.total_capacity_bytes);
@@ -177,27 +176,21 @@ TEST_F(ShardManagerTestingRecovery, ShardManagerRecovery) {
     EXPECT_EQ(0ul, shard_info.deleted_capacity_bytes);
     EXPECT_EQ(_pg_id, shard_info.placement_group);
 
+    // restart homeobject and check if pg/shard info will be recovery
+    _home_object.reset();
+    LOGI("restart home_object");
+    _home_object = homeobject::init_homeobject(std::weak_ptr< homeobject::HomeObjectApplication >(app));
     homeobject::HSHomeObject* ho = dynamic_cast< homeobject::HSHomeObject* >(_home_object.get());
+    // check PG after recovery.
+    EXPECT_TRUE(ho->_pg_map.size() == 1);
     auto pg_iter = ho->_pg_map.find(_pg_id);
     EXPECT_TRUE(pg_iter != ho->_pg_map.end());
     auto& pg_result = pg_iter->second;
     EXPECT_EQ(1, pg_result->shards_.size());
+    // check shard state.
     auto check_shard = pg_result->shards_.front().get();
     EXPECT_EQ(ShardInfo::State::OPEN, check_shard->info.state);
-    // release the homeobject and homestore will be shutdown automatically.
-    _home_object.reset();
-
-    LOGI("restart home_object");
-    // re-create the homeobject and pg infos and shard infos will be recover automatically.
-    _home_object = homeobject::init_homeobject(std::weak_ptr< homeobject::HomeObjectApplication >(app));
-    ho = dynamic_cast< homeobject::HSHomeObject* >(_home_object.get());
-    EXPECT_TRUE(ho->_pg_map.size() == 1);
-
-    // check shard internal state;
-    pg_iter = ho->_pg_map.find(_pg_id);
-    EXPECT_TRUE(pg_iter != ho->_pg_map.end());
-    EXPECT_EQ(1, pg_iter->second->shards_.size());
-    auto hs_shard = d_cast< homeobject::HSHomeObject::HS_Shard* >(pg_iter->second->shards_.front().get());
+    auto hs_shard = d_cast< homeobject::HSHomeObject::HS_Shard* >(check_shard);
     EXPECT_TRUE(hs_shard->info == shard_info);
     EXPECT_TRUE(hs_shard->sb_->id == shard_info.id);
     EXPECT_TRUE(hs_shard->sb_->placement_group == shard_info.placement_group);
@@ -207,4 +200,27 @@ TEST_F(ShardManagerTestingRecovery, ShardManagerRecovery) {
     EXPECT_TRUE(hs_shard->sb_->available_capacity_bytes == shard_info.available_capacity_bytes);
     EXPECT_TRUE(hs_shard->sb_->total_capacity_bytes == shard_info.total_capacity_bytes);
     EXPECT_TRUE(hs_shard->sb_->deleted_capacity_bytes == shard_info.deleted_capacity_bytes);
+
+    // seal the shard when shard is recovery
+    auto shard_id = shard_info.id;
+    e = _home_object->shard_manager()->seal_shard(shard_id).get();
+    ASSERT_TRUE(!!e);
+    EXPECT_EQ(ShardInfo::State::SEALED, e.value().state);
+
+    // restart again to verify the shard is already sealed.
+    _home_object.reset();
+    LOGI("restart home_object again");
+    // re-create the homeobject and pg infos and shard infos will be recover automatically.
+    _home_object = homeobject::init_homeobject(std::weak_ptr< homeobject::HomeObjectApplication >(app));
+    auto s = _home_object->shard_manager()->get_shard(shard_id).get();
+    ASSERT_TRUE(!!s);
+    EXPECT_EQ(ShardInfo::State::SEALED, s.value().state);
+    // re-create new shards on this pg works too even homeobject is restarted twice.
+    e = _home_object->shard_manager()->create_shard(_pg_id, Mi).get();
+    ASSERT_TRUE(!!e);
+    EXPECT_NE(shard_id, e.value().id);
+    EXPECT_EQ(ShardInfo::State::OPEN, e.value().state);
+    // finally close the homeobject and homestore.
+    _home_object.reset();
+    std::filesystem::remove(fpath);
 }
