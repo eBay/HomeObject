@@ -18,15 +18,19 @@
 
 namespace homeobject {
 
-HomeObjCPCallbacks::HomeObjCPCallbacks() {}
-
 std::unique_ptr< CPContext > HomeObjCPCallbacks::on_switchover_cp(CP* cur_cp, CP* new_cp) {
     return std::make_unique< HomeObjCPContext >(new_cp);
 }
 
 folly::Future< bool > HomeObjCPCallbacks::cp_flush(CP* cp) {
-    auto cp_ctx = s_cast< CPContext* >(cp->context(homestore::cp_consumer_t::HS_CLIENT));
-    // m_vdev->cp_flush(cp_ctx); // this is a blocking io call
+    auto cp_ctx = s_cast< HomeObjCPContext* >(cp->context(homestore::cp_consumer_t::HS_CLIENT));
+
+    // start to flush all dirty candidates.
+    for (auto it = cp_ctx->pg_dirty_list_.begin(); it != cp_ctx->pg_dirty_list_.end(); ++it) {
+        auto pg_sb = it->second;
+        pg_sb.write(); // this is a blocking io;
+    }
+
     cp_ctx->complete(true);
 
     return folly::makeFuture< bool >(true);
@@ -36,6 +40,6 @@ void HomeObjCPCallbacks::cp_cleanup(CP* cp) {}
 
 int HomeObjCPCallbacks::cp_progress_percent() { return 0; }
 
-HomeObjCPContext::HomeObjCPContext(CP* cp) : CPContext(cp) {}
+HomeObjCPContext::HomeObjCPContext(CP* cp) : CPContext(cp) { pg_dirty_list_.clear(); }
 
 } // namespace homeobject
