@@ -36,6 +36,10 @@ void HeapChunkSelector::add_chunk_internal(const chunk_num_t chunkID) {
 
     auto& heapLock = it->second->mtx;
     auto& heap = it->second->m_heap;
+    {
+        std::lock_guard< std::mutex > l(m_defrag_mtx);
+        m_defrag_heap.emplace(chunk);
+    }
     std::lock_guard< std::mutex > l(heapLock);
     heap.emplace(chunk);
 }
@@ -86,6 +90,7 @@ csharedChunk HeapChunkSelector::select_chunk(homestore::blk_count_t count, const
     if (vchunk.get_internal_chunk()) {
         auto& avalableBlkCounter = it->second->available_blk_count;
         avalableBlkCounter.fetch_sub(vchunk.available_blks());
+        remove_chunk_from_defrag_heap(vchunk.get_chunk_id());
     } else {
         LOGWARNMOD(homeobject, "No pdev found for pdev {}", pdevID);
     }
@@ -130,9 +135,42 @@ csharedChunk HeapChunkSelector::select_specific_chunk(const chunk_num_t chunkID)
     if (vchunk.get_internal_chunk()) {
         auto& avalableBlkCounter = it->second->available_blk_count;
         avalableBlkCounter.fetch_sub(vchunk.available_blks());
+        remove_chunk_from_defrag_heap(vchunk.get_chunk_id());
     }
 
     return vchunk.get_internal_chunk();
+}
+
+// select_chunk_for_GC will only be called when GC is triggered, and will return the chunk with the most
+// defrag blocks
+csharedChunk HeapChunkSelector::select_chunk_for_GC() {
+    chunk_num_t chunkID{0};
+    // the chunk might be seleted for creating shard. if this happens, we need to select another chunk
+    for (;;) {
+        {
+            std::lock_guard< std::mutex > lg(m_defrag_mtx);
+            if (m_defrag_heap.empty()) break;
+            chunkID = m_defrag_heap.top().get_chunk_id();
+        }
+        auto chunk = select_specific_chunk(chunkID);
+        if (chunk) return chunk;
+    }
+    return nullptr;
+}
+
+void HeapChunkSelector::remove_chunk_from_defrag_heap(const chunk_num_t chunkID) {
+    std::vector< VChunk > chunks;
+    chunks.reserve(m_defrag_heap.size());
+    std::lock_guard< std::mutex > lg(m_defrag_mtx);
+    while (!m_defrag_heap.empty()) {
+        auto c = m_defrag_heap.top();
+        m_defrag_heap.pop();
+        if (c.get_chunk_id() == chunkID) break;
+        chunks.emplace_back(std::move(c));
+    }
+    for (auto& c : chunks) {
+        m_defrag_heap.emplace(c);
+    }
 }
 
 void HeapChunkSelector::foreach_chunks(std::function< void(csharedChunk&) >&& cb) {
