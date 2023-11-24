@@ -160,8 +160,8 @@ csharedChunk HeapChunkSelector::select_chunk_for_GC() {
 
 void HeapChunkSelector::remove_chunk_from_defrag_heap(const chunk_num_t chunkID) {
     std::vector< VChunk > chunks;
-    chunks.reserve(m_defrag_heap.size());
     std::lock_guard< std::mutex > lg(m_defrag_mtx);
+    chunks.reserve(m_defrag_heap.size());
     while (!m_defrag_heap.empty()) {
         auto c = m_defrag_heap.top();
         m_defrag_heap.pop();
