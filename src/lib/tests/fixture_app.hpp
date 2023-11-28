@@ -23,7 +23,7 @@ class FixtureApp : public homeobject::HomeObjectApplication {
 
 public:
     FixtureApp();
-    ~FixtureApp() override { clean(); }
+    ~FixtureApp() = default;
 
     bool spdk_mode() const override { return false; }
     uint32_t threads() const override { return 2; }
@@ -54,6 +54,7 @@ public:
     blob_id_t _blob_id;
 
     void SetUp() override;
+    void TearDown() override;
 
 protected:
     std::shared_ptr< homeobject::HomeObject > homeobj_;
