@@ -36,8 +36,7 @@ class HSHomeObject;
 
 class HomeObjCPCallbacks : public CPCallbacks {
 public:
-    // HomeObjCPCallbacks(cshared< HomeObjectImpl > home_obj_ptr);
-    HomeObjCPCallbacks() = default;
+    HomeObjCPCallbacks(HSHomeObject* home_obj_ptr) : home_obj_(home_obj_ptr){};
     virtual ~HomeObjCPCallbacks() = default;
 
 public:
@@ -47,7 +46,8 @@ public:
     int cp_progress_percent() override;
 
 private:
-    // cshared< HomeObjectImpl > home_obj_{nullptr};
+    HSHomeObject* home_obj_{nullptr}; // it is a raw pointer because HSHomeObject triggers shutdown in its destructor,
+                                      // holding a shared_ptr will cause a shutdown deadlock.
 };
 
 //
@@ -60,14 +60,11 @@ class HomeObjCPContext : public CPContext {
 public:
     HomeObjCPContext(CP* cp);
     virtual ~HomeObjCPContext() = default;
+    void add_pg_to_dirty_list(pg_id_t pg_id);
 
 public:
-    //
-    // HSHomeObject will add the dirty PG sb into this list.
-    // When CP is flushed, this list will be flushed to disk, when CP is completed, this list will be freed.
-    // Consumer needs to make sure anything being dirtied into this list are log protected.
-    //
-    folly::ConcurrentHashMap< pg_id_t, homestore::superblk< HSHomeObject::pg_info_superblk > > pg_dirty_list_;
+    std::mutex dl_mtx_;
+    std::unordered_set< pg_id_t > pg_dirty_list_;
 };
 
 } // namespace homeobject

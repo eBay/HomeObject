@@ -193,4 +193,17 @@ void HSHomeObject::persist_pg_sb() {
     }
 }
 
+void HSHomeObject::persist_pg_sb(pg_id_t id) {
+    {
+        std::scoped_lock lock_guard(_pg_lock);
+        auto const pg_it = _pg_map.find(id);
+        if (pg_it == _pg_map.end()) {
+            // relax this assert if PG remove is supported;
+            DEBUG_ASSERT(false, "persist_pg_sb: pg {} not found", id);
+        } else {
+            auto hs_pg = static_cast< HS_PG* >(pg_it->second.get());
+            hs_pg->pg_sb_.write();
+        }
+    }
+}
 } // namespace homeobject
