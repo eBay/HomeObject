@@ -170,13 +170,14 @@ TEST_F(ShardManagerTestingRecovery, ShardManagerRecovery) {
     auto e = _home_object->shard_manager()->create_shard(_pg_id, Mi).get();
     ASSERT_TRUE(!!e);
     ShardInfo shard_info = e.value();
+    auto shard_id = shard_info.id;
     EXPECT_EQ(ShardInfo::State::OPEN, shard_info.state);
     EXPECT_EQ(Mi, shard_info.total_capacity_bytes);
     EXPECT_EQ(Mi, shard_info.available_capacity_bytes);
     EXPECT_EQ(0ul, shard_info.deleted_capacity_bytes);
     EXPECT_EQ(_pg_id, shard_info.placement_group);
 
-    // restart homeobject and check if pg/shard info will be recovery
+    // restart homeobject and check if pg/shard info will be recovered.
     _home_object.reset();
     LOGI("restart home_object");
     _home_object = homeobject::init_homeobject(std::weak_ptr< homeobject::HomeObjectApplication >(app));
@@ -187,7 +188,9 @@ TEST_F(ShardManagerTestingRecovery, ShardManagerRecovery) {
     EXPECT_TRUE(pg_iter != ho->_pg_map.end());
     auto& pg_result = pg_iter->second;
     EXPECT_EQ(1, pg_result->shards_.size());
-    // check shard state.
+    // verify the sequence number is correct after recovery.
+    EXPECT_EQ(1, pg_result->shard_sequence_num_);
+    // check recovered shard state.
     auto check_shard = pg_result->shards_.front().get();
     EXPECT_EQ(ShardInfo::State::OPEN, check_shard->info.state);
     auto hs_shard = d_cast< homeobject::HSHomeObject::HS_Shard* >(check_shard);
@@ -202,12 +205,11 @@ TEST_F(ShardManagerTestingRecovery, ShardManagerRecovery) {
     EXPECT_TRUE(hs_shard->sb_->deleted_capacity_bytes == shard_info.deleted_capacity_bytes);
 
     // seal the shard when shard is recovery
-    auto shard_id = shard_info.id;
     e = _home_object->shard_manager()->seal_shard(shard_id).get();
     ASSERT_TRUE(!!e);
     EXPECT_EQ(ShardInfo::State::SEALED, e.value().state);
 
-    // restart again to verify the shard is already sealed.
+    // restart again to verify the shards has expected states.
     _home_object.reset();
     LOGI("restart home_object again");
     // re-create the homeobject and pg infos and shard infos will be recover automatically.
@@ -215,11 +217,17 @@ TEST_F(ShardManagerTestingRecovery, ShardManagerRecovery) {
     auto s = _home_object->shard_manager()->get_shard(shard_id).get();
     ASSERT_TRUE(!!s);
     EXPECT_EQ(ShardInfo::State::SEALED, s.value().state);
+    ho = dynamic_cast< homeobject::HSHomeObject* >(_home_object.get());
+    pg_iter = ho->_pg_map.find(_pg_id);
+    // verify the sequence number is correct after recovery.
+    EXPECT_EQ(1, pg_iter->second->shard_sequence_num_);
+
     // re-create new shards on this pg works too even homeobject is restarted twice.
     e = _home_object->shard_manager()->create_shard(_pg_id, Mi).get();
     ASSERT_TRUE(!!e);
     EXPECT_NE(shard_id, e.value().id);
     EXPECT_EQ(ShardInfo::State::OPEN, e.value().state);
+    EXPECT_EQ(2, pg_iter->second->shard_sequence_num_);
     // finally close the homeobject and homestore.
     _home_object.reset();
     std::filesystem::remove(fpath);
