@@ -292,6 +292,8 @@ public:
     void print_btree_index(pg_id_t pg_id);
 
     void trigger_timed_events();
+
+    void persist_pg_sb(pg_id_t id);
 };
 
 class BlobIndexServiceCallbacks : public homestore::IndexServiceCallbacks {

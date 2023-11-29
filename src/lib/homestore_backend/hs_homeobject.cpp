@@ -116,7 +116,7 @@ void HSHomeObject::init_cp() {
     using namespace homestore;
     // Register to CP for flush dirty buffers;
     HomeStore::instance()->cp_mgr().register_consumer(cp_consumer_t::HS_CLIENT,
-                                                      std::move(std::make_unique< HomeObjCPCallbacks >()));
+                                                      std::move(std::make_unique< HomeObjCPCallbacks >(this)));
 }
 
 void HSHomeObject::trigger_timed_events() { persist_pg_sb(); }
