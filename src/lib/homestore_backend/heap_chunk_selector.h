@@ -52,7 +52,7 @@ public:
     csharedChunk select_specific_chunk(const chunk_num_t);
 
     // this function will be used by GC flow to select a chunk for GC
-    csharedChunk select_chunk_for_GC();
+    csharedChunk most_defrag_chunk();
 
     // this function is used to return a chunk back to ChunkSelector when sealing a shard, and will only be used by
     // Homeobject.

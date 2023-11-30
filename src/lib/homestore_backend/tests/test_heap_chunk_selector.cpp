@@ -135,16 +135,16 @@ TEST_F(HeapChunkSelectorTest, test_select_specific_chunk) {
     ASSERT_EQ(chunk_id, chunk->get_chunk_id());
 }
 
-TEST_F(HeapChunkSelectorTest, test_select_chunk_for_GC) {
+TEST_F(HeapChunkSelectorTest, test_most_defrag_chunk) {
     for (uint32_t i = 1; i < 6; i++) {
-        auto chunk = HCS.select_chunk_for_GC();
+        auto chunk = HCS.most_defrag_chunk();
         // should always select the chunk with the most defrag blocks
         ASSERT_EQ(chunk->get_chunk_id(), i);
     }
 
-    // after release a chunk with the most defrag blocks, select_chunk_for_GC should select this chunk.
+    // after release a chunk with the most defrag blocks, most_defrag_chunk should select this chunk.
     HCS.release_chunk(1);
-    auto chunk = HCS.select_chunk_for_GC();
+    auto chunk = HCS.most_defrag_chunk();
     ASSERT_EQ(chunk->get_chunk_id(), 1);
 }
 

@@ -141,9 +141,9 @@ csharedChunk HeapChunkSelector::select_specific_chunk(const chunk_num_t chunkID)
     return vchunk.get_internal_chunk();
 }
 
-// select_chunk_for_GC will only be called when GC is triggered, and will return the chunk with the most
+// most_defrag_chunk will only be called when GC is triggered, and will return the chunk with the most
 // defrag blocks
-csharedChunk HeapChunkSelector::select_chunk_for_GC() {
+csharedChunk HeapChunkSelector::most_defrag_chunk() {
     chunk_num_t chunkID{0};
     // the chunk might be seleted for creating shard. if this happens, we need to select another chunk
     for (;;) {
