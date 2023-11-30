@@ -23,7 +23,6 @@ struct BlobExt {
 
 struct ShardIndex {
     folly::ConcurrentHashMap< BlobRoute, BlobExt > btree_;
-    std::atomic< blob_id_t > shard_seq_num_{0ull};
     ~ShardIndex();
 };
 

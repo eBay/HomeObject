@@ -12,11 +12,15 @@ static constexpr uint64_t io_align{512};
 BlobManager::AsyncResult< blob_id_t > HSHomeObject::_put_blob(ShardInfo const& shard, Blob&& blob) {
     auto& pg_id = shard.placement_group;
     shared< homestore::ReplDev > repl_dev;
+    blob_id_t new_blob_id;
     {
         std::shared_lock lock_guard(_pg_lock);
         auto iter = _pg_map.find(pg_id);
         RELEASE_ASSERT(iter != _pg_map.end(), "PG not found");
         repl_dev = static_cast< HS_PG* >(iter->second.get())->repl_dev_;
+        new_blob_id = iter->second->blob_sequence_num_.fetch_add(1, std::memory_order_relaxed);
+        RELEASE_ASSERT(new_blob_id < std::numeric_limits< decltype(new_blob_id) >::max(),
+                       "exhausted all available blob ids");
     }
 
     RELEASE_ASSERT(repl_dev != nullptr, "Repl dev instance null");
@@ -44,6 +48,7 @@ BlobManager::AsyncResult< blob_id_t > HSHomeObject::_put_blob(ShardInfo const& s
     blob_header->magic = BlobHeader::blob_header_magic;
     blob_header->version = BlobHeader::blob_header_version;
     blob_header->shard_id = shard.id;
+    blob_header->blob_id = new_blob_id;
     blob_header->hash_algorithm = BlobHeader::HashAlgorithm::CRC32;
     blob_header->blob_size = blob.body.size;
     blob_header->user_key_size = blob.user_key.size();
@@ -102,15 +107,21 @@ BlobManager::AsyncResult< blob_id_t > HSHomeObject::_put_blob(ShardInfo const& s
                               (uint8_t*)blob.user_key.data(), blob.user_key.size(), blob_header->hash,
                               BlobHeader::blob_max_hash_len);
 
-    repl_dev->async_alloc_write(req->hdr_buf_, sisl::blob{}, sgs, req);
+    // serialize blob_id as key
+    auto key_blob = sisl::blob(iomanager.iobuf_alloc(sizeof(blob_id_t), io_align), sizeof(blob_id_t));
+    *(reinterpret_cast< blob_id_t* >(key_blob.bytes)) = new_blob_id;
+    // TODO: too many captures in a lambda is not good for performance, find a way to move all the captures to a context
+    // struct
+    repl_dev->async_alloc_write(req->hdr_buf_, key_blob, sgs, req);
     return req->result().deferValue([this, header, blob_header, blob = std::move(blob), blob_bytes, blob_copied,
-                                     user_key_bytes, user_key_copied,
-                                     pad_zeroes](const auto& result) -> BlobManager::AsyncResult< blob_id_t > {
+                                     user_key_bytes, user_key_copied, pad_zeroes,
+                                     key_blob](const auto& result) -> BlobManager::AsyncResult< blob_id_t > {
         header->~ReplicationMessageHeader();
         iomanager.iobuf_free(r_cast< uint8_t* >(blob_header));
         if (blob_copied) { iomanager.iobuf_free(blob_bytes); }
         if (user_key_copied) { iomanager.iobuf_free(r_cast< uint8_t* >(user_key_bytes)); }
         if (pad_zeroes) { iomanager.iobuf_free(r_cast< uint8_t* >(pad_zeroes)); }
+        iomanager.iobuf_free(r_cast< uint8_t* >(key_blob.bytes));
 
         if (result.hasError()) { return folly::makeUnexpected(result.error()); }
         auto blob_info = result.value();
@@ -136,6 +147,7 @@ void HSHomeObject::on_blob_put_commit(int64_t lsn, sisl::blob const& header, sis
         return;
     }
 
+    auto const blob_id = *(reinterpret_cast< blob_id_t* >(key.bytes));
     shared< BlobIndexTable > index_table;
     {
         std::shared_lock lock_guard(_pg_lock);
@@ -143,18 +155,19 @@ void HSHomeObject::on_blob_put_commit(int64_t lsn, sisl::blob const& header, sis
         RELEASE_ASSERT(iter != _pg_map.end(), "PG not found");
         index_table = static_cast< HS_PG* >(iter->second.get())->index_table_;
         RELEASE_ASSERT(index_table != nullptr, "Index table not intialized");
+        if (iter->second->blob_sequence_num_.load() <= blob_id) { iter->second->blob_sequence_num_.store(blob_id + 1); }
     }
 
     BlobInfo blob_info;
     blob_info.shard_id = msg_header->shard_id;
-    blob_info.blob_id = lsn;
+    blob_info.blob_id = blob_id;
     blob_info.pbas = pbas;
 
     // Write to index table with key {shard id, blob id } and value {pba}.
     auto r = add_to_index_table(index_table, blob_info);
     if (r.hasError()) {
         LOGE("Failed to insert into index table for blob {} err {}", lsn, r.error());
-        ctx->promise_.setValue(folly::makeUnexpected(r.error()));
+        if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(r.error())); }
         return;
     }
 
