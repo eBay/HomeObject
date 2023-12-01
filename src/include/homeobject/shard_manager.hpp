@@ -31,6 +31,7 @@ struct ShardInfo {
 
     auto operator<=>(ShardInfo const& rhs) const { return id <=> rhs.id; }
     auto operator==(ShardInfo const& rhs) const { return id == rhs.id; }
+    bool is_open() { return state == State::OPEN; }
 };
 
 using InfoList = std::list< ShardInfo >;

@@ -12,4 +12,9 @@ PGManager::NullAsyncResult MemoryHomeObject::_replace_member(pg_id_t id, peer_id
                                                              PGMember const& new_member) {
     return folly::makeSemiFuture< PGManager::NullResult >(folly::makeUnexpected(PGError::UNSUPPORTED_OP));
 }
+
+bool MemoryHomeObject::_get_stats(pg_id_t id, PGStats& stats) { RELEASE_ASSERT(false, "Not implemented!"); }
+
+void MemoryHomeObject::_get_pg_ids(std::vector< pg_id_t >& pg_ids) { RELEASE_ASSERT(false, "Not implemented!"); }
+
 } // namespace homeobject

@@ -35,6 +35,8 @@ public:
         std::mutex mtx;
         VChunkHeap m_heap;
         std::atomic_size_t available_blk_count;
+        uint64_t m_total_blks{0}; // initlized during boot, and will not change during runtime;
+        uint32_t size() const { return m_heap.size(); }
     };
 
     void add_chunk(csharedChunk&) override;
@@ -52,7 +54,29 @@ public:
     // this should be called after ShardManager is initialized and get all the open shards
     void build_per_dev_chunk_heap(const std::unordered_set< chunk_num_t >& excludingChunks);
 
+    /**
+     * Retrieves the block allocation hints for a given chunk.
+     *
+     * @param chunk_id The ID of the chunk.
+     * @return The block allocation hints for the specified chunk.
+     */
     homestore::blk_alloc_hints chunk_to_hints(chunk_num_t chunk_id) const;
+
+    /**
+     * Returns the number of available blocks of the given device id.
+     *
+     * @param dev_id (optional) The device ID. if nullopt, it returns the maximum available blocks among all devices.
+     * @return The number of available blocks.
+     */
+    uint64_t avail_blks(std::optional< uint32_t > dev_id) const;
+
+    /**
+     * Returns the maximum number of chunks on pdev that are currently available for allocation.
+     * Caller is not interested with the pdev id;
+     *
+     * @return The number of available chunks.
+     */
+    uint32_t most_available_num_chunks() const;
 
 private:
     std::unordered_map< uint32_t, std::shared_ptr< PerDevHeap > > m_per_dev_heap;
@@ -60,6 +84,6 @@ private:
     // hold all the chunks , selected or not
     std::unordered_map< chunk_num_t, csharedChunk > m_chunks;
 
-    void add_chunk_internal(const chunk_num_t);
+    void add_chunk_internal(const chunk_num_t, bool add_to_heap = true);
 };
 } // namespace homeobject

@@ -4,7 +4,6 @@
 #include "homeobject/blob_manager.hpp"
 #include "homeobject/pg_manager.hpp"
 #include "homeobject/shard_manager.hpp"
-
 #include <sisl/logging/logging.h>
 
 #define LOGT(...) LOGTRACEMOD(homeobject, ##__VA_ARGS__)
@@ -34,7 +33,6 @@ using intrusive = boost::intrusive_ptr< T >;
 
 template < typename T >
 using cintrusive = const boost::intrusive_ptr< T >;
-
 constexpr size_t pg_width = sizeof(pg_id_t) * 8;
 constexpr size_t shard_width = (sizeof(shard_id_t) * 8) - pg_width;
 constexpr size_t shard_mask = std::numeric_limits< homeobject::shard_id_t >::max() >> pg_width;
@@ -86,6 +84,8 @@ class HomeObjectImpl : public HomeObject,
     virtual PGManager::NullAsyncResult _create_pg(PGInfo&& pg_info, std::set< std::string, std::less<> > peers) = 0;
     virtual PGManager::NullAsyncResult _replace_member(pg_id_t id, peer_id_t const& old_member,
                                                        PGMember const& new_member) = 0;
+    virtual bool _get_stats(pg_id_t id, PGStats& stats) = 0;
+    virtual void _get_pg_ids(std::vector< pg_id_t >& pg_ids) = 0;
 
 protected:
     std::mutex _repl_lock;
@@ -126,6 +126,9 @@ public:
     PGManager::NullAsyncResult create_pg(PGInfo&& pg_info) final;
     PGManager::NullAsyncResult replace_member(pg_id_t id, peer_id_t const& old_member,
                                               PGMember const& new_member) final;
+    // see api comments in base class;
+    bool get_stats(pg_id_t id, PGStats& stats) final;
+    void get_pg_ids(std::vector< pg_id_t >& pg_ids) final;
 
     /// ShardManager
     ShardManager::AsyncResult< ShardInfo > get_shard(shard_id_t id) const final;
