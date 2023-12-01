@@ -34,7 +34,7 @@ void HeapChunkSelector::add_chunk_internal(const chunk_num_t chunkID, bool add_t
     if (it == m_per_dev_heap.end()) { it = m_per_dev_heap.emplace(pdevID, std::make_shared< PerDevHeap >()).first; }
 
     // build total blks for every chunk on this device;
-    it->second->m_total_blks += vchunk.get_total_blks();
+    // it->second->m_total_blks += vchunk.get_total_blks();
 
     if (add_to_heap) {
         auto& avalableBlkCounter = it->second->available_blk_count;
@@ -161,7 +161,7 @@ void HeapChunkSelector::release_chunk(const chunk_num_t chunkID) {
 void HeapChunkSelector::build_per_dev_chunk_heap(const std::unordered_set< chunk_num_t >& excludingChunks) {
     for (const auto& p : m_chunks) {
         bool add_to_heap = true;
-        if (excludingChunks.find(p.first) == excludingChunks.end()) { add_to_heap = false; }
+        if (excludingChunks.find(p.first) != excludingChunks.end()) { add_to_heap = false; }
         add_chunk_internal(p.first, add_to_heap);
     };
 }
@@ -205,4 +205,15 @@ uint64_t HeapChunkSelector::avail_blks(std::optional< uint32_t > dev_it) const {
         return it->second->available_blk_count.load();
     }
 }
+
+uint64_t HeapChunkSelector::total_blks(uint32_t dev_id) const {
+    auto it = m_per_dev_heap.find(dev_id);
+    if (it == m_per_dev_heap.end()) {
+        LOGWARNMOD(homeobject, "No pdev found for pdev {}", dev_id);
+        return 0;
+    }
+
+    return it->second->m_total_blks;
+}
+
 } // namespace homeobject

@@ -71,6 +71,14 @@ public:
     uint64_t avail_blks(std::optional< uint32_t > dev_id) const;
 
     /**
+     * Returns the total number of blocks of the given device;
+     *
+     * @param dev_id The device ID.
+     * @return The total number of blocks.
+     */
+    uint64_t total_blks(uint32_t dev_id) const;
+
+    /**
      * Returns the maximum number of chunks on pdev that are currently available for allocation.
      * Caller is not interested with the pdev id;
      *

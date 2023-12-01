@@ -45,6 +45,7 @@ struct Shard {
     explicit Shard(ShardInfo info) : info(std::move(info)) {}
     virtual ~Shard() = default;
     ShardInfo info;
+    bool is_open() { return ShardInfo::State::OPEN == info.state; }
 };
 
 using ShardPtr = unique< Shard >;

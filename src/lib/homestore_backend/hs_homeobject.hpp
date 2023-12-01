@@ -109,7 +109,7 @@ public:
         /**
          * Returns the number of open shards on this PG.
          */
-        uint32_t open_shards(std::vector< homestore::chunk_num_t >&) const;
+        uint32_t open_shards() const;
 
         /**
          * Retrieves the device hint associated with this PG(if any shard is created).
