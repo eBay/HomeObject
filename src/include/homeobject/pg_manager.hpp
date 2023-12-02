@@ -46,6 +46,13 @@ struct PGStats {
     uint32_t avail_open_shards; // total number of shards that could be opened on this PG;
     uint64_t used_bytes;        // total number of bytes used by all shards on this PG;
     uint64_t avail_bytes;       // total number of bytes available on this PG;
+
+    std::string to_string() {
+        return fmt::format("PGStats: id={}, replica_set_uuid={}, num_members={}, total_shards={}, open_shards={}, "
+                           "avail_open_shards={}, used_bytes={}, avail_bytes={}",
+                           id, boost::uuids::to_string(replica_set_uuid), num_members, total_shards, open_shards,
+                           avail_open_shards, used_bytes, avail_bytes);
+    }
 };
 
 class PGManager : public Manager< PGError > {

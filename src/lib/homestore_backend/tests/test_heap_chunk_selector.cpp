@@ -12,7 +12,12 @@ SISL_LOGGING_INIT(logging, HOMEOBJECT_LOG_MODS)
 SISL_OPTIONS_ENABLE(logging)
 
 namespace homestore {
+// This is a fake implementation of Chunk/VChunk to avoid linking with homestore instance.
 
+// if redefinition error was seen while building this file, any api being added in homestore::Chunk/VChunk, also needs
+// to add one here to avoid redefinition error.
+// Compiler will get confused if symbol can't be resolved locally(e.g. in this file), and will try to find it in
+// homestore library which will cause redefine error.
 class Chunk : public std::enable_shared_from_this< Chunk > {
 public:
     uint32_t available_blks() const { return m_available_blks; }
@@ -25,6 +30,7 @@ public:
 
     uint16_t get_chunk_id() const { return m_chunk_id; }
 
+    blk_num_t get_total_blks() const { return 0; }
     void set_chunk_id(uint16_t chunk_id) { m_chunk_id = chunk_id; }
     const std::shared_ptr< Chunk > get_internal_chunk() { return shared_from_this(); }
 
@@ -51,6 +57,8 @@ blk_num_t VChunk::available_blks() const { return m_internal_chunk->available_bl
 uint32_t VChunk::get_pdev_id() const { return m_internal_chunk->get_pdev_id(); }
 
 uint16_t VChunk::get_chunk_id() const { return m_internal_chunk->get_chunk_id(); }
+
+blk_num_t VChunk::get_total_blks() const { return m_internal_chunk->get_total_blks(); }
 
 cshared< Chunk > VChunk::get_internal_chunk() const { return m_internal_chunk->get_internal_chunk(); }
 

@@ -34,7 +34,7 @@ void HeapChunkSelector::add_chunk_internal(const chunk_num_t chunkID, bool add_t
     if (it == m_per_dev_heap.end()) { it = m_per_dev_heap.emplace(pdevID, std::make_shared< PerDevHeap >()).first; }
 
     // build total blks for every chunk on this device;
-    // it->second->m_total_blks += vchunk.get_total_blks();
+    it->second->m_total_blks += vchunk.get_total_blks();
 
     if (add_to_heap) {
         auto& avalableBlkCounter = it->second->available_blk_count;
