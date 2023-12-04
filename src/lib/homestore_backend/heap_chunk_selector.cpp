@@ -187,6 +187,8 @@ uint32_t HeapChunkSelector::most_available_num_chunks() const {
     return max_avail_num_chunks;
 }
 
+uint32_t HeapChunkSelector::total_chunks() const { return m_chunks.size(); }
+
 uint64_t HeapChunkSelector::avail_blks(std::optional< uint32_t > dev_it) const {
     if (!dev_it.has_value()) {
         uint64_t max_avail_blks = 0ull;

@@ -86,6 +86,15 @@ public:
      */
     uint32_t most_available_num_chunks() const;
 
+    /**
+     * @brief Returns the total number of chunks.
+     *
+     * This function returns the total number of chunks in the heap chunk selector.
+     *
+     * @return The total number of chunks.
+     */
+    uint32_t total_chunks() const;
+
 private:
     std::unordered_map< uint32_t, std::shared_ptr< PerDevHeap > > m_per_dev_heap;
 

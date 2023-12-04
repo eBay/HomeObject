@@ -28,6 +28,17 @@ public:
     virtual std::string lookup_peer(peer_id_t const&) const = 0;
 };
 
+struct HomeObjectStats {
+    uint64_t total_capacity_bytes{0};
+    uint64_t used_capacity_bytes{0};
+    uint32_t num_open_shards{0};
+    uint32_t avail_open_shards{0};
+    std::string to_string() const {
+        return fmt::format("total_capacity_bytes={}, used_capacity_bytes={}, num_open_shards={}, avail_open_shards={}",
+                           total_capacity_bytes, used_capacity_bytes, num_open_shards, avail_open_shards);
+    }
+};
+
 class HomeObject {
 public:
     virtual ~HomeObject() = default;
@@ -35,6 +46,7 @@ public:
     virtual std::shared_ptr< BlobManager > blob_manager() = 0;
     virtual std::shared_ptr< PGManager > pg_manager() = 0;
     virtual std::shared_ptr< ShardManager > shard_manager() = 0;
+    virtual HomeObjectStats get_stats() const = 0;
 };
 
 extern std::shared_ptr< HomeObject > init_homeobject(std::weak_ptr< HomeObjectApplication >&& application);

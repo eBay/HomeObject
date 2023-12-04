@@ -67,7 +67,7 @@ public:
      * @param stats The reference to the PGStats object where the statistics will be stored.
      * @return True if the statistics were successfully retrieved, false otherwise (e.g. id not found).
      */
-    virtual bool get_stats(pg_id_t id, PGStats& stats) = 0;
+    virtual bool get_stats(pg_id_t id, PGStats& stats) const = 0;
 
     /**
      * @brief Retrieves the list of pg_ids.
@@ -76,7 +76,7 @@ public:
      *
      * @param pg_ids The vector to store the pg_ids.
      */
-    virtual void get_pg_ids(std::vector< pg_id_t >& pg_ids) = 0;
+    virtual void get_pg_ids(std::vector< pg_id_t >& pg_ids) const = 0;
 };
 
 } // namespace homeobject

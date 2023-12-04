@@ -206,7 +206,7 @@ void HSHomeObject::persist_pg_sb() {
     }
 }
 
-bool HSHomeObject::_get_stats(pg_id_t id, PGStats& stats) {
+bool HSHomeObject::_get_stats(pg_id_t id, PGStats& stats) const {
     auto lg = std::shared_lock(_pg_lock);
     auto it = _pg_map.find(id);
     if (_pg_map.end() == it) { return false; }
@@ -263,7 +263,7 @@ bool HSHomeObject::_get_stats(pg_id_t id, PGStats& stats) {
     return true;
 }
 
-void HSHomeObject::_get_pg_ids(std::vector< pg_id_t >& pg_ids) {
+void HSHomeObject::_get_pg_ids(std::vector< pg_id_t >& pg_ids) const {
     {
         auto lg = std::shared_lock(_pg_lock);
         for (auto& [id, _] : _pg_map) {

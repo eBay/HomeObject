@@ -333,4 +333,7 @@ TEST_F(HomeObjectFixture, PGStatsTest) {
     EXPECT_EQ(pg_stats.total_shards, 2);
     EXPECT_EQ(pg_stats.open_shards, 1);
     EXPECT_EQ(pg_stats.num_members, 3);
+
+    auto stats = _obj_inst->get_stats();
+    LOGINFO("HomeObj stats: {}", stats.to_string());
 }

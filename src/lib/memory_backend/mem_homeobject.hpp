@@ -49,8 +49,10 @@ class MemoryHomeObject : public HomeObjectImpl {
     PGManager::NullAsyncResult _replace_member(pg_id_t id, peer_id_t const& old_member,
                                                PGMember const& new_member) override;
 
-    bool _get_stats(pg_id_t id, PGStats& stats) override;
-    void _get_pg_ids(std::vector< pg_id_t >& pg_ids) override;
+    bool _get_stats(pg_id_t id, PGStats& stats) const override;
+    void _get_pg_ids(std::vector< pg_id_t >& pg_ids) const override;
+
+    HomeObjectStats _get_stats() const override;
 
     ShardIndex& _find_index(shard_id_t) const;
 

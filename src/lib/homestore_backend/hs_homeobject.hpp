@@ -43,8 +43,10 @@ class HSHomeObject : public HomeObjectImpl {
     PGManager::NullAsyncResult _replace_member(pg_id_t id, peer_id_t const& old_member,
                                                PGMember const& new_member) override;
 
-    bool _get_stats(pg_id_t id, PGStats& stats) override;
-    void _get_pg_ids(std::vector< pg_id_t >& pg_ids) override;
+    bool _get_stats(pg_id_t id, PGStats& stats) const override;
+    void _get_pg_ids(std::vector< pg_id_t >& pg_ids) const override;
+
+    HomeObjectStats _get_stats() const override;
 
     // Mapping from index table uuid to pg id.
     std::shared_mutex index_lock_;
@@ -221,7 +223,7 @@ public:
 
     std::optional< homestore::chunk_num_t > get_any_chunk_id(pg_id_t const pg);
 
-    shared< HeapChunkSelector > chunk_selector() { return chunk_selector_; }
+    cshared< HeapChunkSelector > chunk_selector() const { return chunk_selector_; }
 
     bool on_pre_commit_shard_msg(int64_t lsn, sisl::blob const& header, sisl::blob const& key,
                                  cintrusive< homestore::repl_req_ctx >&);

@@ -85,8 +85,10 @@ class HomeObjectImpl : public HomeObject,
     virtual PGManager::NullAsyncResult _create_pg(PGInfo&& pg_info, std::set< std::string, std::less<> > peers) = 0;
     virtual PGManager::NullAsyncResult _replace_member(pg_id_t id, peer_id_t const& old_member,
                                                        PGMember const& new_member) = 0;
-    virtual bool _get_stats(pg_id_t id, PGStats& stats) = 0;
-    virtual void _get_pg_ids(std::vector< pg_id_t >& pg_ids) = 0;
+    virtual bool _get_stats(pg_id_t id, PGStats& stats) const = 0;
+    virtual void _get_pg_ids(std::vector< pg_id_t >& pg_ids) const = 0;
+
+    virtual HomeObjectStats _get_stats() const = 0;
 
 protected:
     std::mutex _repl_lock;
@@ -121,15 +123,18 @@ public:
     std::shared_ptr< PGManager > pg_manager() final;
     std::shared_ptr< ShardManager > shard_manager() final;
 
+    /// HomeObject
+    /// Returns the UUID of this HomeObject.
     peer_id_t our_uuid() const final { return _our_id; }
+    HomeObjectStats get_stats() const final { return _get_stats(); }
 
     /// PgManager
     PGManager::NullAsyncResult create_pg(PGInfo&& pg_info) final;
     PGManager::NullAsyncResult replace_member(pg_id_t id, peer_id_t const& old_member,
                                               PGMember const& new_member) final;
     // see api comments in base class;
-    bool get_stats(pg_id_t id, PGStats& stats) final;
-    void get_pg_ids(std::vector< pg_id_t >& pg_ids) final;
+    bool get_stats(pg_id_t id, PGStats& stats) const final;
+    void get_pg_ids(std::vector< pg_id_t >& pg_ids) const final;
 
     /// ShardManager
     ShardManager::AsyncResult< ShardInfo > get_shard(shard_id_t id) const final;
