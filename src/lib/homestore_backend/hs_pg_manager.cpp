@@ -220,6 +220,10 @@ bool HSHomeObject::_get_stats(pg_id_t id, PGStats& stats) const {
     stats.total_shards = hs_pg->total_shards();
     stats.open_shards = hs_pg->open_shards();
 
+    for (auto const& m : hs_pg->pg_info_.members) {
+        stats.members.emplace_back(m.id, m.name);
+    }
+
     auto const pdev_id_hint = hs_pg->dev_hint(chunk_selector());
     if (pdev_id_hint.has_value()) {
         auto total_chunks_on_dev = 0ul;

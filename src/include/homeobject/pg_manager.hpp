@@ -46,12 +46,20 @@ struct PGStats {
     uint32_t avail_open_shards; // total number of shards that could be opened on this PG;
     uint64_t used_bytes;        // total number of bytes used by all shards on this PG;
     uint64_t avail_bytes;       // total number of bytes available on this PG;
+    std::vector< std::pair< peer_id_t, std::string > > members;
 
     std::string to_string() {
+        std::string members_str;
+        uint32_t i = 0ul;
+        for (auto const& m : members) {
+            if (i++ > 0) { members_str += ", "; };
+            members_str += fmt::format("member-{}: id={}, name={}", i, boost::uuids::to_string(m.first), m.second);
+        }
+
         return fmt::format("PGStats: id={}, replica_set_uuid={}, num_members={}, total_shards={}, open_shards={}, "
-                           "avail_open_shards={}, used_bytes={}, avail_bytes={}",
+                           "avail_open_shards={}, used_bytes={}, avail_bytes={}, members: {}",
                            id, boost::uuids::to_string(replica_set_uuid), num_members, total_shards, open_shards,
-                           avail_open_shards, used_bytes, avail_bytes);
+                           avail_open_shards, used_bytes, avail_bytes, members_str);
     }
 };
 
