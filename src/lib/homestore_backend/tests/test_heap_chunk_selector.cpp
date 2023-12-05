@@ -24,6 +24,10 @@ public:
 
     void set_available_blks(uint32_t available_blks) { m_available_blks = available_blks; }
 
+    uint32_t get_defrag_nblks() const { return m_defrag_nblks; }
+
+    void set_defrag_nblks(uint32_t defrag_nblks) { m_defrag_nblks = defrag_nblks; }
+
     uint32_t get_pdev_id() const { return m_pdev_id; }
 
     void set_pdev_id(uint32_t pdev_id) { m_pdev_id = pdev_id; }
@@ -34,16 +38,18 @@ public:
     void set_chunk_id(uint16_t chunk_id) { m_chunk_id = chunk_id; }
     const std::shared_ptr< Chunk > get_internal_chunk() { return shared_from_this(); }
 
-    Chunk(uint32_t pdev_id, uint16_t chunk_id, uint32_t available_blks) {
+    Chunk(uint32_t pdev_id, uint16_t chunk_id, uint32_t available_blks, uint32_t defrag_nblks) {
         m_available_blks = available_blks;
         m_pdev_id = pdev_id;
         m_chunk_id = chunk_id;
+        m_defrag_nblks = defrag_nblks;
     }
 
 private:
     uint32_t m_available_blks;
     uint32_t m_pdev_id;
     uint16_t m_chunk_id;
+    uint32_t m_defrag_nblks;
 };
 
 VChunk::VChunk(cshared< Chunk >& chunk) : m_internal_chunk(chunk) {}
@@ -53,6 +59,8 @@ void VChunk::set_user_private(const sisl::blob& data) {}
 const uint8_t* VChunk::get_user_private() const { return nullptr; };
 
 blk_num_t VChunk::available_blks() const { return m_internal_chunk->available_blks(); }
+
+blk_num_t VChunk::get_defrag_nblks() const { return m_internal_chunk->get_defrag_nblks(); }
 
 uint32_t VChunk::get_pdev_id() const { return m_internal_chunk->get_pdev_id(); }
 
@@ -72,15 +80,15 @@ using homestore::chunk_num_t;
 class HeapChunkSelectorTest : public ::testing::Test {
 protected:
     void SetUp() override {
-        HCS.add_chunk(std::make_shared< Chunk >(1, 1, 1));
-        HCS.add_chunk(std::make_shared< Chunk >(1, 2, 2));
-        HCS.add_chunk(std::make_shared< Chunk >(1, 3, 3));
-        HCS.add_chunk(std::make_shared< Chunk >(2, 4, 1));
-        HCS.add_chunk(std::make_shared< Chunk >(2, 5, 2));
-        HCS.add_chunk(std::make_shared< Chunk >(2, 6, 3));
-        HCS.add_chunk(std::make_shared< Chunk >(3, 7, 1));
-        HCS.add_chunk(std::make_shared< Chunk >(3, 8, 2));
-        HCS.add_chunk(std::make_shared< Chunk >(3, 9, 3));
+        HCS.add_chunk(std::make_shared< Chunk >(1, 1, 1, 9));
+        HCS.add_chunk(std::make_shared< Chunk >(1, 2, 2, 8));
+        HCS.add_chunk(std::make_shared< Chunk >(1, 3, 3, 7));
+        HCS.add_chunk(std::make_shared< Chunk >(2, 4, 1, 6));
+        HCS.add_chunk(std::make_shared< Chunk >(2, 5, 2, 5));
+        HCS.add_chunk(std::make_shared< Chunk >(2, 6, 3, 4));
+        HCS.add_chunk(std::make_shared< Chunk >(3, 7, 1, 3));
+        HCS.add_chunk(std::make_shared< Chunk >(3, 8, 2, 2));
+        HCS.add_chunk(std::make_shared< Chunk >(3, 9, 3, 1));
         std::unordered_set< chunk_num_t > excludingChunks;
         HCS.build_per_dev_chunk_heap(excludingChunks);
     };
@@ -133,6 +141,19 @@ TEST_F(HeapChunkSelectorTest, test_select_specific_chunk) {
     chunk = HCS.select_chunk(1, homestore::blk_alloc_hints());
     ASSERT_EQ(1, chunk->get_pdev_id());
     ASSERT_EQ(chunk_id, chunk->get_chunk_id());
+}
+
+TEST_F(HeapChunkSelectorTest, test_most_defrag_chunk) {
+    for (uint32_t i = 1; i < 6; i++) {
+        auto chunk = HCS.most_defrag_chunk();
+        // should always select the chunk with the most defrag blocks
+        ASSERT_EQ(chunk->get_chunk_id(), i);
+    }
+
+    // after release a chunk with the most defrag blocks, most_defrag_chunk should select this chunk.
+    HCS.release_chunk(1);
+    auto chunk = HCS.most_defrag_chunk();
+    ASSERT_EQ(chunk->get_chunk_id(), 1);
 }
 
 TEST_F(HeapChunkSelectorTest, test_release_chunk) {

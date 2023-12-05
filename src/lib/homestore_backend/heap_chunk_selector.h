@@ -28,7 +28,13 @@ public:
         bool operator()(VChunk& lhs, VChunk& rhs) { return lhs.available_blks() < rhs.available_blks(); }
     };
 
+    class VChunkDefragComparator {
+    public:
+        bool operator()(VChunk& lhs, VChunk& rhs) { return lhs.get_defrag_nblks() < rhs.get_defrag_nblks(); }
+    };
+
     using VChunkHeap = std::priority_queue< VChunk, std::vector< VChunk >, VChunkComparator >;
+    using VChunkDefragHeap = std::priority_queue< VChunk, std::vector< VChunk >, VChunkDefragComparator >;
     using chunk_num_t = homestore::chunk_num_t;
 
     struct PerDevHeap {
@@ -46,6 +52,9 @@ public:
     // this function will be used by GC flow or recovery flow to mark one specific chunk to be busy, caller should be
     // responsible to use release_chunk() interface to release it when no longer to use the chunk anymore.
     csharedChunk select_specific_chunk(const chunk_num_t);
+
+    // this function will be used by GC flow to select a chunk for GC
+    csharedChunk most_defrag_chunk();
 
     // this function is used to return a chunk back to ChunkSelector when sealing a shard, and will only be used by
     // Homeobject.
@@ -102,5 +111,10 @@ private:
     std::unordered_map< chunk_num_t, csharedChunk > m_chunks;
 
     void add_chunk_internal(const chunk_num_t, bool add_to_heap = true);
+
+    VChunkDefragHeap m_defrag_heap;
+    std::mutex m_defrag_mtx;
+
+    void remove_chunk_from_defrag_heap(const chunk_num_t);
 };
 } // namespace homeobject
