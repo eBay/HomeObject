@@ -42,6 +42,10 @@ void HeapChunkSelector::add_chunk_internal(const chunk_num_t chunkID, bool add_t
 
         auto& heapLock = it->second->mtx;
         auto& heap = it->second->m_heap;
+        {
+            std::lock_guard< std::mutex > l(m_defrag_mtx);
+            m_defrag_heap.emplace(chunk);
+        }
         std::lock_guard< std::mutex > l(heapLock);
         heap.emplace(chunk);
     }
