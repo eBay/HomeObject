@@ -226,35 +226,13 @@ bool HSHomeObject::_get_stats(pg_id_t id, PGStats& stats) const {
 
     auto const pdev_id_hint = hs_pg->dev_hint(chunk_selector());
     if (pdev_id_hint.has_value()) {
-        auto total_chunks_on_dev = 0ul;
-        auto open_shards_on_dev = 0ul; // one open shard maps to one unique chunk;
-
-        // get all the open shards from all PGs on the same drive;
-        for (auto& [_, pg] : _pg_map) {
-            // multiple PGs could be on same device;
-            auto cur_hs_pg = static_cast< HS_PG* >(pg.get());
-            auto const& cur_pdev_id_hint = cur_hs_pg->dev_hint(chunk_selector());
-            if (cur_pdev_id_hint.has_value() && cur_pdev_id_hint.value() == pdev_id_hint.value()) {
-                // open shards will never be on same chunk;
-                open_shards_on_dev += cur_hs_pg->open_shards();
-            }
-        }
-
-        // get number of total chunks on the this drive;
-        chunk_selector()->foreach_chunks([this, &pdev_id_hint, &total_chunks_on_dev](auto const& chunk) {
-            VChunk const& vchunk(chunk);
-            if (vchunk.get_pdev_id() == pdev_id_hint) { ++total_chunks_on_dev; }
-        });
-
-        stats.avail_open_shards = total_chunks_on_dev - open_shards_on_dev;
-
+        stats.avail_open_shards = chunk_selector()->avail_num_chunks(pdev_id_hint.value());
         stats.avail_bytes = chunk_selector()->avail_blks(pdev_id_hint) * blk_size;
-
         stats.used_bytes = chunk_selector()->total_blks(pdev_id_hint.value()) * blk_size - stats.avail_bytes;
     } else {
         // if no shard has been created on this PG yet, it means this PG could arrive on any drive that has the most
         // available open shards;
-        stats.avail_open_shards = chunk_selector()->most_available_num_chunks();
+        stats.avail_open_shards = chunk_selector()->most_avail_num_chunks();
 
         // if no shards is created yet on this PG, set used bytes to zero;
         stats.used_bytes = 0ul;

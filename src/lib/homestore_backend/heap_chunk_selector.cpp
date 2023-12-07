@@ -216,13 +216,23 @@ homestore::blk_alloc_hints HeapChunkSelector::chunk_to_hints(chunk_num_t chunk_i
 }
 
 // return the maximum number of chunks that can be allocated on pdev
-uint32_t HeapChunkSelector::most_available_num_chunks() const {
+uint32_t HeapChunkSelector::most_avail_num_chunks() const {
     uint32_t max_avail_num_chunks = 0ul;
     for (auto const& [_, pdev_heap] : m_per_dev_heap) {
         max_avail_num_chunks = std::max(max_avail_num_chunks, pdev_heap->size());
     }
 
     return max_avail_num_chunks;
+}
+
+uint32_t HeapChunkSelector::avail_num_chunks(uint32_t dev_id) const {
+    auto it = m_per_dev_heap.find(dev_id);
+    if (it == m_per_dev_heap.end()) {
+        LOGWARNMOD(homeobject, "No pdev found for pdev {}", dev_id);
+        return 0;
+    }
+
+    return it->second->size();
 }
 
 uint32_t HeapChunkSelector::total_chunks() const { return m_chunks.size(); }

@@ -93,7 +93,15 @@ public:
      *
      * @return The number of available chunks.
      */
-    uint32_t most_available_num_chunks() const;
+    uint32_t most_avail_num_chunks() const;
+
+    /**
+     * Returns the number of available chunks for a given device ID.
+     *
+     * @param dev_id The device ID.
+     * @return The number of available chunks.
+     */
+    uint32_t avail_num_chunks(uint32_t dev_id) const;
 
     /**
      * @brief Returns the total number of chunks.
