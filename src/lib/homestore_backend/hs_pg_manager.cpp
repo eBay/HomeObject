@@ -221,7 +221,8 @@ bool HSHomeObject::_get_stats(pg_id_t id, PGStats& stats) const {
     stats.open_shards = hs_pg->open_shards();
 
     for (auto const& m : hs_pg->pg_info_.members) {
-        stats.members.emplace_back(m.id, m.name);
+        // TODO: get last commit lsn from repl_dev when it is ready;
+        stats.members.emplace_back(std::make_tuple(m.id, m.name, 0 /* last commit lsn */));
     }
 
     auto const pdev_id_hint = hs_pg->dev_hint(chunk_selector());
