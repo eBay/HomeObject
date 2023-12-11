@@ -35,4 +35,7 @@ PGManager::NullAsyncResult HomeObjectImpl::replace_member(pg_id_t id, peer_id_t 
 
     return _replace_member(id, old_member, new_member);
 }
+
+bool HomeObjectImpl::get_stats(pg_id_t id, PGStats& stats) const { return _get_stats(id, stats); }
+void HomeObjectImpl::get_pg_ids(std::vector< pg_id_t >& pg_ids) const { return _get_pg_ids(pg_ids); }
 } // namespace homeobject

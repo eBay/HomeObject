@@ -184,6 +184,19 @@ HSHomeObject::HS_PG::HS_PG(homestore::superblk< HSHomeObject::pg_info_superblk >
     blob_sequence_num_ = sb->blob_sequence_num;
 }
 
+uint32_t HSHomeObject::HS_PG::total_shards() const { return shards_.size(); }
+
+uint32_t HSHomeObject::HS_PG::open_shards() const {
+    return std::count_if(shards_.begin(), shards_.end(), [](auto const& s) { return s->is_open(); });
+}
+
+std::optional< uint32_t > HSHomeObject::HS_PG::dev_hint(cshared< HeapChunkSelector > chunk_sel) const {
+    if (shards_.empty()) { return std::nullopt; }
+    auto const hs_shard = d_cast< HS_Shard* >(shards_.front().get());
+    auto const hint = chunk_sel->chunk_to_hints(hs_shard->chunk_id());
+    return hint.pdev_id_hint;
+}
+
 void HSHomeObject::persist_pg_sb() {
     auto lg = std::shared_lock(_pg_lock);
     for (auto& [_, pg] : _pg_map) {
@@ -193,4 +206,52 @@ void HSHomeObject::persist_pg_sb() {
     }
 }
 
+bool HSHomeObject::_get_stats(pg_id_t id, PGStats& stats) const {
+    auto lg = std::shared_lock(_pg_lock);
+    auto it = _pg_map.find(id);
+    if (_pg_map.end() == it) { return false; }
+    auto const& pg = it->second;
+    auto hs_pg = static_cast< HS_PG* >(pg.get());
+    auto const blk_size = hs_pg->repl_dev_->get_blk_size();
+
+    stats.id = hs_pg->pg_info_.id;
+    stats.replica_set_uuid = hs_pg->pg_info_.replica_set_uuid;
+    stats.num_members = hs_pg->pg_info_.members.size();
+    stats.total_shards = hs_pg->total_shards();
+    stats.open_shards = hs_pg->open_shards();
+
+    for (auto const& m : hs_pg->pg_info_.members) {
+        // TODO: get last commit lsn from repl_dev when it is ready;
+        stats.members.emplace_back(std::make_tuple(m.id, m.name, 0 /* last commit lsn */));
+    }
+
+    auto const pdev_id_hint = hs_pg->dev_hint(chunk_selector());
+    if (pdev_id_hint.has_value()) {
+        stats.avail_open_shards = chunk_selector()->avail_num_chunks(pdev_id_hint.value());
+        stats.avail_bytes = chunk_selector()->avail_blks(pdev_id_hint) * blk_size;
+        stats.used_bytes = chunk_selector()->total_blks(pdev_id_hint.value()) * blk_size - stats.avail_bytes;
+    } else {
+        // if no shard has been created on this PG yet, it means this PG could arrive on any drive that has the most
+        // available open shards;
+        stats.avail_open_shards = chunk_selector()->most_avail_num_chunks();
+
+        // if no shards is created yet on this PG, set used bytes to zero;
+        stats.used_bytes = 0ul;
+
+        // if no shard has been created on this PG yet, it means this PG could arrive on any drive that has the most
+        // available space;
+        stats.avail_bytes = chunk_selector()->avail_blks(std::nullopt) * blk_size;
+    }
+
+    return true;
+}
+
+void HSHomeObject::_get_pg_ids(std::vector< pg_id_t >& pg_ids) const {
+    {
+        auto lg = std::shared_lock(_pg_lock);
+        for (auto& [id, _] : _pg_map) {
+            pg_ids.push_back(id);
+        }
+    }
+}
 } // namespace homeobject

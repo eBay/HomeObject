@@ -171,4 +171,22 @@ void HSHomeObject::on_shard_meta_blk_recover_completed(bool success) {
     chunk_selector_->build_per_dev_chunk_heap(excluding_chunks);
 }
 
+HomeObjectStats HSHomeObject::_get_stats() const {
+    HomeObjectStats stats;
+    auto const& repl_svc = homestore::hs()->repl_service();
+    stats.total_capacity_bytes = repl_svc.get_cap_stats().total_capacity;
+    stats.used_capacity_bytes = repl_svc.get_cap_stats().used_capacity;
+
+    uint32_t num_open_shards = 0ul;
+    std::scoped_lock lock_guard(_pg_lock);
+    for (auto const& [_, pg] : _pg_map) {
+        auto hs_pg = static_cast< HS_PG* >(pg.get());
+        num_open_shards += hs_pg->open_shards();
+    }
+
+    stats.num_open_shards = num_open_shards;
+    stats.avail_open_shards = chunk_selector()->total_chunks() - num_open_shards;
+    return stats;
+}
+
 } // namespace homeobject

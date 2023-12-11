@@ -19,29 +19,36 @@ namespace homeobject {
 // this should only be called when initializing HeapChunkSelector in Homestore
 void HeapChunkSelector::add_chunk(csharedChunk& chunk) { m_chunks.emplace(VChunk(chunk).get_chunk_id(), chunk); }
 
-void HeapChunkSelector::add_chunk_internal(const chunk_num_t chunkID) {
+void HeapChunkSelector::add_chunk_internal(const chunk_num_t chunkID, bool add_to_heap) {
     if (m_chunks.find(chunkID) == m_chunks.end()) {
         // sanity check
         LOGWARNMOD(homeobject, "No chunk found for ChunkID {}", chunkID);
         return;
     }
+
     const auto& chunk = m_chunks[chunkID];
     VChunk vchunk(chunk);
     auto pdevID = vchunk.get_pdev_id();
     // add this find here, since we don`t want to call make_shared in try_emplace every time.
     auto it = m_per_dev_heap.find(pdevID);
-    if (it == m_per_dev_heap.end()) it = m_per_dev_heap.emplace(pdevID, std::make_shared< PerDevHeap >()).first;
-    auto& avalableBlkCounter = it->second->available_blk_count;
-    avalableBlkCounter.fetch_add(vchunk.available_blks());
+    if (it == m_per_dev_heap.end()) { it = m_per_dev_heap.emplace(pdevID, std::make_shared< PerDevHeap >()).first; }
 
-    auto& heapLock = it->second->mtx;
-    auto& heap = it->second->m_heap;
-    {
-        std::lock_guard< std::mutex > l(m_defrag_mtx);
-        m_defrag_heap.emplace(chunk);
+    // build total blks for every chunk on this device;
+    it->second->m_total_blks += vchunk.get_total_blks();
+
+    if (add_to_heap) {
+        auto& avalableBlkCounter = it->second->available_blk_count;
+        avalableBlkCounter.fetch_add(vchunk.available_blks());
+
+        auto& heapLock = it->second->mtx;
+        auto& heap = it->second->m_heap;
+        {
+            std::lock_guard< std::mutex > l(m_defrag_mtx);
+            m_defrag_heap.emplace(chunk);
+        }
+        std::lock_guard< std::mutex > l(heapLock);
+        heap.emplace(chunk);
     }
-    std::lock_guard< std::mutex > l(heapLock);
-    heap.emplace(chunk);
 }
 
 // select_chunk will only be called in homestore when creating a shard.
@@ -191,7 +198,9 @@ void HeapChunkSelector::release_chunk(const chunk_num_t chunkID) {
 
 void HeapChunkSelector::build_per_dev_chunk_heap(const std::unordered_set< chunk_num_t >& excludingChunks) {
     for (const auto& p : m_chunks) {
-        if (excludingChunks.find(p.first) == excludingChunks.end()) { add_chunk_internal(p.first); }
+        bool add_to_heap = true;
+        if (excludingChunks.find(p.first) != excludingChunks.end()) { add_to_heap = false; }
+        add_chunk_internal(p.first, add_to_heap);
     };
 }
 
@@ -204,6 +213,57 @@ homestore::blk_alloc_hints HeapChunkSelector::chunk_to_hints(chunk_num_t chunk_i
     homestore::blk_alloc_hints hints;
     hints.pdev_id_hint = VChunk(iter->second).get_pdev_id();
     return hints;
+}
+
+// return the maximum number of chunks that can be allocated on pdev
+uint32_t HeapChunkSelector::most_avail_num_chunks() const {
+    uint32_t max_avail_num_chunks = 0ul;
+    for (auto const& [_, pdev_heap] : m_per_dev_heap) {
+        max_avail_num_chunks = std::max(max_avail_num_chunks, pdev_heap->size());
+    }
+
+    return max_avail_num_chunks;
+}
+
+uint32_t HeapChunkSelector::avail_num_chunks(uint32_t dev_id) const {
+    auto it = m_per_dev_heap.find(dev_id);
+    if (it == m_per_dev_heap.end()) {
+        LOGWARNMOD(homeobject, "No pdev found for pdev {}", dev_id);
+        return 0;
+    }
+
+    return it->second->size();
+}
+
+uint32_t HeapChunkSelector::total_chunks() const { return m_chunks.size(); }
+
+uint64_t HeapChunkSelector::avail_blks(std::optional< uint32_t > dev_it) const {
+    if (!dev_it.has_value()) {
+        uint64_t max_avail_blks = 0ull;
+        for (auto const& [_, heap] : m_per_dev_heap) {
+            std::scoped_lock lock(heap->mtx);
+            max_avail_blks = std::max(max_avail_blks, static_cast< uint64_t >(heap->available_blk_count.load()));
+        }
+        return max_avail_blks;
+    } else {
+        auto it = m_per_dev_heap.find(dev_it.value());
+        std::scoped_lock lock(it->second->mtx);
+        if (it == m_per_dev_heap.end()) {
+            LOGWARNMOD(homeobject, "No pdev found for pdev {}", dev_it.value());
+            return 0;
+        }
+        return it->second->available_blk_count.load();
+    }
+}
+
+uint64_t HeapChunkSelector::total_blks(uint32_t dev_id) const {
+    auto it = m_per_dev_heap.find(dev_id);
+    if (it == m_per_dev_heap.end()) {
+        LOGWARNMOD(homeobject, "No pdev found for pdev {}", dev_id);
+        return 0;
+    }
+
+    return it->second->m_total_blks;
 }
 
 } // namespace homeobject
