@@ -192,7 +192,7 @@ void HSHomeObject::persist_pg_sb() {
         hs_pg->pg_sb_.write();
     }
 }
-
+#if 0
 void HSHomeObject::persist_pg_sb(pg_id_t id) {
     {
         std::scoped_lock lock_guard(_pg_lock);
@@ -206,4 +206,5 @@ void HSHomeObject::persist_pg_sb(pg_id_t id) {
         }
     }
 }
+#endif
 } // namespace homeobject
