@@ -20,7 +20,7 @@ TEST_F(HomeObjectFixture, HSHomeObjectCPTestBasic) {
             auto hs_pg = static_cast< HSHomeObject::HS_PG* >(pg.get());
             hs_pg->blob_sequence_num_ = 12345; // fake some random blob seq number to make it dirty;
             hs_pg->pg_sb_->blob_sequence_num = hs_pg->blob_sequence_num_;
-            cp_ctx->add_pg_to_dirty_list(hs_pg->pg_sb_->id);
+            cp_ctx->add_pg_to_dirty_list(hs_pg->pg_sb_.get());
         }
     }
 

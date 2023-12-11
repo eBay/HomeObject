@@ -54,17 +54,23 @@ private:
 // This is a per_cp context for home object.
 // When a new CP is created, a new HomeObjCPContext is created by CP Manager;
 // CP consumer doesn't need to free the dirty list inside this context as it will be automatically freed when this cp is
-// completed (goes out of life cycle) which is controlled by cp manager;
+// completed (goes out of life cycle);
 //
 class HomeObjCPContext : public CPContext {
 public:
     HomeObjCPContext(CP* cp);
     virtual ~HomeObjCPContext() = default;
-    void add_pg_to_dirty_list(pg_id_t pg_id);
 
-public:
+    // this will be called on io path;
+    void add_pg_to_dirty_list(HSHomeObject::pg_info_superblk* pg_sb);
+
+    static void init_pg_sb(pg_id_t id, homestore::superblk< HSHomeObject::pg_info_superblk >&& sb) {
+        pg_sb_[id] = std::move(sb); // move the sb to the map;
+    };
+
     std::mutex dl_mtx_;
-    std::unordered_set< pg_id_t > pg_dirty_list_;
+    std::unordered_map< pg_id_t, unique< HSHomeObject::pg_info_superblk > > pg_dirty_list_;
+    static std::unordered_map< pg_id_t, homestore::superblk< HSHomeObject::pg_info_superblk > > pg_sb_;
 };
 
 } // namespace homeobject

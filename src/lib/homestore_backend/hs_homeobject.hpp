@@ -73,6 +73,18 @@ public:
         homestore::uuid_t index_table_uuid;
         blob_id_t blob_sequence_num;
         pg_members members[1]; // ISO C++ forbids zero-size array
+        pg_info_superblk() = default;
+        pg_info_superblk(pg_info_superblk const& rhs) { *this = rhs; }
+
+        pg_info_superblk operator=(pg_info_superblk const& rhs) {
+            id = rhs.id;
+            num_members = rhs.num_members;
+            replica_set_uuid = rhs.replica_set_uuid;
+            index_table_uuid = rhs.index_table_uuid;
+            blob_sequence_num = rhs.blob_sequence_num;
+            memcpy(members, rhs.members, sizeof(pg_members) * num_members);
+            return *this;
+        }
     };
 
     struct shard_info_superblk {
@@ -89,6 +101,7 @@ public:
 #pragma pack()
 
     struct HS_PG : public PG {
+        // Only accessible during PG creation, after that it is not accessible.
         homestore::superblk< pg_info_superblk > pg_sb_;
         shared< homestore::ReplDev > repl_dev_;
 
