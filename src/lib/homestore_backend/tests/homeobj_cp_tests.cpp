@@ -18,9 +18,17 @@ TEST_F(HomeObjectFixture, HSHomeObjectCPTestBasic) {
         auto lg = std::unique_lock(ho->_pg_lock);
         for (auto& [_, pg] : ho->_pg_map) {
             auto hs_pg = static_cast< HSHomeObject::HS_PG* >(pg.get());
+            hs_pg->blob_sequence_num_ = 54321; // fake some random blob seq number to make it dirty;
+            hs_pg->pg_sb_->blob_sequence_num = hs_pg->blob_sequence_num_;
+            cp_ctx->add_pg_to_dirty_list(hs_pg->pg_sb_.get());
+            hs_pg->blob_sequence_num_ = 54321; // fake some random blob seq number to make it dirty;
+
+            // test multiple update to the dirty list;
+            // only the last update should be kept;
             hs_pg->blob_sequence_num_ = 12345; // fake some random blob seq number to make it dirty;
             hs_pg->pg_sb_->blob_sequence_num = hs_pg->blob_sequence_num_;
             cp_ctx->add_pg_to_dirty_list(hs_pg->pg_sb_.get());
+            hs_pg->blob_sequence_num_ = 12345; // fake some random blob seq number to make it dirty;
         }
     }
 

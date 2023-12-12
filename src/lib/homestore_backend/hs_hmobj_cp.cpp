@@ -31,16 +31,25 @@ folly::Future< bool > HomeObjCPCallbacks::cp_flush(CP* cp) {
     // no need to take the lock as no more dirty candidate is going to be added to this context when we are here;
     for (auto it = cp_ctx->pg_dirty_list_.begin(); it != cp_ctx->pg_dirty_list_.end(); ++it) {
         auto id = it->first;
-        auto pg_sb = it->second.get();
+        // auto pg_sb = it->second.get();
+        auto pg_sb = it->second;
         auto const pit = cp_ctx->pg_sb_.find(id);
-
+#if 0  
         // releax this assert if HS_PG won't write pg_sb first before cp_flush;
         RELEASE_ASSERT(pit != cp_ctx->pg_sb_.end(), "pg_sb_ should have this pg_id");
+#endif
+        if (pit == cp_ctx->pg_sb_.end()) {
+            cp_ctx->pg_sb_[id] =
+                homestore::superblk< HSHomeObject::pg_info_superblk >(HSHomeObject::pg_info_superblk::name());
+        }
+
+        cp_ctx->pg_sb_[id].create(pg_sb->size());
 
         // copy the dirty buffer to the superblk;
-        *(pit->second.get()) = *pg_sb;
+        cp_ctx->pg_sb_[id].get()->copy(*pg_sb);
 
-        pit->second.write();
+        // write to disk;
+        cp_ctx->pg_sb_[id].write();
     }
 
     cp_ctx->complete(true);
@@ -57,8 +66,16 @@ HomeObjCPContext::HomeObjCPContext(CP* cp) : CPContext(cp) { pg_dirty_list_.clea
 void HomeObjCPContext::add_pg_to_dirty_list(HSHomeObject::pg_info_superblk* pg_sb) {
     // this will be called in io path, so take the lock;
     std::scoped_lock lock_guard(dl_mtx_);
-    // pg_dirty_list_.insert(pg_sb.id, std::move(std::make_unique< HSHomeObject::pg_info_superblk >(pg_sb)));
-    pg_dirty_list_[pg_sb->id] = std::move(std::make_unique< HSHomeObject::pg_info_superblk >(*pg_sb));
+    HSHomeObject::pg_info_superblk* sb_copy{nullptr};
+
+    if (pg_dirty_list_.find(pg_sb->id) == pg_dirty_list_.end()) {
+        sb_copy = (HSHomeObject::pg_info_superblk*)malloc(pg_sb->size());
+    } else {
+        sb_copy = pg_dirty_list_[pg_sb->id];
+    }
+
+    sb_copy->copy(*pg_sb);
+    pg_dirty_list_.emplace(pg_sb->id, sb_copy);
 }
 
 std::unordered_map< pg_id_t, homestore::superblk< HSHomeObject::pg_info_superblk > > HomeObjCPContext::pg_sb_;

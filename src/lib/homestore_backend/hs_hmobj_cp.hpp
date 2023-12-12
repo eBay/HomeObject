@@ -59,17 +59,22 @@ private:
 class HomeObjCPContext : public CPContext {
 public:
     HomeObjCPContext(CP* cp);
-    virtual ~HomeObjCPContext() = default;
+    virtual ~HomeObjCPContext() {
+        for (auto x : pg_dirty_list_) {
+            free(x.second);
+        }
+    };
 
     // this will be called on io path;
     void add_pg_to_dirty_list(HSHomeObject::pg_info_superblk* pg_sb);
 
-    static void init_pg_sb(pg_id_t id, homestore::superblk< HSHomeObject::pg_info_superblk >&& sb) {
-        pg_sb_[id] = std::move(sb); // move the sb to the map;
+    static void init_pg_sb(homestore::superblk< HSHomeObject::pg_info_superblk >&& sb) {
+        pg_sb_[sb->id] = std::move(sb); // move the sb to the map;
     };
 
     std::mutex dl_mtx_;
-    std::unordered_map< pg_id_t, unique< HSHomeObject::pg_info_superblk > > pg_dirty_list_;
+    // std::unordered_map< pg_id_t, unique< HSHomeObject::pg_info_superblk > > pg_dirty_list_;
+    std::unordered_map< pg_id_t, HSHomeObject::pg_info_superblk* > pg_dirty_list_;
     static std::unordered_map< pg_id_t, homestore::superblk< HSHomeObject::pg_info_superblk > > pg_sb_;
 };
 
