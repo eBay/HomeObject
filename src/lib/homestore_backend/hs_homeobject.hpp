@@ -44,6 +44,11 @@ class HSHomeObject : public HomeObjectImpl {
     PGManager::NullAsyncResult _replace_member(pg_id_t id, peer_id_t const& old_member,
                                                PGMember const& new_member) override;
 
+    bool _get_stats(pg_id_t id, PGStats& stats) const override;
+    void _get_pg_ids(std::vector< pg_id_t >& pg_ids) const override;
+
+    HomeObjectStats _get_stats() const override;
+
     // Mapping from index table uuid to pg id.
     std::shared_mutex index_lock_;
     struct PgIndexTable {
@@ -114,6 +119,27 @@ public:
         virtual ~HS_PG() = default;
 
         static PGInfo pg_info_from_sb(homestore::superblk< pg_info_superblk > const& sb);
+
+        ///////////////// PG stats APIs /////////////////
+        /// Note: Caller needs to hold the _pg_lock before calling these apis
+        /**
+         * Returns the total number of created shards on this PG.
+         * It is caller's responsibility to hold the _pg_lock.
+         */
+        uint32_t total_shards() const;
+
+        /**
+         * Returns the number of open shards on this PG.
+         */
+        uint32_t open_shards() const;
+
+        /**
+         * Retrieves the device hint associated with this PG(if any shard is created).
+         *
+         * @param selector The HeapChunkSelector object.
+         * @return An optional uint32_t value representing the device hint, or std::nullopt if no hint is available.
+         */
+        std::optional< uint32_t > dev_hint(cshared< HeapChunkSelector >) const;
     };
 
     struct HS_Shard : public Shard {
@@ -124,6 +150,7 @@ public:
 
         void update_info(const ShardInfo& info);
         void write_sb();
+        auto chunk_id() const { return sb_->chunk_id; }
         static ShardInfo shard_info_from_sb(homestore::superblk< shard_info_superblk > const& sb);
     };
 
@@ -250,10 +277,7 @@ public:
      */
     std::optional< homestore::chunk_num_t > get_any_chunk_id(pg_id_t const pg);
 
-    /**
-     * Returns a shared pointer to the HeapChunkSelector object used by this HomeObject.
-     */
-    shared< HeapChunkSelector > chunk_selector() { return chunk_selector_; }
+    cshared< HeapChunkSelector > chunk_selector() const { return chunk_selector_; }
 
     bool on_pre_commit_shard_msg(int64_t lsn, sisl::blob const& header, sisl::blob const& key,
                                  cintrusive< homestore::repl_req_ctx >&);
