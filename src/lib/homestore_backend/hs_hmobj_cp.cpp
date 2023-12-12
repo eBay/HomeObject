@@ -41,9 +41,10 @@ folly::Future< bool > HomeObjCPCallbacks::cp_flush(CP* cp) {
         if (pit == cp_ctx->pg_sb_.end()) {
             cp_ctx->pg_sb_[id] =
                 homestore::superblk< HSHomeObject::pg_info_superblk >(HSHomeObject::pg_info_superblk::name());
+            cp_ctx->pg_sb_[id].create(pg_sb->size());
         }
 
-        cp_ctx->pg_sb_[id].create(pg_sb->size());
+        // reuse the superblk in the cp context if the same pg has been dirtied in same cp;
 
         // copy the dirty buffer to the superblk;
         cp_ctx->pg_sb_[id].get()->copy(*pg_sb);
