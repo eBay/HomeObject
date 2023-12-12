@@ -95,7 +95,7 @@ public:
         std::shared_ptr< BlobIndexTable > index_table_;
 
         HS_PG(PGInfo info, shared< homestore::ReplDev > rdev, shared< BlobIndexTable > index_table);
-        HS_PG(homestore::superblk< pg_info_superblk > const& sb, shared< homestore::ReplDev > rdev);
+        HS_PG(homestore::superblk< pg_info_superblk >&& sb, shared< homestore::ReplDev > rdev);
         virtual ~HS_PG() = default;
 
         static PGInfo pg_info_from_sb(homestore::superblk< pg_info_superblk > const& sb);
@@ -125,7 +125,7 @@ public:
     struct HS_Shard : public Shard {
         homestore::superblk< shard_info_superblk > sb_;
         HS_Shard(ShardInfo info, homestore::chunk_num_t chunk_id);
-        HS_Shard(homestore::superblk< shard_info_superblk > const& sb);
+        HS_Shard(homestore::superblk< shard_info_superblk >&& sb);
         ~HS_Shard() override = default;
 
         void update_info(const ShardInfo& info);
@@ -245,7 +245,7 @@ public:
 
     std::shared_ptr< BlobIndexTable > create_index_table();
 
-    std::shared_ptr< BlobIndexTable > recover_index_table(const homestore::superblk< homestore::index_table_sb >& sb);
+    std::shared_ptr< BlobIndexTable > recover_index_table(homestore::superblk< homestore::index_table_sb >&& sb);
 
     BlobManager::NullResult add_to_index_table(shared< BlobIndexTable > index_table, const BlobInfo& blob_info);
 
@@ -263,9 +263,9 @@ class BlobIndexServiceCallbacks : public homestore::IndexServiceCallbacks {
 public:
     BlobIndexServiceCallbacks(HSHomeObject* home_object) : home_object_(home_object) {}
     std::shared_ptr< homestore::IndexTableBase >
-    on_index_table_found(const homestore::superblk< homestore::index_table_sb >& sb) override {
+    on_index_table_found(homestore::superblk< homestore::index_table_sb >&& sb) override {
         LOGI("Recovered index table to index service");
-        return home_object_->recover_index_table(sb);
+        return home_object_->recover_index_table(std::move(sb));
     }
 
 private:
