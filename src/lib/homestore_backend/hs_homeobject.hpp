@@ -68,10 +68,14 @@ public:
         homestore::uuid_t index_table_uuid;
         blob_id_t blob_sequence_num;
         pg_members members[1]; // ISO C++ forbids zero-size array
+
+        uint32_t size() const { return sizeof(pg_info_superblk) + ((num_members - 1) * sizeof(pg_members)); }
+        static std::string name() { return _pg_meta_name; }
+
         pg_info_superblk() = default;
         pg_info_superblk(pg_info_superblk const& rhs) { *this = rhs; }
 
-        pg_info_superblk operator=(pg_info_superblk const& rhs) {
+        pg_info_superblk& operator=(pg_info_superblk const& rhs) {
             id = rhs.id;
             num_members = rhs.num_members;
             replica_set_uuid = rhs.replica_set_uuid;
@@ -80,6 +84,8 @@ public:
             memcpy(members, rhs.members, sizeof(pg_members) * num_members);
             return *this;
         }
+
+        void copy(pg_info_superblk const& rhs) { *this = rhs; }
     };
 
     struct shard_info_superblk {

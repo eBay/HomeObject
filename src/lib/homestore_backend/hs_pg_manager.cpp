@@ -2,6 +2,7 @@
 #include <homestore/replication_service.hpp>
 #include "hs_homeobject.hpp"
 #include "replication_state_machine.hpp"
+#include "hs_hmobj_cp.hpp"
 
 using namespace homestore;
 namespace homeobject {
@@ -176,6 +177,8 @@ HSHomeObject::HS_PG::HS_PG(PGInfo info, shared< homestore::ReplDev > rdev, share
     }
 
     pg_sb_.write();
+
+    // HomeObjCPContext::init_pg_sb(std::move(pg_sb_));
 }
 
 HSHomeObject::HS_PG::HS_PG(homestore::superblk< HSHomeObject::pg_info_superblk > const& sb,
