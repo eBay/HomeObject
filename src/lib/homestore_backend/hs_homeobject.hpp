@@ -109,6 +109,7 @@ public:
     struct HS_PG : public PG {
         // Only accessible during PG creation, after that it is not accessible.
         homestore::superblk< pg_info_superblk > pg_sb_;
+        pg_info_superblk* cache_pg_sb_{nullptr}; // always up-to-date;
         shared< homestore::ReplDev > repl_dev_;
 
         std::optional< homestore::chunk_num_t > any_allocated_chunk_id_{};
@@ -116,7 +117,15 @@ public:
 
         HS_PG(PGInfo info, shared< homestore::ReplDev > rdev, shared< BlobIndexTable > index_table);
         HS_PG(homestore::superblk< pg_info_superblk >&& sb, shared< homestore::ReplDev > rdev);
-        virtual ~HS_PG() = default;
+
+        void init_cp();
+
+        virtual ~HS_PG() {
+            if (cache_pg_sb_) {
+                free(cache_pg_sb_);
+                cache_pg_sb_ = nullptr;
+            }
+        }
 
         static PGInfo pg_info_from_sb(homestore::superblk< pg_info_superblk > const& sb);
 
