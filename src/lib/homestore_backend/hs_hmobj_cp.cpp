@@ -65,16 +65,17 @@ int HomeObjCPCallbacks::cp_progress_percent() { return 0; }
 HomeObjCPContext::HomeObjCPContext(CP* cp) : CPContext(cp) { pg_dirty_list_.clear(); }
 
 void HomeObjCPContext::add_pg_to_dirty_list(HSHomeObject::pg_info_superblk* pg_sb) {
-    // this will be called in io path, so take the lock;
+    // this will be called in io path, so take the lock to protect the dirty list;
     std::scoped_lock lock_guard(dl_mtx_);
     HSHomeObject::pg_info_superblk* sb_copy{nullptr};
-
     if (pg_dirty_list_.find(pg_sb->id) == pg_dirty_list_.end()) {
         sb_copy = (HSHomeObject::pg_info_superblk*)malloc(pg_sb->size());
     } else {
         sb_copy = pg_dirty_list_[pg_sb->id];
     }
 
+    // here we do copy instead of using caller's pg_sb directly because we don't want to every I/O to allocate the same
+    // piece of memory. Instead, choose to copy the pg_sb which is a very small size;
     sb_copy->copy(*pg_sb);
     pg_dirty_list_.emplace(pg_sb->id, sb_copy);
 }

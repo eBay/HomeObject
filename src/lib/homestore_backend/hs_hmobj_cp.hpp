@@ -65,7 +65,20 @@ public:
         }
     };
 
-    // this will be called on io path;
+    /**
+     * @brief Adds the PG sb to the dirty list.
+     *
+     * This function adds the given pg superblock to the dirty list, indicating that it has been modified and needs to
+     * be written back to storage. If the same pg (identified by its id) has been added before in the same CP, it will
+     * update the same dirty buffer in the dirty list. Caller doesn't need to worry about whether same pg sb has been
+     * added or not.
+     *
+     * Memory:
+     * This function will allocate memory for the pg sb if it is the first time the pg sb is added;
+     * otherwise, it will reuse the memory allocated before.
+     *
+     * @param pg_sb A pointer to the page superblock to be added to the dirty list.
+     */
     void add_pg_to_dirty_list(HSHomeObject::pg_info_superblk* pg_sb);
 
     static void init_pg_sb(homestore::superblk< HSHomeObject::pg_info_superblk >&& sb) {
@@ -73,8 +86,9 @@ public:
     };
 
     std::mutex dl_mtx_;
-    // std::unordered_map< pg_id_t, unique< HSHomeObject::pg_info_superblk > > pg_dirty_list_;
     std::unordered_map< pg_id_t, HSHomeObject::pg_info_superblk* > pg_dirty_list_;
+
+    // static so that only one superblk instance can write to metablk;
     static std::unordered_map< pg_id_t, homestore::superblk< HSHomeObject::pg_info_superblk > > pg_sb_;
 };
 
