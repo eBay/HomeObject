@@ -237,8 +237,7 @@ public:
                             const homestore::MultiBlkId& pbas, cintrusive< homestore::repl_req_ctx >& hs_ctx);
     void on_blob_del_commit(int64_t lsn, sisl::blob const& header, sisl::blob const& key,
                             cintrusive< homestore::repl_req_ctx >& hs_ctx);
-    homestore::blk_alloc_hints blob_put_get_blk_alloc_hints(sisl::blob const& header,
-                                                            cintrusive< homestore::repl_req_ctx >& ctx);
+    homestore::blk_alloc_hints blob_put_get_blk_alloc_hints(sisl::blob const& header);
     void compute_blob_payload_hash(BlobHeader::HashAlgorithm algorithm, const uint8_t* blob_bytes, size_t blob_size,
                                    const uint8_t* user_key_bytes, size_t user_key_size, uint8_t* hash_bytes,
                                    size_t hash_len) const;

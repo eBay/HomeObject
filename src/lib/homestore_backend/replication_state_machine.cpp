@@ -5,7 +5,7 @@ namespace homeobject {
 void ReplicationStateMachine::on_commit(int64_t lsn, const sisl::blob& header, const sisl::blob& key,
                                         const homestore::MultiBlkId& pbas, cintrusive< homestore::repl_req_ctx >& ctx) {
     LOGI("applying raft log commit with lsn:{}", lsn);
-    const ReplicationMessageHeader* msg_header = r_cast< const ReplicationMessageHeader* >(header.bytes);
+    const ReplicationMessageHeader* msg_header = r_cast< const ReplicationMessageHeader* >(header.cbytes());
     switch (msg_header->msg_type) {
     case ReplicationMessageType::CREATE_SHARD_MSG:
     case ReplicationMessageType::SEAL_SHARD_MSG: {
@@ -41,8 +41,8 @@ void ReplicationStateMachine::on_rollback(int64_t lsn, sisl::blob const&, sisl::
 }
 
 homestore::blk_alloc_hints ReplicationStateMachine::get_blk_alloc_hints(sisl::blob const& header,
-                                                                        cintrusive< homestore::repl_req_ctx >& ctx) {
-    const ReplicationMessageHeader* msg_header = r_cast< const ReplicationMessageHeader* >(header.bytes);
+                                                                        uint32_t data_size) {
+    const ReplicationMessageHeader* msg_header = r_cast< const ReplicationMessageHeader* >(header.cbytes());
     switch (msg_header->msg_type) {
     case ReplicationMessageType::CREATE_SHARD_MSG: {
         auto any_allocated_chunk_id = home_object_->get_any_chunk_id(msg_header->pg_id);
@@ -64,7 +64,7 @@ homestore::blk_alloc_hints ReplicationStateMachine::get_blk_alloc_hints(sisl::bl
     }
 
     case ReplicationMessageType::PUT_BLOB_MSG:
-        return home_object_->blob_put_get_blk_alloc_hints(header, ctx);
+        return home_object_->blob_put_get_blk_alloc_hints(header);
     case ReplicationMessageType::DEL_BLOB_MSG:
     default: {
         break;

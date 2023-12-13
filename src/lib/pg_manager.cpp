@@ -10,11 +10,11 @@ PGManager::NullAsyncResult HomeObjectImpl::create_pg(PGInfo&& pg_info) {
     LOGI("[pg={}] has [{}] members", pg_info.id, pg_info.members.size());
     auto saw_ourself = false;
     auto saw_leader = false;
-    auto peers = std::set< std::string, std::less<> >();
+    auto peers = std::set<peer_id_t>();
     for (auto const& member : pg_info.members) {
         if (member.id == our_uuid()) saw_ourself = true;
         if (member.priority > 0) saw_leader = true;
-        peers.insert(to_string(member.id));
+        peers.insert(member.id);
     }
     if (!saw_ourself || !saw_leader) return folly::makeUnexpected(PGError::INVALID_ARG);
     return _create_pg(std::move(pg_info), std::move(peers));

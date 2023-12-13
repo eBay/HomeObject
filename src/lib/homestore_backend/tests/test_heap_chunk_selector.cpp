@@ -66,7 +66,7 @@ uint32_t VChunk::get_pdev_id() const { return m_internal_chunk->get_pdev_id(); }
 
 uint16_t VChunk::get_chunk_id() const { return m_internal_chunk->get_chunk_id(); }
 
-blk_num_t VChunk::get_total_blks() const { return m_internal_chunk->get_total_blks(); }
+blk_num_t VChunk::get_total_blks() const { return m_internal_chunk->get_total_blks();}
 
 cshared< Chunk > VChunk::get_internal_chunk() const { return m_internal_chunk->get_internal_chunk(); }
 

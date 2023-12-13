@@ -46,10 +46,10 @@ PGError toPgError(ReplServiceError const& e) {
     return *(static_cast< HSHomeObject::HS_PG const& >(pg).repl_dev_);
 }
 
-PGManager::NullAsyncResult HSHomeObject::_create_pg(PGInfo&& pg_info, std::set< std::string, std::less<> > peers) {
+PGManager::NullAsyncResult HSHomeObject::_create_pg(PGInfo&& pg_info, std::set<peer_id_t> peers) {
     pg_info.replica_set_uuid = boost::uuids::random_generator()();
     return hs_repl_service()
-        .create_repl_dev(pg_info.replica_set_uuid, std::move(peers), std::make_unique< ReplicationStateMachine >(this))
+        .create_repl_dev(pg_info.replica_set_uuid, std::move(peers))
         .thenValue([this, pg_info = std::move(pg_info)](auto&& v) mutable -> PGManager::NullResult {
             if (v.hasError()) { return folly::makeUnexpected(toPgError(v.error())); }
 

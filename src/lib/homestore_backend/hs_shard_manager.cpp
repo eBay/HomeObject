@@ -78,7 +78,7 @@ ShardManager::AsyncResult< ShardInfo > HSHomeObject::_create_shard(pg_id_t pg_ow
         ShardInfo(new_shard_id, pg_owner, ShardInfo::State::OPEN, create_time, create_time, size_bytes, size_bytes, 0));
     const auto msg_size = sisl::round_up(create_shard_message.size(), repl_dev->get_blk_size());
     auto req = repl_result_ctx< ShardManager::Result< ShardInfo > >::make(msg_size, 512 /*alignment*/);
-    auto buf_ptr = req->hdr_buf_.bytes;
+    auto buf_ptr = req->hdr_buf_.bytes();
     std::memset(buf_ptr, 0, msg_size);
     std::memcpy(buf_ptr, create_shard_message.c_str(), create_shard_message.size());
     // preapre msg header;
@@ -89,8 +89,8 @@ ShardManager::AsyncResult< ShardInfo > HSHomeObject::_create_shard(pg_id_t pg_ow
     req->header_.payload_crc = crc32_ieee(init_crc32, buf_ptr, msg_size);
     req->header_.seal();
     sisl::blob header;
-    header.bytes = r_cast< uint8_t* >(&req->header_);
-    header.size = sizeof(req->header_);
+    header.set_bytes(r_cast< uint8_t* >(&req->header_));
+    header.set_size(sizeof(req->header_));
     sisl::sg_list value;
     value.size = msg_size;
     value.iovs.push_back(iovec(buf_ptr, msg_size));
@@ -120,7 +120,7 @@ ShardManager::AsyncResult< ShardInfo > HSHomeObject::_seal_shard(ShardInfo const
     auto seal_shard_message = serialize_shard_info(shard_info);
     const auto msg_size = sisl::round_up(seal_shard_message.size(), repl_dev->get_blk_size());
     auto req = repl_result_ctx< ShardManager::Result< ShardInfo > >::make(msg_size, 512 /*alignment*/);
-    auto buf_ptr = req->hdr_buf_.bytes;
+    auto buf_ptr = req->hdr_buf_.bytes();
     std::memset(buf_ptr, 0, msg_size);
     std::memcpy(buf_ptr, seal_shard_message.c_str(), seal_shard_message.size());
 
@@ -131,8 +131,8 @@ ShardManager::AsyncResult< ShardInfo > HSHomeObject::_seal_shard(ShardInfo const
     req->header_.payload_crc = crc32_ieee(init_crc32, buf_ptr, msg_size);
     req->header_.seal();
     sisl::blob header;
-    header.bytes = r_cast< uint8_t* >(&req->header_);
-    header.size = sizeof(req->header_);
+    header.set_bytes(r_cast< uint8_t* >(&req->header_));
+    header.set_size(sizeof(req->header_));
     sisl::sg_list value;
     value.size = msg_size;
     value.iovs.push_back(iovec(buf_ptr, msg_size));
@@ -148,7 +148,7 @@ void HSHomeObject::on_shard_message_commit(int64_t lsn, sisl::blob const& header
 
     if (hs_ctx != nullptr) {
         auto ctx = boost::static_pointer_cast< repl_result_ctx< ShardManager::Result< ShardInfo > > >(hs_ctx);
-        do_shard_message_commit(lsn, *r_cast< ReplicationMessageHeader* >(header.bytes), blkids, ctx->hdr_buf_, hs_ctx);
+        do_shard_message_commit(lsn, *r_cast< ReplicationMessageHeader* >(const_cast<uint8_t*>(header.cbytes())), blkids, ctx->hdr_buf_, hs_ctx);
         return;
     }
 
@@ -162,7 +162,7 @@ void HSHomeObject::on_shard_message_commit(int64_t lsn, sisl::blob const& header
     auto value_buf = iomanager.iobuf_alloc(512, value.size);
     value.iovs.push_back(iovec{.iov_base = value_buf, .iov_len = value.size});
     // header will be released when this function returns, but we still need the header when async_read() finished.
-    auto header_ptr = r_cast< const ReplicationMessageHeader* >(header.bytes);
+    auto header_ptr = r_cast< const ReplicationMessageHeader* >(header.cbytes());
     repl_dev->async_read(blkids, value, value.size)
         .thenValue([this, lsn, msg_header = *header_ptr, blkids, value](auto&& err) mutable {
             if (err) {
@@ -189,14 +189,14 @@ void HSHomeObject::do_shard_message_commit(int64_t lsn, ReplicationMessageHeader
         return;
     }
 
-    if (crc32_ieee(init_crc32, value.bytes, value.size) != header.payload_crc) {
+    if (crc32_ieee(init_crc32, value.bytes(), value.size()) != header.payload_crc) {
         // header & value is inconsistent;
         LOGW("replication message header is inconsistent with value, lsn:{}", lsn);
         if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(ShardError::CRC_MISMATCH)); }
         return;
     }
 
-    auto shard_info = deserialize_shard_info(r_cast< const char* >(value.bytes), value.size);
+    auto shard_info = deserialize_shard_info(r_cast< const char* >(value.cbytes()), value.size());
     switch (header.msg_type) {
     case ReplicationMessageType::CREATE_SHARD_MSG: {
         bool shard_exist = false;

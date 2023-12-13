@@ -9,10 +9,11 @@
 #include <iomgr/io_environment.hpp>
 
 #include <homeobject/homeobject.hpp>
-#include "hs_homeobject.hpp"
 #include "heap_chunk_selector.h"
-#include "index_kv.hpp"
 #include "hs_backend_config.hpp"
+#include "hs_homeobject.hpp"
+#include "index_kv.hpp"
+#include "replication_state_machine.hpp"
 
 namespace homeobject {
 
@@ -55,7 +56,7 @@ void HSHomeObject::init_homestore() {
     using namespace homestore;
     bool need_format = HomeStore::instance()
                            ->with_index_service(std::make_unique< BlobIndexServiceCallbacks >(this))
-                           .with_repl_data_service(repl_impl_type::solo, chunk_selector_)
+                           .with_repl_data_service(std::make_shared<HSReplApplication>(this), chunk_selector_)
                            .start(hs_input_params{.devices = device_info, .app_mem_size = app_mem_size},
                                   [this]() { register_homestore_metablk_callback(); });
 
