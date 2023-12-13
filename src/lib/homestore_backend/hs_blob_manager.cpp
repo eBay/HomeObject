@@ -352,7 +352,7 @@ void HSHomeObject::on_blob_del_commit(int64_t lsn, sisl::blob const& header, sis
 
     BlobInfo blob_info;
     blob_info.shard_id = msg_header->shard_id;
-    blob_info.blob_id = *r_cast< blob_id_t* >(const_cast<uint8_t*>(key.bytes()));
+    blob_info.blob_id = *r_cast< blob_id_t* >(const_cast<uint8_t*>(key.cbytes()));
 
     auto r = move_to_tombstone(index_table, blob_info);
     if (!r) {

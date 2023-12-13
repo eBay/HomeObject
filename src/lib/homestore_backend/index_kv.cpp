@@ -22,13 +22,13 @@ std::shared_ptr< BlobIndexTable > HSHomeObject::create_index_table() {
 }
 
 std::shared_ptr< BlobIndexTable >
-HSHomeObject::recover_index_table(const homestore::superblk< homestore::index_table_sb >& sb) {
+HSHomeObject::recover_index_table(homestore::superblk< homestore::index_table_sb >&& sb) {
     homestore::BtreeConfig bt_cfg(homestore::hs()->index_service().node_size());
     bt_cfg.m_leaf_node_type = homestore::btree_node_type::FIXED;
     bt_cfg.m_int_node_type = homestore::btree_node_type::FIXED;
 
     auto uuid_str = boost::uuids::to_string(sb->uuid);
-    auto index_table = std::make_shared< homestore::IndexTable< BlobRouteKey, BlobRouteValue > >(sb, bt_cfg);
+    auto index_table = std::make_shared< homestore::IndexTable< BlobRouteKey, BlobRouteValue > >(std::move(sb), bt_cfg);
 
     // Check if PG is already recovered.
     std::scoped_lock lock_guard(index_lock_);

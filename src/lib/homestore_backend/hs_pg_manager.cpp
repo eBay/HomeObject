@@ -50,6 +50,7 @@ PGManager::NullAsyncResult HSHomeObject::_create_pg(PGInfo&& pg_info, std::set<p
     pg_info.replica_set_uuid = boost::uuids::random_generator()();
     return hs_repl_service()
         .create_repl_dev(pg_info.replica_set_uuid, std::move(peers))
+        .via(executor_)
         .thenValue([this, pg_info = std::move(pg_info)](auto&& v) mutable -> PGManager::NullResult {
             if (v.hasError()) { return folly::makeUnexpected(toPgError(v.error())); }
 
@@ -126,28 +127,29 @@ PGInfo HSHomeObject::deserialize_pg_info(std::string const& json_str) {
 void HSHomeObject::on_pg_meta_blk_found(sisl::byte_view const& buf, void* meta_cookie) {
     homestore::superblk< pg_info_superblk > pg_sb(_pg_meta_name);
     pg_sb.load(buf, meta_cookie);
-
+    /*
     hs_repl_service()
         .open_repl_dev(pg_sb->replica_set_uuid, std::make_unique< ReplicationStateMachine >(this))
-        .thenValue([this, pg_sb = std::move(pg_sb)](auto&& v) {
+        .thenValue([this, pg_sb = std::move(pg_sb)](auto&& v) mutable {
             if (v.hasError()) {
                 // TODO: We need to raise an alert here, since without pg repl_dev all operations on that pg will fail
                 LOGE("open_repl_dev for group_id={} has failed", boost::uuids::to_string(pg_sb->replica_set_uuid));
                 return;
             }
-
-            auto hs_pg = std::make_unique< HS_PG >(pg_sb, std::move(v.value()));
+            auto pg_id = pg_sb->id;
+            auto uuid_str = boost::uuids::to_string(pg_sb->index_table_uuid);
+            auto hs_pg = std::make_unique< HS_PG >(std::move(pg_sb), std::move(v.value()));
             // During PG recovery check if index is already recoverd else
             // add entry in map, so that index recovery can update the PG.
             std::scoped_lock lg(index_lock_);
-            auto uuid_str = boost::uuids::to_string(pg_sb->index_table_uuid);
             auto it = index_table_pg_map_.find(uuid_str);
             RELEASE_ASSERT(it != index_table_pg_map_.end(), "IndexTable should be recovered before PG");
             hs_pg->index_table_ = it->second.index_table;
-            it->second.pg_id = pg_sb->id;
+            it->second.pg_id = pg_id;
 
             add_pg_to_map(std::move(hs_pg));
         });
+    */
 }
 
 PGInfo HSHomeObject::HS_PG::pg_info_from_sb(homestore::superblk< pg_info_superblk > const& sb) {
@@ -178,10 +180,10 @@ HSHomeObject::HS_PG::HS_PG(PGInfo info, shared< homestore::ReplDev > rdev, share
     pg_sb_.write();
 }
 
-HSHomeObject::HS_PG::HS_PG(homestore::superblk< HSHomeObject::pg_info_superblk > const& sb,
+HSHomeObject::HS_PG::HS_PG(homestore::superblk< HSHomeObject::pg_info_superblk >&& sb,
                            shared< homestore::ReplDev > rdev) :
-        PG{pg_info_from_sb(sb)}, pg_sb_{sb}, repl_dev_{std::move(rdev)} {
-    blob_sequence_num_ = sb->blob_sequence_num;
+        PG{pg_info_from_sb(sb)}, pg_sb_{std::move(sb)}, repl_dev_{std::move(rdev)} {
+    blob_sequence_num_ = pg_sb_->blob_sequence_num;
 }
 
 uint32_t HSHomeObject::HS_PG::total_shards() const { return shards_.size(); }
