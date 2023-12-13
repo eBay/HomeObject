@@ -214,7 +214,7 @@ public:
 
 private:
     shared< HeapChunkSelector > chunk_selector_;
-    iomgr::timer_handle_t ho_timer_thread_handle_;
+    // iomgr::timer_handle_t ho_timer_thread_handle_;
 
 private:
     static homestore::ReplicationService& hs_repl_service() { return homestore::hs()->repl_service(); }
@@ -246,11 +246,13 @@ public:
      */
     void init_homestore();
 
+#if 0
     /**
      * @brief Initializes a timer thread.
      *
      */
     void init_timer_thread();
+#endif
 
     /**
      * @brief Initializes the checkpinting for the home object.
@@ -319,9 +321,7 @@ public:
                                                                    const BlobInfo& blob_info);
     void print_btree_index(pg_id_t pg_id);
 
-    void trigger_timed_events();
-
-    void persist_pg_sb(pg_id_t id);
+    // void trigger_timed_events();
 };
 
 class BlobIndexServiceCallbacks : public homestore::IndexServiceCallbacks {
