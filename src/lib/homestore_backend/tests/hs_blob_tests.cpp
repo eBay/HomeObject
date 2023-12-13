@@ -94,13 +94,13 @@ public:
                 BitsGenerator::gen_random_bits(put_blob.body);
                 // Keep a copy of random payload to verify later.
                 homeobject::Blob clone{sisl::io_blob_safe(blob_size, alignment), user_key, 42ul};
-                std::memcpy(clone.body.bytes, put_blob.body.bytes, put_blob.body.size);
+                std::memcpy(clone.body.bytes(), put_blob.body.cbytes(), put_blob.body.size());
                 auto b = _obj_inst->blob_manager()->put(shard_id, std::move(put_blob)).get();
                 ASSERT_TRUE(!!b);
                 auto blob_id = b.value();
 
                 LOGINFO("Put blob pg {} shard {} blob {} data {}", pg_id, shard_id, blob_id,
-                        hex_bytes(clone.body.bytes, std::min(10u, clone.body.size)));
+                        hex_bytes(clone.body.bytes(), std::min(10u, clone.body.size())));
                 blob_map.insert({{pg_id, shard_id, blob_id}, std::move(clone)});
             }
         }
@@ -110,23 +110,23 @@ public:
         uint32_t off = 0, len = 0;
         for (const auto& [id, blob] : blob_map) {
             int64_t pg_id = std::get< 0 >(id), shard_id = std::get< 1 >(id), blob_id = std::get< 2 >(id);
-            len = blob.body.size;
+            len = blob.body.size();
             if (use_random_offset) {
-                std::uniform_int_distribution< uint32_t > rand_off_gen{0u, blob.body.size - 1u};
-                std::uniform_int_distribution< uint32_t > rand_len_gen{1u, blob.body.size};
+                std::uniform_int_distribution< uint32_t > rand_off_gen{0u, blob.body.size() - 1u};
+                std::uniform_int_distribution< uint32_t > rand_len_gen{1u, blob.body.size()};
 
                 off = rand_off_gen(rnd_engine);
                 len = rand_len_gen(rnd_engine);
-                if ((off + len) >= blob.body.size) { len = blob.body.size - off; }
+                if ((off + len) >= blob.body.size()) { len = blob.body.size() - off; }
             }
 
             auto g = _obj_inst->blob_manager()->get(shard_id, blob_id, off, len).get();
             ASSERT_TRUE(!!g);
             auto result = std::move(g.value());
             LOGINFO("After restart get blob pg {} shard {} blob {} off {} len {} data {}", pg_id, shard_id, blob_id,
-                    off, len, hex_bytes(result.body.bytes, std::min(len, 10u)));
-            EXPECT_EQ(result.body.size, len);
-            EXPECT_EQ(std::memcmp(result.body.bytes, blob.body.bytes + off, result.body.size), 0);
+                    off, len, hex_bytes(result.body.bytes(), std::min(len, 10u)));
+            EXPECT_EQ(result.body.size(), len);
+            EXPECT_EQ(std::memcmp(result.body.bytes(), blob.body.cbytes() + off, result.body.size()), 0);
             EXPECT_EQ(result.user_key.size(), blob.user_key.size());
             EXPECT_EQ(blob.user_key, result.user_key);
             EXPECT_EQ(blob.object_off, result.object_off);
