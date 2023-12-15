@@ -48,6 +48,11 @@ homestore::blk_alloc_hints ReplicationStateMachine::get_blk_alloc_hints(sisl::bl
                                                                         uint32_t data_size) {
     const ReplicationMessageHeader* msg_header = r_cast< const ReplicationMessageHeader* >(header.cbytes());
     switch (msg_header->msg_type) {
+    case ReplicationMessageType::CREATE_PG_MSG:{
+        //Which chunk should be used to put the PGHeader? we will return default blk_alloc_hints()
+        break;
+    }
+
     case ReplicationMessageType::CREATE_SHARD_MSG: {
         auto any_allocated_chunk_id = home_object_->get_any_chunk_id(msg_header->pg_id);
         if (!any_allocated_chunk_id.has_value()) {

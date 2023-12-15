@@ -60,7 +60,7 @@ PGManager::NullAsyncResult HSHomeObject::_create_pg(PGInfo&& pg_info, std::set<p
 }
 
 PGManager::NullAsyncResult HSHomeObject::replicate_create_pg_msg(cshared<homestore::ReplDev> repl_dev, pg_id_t pg) {
-    auto msg_size = 512;
+    auto msg_size = 4 * Ki;
     auto req = repl_result_ctx< PGManager::NullResult >::make(msg_size, 512 /*alignment*/);
     req->header_.msg_type = ReplicationMessageType::CREATE_PG_MSG;
     req->header_.pg_id = pg;
@@ -68,10 +68,19 @@ PGManager::NullAsyncResult HSHomeObject::replicate_create_pg_msg(cshared<homesto
     req->header_.payload_size = 0;
     req->header_.payload_crc = 0;
     req->header_.seal();
+
     sisl::blob header;
     header.set_bytes(r_cast< uint8_t* >(&req->header_));
     header.set_size(sizeof(req->header_));
-    repl_dev->async_alloc_write(header, sisl::blob{},  sisl::sg_list{}, req);
+
+    //TODO: we need to serialize the PGInfo to the buf;
+    auto buf_ptr = req->hdr_buf_.bytes();
+    std::memset(buf_ptr, 0, msg_size);
+    sisl::sg_list value;
+    value.size = msg_size;
+    value.iovs.push_back(iovec(buf_ptr, msg_size));
+
+    repl_dev->async_alloc_write(header, sisl::blob{}, value, req);
     return req->result().deferValue([this](auto const& e) -> PGManager::NullResult {
         if (!e) { return folly::makeUnexpected(e.error()); }
         return folly::Unit();
