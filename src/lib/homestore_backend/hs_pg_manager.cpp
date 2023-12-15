@@ -97,7 +97,9 @@ void HSHomeObject::on_pg_message_commit(int64_t lsn, sisl::blob const& head_blob
     auto uuid_str = boost::uuids::to_string(index_table->uuid());
     PGInfo pg_info(pg_id);
     pg_info.replica_set_uuid = repl_dev->group_id();
-    //TODO: add members to pg_info
+    PGMember member(_our_id, "myself", 1);
+    //TODO: add more members to pg_info    
+    pg_info.members.emplace(std::move(member));
 
     //TODO: we need to get the ReplDev shard_ptr instead of ReplDev*
     auto repl_dev_result = hs_repl_service().get_repl_dev(pg_info.replica_set_uuid);
