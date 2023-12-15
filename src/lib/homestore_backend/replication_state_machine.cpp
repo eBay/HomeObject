@@ -7,6 +7,10 @@ void ReplicationStateMachine::on_commit(int64_t lsn, const sisl::blob& header, c
     LOGI("applying raft log commit with lsn:{}", lsn);
     const ReplicationMessageHeader* msg_header = r_cast< const ReplicationMessageHeader* >(header.cbytes());
     switch (msg_header->msg_type) {
+    case ReplicationMessageType::CREATE_PG_MSG: {
+        home_object_->on_pg_message_commit(lsn, header, pbas, repl_dev(), ctx);
+	break;
+    }
     case ReplicationMessageType::CREATE_SHARD_MSG:
     case ReplicationMessageType::SEAL_SHARD_MSG: {
         home_object_->on_shard_message_commit(lsn, header, pbas, repl_dev(), ctx);

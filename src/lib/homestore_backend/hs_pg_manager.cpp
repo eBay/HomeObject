@@ -51,27 +51,75 @@ PGManager::NullAsyncResult HSHomeObject::_create_pg(PGInfo&& pg_info, std::set<p
     return hs_repl_service()
         .create_repl_dev(pg_info.replica_set_uuid, std::move(peers))
         .via(executor_)
-        .thenValue([this, pg_info = std::move(pg_info)](auto&& v) mutable -> PGManager::NullResult {
+        .thenValue([this, pg_info = std::move(pg_info)](auto&& v) mutable -> PGManager::NullAsyncResult {
             if (v.hasError()) { return folly::makeUnexpected(toPgError(v.error())); }
-
-            // TODO create index table during create shard.
-            auto index_table = create_index_table();
-            auto uuid_str = boost::uuids::to_string(index_table->uuid());
-
-            auto pg_id = pg_info.id;
-            auto hs_pg = std::make_unique< HS_PG >(std::move(pg_info), std::move(v.value()), index_table);
-            std::scoped_lock lock_guard(index_lock_);
-            RELEASE_ASSERT(index_table_pg_map_.count(uuid_str) == 0, "duplicate index table found");
-            index_table_pg_map_[uuid_str] = PgIndexTable{pg_id, index_table};
-
-            LOGI("Index table created for pg {} uuid {}", pg_id, uuid_str);
-            hs_pg->index_table_ = index_table;
-            // Add to index service, so that it gets cleaned up when index service is shutdown.
-            homestore::hs()->index_service().add_index_table(index_table);
-            add_pg_to_map(std::move(hs_pg));
-            return folly::Unit();
+	    //to make all PG will be created on all members, we will write a PGHeader to the raft group and
+	    //commit it when PGHeader is commited on raft group.
+            return replicate_create_pg_msg(v.value(), pg_info.id);
         });
 }
+
+PGManager::NullAsyncResult HSHomeObject::replicate_create_pg_msg(cshared<homestore::ReplDev> repl_dev, pg_id_t pg) {
+    auto msg_size = 512;
+    auto req = repl_result_ctx< PGManager::NullResult >::make(msg_size, 512 /*alignment*/);
+    req->header_.msg_type = ReplicationMessageType::CREATE_PG_MSG;
+    req->header_.pg_id = pg;
+    req->header_.shard_id = 0;
+    req->header_.payload_size = 0;
+    req->header_.payload_crc = 0;
+    req->header_.seal();
+    sisl::blob header;
+    header.set_bytes(r_cast< uint8_t* >(&req->header_));
+    header.set_size(sizeof(req->header_));
+    repl_dev->async_alloc_write(header, sisl::blob{},  sisl::sg_list{}, req);
+    return req->result().deferValue([this](auto const& e) -> PGManager::NullResult {
+        if (!e) { return folly::makeUnexpected(e.error()); }
+        return folly::Unit();
+    });
+}
+
+void HSHomeObject::on_pg_message_commit(int64_t lsn, sisl::blob const& head_blob, homestore::MultiBlkId const& pbas,
+                                        homestore::ReplDev *repl_dev, cintrusive< homestore::repl_req_ctx >& hs_ctx) {
+    repl_result_ctx< PGManager::NullResult >* ctx{nullptr};
+    if (hs_ctx != nullptr) {
+        ctx = boost::static_pointer_cast< repl_result_ctx< PGManager::NullResult > >(hs_ctx).get();
+    }
+    auto header = *r_cast< ReplicationMessageHeader const* >(head_blob.cbytes());
+    if (header.corrupted()) {
+        LOGW("replication message header is corrupted with crc error, lsn:{}", lsn);
+        if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(PGError::CRC_MISMATCH)); }
+        return;
+    }
+    auto pg_id = header.pg_id;
+
+    // TODO create index table during create shard.
+    auto index_table = create_index_table();
+    auto uuid_str = boost::uuids::to_string(index_table->uuid());
+    PGInfo pg_info(pg_id);
+    pg_info.replica_set_uuid = repl_dev->group_id();
+    //TODO: add members to pg_info
+
+    //TODO: we need to get the ReplDev shard_ptr instead of ReplDev*
+    auto repl_dev_result = hs_repl_service().get_repl_dev(pg_info.replica_set_uuid);
+    RELEASE_ASSERT(repl_dev_result.hasValue(), "Failed to get ReplDev for group_id={}",
+		   boost::uuids::to_string(pg_info.replica_set_uuid));
+    auto repl_dev_ptr = repl_dev_result.value();
+    auto hs_pg = std::make_unique< HS_PG >(std::move(pg_info), std::move(repl_dev_ptr), index_table);
+    std::scoped_lock lock_guard(index_lock_);
+    RELEASE_ASSERT(index_table_pg_map_.count(uuid_str) == 0, "duplicate index table found");
+    index_table_pg_map_[uuid_str] = PgIndexTable{pg_id, index_table};
+
+    LOGI("Index table created for pg {} uuid {}", pg_id, uuid_str);
+    hs_pg->index_table_ = index_table;
+    // Add to index service, so that it gets cleaned up when index service is shutdown.
+    homestore::hs()->index_service().add_index_table(index_table);
+    add_pg_to_map(std::move(hs_pg));
+
+    if (ctx) {
+      	ctx->promise_.setValue(folly::Unit());
+    }
+}
+
 
 PGManager::NullAsyncResult HSHomeObject::_replace_member(pg_id_t id, peer_id_t const& old_member,
                                                          PGMember const& new_member) {

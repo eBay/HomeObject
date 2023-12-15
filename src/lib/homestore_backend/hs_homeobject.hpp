@@ -208,6 +208,7 @@ private:
 
     void persist_pg_sb();
 
+    PGManager::NullAsyncResult replicate_create_pg_msg(cshared<homestore::ReplDev> repl_dev, pg_id_t pg);
 public:
     using HomeObjectImpl::HomeObjectImpl;
     ~HSHomeObject() override;
@@ -215,6 +216,9 @@ public:
     void init_homestore();
 
     void init_timer_thread();
+
+    void on_pg_message_commit(int64_t lsn, sisl::blob const& header, homestore::MultiBlkId const& blkids,
+			      homestore::ReplDev* repl_dev, cintrusive< homestore::repl_req_ctx >& hs_ctx);
 
     void on_shard_message_commit(int64_t lsn, sisl::blob const& header, homestore::MultiBlkId const& blkids,
                                  homestore::ReplDev* repl_dev, cintrusive< homestore::repl_req_ctx >& hs_ctx);
