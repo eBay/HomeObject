@@ -46,20 +46,20 @@ PGError toPgError(ReplServiceError const& e) {
     return *(static_cast< HSHomeObject::HS_PG const& >(pg).repl_dev_);
 }
 
-PGManager::NullAsyncResult HSHomeObject::_create_pg(PGInfo&& pg_info, std::set<peer_id_t> peers) {
+PGManager::NullAsyncResult HSHomeObject::_create_pg(PGInfo&& pg_info, std::set< peer_id_t > peers) {
     pg_info.replica_set_uuid = boost::uuids::random_generator()();
     return hs_repl_service()
         .create_repl_dev(pg_info.replica_set_uuid, std::move(peers))
         .via(executor_)
         .thenValue([this, pg_info = std::move(pg_info)](auto&& v) mutable -> PGManager::NullAsyncResult {
             if (v.hasError()) { return folly::makeUnexpected(toPgError(v.error())); }
-	    //to make all PG will be created on all members, we will write a PGHeader to the raft group and
-	    //commit it when PGHeader is commited on raft group.
+            // to make all PG will be created on all members, we will write a PGHeader to the raft group and
+            // commit it when PGHeader is commited on raft group.
             return replicate_create_pg_msg(v.value(), pg_info.id);
         });
 }
 
-PGManager::NullAsyncResult HSHomeObject::replicate_create_pg_msg(cshared<homestore::ReplDev> repl_dev, pg_id_t pg) {
+PGManager::NullAsyncResult HSHomeObject::replicate_create_pg_msg(cshared< homestore::ReplDev > repl_dev, pg_id_t pg) {
     auto msg_size = 4 * Ki;
     auto req = repl_result_ctx< PGManager::NullResult >::make(msg_size, 512 /*alignment*/);
     req->header_.msg_type = ReplicationMessageType::CREATE_PG_MSG;
@@ -73,7 +73,7 @@ PGManager::NullAsyncResult HSHomeObject::replicate_create_pg_msg(cshared<homesto
     header.set_bytes(r_cast< uint8_t* >(&req->header_));
     header.set_size(sizeof(req->header_));
 
-    //TODO: we need to serialize the PGInfo to the buf;
+    // TODO: we need to serialize the PGInfo to the buf;
     auto buf_ptr = req->hdr_buf_.bytes();
     std::memset(buf_ptr, 0, msg_size);
     sisl::sg_list value;
@@ -88,9 +88,9 @@ PGManager::NullAsyncResult HSHomeObject::replicate_create_pg_msg(cshared<homesto
 }
 
 void HSHomeObject::on_pg_message_commit(int64_t lsn, sisl::blob const& head_blob, homestore::MultiBlkId const& pbas,
-                                        homestore::ReplDev *repl_dev, cintrusive< homestore::repl_req_ctx >& hs_ctx) {
+                                        homestore::ReplDev* repl_dev, cintrusive< homestore::repl_req_ctx >& hs_ctx) {
     repl_result_ctx< PGManager::NullResult >* ctx{nullptr};
-    if (hs_ctx != nullptr) {
+    if (hs_ctx != nullptr && repl_dev->is_leader()) {
         ctx = boost::static_pointer_cast< repl_result_ctx< PGManager::NullResult > >(hs_ctx).get();
     }
     auto header = *r_cast< ReplicationMessageHeader const* >(head_blob.cbytes());
@@ -107,13 +107,13 @@ void HSHomeObject::on_pg_message_commit(int64_t lsn, sisl::blob const& head_blob
     PGInfo pg_info(pg_id);
     pg_info.replica_set_uuid = repl_dev->group_id();
     PGMember member(_our_id, "myself", 1);
-    //TODO: add more members to pg_info    
+    // TODO: add more members to pg_info
     pg_info.members.emplace(std::move(member));
 
-    //TODO: we need to get the ReplDev shard_ptr instead of ReplDev*
+    // TODO: we need to get the ReplDev shard_ptr instead of ReplDev*
     auto repl_dev_result = hs_repl_service().get_repl_dev(pg_info.replica_set_uuid);
     RELEASE_ASSERT(repl_dev_result.hasValue(), "Failed to get ReplDev for group_id={}",
-		   boost::uuids::to_string(pg_info.replica_set_uuid));
+                   boost::uuids::to_string(pg_info.replica_set_uuid));
     auto repl_dev_ptr = repl_dev_result.value();
     auto hs_pg = std::make_unique< HS_PG >(std::move(pg_info), std::move(repl_dev_ptr), index_table);
     std::scoped_lock lock_guard(index_lock_);
@@ -126,11 +126,8 @@ void HSHomeObject::on_pg_message_commit(int64_t lsn, sisl::blob const& head_blob
     homestore::hs()->index_service().add_index_table(index_table);
     add_pg_to_map(std::move(hs_pg));
 
-    if (ctx) {
-      	ctx->promise_.setValue(folly::Unit());
-    }
+    if (ctx) { ctx->promise_.setValue(folly::Unit()); }
 }
-
 
 PGManager::NullAsyncResult HSHomeObject::_replace_member(pg_id_t id, peer_id_t const& old_member,
                                                          PGMember const& new_member) {

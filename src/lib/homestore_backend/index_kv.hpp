@@ -18,7 +18,7 @@ public:
     BlobRouteKey(const BlobRouteKey& other) : BlobRouteKey(other.serialize(), true) {}
     BlobRouteKey(const homestore::BtreeKey& other) : BlobRouteKey(other.serialize(), true) {}
     BlobRouteKey(const sisl::blob& b, bool copy) :
-        homestore::BtreeKey(), key_{*(r_cast< const BlobRoute* >(b.cbytes()))} {}
+            homestore::BtreeKey(), key_{*(r_cast< const BlobRoute* >(b.cbytes()))} {}
 
     ~BlobRouteKey() override = default;
 

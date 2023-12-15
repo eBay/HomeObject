@@ -10,7 +10,7 @@ PGManager::NullAsyncResult HomeObjectImpl::create_pg(PGInfo&& pg_info) {
     LOGI("[pg={}] has [{}] members", pg_info.id, pg_info.members.size());
     auto saw_ourself = false;
     auto saw_leader = false;
-    auto peers = std::set<peer_id_t>();
+    auto peers = std::set< peer_id_t >();
     for (auto const& member : pg_info.members) {
         if (member.id == our_uuid()) saw_ourself = true;
         if (member.priority > 0) saw_leader = true;

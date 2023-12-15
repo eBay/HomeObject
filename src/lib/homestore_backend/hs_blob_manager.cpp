@@ -133,21 +133,21 @@ BlobManager::AsyncResult< blob_id_t > HSHomeObject::_put_blob(ShardInfo const& s
 }
 
 void HSHomeObject::on_blob_put_commit(int64_t lsn, sisl::blob const& header, sisl::blob const& key,
-                                      const homestore::MultiBlkId& pbas,
+                                      const homestore::MultiBlkId& pbas, bool is_leader,
                                       cintrusive< homestore::repl_req_ctx >& hs_ctx) {
     repl_result_ctx< BlobManager::Result< BlobInfo > >* ctx{nullptr};
-    if (hs_ctx != nullptr) {
+    if (hs_ctx != nullptr && is_leader) {
         ctx = boost::static_pointer_cast< repl_result_ctx< BlobManager::Result< BlobInfo > > >(hs_ctx).get();
     }
 
-    auto msg_header = r_cast< ReplicationMessageHeader* >(const_cast<uint8_t*>(header.cbytes()));
+    auto msg_header = r_cast< ReplicationMessageHeader* >(const_cast< uint8_t* >(header.cbytes()));
     if (msg_header->corrupted()) {
         LOGE("replication message header is corrupted with crc error, lsn:{}", lsn);
         if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(BlobError::CHECKSUM_MISMATCH)); }
         return;
     }
 
-    auto const blob_id = *(reinterpret_cast< blob_id_t* >(const_cast<uint8_t*>(key.cbytes())));
+    auto const blob_id = *(reinterpret_cast< blob_id_t* >(const_cast< uint8_t* >(key.cbytes())));
     shared< BlobIndexTable > index_table;
     {
         std::shared_lock lock_guard(_pg_lock);
@@ -271,7 +271,7 @@ BlobManager::AsyncResult< Blob > HSHomeObject::_get_blob(ShardInfo const& shard,
 }
 
 homestore::blk_alloc_hints HSHomeObject::blob_put_get_blk_alloc_hints(sisl::blob const& header) {
-    auto msg_header = r_cast< ReplicationMessageHeader* >(const_cast<uint8_t*>(header.cbytes()));
+    auto msg_header = r_cast< ReplicationMessageHeader* >(const_cast< uint8_t* >(header.cbytes()));
     if (msg_header->corrupted()) {
         LOGE("replication message header is corrupted with crc error shard:{}", msg_header->shard_id);
         return {};
@@ -324,14 +324,14 @@ BlobManager::NullAsyncResult HSHomeObject::_del_blob(ShardInfo const& shard, blo
     });
 }
 
-void HSHomeObject::on_blob_del_commit(int64_t lsn, sisl::blob const& header, sisl::blob const& key,
+void HSHomeObject::on_blob_del_commit(int64_t lsn, sisl::blob const& header, sisl::blob const& key, bool is_leader,
                                       cintrusive< homestore::repl_req_ctx >& hs_ctx) {
     repl_result_ctx< BlobManager::Result< BlobInfo > >* ctx{nullptr};
-    if (hs_ctx != nullptr) {
+    if (hs_ctx != nullptr && is_leader) {
         ctx = boost::static_pointer_cast< repl_result_ctx< BlobManager::Result< BlobInfo > > >(hs_ctx).get();
     }
 
-    auto msg_header = r_cast< ReplicationMessageHeader* >(const_cast<uint8_t*>(header.cbytes()));
+    auto msg_header = r_cast< ReplicationMessageHeader* >(const_cast< uint8_t* >(header.cbytes()));
     if (msg_header->corrupted()) {
         LOGERROR("replication message header is corrupted with crc error, lsn:{}", lsn);
         if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(BlobError::CHECKSUM_MISMATCH)); }
@@ -352,7 +352,7 @@ void HSHomeObject::on_blob_del_commit(int64_t lsn, sisl::blob const& header, sis
 
     BlobInfo blob_info;
     blob_info.shard_id = msg_header->shard_id;
-    blob_info.blob_id = *r_cast< blob_id_t* >(const_cast<uint8_t*>(key.cbytes()));
+    blob_info.blob_id = *r_cast< blob_id_t* >(const_cast< uint8_t* >(key.cbytes()));
 
     auto r = move_to_tombstone(index_table, blob_info);
     if (!r) {

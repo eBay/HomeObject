@@ -146,9 +146,10 @@ void HSHomeObject::on_shard_message_commit(int64_t lsn, sisl::blob const& header
                                            homestore::ReplDev* repl_dev,
                                            cintrusive< homestore::repl_req_ctx >& hs_ctx) {
 
-    if (hs_ctx != nullptr) {
+    if (hs_ctx != nullptr && repl_dev->is_leader()) {
         auto ctx = boost::static_pointer_cast< repl_result_ctx< ShardManager::Result< ShardInfo > > >(hs_ctx);
-        do_shard_message_commit(lsn, *r_cast< ReplicationMessageHeader* >(const_cast<uint8_t*>(header.cbytes())), blkids, ctx->hdr_buf_, hs_ctx);
+        do_shard_message_commit(lsn, *r_cast< ReplicationMessageHeader* >(const_cast< uint8_t* >(header.cbytes())),
+                                blkids, ctx->hdr_buf_, hs_ctx);
         return;
     }
 
@@ -157,6 +158,7 @@ void HSHomeObject::on_shard_message_commit(int64_t lsn, sisl::blob const& header
     // is already be written into metablk, so we need to do nothing in this case to avoid duplication when replay this
     // journal log. but there is still a smaller chance that HO is stopped/crashed before writing metablk is called or
     // completed and we need to recover shard info from journal log in such case.
+
     sisl::sg_list value;
     value.size = blkids.blk_count() * repl_dev->get_blk_size();
     auto value_buf = iomanager.iobuf_alloc(512, value.size);

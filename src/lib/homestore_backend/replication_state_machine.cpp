@@ -9,7 +9,7 @@ void ReplicationStateMachine::on_commit(int64_t lsn, const sisl::blob& header, c
     switch (msg_header->msg_type) {
     case ReplicationMessageType::CREATE_PG_MSG: {
         home_object_->on_pg_message_commit(lsn, header, pbas, repl_dev(), ctx);
-	break;
+        break;
     }
     case ReplicationMessageType::CREATE_SHARD_MSG:
     case ReplicationMessageType::SEAL_SHARD_MSG: {
@@ -18,11 +18,11 @@ void ReplicationStateMachine::on_commit(int64_t lsn, const sisl::blob& header, c
     }
 
     case ReplicationMessageType::PUT_BLOB_MSG: {
-        home_object_->on_blob_put_commit(lsn, header, key, pbas, ctx);
+        home_object_->on_blob_put_commit(lsn, header, key, pbas, repl_dev()->is_leader(), ctx);
         break;
     }
     case ReplicationMessageType::DEL_BLOB_MSG:
-        home_object_->on_blob_del_commit(lsn, header, key, ctx);
+        home_object_->on_blob_del_commit(lsn, header, key, repl_dev()->is_leader(), ctx);
         break;
     default: {
         break;
@@ -44,12 +44,11 @@ void ReplicationStateMachine::on_rollback(int64_t lsn, sisl::blob const&, sisl::
     LOGI("on_rollback  with lsn:{}", lsn);
 }
 
-homestore::blk_alloc_hints ReplicationStateMachine::get_blk_alloc_hints(sisl::blob const& header,
-                                                                        uint32_t data_size) {
+homestore::blk_alloc_hints ReplicationStateMachine::get_blk_alloc_hints(sisl::blob const& header, uint32_t data_size) {
     const ReplicationMessageHeader* msg_header = r_cast< const ReplicationMessageHeader* >(header.cbytes());
     switch (msg_header->msg_type) {
-    case ReplicationMessageType::CREATE_PG_MSG:{
-        //Which chunk should be used to put the PGHeader? we will return default blk_alloc_hints()
+    case ReplicationMessageType::CREATE_PG_MSG: {
+        // Which chunk should be used to put the PGHeader? we will return default blk_alloc_hints()
         break;
     }
 

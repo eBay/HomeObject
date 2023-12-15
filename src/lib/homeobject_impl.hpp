@@ -82,7 +82,7 @@ class HomeObjectImpl : public HomeObject,
     virtual BlobManager::NullAsyncResult _del_blob(ShardInfo const&, blob_id_t) = 0;
     ///
 
-    virtual PGManager::NullAsyncResult _create_pg(PGInfo&& pg_info, std::set<peer_id_t> peers) = 0;
+    virtual PGManager::NullAsyncResult _create_pg(PGInfo&& pg_info, std::set< peer_id_t > peers) = 0;
     virtual PGManager::NullAsyncResult _replace_member(pg_id_t id, peer_id_t const& old_member,
                                                        PGMember const& new_member) = 0;
     virtual bool _get_stats(pg_id_t id, PGStats& stats) const = 0;
@@ -128,9 +128,7 @@ public:
     peer_id_t our_uuid() const final { return _our_id; }
     HomeObjectStats get_stats() const final { return _get_stats(); }
 
-    std::shared_ptr<HomeObjectApplication> application() {
-      	return _application.lock();
-    }
+    std::shared_ptr< HomeObjectApplication > application() { return _application.lock(); }
 
     /// PgManager
     PGManager::NullAsyncResult create_pg(PGInfo&& pg_info) final;

@@ -39,7 +39,7 @@ class HSHomeObject : public HomeObjectImpl {
                                                uint64_t len = 0) const override;
     BlobManager::NullAsyncResult _del_blob(ShardInfo const&, blob_id_t) override;
 
-  PGManager::NullAsyncResult _create_pg(PGInfo&& pg_info, std::set<peer_id_t> peers) override;
+    PGManager::NullAsyncResult _create_pg(PGInfo&& pg_info, std::set< peer_id_t > peers) override;
     PGManager::NullAsyncResult _replace_member(pg_id_t id, peer_id_t const& old_member,
                                                PGMember const& new_member) override;
 
@@ -208,7 +208,11 @@ private:
 
     void persist_pg_sb();
 
-    PGManager::NullAsyncResult replicate_create_pg_msg(cshared<homestore::ReplDev> repl_dev, pg_id_t pg);
+    // PG related
+    PGManager::NullAsyncResult replicate_create_pg_msg(cshared< homestore::ReplDev > repl_dev, pg_id_t pg);
+    static std::string serialize_pg_info(const PGInfo& info);
+    static PGInfo deserialize_pg_info(const char* pg_info_str, size_t size);
+
 public:
     using HomeObjectImpl::HomeObjectImpl;
     ~HSHomeObject() override;
@@ -218,7 +222,7 @@ public:
     void init_timer_thread();
 
     void on_pg_message_commit(int64_t lsn, sisl::blob const& header, homestore::MultiBlkId const& blkids,
-			      homestore::ReplDev* repl_dev, cintrusive< homestore::repl_req_ctx >& hs_ctx);
+                              homestore::ReplDev* repl_dev, cintrusive< homestore::repl_req_ctx >& hs_ctx);
 
     void on_shard_message_commit(int64_t lsn, sisl::blob const& header, homestore::MultiBlkId const& blkids,
                                  homestore::ReplDev* repl_dev, cintrusive< homestore::repl_req_ctx >& hs_ctx);
@@ -238,8 +242,9 @@ public:
 
     // Blob manager related.
     void on_blob_put_commit(int64_t lsn, sisl::blob const& header, sisl::blob const& key,
-                            const homestore::MultiBlkId& pbas, cintrusive< homestore::repl_req_ctx >& hs_ctx);
-    void on_blob_del_commit(int64_t lsn, sisl::blob const& header, sisl::blob const& key,
+                            const homestore::MultiBlkId& pbas, bool is_leader,
+                            cintrusive< homestore::repl_req_ctx >& hs_ctx);
+    void on_blob_del_commit(int64_t lsn, sisl::blob const& header, sisl::blob const& key, bool is_leader,
                             cintrusive< homestore::repl_req_ctx >& hs_ctx);
     homestore::blk_alloc_hints blob_put_get_blk_alloc_hints(sisl::blob const& header);
     void compute_blob_payload_hash(BlobHeader::HashAlgorithm algorithm, const uint8_t* blob_bytes, size_t blob_size,

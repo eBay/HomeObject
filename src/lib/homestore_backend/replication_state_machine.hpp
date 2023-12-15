@@ -102,8 +102,7 @@ public:
     /// @param header Header originally passed with repl_dev::write() api on the leader
     /// @param data_size Size needed to be allocated for
     /// @return Expected to return blk_alloc_hints for this write
-    homestore::blk_alloc_hints get_blk_alloc_hints(sisl::blob const& header,
-                                                   uint32_t data_size) override;
+    homestore::blk_alloc_hints get_blk_alloc_hints(sisl::blob const& header, uint32_t data_size) override;
 
     /// @brief Called when the replica set is being stopped
     void on_replica_stop() override;
@@ -118,9 +117,7 @@ public:
 
     virtual ~HSReplApplication() = default;
 
-    virtual homestore::repl_impl_type get_impl_type() const override {
-        return homestore::repl_impl_type::server_side;
-    }
+    virtual homestore::repl_impl_type get_impl_type() const override { return homestore::repl_impl_type::server_side; }
 
     virtual bool need_timeline_consistency() const override { return false; }
 
@@ -130,16 +127,17 @@ public:
 
     // Given the uuid of the peer, get their address and port
     virtual std::pair< std::string, uint16_t > lookup_peer(homestore::replica_id_t uuid) const override {
-	auto ip_v4 = home_object_->application()->lookup_peer(uuid);
-	//for now, there is no port defined for home replication, let's just use 8000 temporarily;
-	return std::make_pair(ip_v4, 8000);
+        auto ip_v4 = home_object_->application()->lookup_peer(uuid);
+        // for now, there is no port defined for home replication, let's just use 8000 temporarily;
+        return std::make_pair(ip_v4, 8000);
     }
 
     // Get the current application/server repl uuid
     virtual homestore::replica_id_t get_my_repl_id() const override {
-        //return home_object_->our_uuid();
+        // return home_object_->our_uuid();
         return home_object_->application()->discover_svcid(boost::uuids::uuid());
     }
+
 private:
     HSHomeObject* home_object_{nullptr};
 };
