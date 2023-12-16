@@ -95,6 +95,7 @@ ShardManager::AsyncResult< ShardInfo > HSHomeObject::_create_shard(pg_id_t pg_ow
     value.size = msg_size;
     value.iovs.push_back(iovec(buf_ptr, msg_size));
     // replicate this create shard message to PG members;
+    LOGI("propose to create new shard with pg_id:{}, shard_id:{}", pg_owner, new_shard_id);
     repl_dev->async_alloc_write(header, sisl::blob{}, value, req);
     return req->result().deferValue([this](auto const& e) -> ShardManager::Result< ShardInfo > {
         if (!e) return folly::makeUnexpected(e.error());
@@ -138,6 +139,7 @@ ShardManager::AsyncResult< ShardInfo > HSHomeObject::_seal_shard(ShardInfo const
     value.iovs.push_back(iovec(buf_ptr, msg_size));
 
     // replicate this seal shard message to PG members;
+    LOGI("propose to seal shard with pg_id:{}, shard_id:{}", pg_id, shard_id);
     repl_dev->async_alloc_write(header, sisl::blob{}, value, req);
     return req->result();
 }
@@ -209,6 +211,7 @@ void HSHomeObject::do_shard_message_commit(int64_t lsn, ReplicationMessageHeader
 
         if (!shard_exist) {
             add_new_shard_to_map(std::make_unique< HS_Shard >(shard_info, blkids.chunk_num()));
+            LOGI("new shard:{} is created successfully on homeobject", shard_info.id);
             // select_specific_chunk() will do something only when we are relaying journal after restart, during the
             // runtime flow chunk is already been be mark busy when we write the shard info to the repldev.
             chunk_selector_->select_specific_chunk(blkids.chunk_num());
@@ -231,6 +234,7 @@ void HSHomeObject::do_shard_message_commit(int64_t lsn, ReplicationMessageHeader
             RELEASE_ASSERT(chunk_id.has_value(), "Chunk id not found");
             chunk_selector()->release_chunk(chunk_id.value());
             update_shard_in_map(shard_info);
+            LOGI("seal shard:{} successfully on homeobject", shard_info.id);
         }
 
         break;

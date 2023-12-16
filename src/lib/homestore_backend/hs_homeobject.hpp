@@ -209,9 +209,9 @@ private:
     void persist_pg_sb();
 
     // PG related
-    PGManager::NullAsyncResult replicate_create_pg_msg(cshared< homestore::ReplDev > repl_dev, pg_id_t pg);
+    PGManager::NullAsyncResult replicate_create_pg_msg(cshared< homestore::ReplDev > repl_dev, PGInfo pg_info);
     static std::string serialize_pg_info(const PGInfo& info);
-    static PGInfo deserialize_pg_info(const char* pg_info_str, size_t size);
+    static PGInfo deserialize_pg_info(std::string const& pg_info_str);
 
 public:
     using HomeObjectImpl::HomeObjectImpl;

@@ -1,4 +1,5 @@
 #include <boost/uuid/random_generator.hpp>
+#include <boost/uuid/string_generator.hpp>
 #include <homestore/replication_service.hpp>
 #include "hs_homeobject.hpp"
 #include "replication_state_machine.hpp"
@@ -55,15 +56,16 @@ PGManager::NullAsyncResult HSHomeObject::_create_pg(PGInfo&& pg_info, std::set< 
             if (v.hasError()) { return folly::makeUnexpected(toPgError(v.error())); }
             // to make all PG will be created on all members, we will write a PGHeader to the raft group and
             // commit it when PGHeader is commited on raft group.
-            return replicate_create_pg_msg(v.value(), pg_info.id);
+            return replicate_create_pg_msg(v.value(), std::move(pg_info));
         });
 }
 
-PGManager::NullAsyncResult HSHomeObject::replicate_create_pg_msg(cshared< homestore::ReplDev > repl_dev, pg_id_t pg) {
-    auto msg_size = 4 * Ki;
+PGManager::NullAsyncResult HSHomeObject::replicate_create_pg_msg(cshared< homestore::ReplDev > repl_dev, PGInfo pg_info) {
+    auto serailized_pg_info = HSHomeObject::serialize_pg_info(pg_info);
+    auto msg_size = sisl::round_up(serailized_pg_info.size(), repl_dev->get_blk_size());
     auto req = repl_result_ctx< PGManager::NullResult >::make(msg_size, 512 /*alignment*/);
     req->header_.msg_type = ReplicationMessageType::CREATE_PG_MSG;
-    req->header_.pg_id = pg;
+    req->header_.pg_id = pg_info.id;
     req->header_.shard_id = 0;
     req->header_.payload_size = 0;
     req->header_.payload_crc = 0;
@@ -76,6 +78,7 @@ PGManager::NullAsyncResult HSHomeObject::replicate_create_pg_msg(cshared< homest
     // TODO: we need to serialize the PGInfo to the buf;
     auto buf_ptr = req->hdr_buf_.bytes();
     std::memset(buf_ptr, 0, msg_size);
+    std::memcpy(buf_ptr, serailized_pg_info.c_str(), serailized_pg_info.size());
     sisl::sg_list value;
     value.size = msg_size;
     value.iovs.push_back(iovec(buf_ptr, msg_size));
@@ -144,7 +147,7 @@ void HSHomeObject::add_pg_to_map(unique< HS_PG > hs_pg) {
     RELEASE_ASSERT(_pg_map.end() != it1, "Unknown map insert error!");
 }
 
-#if 0
+
 std::string HSHomeObject::serialize_pg_info(PGInfo const& pginfo) {
     nlohmann::json j;
     j["pg_info"]["pg_id_t"] = pginfo.id;
@@ -165,20 +168,18 @@ std::string HSHomeObject::serialize_pg_info(PGInfo const& pginfo) {
 PGInfo HSHomeObject::deserialize_pg_info(std::string const& json_str) {
     auto pg_json = nlohmann::json::parse(json_str);
 
-    PGInfo pg_info;
-    pg_info.id = pg_json["pg_info"]["pg_id_t"].get< pg_id_t >();
+    PGInfo pg_info(pg_json["pg_info"]["pg_id_t"].get< pg_id_t >());
     pg_info.replica_set_uuid = boost::uuids::string_generator()(pg_json["pg_info"]["repl_uuid"].get< std::string >());
 
-    for (auto const& m : pg_info["pg_info"]["members"]) {
-        PGMember member;
-        member.id = m["member_id"].get< pg_id_t >();
+    for (auto const& m : pg_json["pg_info"]["members"]) {
+        auto uuid_str = m["member_id"].get< std::string >();
+        PGMember member(boost::uuids::string_generator()(uuid_str));
         member.name = m["name"].get< std::string >();
         member.priority = m["priority"].get< int32_t >();
         pg_info.members.emplace(std::move(member));
     }
     return pg_info;
 }
-#endif
 
 void HSHomeObject::on_pg_meta_blk_found(sisl::byte_view const& buf, void* meta_cookie) {
     homestore::superblk< pg_info_superblk > pg_sb(_pg_meta_name);

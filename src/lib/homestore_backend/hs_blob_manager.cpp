@@ -112,6 +112,7 @@ BlobManager::AsyncResult< blob_id_t > HSHomeObject::_put_blob(ShardInfo const& s
     *(reinterpret_cast< blob_id_t* >(key_blob.bytes())) = new_blob_id;
     // TODO: too many captures in a lambda is not good for performance, find a way to move all the captures to a context
     // struct
+    LOGD("propose to Put blob {} on shard {}", new_blob_id, shard.id);
     repl_dev->async_alloc_write(req->hdr_buf_, key_blob, sgs, req);
     return req->result().deferValue([this, header, blob_header, blob = std::move(blob), blob_bytes, blob_copied,
                                      user_key_bytes, user_key_copied, pad_zeroes,
@@ -171,6 +172,7 @@ void HSHomeObject::on_blob_put_commit(int64_t lsn, sisl::blob const& header, sis
         return;
     }
 
+    LOGD("Put blob {} on shard {} is successfully", blob_info.blob_id,  blob_info.shard_id);
     if (ctx) { ctx->promise_.setValue(BlobManager::Result< BlobInfo >(blob_info)); }
 }
 
