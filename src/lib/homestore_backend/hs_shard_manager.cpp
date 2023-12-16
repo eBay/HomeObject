@@ -299,8 +299,8 @@ HSHomeObject::HS_Shard::HS_Shard(ShardInfo shard_info, homestore::chunk_num_t ch
     write_sb();
 }
 
-HSHomeObject::HS_Shard::HS_Shard(homestore::superblk< shard_info_superblk > const& sb) :
-        Shard(shard_info_from_sb(sb)), sb_(sb) {}
+HSHomeObject::HS_Shard::HS_Shard(homestore::superblk< shard_info_superblk >&& sb) :
+        Shard(shard_info_from_sb(sb)), sb_(std::move(sb)) {}
 
 void HSHomeObject::HS_Shard::update_info(const ShardInfo& shard_info) {
     info = shard_info;

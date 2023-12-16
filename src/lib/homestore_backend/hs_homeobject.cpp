@@ -154,7 +154,7 @@ HSHomeObject::~HSHomeObject() {
 void HSHomeObject::on_shard_meta_blk_found(homestore::meta_blk* mblk, sisl::byte_view buf) {
     homestore::superblk< shard_info_superblk > sb(_shard_meta_name);
     sb.load(buf, mblk);
-    add_new_shard_to_map(std::make_unique< HS_Shard >(sb));
+    add_new_shard_to_map(std::make_unique< HS_Shard >(std::move(sb)));
 }
 
 void HSHomeObject::on_shard_meta_blk_recover_completed(bool success) {
