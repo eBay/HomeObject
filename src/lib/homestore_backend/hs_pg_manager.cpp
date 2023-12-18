@@ -267,4 +267,5 @@ void HSHomeObject::_get_pg_ids(std::vector< pg_id_t >& pg_ids) const {
         }
     }
 }
+
 } // namespace homeobject
