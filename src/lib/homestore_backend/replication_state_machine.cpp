@@ -26,18 +26,46 @@ void ReplicationStateMachine::on_commit(int64_t lsn, const sisl::blob& header, c
     }
 }
 
-bool ReplicationStateMachine::on_pre_commit(int64_t lsn, sisl::blob const&, sisl::blob const&,
-                                            cintrusive< homestore::repl_req_ctx >&) {
+bool ReplicationStateMachine::on_pre_commit(int64_t lsn, sisl::blob const& header, sisl::blob const& key,
+                                            cintrusive< homestore::repl_req_ctx >& ctx) {
     LOGI("on_pre_commit with lsn:{}", lsn);
-    // For shard creation, since homestore repldev inside will write shard header to data service first before this
-    // function is called. So there is nothing is needed to do and we can get the binding chunk_id with the newly shard
-    // from the blkid in on_commit()
-    return true;
+    bool ret{true};
+    const ReplicationMessageHeader* msg_header = r_cast< const ReplicationMessageHeader* >(header.bytes);
+    switch (msg_header->msg_type) {
+    case ReplicationMessageType::CREATE_SHARD_MSG:
+    case ReplicationMessageType::SEAL_SHARD_MSG: {
+        ret = home_object_->on_pre_commit_shard_msg(lsn, header, key, ctx);
+        break;
+    }
+    case ReplicationMessageType::PUT_BLOB_MSG: {
+        ret = home_object_->on_blob_put_pre_commit(lsn, header, key, ctx);
+        break;
+    }
+    default: {
+        break;
+    }
+    }
+    return ret;
 }
 
-void ReplicationStateMachine::on_rollback(int64_t lsn, sisl::blob const&, sisl::blob const&,
-                                          cintrusive< homestore::repl_req_ctx >&) {
+void ReplicationStateMachine::on_rollback(int64_t lsn, sisl::blob const& header, sisl::blob const& key,
+                                          cintrusive< homestore::repl_req_ctx >& ctx) {
     LOGI("on_rollback  with lsn:{}", lsn);
+    const ReplicationMessageHeader* msg_header = r_cast< const ReplicationMessageHeader* >(header.bytes);
+    switch (msg_header->msg_type) {
+    case ReplicationMessageType::CREATE_SHARD_MSG:
+    case ReplicationMessageType::SEAL_SHARD_MSG: {
+        home_object_->on_rollback_shard_msg(lsn, header, key, ctx);
+        break;
+    }
+    case ReplicationMessageType::PUT_BLOB_MSG: {
+        home_object_->on_blob_put_rollback(lsn, header, key, ctx);
+        break;
+    }
+    default: {
+        break;
+    }
+    }
 }
 
 homestore::blk_alloc_hints ReplicationStateMachine::get_blk_alloc_hints(sisl::blob const& header,

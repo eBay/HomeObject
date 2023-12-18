@@ -337,3 +337,48 @@ TEST_F(HomeObjectFixture, PGStatsTest) {
     auto stats = _obj_inst->get_stats();
     LOGINFO("HomeObj stats: {}", stats.to_string());
 }
+
+TEST_F(HomeObjectFixture, SealShardWithPutBlob) {
+    pg_id_t pg_id{1};
+    create_pg(pg_id);
+
+    auto s = _obj_inst->shard_manager()->create_shard(pg_id, 64 * Mi).get();
+    ASSERT_TRUE(!!s);
+    auto shard_info = s.value();
+    auto shard_id = shard_info.id;
+    s = _obj_inst->shard_manager()->get_shard(shard_id).get();
+    ASSERT_TRUE(!!s);
+
+    // normal put blob should succeed
+    LOGINFO("Got shard {}", shard_id);
+    shard_info = s.value();
+    EXPECT_EQ(shard_info.id, shard_id);
+    EXPECT_EQ(shard_info.placement_group, pg_id);
+    EXPECT_EQ(shard_info.state, ShardInfo::State::OPEN);
+    auto b = _obj_inst->blob_manager()->put(shard_id, Blob{sisl::io_blob_safe(512u, 512u), "test_blob", 0ul}).get();
+    ASSERT_TRUE(!!b);
+    LOGINFO("Put blob {}", b.value());
+
+    auto hs_homeobject = dynamic_cast< HSHomeObject* >(_obj_inst.get());
+    hs_homeobject->set_semaphore();
+    // shard is open, so after set semaphore, put blob will block in pre_commit waiting for semaphore to be released.
+    std::thread blocking_put_blob([this, shard_id] {
+        auto b = _obj_inst->blob_manager()->put(shard_id, Blob{sisl::io_blob_safe(512u, 512u), "test_blob", 0ul}).get();
+        ASSERT_FALSE(b);
+        ASSERT_TRUE(b.error() == BlobError::SEALED_SHARD);
+    });
+
+    s = _obj_inst->shard_manager()->seal_shard(shard_id).get();
+    ASSERT_TRUE(!!s);
+    shard_info = s.value();
+    EXPECT_EQ(shard_info.id, shard_id);
+    EXPECT_EQ(shard_info.placement_group, pg_id);
+    EXPECT_EQ(shard_info.state, ShardInfo::State::SEALED);
+    LOGINFO("Sealed shard {}", shard_id);
+
+    // now shard is sealed, so put blob should fail immediately
+    hs_homeobject->release_semaphore();
+    blocking_put_blob.join();
+}
+
+// TODO: solo_repl_dev never call rollback. add test case for rollback when it is called in raft_repl_dev.

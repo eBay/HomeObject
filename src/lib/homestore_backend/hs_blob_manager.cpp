@@ -132,12 +132,71 @@ BlobManager::AsyncResult< blob_id_t > HSHomeObject::_put_blob(ShardInfo const& s
     });
 }
 
+bool HSHomeObject::on_blob_put_pre_commit(int64_t lsn, sisl::blob const& header, sisl::blob const& key,
+                                          cintrusive< homestore::repl_req_ctx >& hs_ctx) {
+    repl_result_ctx< BlobManager::Result< BlobInfo > >* ctx{nullptr};
+    if (hs_ctx != nullptr) {
+        ctx = boost::static_pointer_cast< repl_result_ctx< BlobManager::Result< BlobInfo > > >(hs_ctx).get();
+    }
+
+    if (ctx) { RELEASE_ASSERT(!ctx->promise_.isFulfilled(), "on_blob_put_pre_commit promise is already fulfilled"); }
+
+    auto msg_header = r_cast< ReplicationMessageHeader* >(header.bytes);
+    auto shard_id = msg_header->shard_id;
+
+    // used for test
+    if (smphSignal) smphSignal->acquire();
+
+    {
+        std::scoped_lock lock_guard(_shard_lock);
+        auto shard_iter = _shard_map.find(shard_id);
+        RELEASE_ASSERT(shard_iter != _shard_map.end(), "Missing shard info");
+        if ((shard_iter->second->get()->info).state == ShardInfo::State::SEALED) {
+            LOGE("Shard {} is sealed when pre_commit put_blob", shard_id);
+            if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(BlobError::SEALED_SHARD)); }
+            // we return false here, so on_blob_put_commit will not be called.
+            // instead, on_blob_put_rollback will be called.
+
+            // TODO: solo_repl_dev not check the returen value of pre_commit. this logic should be added to
+            // solo_repl_dev,if we get a false from pre_commit, we should call on_blob_put_rollback.
+            return false;
+        }
+    }
+    return true;
+}
+
+void HSHomeObject::on_blob_put_rollback(int64_t lsn, sisl::blob const& header, sisl::blob const& key,
+                                        cintrusive< homestore::repl_req_ctx >& hs_ctx) {
+    if (!hs_ctx) return;
+    auto msg_header = r_cast< ReplicationMessageHeader* >(header.bytes);
+    if (msg_header->corrupted()) {
+        LOGE("replication message header is corrupted with crc error, lsn:{}", lsn);
+        // TODO: stale blks will be left, GC will take care of it.
+        return;
+    }
+
+    auto& pg_id = msg_header->pg_id;
+    shared< homestore::ReplDev > repl_dev;
+    {
+        std::shared_lock lock_guard(_pg_lock);
+        auto iter = _pg_map.find(pg_id);
+        RELEASE_ASSERT(iter != _pg_map.end(), "PG not found");
+        repl_dev = static_cast< HS_PG* >(iter->second.get())->repl_dev_;
+    }
+    RELEASE_ASSERT(repl_dev != nullptr, "Repl dev instance null");
+    repl_dev->async_free_blks(lsn, hs_ctx->get_local_blkid());
+}
+
 void HSHomeObject::on_blob_put_commit(int64_t lsn, sisl::blob const& header, sisl::blob const& key,
                                       const homestore::MultiBlkId& pbas,
                                       cintrusive< homestore::repl_req_ctx >& hs_ctx) {
     repl_result_ctx< BlobManager::Result< BlobInfo > >* ctx{nullptr};
     if (hs_ctx != nullptr) {
         ctx = boost::static_pointer_cast< repl_result_ctx< BlobManager::Result< BlobInfo > > >(hs_ctx).get();
+        if (ctx->promise_.isFulfilled()) {
+            LOGE("on_blob_put_commit promise is already fulfilled in pre_commit");
+            return;
+        }
     }
 
     auto msg_header = r_cast< ReplicationMessageHeader* >(header.bytes);
