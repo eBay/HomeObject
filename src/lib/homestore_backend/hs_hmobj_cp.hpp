@@ -36,8 +36,7 @@ class HSHomeObject;
 
 class HomeObjCPCallbacks : public CPCallbacks {
 public:
-    // HomeObjCPCallbacks(cshared< HomeObjectImpl > home_obj_ptr);
-    HomeObjCPCallbacks() = default;
+    HomeObjCPCallbacks(HSHomeObject* home_obj_ptr) : home_obj_(home_obj_ptr){};
     virtual ~HomeObjCPCallbacks() = default;
 
 public:
@@ -47,27 +46,50 @@ public:
     int cp_progress_percent() override;
 
 private:
-    // cshared< HomeObjectImpl > home_obj_{nullptr};
+    HSHomeObject* home_obj_{nullptr}; // it is a raw pointer because HSHomeObject triggers shutdown in its destructor,
+                                      // holding a shared_ptr will cause a shutdown deadlock.
 };
 
 //
 // This is a per_cp context for home object.
 // When a new CP is created, a new HomeObjCPContext is created by CP Manager;
 // CP consumer doesn't need to free the dirty list inside this context as it will be automatically freed when this cp is
-// completed (goes out of life cycle) which is controlled by cp manager;
+// completed (goes out of life cycle);
 //
 class HomeObjCPContext : public CPContext {
 public:
     HomeObjCPContext(CP* cp);
-    virtual ~HomeObjCPContext() = default;
+    virtual ~HomeObjCPContext() {
+        for (auto x : pg_dirty_list_) {
+            free(x.second);
+        }
+    };
 
-public:
-    //
-    // HSHomeObject will add the dirty PG sb into this list.
-    // When CP is flushed, this list will be flushed to disk, when CP is completed, this list will be freed.
-    // Consumer needs to make sure anything being dirtied into this list are log protected.
-    //
-    folly::ConcurrentHashMap< pg_id_t, homestore::superblk< HSHomeObject::pg_info_superblk > > pg_dirty_list_;
+    /**
+     * @brief Adds the PG sb to the dirty list.
+     *
+     * This function adds the given pg superblock to the dirty list, indicating that it has been modified and needs to
+     * be written back to storage. If the same pg (identified by its id) has been added before in the same CP, it will
+     * update the same dirty buffer in the dirty list. Caller doesn't need to worry about whether same pg sb has been
+     * added or not.
+     *
+     * Memory:
+     * This function will allocate memory for the pg sb if it is the first time the pg sb is added;
+     * otherwise, it will reuse the memory allocated before.
+     *
+     * @param pg_sb A pointer to the page superblock to be added to the dirty list.
+     */
+    void add_pg_to_dirty_list(HSHomeObject::pg_info_superblk* pg_sb);
+
+    static void init_pg_sb(homestore::superblk< HSHomeObject::pg_info_superblk >&& sb) {
+        pg_sb_[sb->id] = std::move(sb); // move the sb to the map;
+    };
+
+    std::mutex dl_mtx_;
+    std::unordered_map< pg_id_t, HSHomeObject::pg_info_superblk* > pg_dirty_list_;
+
+    // static so that only one superblk instance can write to metablk;
+    static std::unordered_map< pg_id_t, homestore::superblk< HSHomeObject::pg_info_superblk > > pg_sb_;
 };
 
 } // namespace homeobject

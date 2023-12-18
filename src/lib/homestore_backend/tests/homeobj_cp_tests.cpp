@@ -15,11 +15,20 @@ TEST_F(HomeObjectFixture, HSHomeObjectCPTestBasic) {
         // Step-2: write some dirty pg information and add to dirt list;
         auto cur_cp = HomeStore::instance()->cp_mgr().cp_guard();
         auto cp_ctx = s_cast< HomeObjCPContext* >(cur_cp->context(homestore::cp_consumer_t::HS_CLIENT));
-        auto lg = std::shared_lock(ho->_pg_lock);
+        auto lg = std::unique_lock(ho->_pg_lock);
         for (auto& [_, pg] : ho->_pg_map) {
             auto hs_pg = static_cast< HSHomeObject::HS_PG* >(pg.get());
-            hs_pg->pg_sb_->num_members = 123;                /* write some random int for verification only*/
-            cp_ctx->pg_dirty_list_.insert(1, hs_pg->pg_sb_); /* deep copy of hs_pg->pg_sb_ */
+            hs_pg->blob_sequence_num_ = 54321; // fake some random blob seq number to make it dirty;
+            hs_pg->cache_pg_sb_->blob_sequence_num = hs_pg->blob_sequence_num_;
+            cp_ctx->add_pg_to_dirty_list(hs_pg->cache_pg_sb_);
+            hs_pg->blob_sequence_num_ = 54321; // fake some random blob seq number to make it dirty;
+
+            // test multiple update to the dirty list;
+            // only the last update should be kept;
+            hs_pg->blob_sequence_num_ = 12345; // fake some random blob seq number to make it dirty;
+            hs_pg->cache_pg_sb_->blob_sequence_num = hs_pg->blob_sequence_num_;
+            cp_ctx->add_pg_to_dirty_list(hs_pg->cache_pg_sb_);
+            hs_pg->blob_sequence_num_ = 12345; // fake some random blob seq number to make it dirty;
         }
     }
 
@@ -37,8 +46,7 @@ TEST_F(HomeObjectFixture, HSHomeObjectCPTestBasic) {
         auto lg = std::shared_lock(ho->_pg_lock);
         for (auto& [_, pg] : ho->_pg_map) {
             auto hs_pg = static_cast< HSHomeObject::HS_PG* >(pg.get());
-            EXPECT_EQ(hs_pg->pg_sb_->num_members, 123);
+            EXPECT_EQ(hs_pg->cache_pg_sb_->blob_sequence_num, 12345);
         }
     }
 }
-
