@@ -6,7 +6,12 @@ pipeline {
         CONAN_USER = 'oss'
         TARGET_BRANCH = 'main'
         STABLE_BRANCH = 'stable/v*'
-        DISABLE_DEP_TESTS = '-o sisl:testing=False -o iomgr:testing=off -o homestore:testing=off'
+        built_chain = ''
+        failed_pkg = ''
+    }
+
+    parameters {
+        string(defaultValue: "", description: 'UpstreamTriggered', name: 'upstream_triggered')
     }
 
     stages {
@@ -55,9 +60,9 @@ pipeline {
 
         stage("Compile") {
             steps {
-                sh """conan create ${BUILD_MISSING} ${DISABLE_DEP_TESTS} -o ${PROJECT}:sanitize=True -pr debug . ${PROJECT}/${TAG} ;
-                      conan create ${BUILD_MISSING} ${DISABLE_DEP_TESTS} -pr debug . ${PROJECT}/${TAG} ;
-                      conan create ${BUILD_MISSING} ${DISABLE_DEP_TESTS} -pr test . ${PROJECT}/${TAG} ;"""
+                sh """conan create ${BUILD_MISSING} -o ${PROJECT}:sanitize=True -pr debug . ${PROJECT}/${TAG} ;
+                      conan create ${BUILD_MISSING} -pr debug . ${PROJECT}/${TAG} ;
+                      conan create ${BUILD_MISSING} -pr test . ${PROJECT}/${TAG} ;"""
             }
         }
 
@@ -70,11 +75,36 @@ pipeline {
                 sh "conan upload ${PROJECT}/${TAG} -c --all -r ebay-local"
             }
         }
+        stage("Downstream Build") {
+            when { allOf {
+               expression { (env.BRANCH_NAME == "${TARGET_BRANCH}") }
+               expression { (!"${upstream_triggered}") || ("${upstream_triggered}" == "") }
+            } }
+        
+            stages {
+                stage('StorageManager') {
+                    steps {
+                        script {
+                            def hobj_res = build job: "StorageManager/main", parameters: [[$class: 'StringParameterValue', name: 'upstream_triggered', value: 'true']], propagate: true
+                            built_chain = "${built_chain}" + ", " + "$hobj_res.buildVariables.pkg_version"
+                        }
+                    }
+                    post {
+                        failure { script { failed_pkg = "StorageManager" } }
+                    }
+                }
+            }
+        }
     }
 
     post {
         failure {
-            slackSend color: '#E43237', channel: '#sds-ci', message: "*${PROJECT}/${TAG}* has had a failure : ${BUILD_URL}"
+            script {
+                if ("${failed_pkg}" != "") {
+                    slackSend color: '#E43237', channel: '#sds-ci', message: "@here HomeObject downstream pkg - *${failed_pkg}* build failed.\n*URL:* ${BUILD_URL}\nIf result not expected, revert (aka `conan remove -r ebay-local`) these pkgs: ```${built_chain}```"
+                } else {
+                    slackSend color: '#E43237', channel: '#sds-ci', message: "*${PROJECT}/${TAG}* has had a failure : ${BUILD_URL}"
+            }
         }
         success {
             slackSend color: '#85B717', channel: '#sds-ci', message: "*${PROJECT}/${TAG}* has completed."

@@ -1,5 +1,6 @@
 
 #include <latch>
+#include <optional>
 #include <spdlog/fmt/bin_to_hex.h>
 
 #include <homestore/homestore.hpp>
@@ -61,7 +62,7 @@ void HSHomeObject::init_homestore() {
 
     // We either recoverd a UUID and no FORMAT is needed, or we need one for a later superblock
     if (need_format) {
-        _our_id = _application.lock()->discover_svcid(boost::uuids::uuid());
+        _our_id = _application.lock()->discover_svcid(std::nullopt);
         RELEASE_ASSERT(!_our_id.is_nil(), "Received no SvcId and need FORMAT!");
         LOGW("We are starting for the first time on [{}], Formatting!!", to_string(_our_id));
 
