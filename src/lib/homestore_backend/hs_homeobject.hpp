@@ -198,8 +198,9 @@ private:
     static std::string serialize_shard_info(const ShardInfo& info);
     void add_new_shard_to_map(ShardPtr&& shard);
     void update_shard_in_map(const ShardInfo& shard_info);
-    void do_shard_message_commit(int64_t lsn, ReplicationMessageHeader& header, homestore::MultiBlkId const& blkids,
-                                 sisl::blob value, cintrusive< homestore::repl_req_ctx >& hs_ctx);
+    void do_shard_message_commit(int64_t lsn, ReplicationMessageHeader const& header,
+                                 homestore::MultiBlkId const& blkids, sisl::blob value,
+                                 cintrusive< homestore::repl_req_ctx >& hs_ctx);
     // recover part
     void register_homestore_metablk_callback();
     void on_pg_meta_blk_found(sisl::byte_view const& buf, void* meta_cookie);
@@ -211,7 +212,9 @@ private:
     // PG related
     PGManager::NullAsyncResult replicate_create_pg_msg(cshared< homestore::ReplDev > repl_dev, PGInfo pg_info);
     static std::string serialize_pg_info(const PGInfo& info);
-    static PGInfo deserialize_pg_info(std::string const& pg_info_str);
+    static PGInfo deserialize_pg_info(char const* pg_info_str, size_t size);
+    void do_commit_create_pg(int64_t lsn, ReplicationMessageHeader const& header, sisl::blob value,
+                             cintrusive< homestore::repl_req_ctx >& hs_ctx);
 
 public:
     using HomeObjectImpl::HomeObjectImpl;
@@ -242,9 +245,8 @@ public:
 
     // Blob manager related.
     void on_blob_put_commit(int64_t lsn, sisl::blob const& header, sisl::blob const& key,
-                            const homestore::MultiBlkId& pbas, bool is_leader,
-                            cintrusive< homestore::repl_req_ctx >& hs_ctx);
-    void on_blob_del_commit(int64_t lsn, sisl::blob const& header, sisl::blob const& key, bool is_leader,
+                            const homestore::MultiBlkId& pbas, cintrusive< homestore::repl_req_ctx >& hs_ctx);
+    void on_blob_del_commit(int64_t lsn, sisl::blob const& header, sisl::blob const& key,
                             cintrusive< homestore::repl_req_ctx >& hs_ctx);
     homestore::blk_alloc_hints blob_put_get_blk_alloc_hints(sisl::blob const& header);
     void compute_blob_payload_hash(BlobHeader::HashAlgorithm algorithm, const uint8_t* blob_bytes, size_t blob_size,

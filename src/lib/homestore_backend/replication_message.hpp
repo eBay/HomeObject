@@ -31,16 +31,16 @@ struct ReplicationMessageHeader {
         header_crc = calculate_crc();
     }
 
-    bool corrupted() {
+    bool corrupted() const {
         if (magic_num != HOMEOBJECT_REPLICATION_MAGIC ||
             protocol_version != HOMEOBJECT_REPLICATION_PROTOCOL_VERSION_V1) {
             return true;
         }
 
         auto saved_crc = header_crc;
-        header_crc = 0;
+        *(uint32_t*)&header_crc = 0;
         bool corrupted = (saved_crc != calculate_crc());
-        header_crc = saved_crc;
+        *(uint32_t*)&header_crc = saved_crc;
         return corrupted;
     }
 

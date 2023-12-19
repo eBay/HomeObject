@@ -148,11 +148,13 @@ void HSHomeObject::on_shard_message_commit(int64_t lsn, sisl::blob const& header
                                            homestore::ReplDev* repl_dev,
                                            cintrusive< homestore::repl_req_ctx >& hs_ctx) {
 
-    if (hs_ctx != nullptr && repl_dev->is_leader()) {
-        auto ctx = boost::static_pointer_cast< repl_result_ctx< ShardManager::Result< ShardInfo > > >(hs_ctx);
-        do_shard_message_commit(lsn, *r_cast< ReplicationMessageHeader* >(const_cast< uint8_t* >(header.cbytes())),
-                                blkids, ctx->hdr_buf_, hs_ctx);
-        return;
+    if (hs_ctx != nullptr) {
+        auto ctx = boost::dynamic_pointer_cast< repl_result_ctx< ShardManager::Result< ShardInfo > > >(hs_ctx);
+        if (ctx != nullptr) {
+            do_shard_message_commit(lsn, *r_cast< ReplicationMessageHeader* >(const_cast< uint8_t* >(header.cbytes())),
+                                    blkids, ctx->hdr_buf_, hs_ctx);
+            return;
+        }
     }
 
     // hs_ctx will be nullptr when HS is restarting and replay all commited log entries from the last checkpoint;
@@ -179,12 +181,12 @@ void HSHomeObject::on_shard_message_commit(int64_t lsn, sisl::blob const& header
         });
 }
 
-void HSHomeObject::do_shard_message_commit(int64_t lsn, ReplicationMessageHeader& header,
+void HSHomeObject::do_shard_message_commit(int64_t lsn, ReplicationMessageHeader const& header,
                                            homestore::MultiBlkId const& blkids, sisl::blob value,
                                            cintrusive< homestore::repl_req_ctx >& hs_ctx) {
     repl_result_ctx< ShardManager::Result< ShardInfo > >* ctx{nullptr};
     if (hs_ctx != nullptr) {
-        ctx = boost::static_pointer_cast< repl_result_ctx< ShardManager::Result< ShardInfo > > >(hs_ctx).get();
+        ctx = boost::dynamic_pointer_cast< repl_result_ctx< ShardManager::Result< ShardInfo > > >(hs_ctx).get();
     }
 
     if (header.corrupted()) {

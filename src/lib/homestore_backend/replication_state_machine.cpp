@@ -18,11 +18,11 @@ void ReplicationStateMachine::on_commit(int64_t lsn, const sisl::blob& header, c
     }
 
     case ReplicationMessageType::PUT_BLOB_MSG: {
-        home_object_->on_blob_put_commit(lsn, header, key, pbas, repl_dev()->is_leader(), ctx);
+        home_object_->on_blob_put_commit(lsn, header, key, pbas, ctx);
         break;
     }
     case ReplicationMessageType::DEL_BLOB_MSG:
-        home_object_->on_blob_del_commit(lsn, header, key, repl_dev()->is_leader(), ctx);
+        home_object_->on_blob_del_commit(lsn, header, key, ctx);
         break;
     default: {
         break;
