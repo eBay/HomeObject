@@ -104,6 +104,7 @@ pipeline {
                     slackSend color: '#E43237', channel: '#sds-ci', message: "@here HomeObject downstream pkg - *${failed_pkg}* build failed.\n*URL:* ${BUILD_URL}\nIf result not expected, revert (aka `conan remove -r ebay-local`) these pkgs: ```${built_chain}```"
                 } else {
                     slackSend color: '#E43237', channel: '#sds-ci', message: "*${PROJECT}/${TAG}* has had a failure : ${BUILD_URL}"
+                }
             }
         }
         success {
