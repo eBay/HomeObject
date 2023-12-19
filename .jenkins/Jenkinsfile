@@ -62,7 +62,7 @@ pipeline {
             steps {
                 sh """conan create ${BUILD_MISSING} -o ${PROJECT}:sanitize=True -pr debug . ${PROJECT}/${TAG} ;
                       conan create ${BUILD_MISSING} -pr debug . ${PROJECT}/${TAG} ;
-                      conan create ${BUILD_MISSING} -pr test . ${PROJECT}/${TAG} ;"""
+                      conan create ${BUILD_MISSING} -pr test -o sisl:malloc_impl=tcmalloc . ${PROJECT}/${TAG} ;"""
             }
         }
 
