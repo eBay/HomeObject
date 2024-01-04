@@ -92,7 +92,7 @@ TEST_F(TestFixture, MockSealShard) {
     auto repl_dev = pg->repl_dev_;
     const auto msg_size = sisl::round_up(seal_shard_msg.size(), repl_dev->get_blk_size());
     auto req = homeobject::repl_result_ctx< ShardManager::Result< ShardInfo > >::make(msg_size, 512 /*alignment*/);
-    auto buf_ptr = req->hdr_buf_.bytes;
+    auto buf_ptr = req->hdr_buf_.bytes();
     std::memset(buf_ptr, 0, msg_size);
     std::memcpy(buf_ptr, seal_shard_msg.c_str(), seal_shard_msg.size());
 
@@ -103,8 +103,8 @@ TEST_F(TestFixture, MockSealShard) {
     req->header_.payload_crc = crc32_ieee(homeobject::init_crc32, buf_ptr, msg_size);
     req->header_.seal();
     sisl::blob header;
-    header.bytes = r_cast< uint8_t* >(&req->header_);
-    header.size = sizeof(req->header_);
+    header.set_bytes(r_cast< uint8_t* >(&req->header_));
+    header.set_size(sizeof(req->header_));
     sisl::sg_list value;
     value.size = msg_size;
     value.iovs.push_back(iovec(buf_ptr, msg_size));

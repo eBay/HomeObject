@@ -12,7 +12,7 @@ SISL_OPTION_GROUP(
     (num_shards, "", "num_shards", "number of shards", ::cxxopts::value< uint64_t >()->default_value("20"), "number"),
     (num_blobs, "", "num_blobs", "number of blobs", ::cxxopts::value< uint64_t >()->default_value("50"), "number"));
 
-SISL_LOGGING_INIT(logging, HOMEOBJECT_LOG_MODS)
+SISL_LOGGING_DEF(logging, HOMEOBJECT_LOG_MODS)
 
 SISL_OPTIONS_ENABLE(logging, iomgr, homeobject, test_home_object)
 

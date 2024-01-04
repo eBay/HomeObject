@@ -8,7 +8,7 @@
 
 #include <memory>
 
-SISL_LOGGING_INIT(logging, HOMEOBJECT_LOG_MODS)
+SISL_LOGGING_DEF(logging, HOMEOBJECT_LOG_MODS)
 SISL_OPTIONS_ENABLE(logging)
 
 namespace homestore {

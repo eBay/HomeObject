@@ -29,8 +29,8 @@ BlobManager::NullAsyncResult HomeObjectImpl::del(shard_id_t shard, blob_id_t con
 }
 
 Blob Blob::clone() const {
-    auto new_body = sisl::io_blob_safe(body.size);
-    std::memcpy(new_body.bytes, body.bytes, body.size);
+    auto new_body = sisl::io_blob_safe(body.size());
+    std::memcpy(new_body.bytes(), body.cbytes(), body.size());
     return Blob(std::move(new_body), user_key, object_off);
 }
 

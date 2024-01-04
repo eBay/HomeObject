@@ -2,6 +2,7 @@
 #include <latch>
 #include <optional>
 #include <spdlog/fmt/bin_to_hex.h>
+#include <folly/Uri.h>
 
 #include <homestore/homestore.hpp>
 #include <homestore/meta_service.hpp>
@@ -14,6 +15,7 @@
 #include "heap_chunk_selector.h"
 #include "index_kv.hpp"
 #include "hs_backend_config.hpp"
+#include "replication_state_machine.hpp"
 
 namespace homeobject {
 
@@ -30,6 +32,54 @@ extern std::shared_ptr< HomeObject > init_homeobject(std::weak_ptr< HomeObjectAp
     instance->init_timer_thread();
     return instance;
 }
+
+// repl application to init homestore
+class HSReplApplication : public homestore::ReplApplication {
+public:
+    HSReplApplication(homestore::repl_impl_type impl_type, bool need_timeline_consistency, HSHomeObject* home_object,
+                      std::shared_ptr< HomeObjectApplication > ho_application) :
+            _impl_type(impl_type),
+            _need_timeline_consistency(need_timeline_consistency),
+            _home_object(home_object),
+            _ho_application(ho_application) {}
+
+    virtual ~HSReplApplication() = default;
+
+    // overrides
+    homestore::repl_impl_type get_impl_type() const override { return _impl_type; }
+
+    bool need_timeline_consistency() const override { return _need_timeline_consistency; }
+
+    std::shared_ptr< homestore::ReplDevListener > create_repl_dev_listener(homestore::group_id_t group_id) override {
+        std::scoped_lock lock_guard(_repl_sm_map_lock);
+        auto [it, inserted] = _repl_sm_map.emplace(group_id, nullptr);
+        if (inserted) { it->second = std::make_shared< ReplicationStateMachine >(_home_object); }
+        return it->second;
+    }
+
+    std::pair< std::string, uint16_t > lookup_peer(homestore::replica_id_t uuid) const override {
+        auto endpoint = _ho_application->lookup_peer(uuid);
+        std::pair< std::string, uint16_t > host_port;
+        try {
+            folly::Uri uri(endpoint);
+            host_port.first = uri.host();
+            host_port.second = uri.port();
+        } catch (std::runtime_error const& e) {
+            LOGE("can't extract host from uuid {}, endpoint: {}; error: {}", to_string(uuid), endpoint, e.what());
+        }
+        return host_port;
+    }
+
+    homestore::replica_id_t get_my_repl_id() const override { return _home_object->our_uuid(); }
+
+private:
+    homestore::repl_impl_type _impl_type;
+    bool _need_timeline_consistency;
+    HSHomeObject* _home_object;
+    std::shared_ptr< HomeObjectApplication > _ho_application;
+    std::map< homestore::group_id_t, std::shared_ptr< ReplicationStateMachine > > _repl_sm_map;
+    std::mutex _repl_sm_map_lock;
+};
 
 ///
 // Start HomeStore based on the options retrived from the Application
@@ -54,9 +104,10 @@ void HSHomeObject::init_homestore() {
 
     chunk_selector_ = std::make_shared< HeapChunkSelector >();
     using namespace homestore;
+    auto repl_app = std::make_shared< HSReplApplication >(repl_impl_type::solo, false, this, app);
     bool need_format = HomeStore::instance()
                            ->with_index_service(std::make_unique< BlobIndexServiceCallbacks >(this))
-                           .with_repl_data_service(repl_impl_type::solo, chunk_selector_)
+                           .with_repl_data_service(repl_app, chunk_selector_)
                            .start(hs_input_params{.devices = device_info, .app_mem_size = app_mem_size},
                                   [this]() { register_homestore_metablk_callback(); });
 
