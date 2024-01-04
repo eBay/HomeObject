@@ -55,7 +55,7 @@ jobs:
     if: ${{ github.event_name != 'pull_request' }}
 
   IOMgrDeps:
-    needs: [Sisl10Deps, Sisl11Deps]
+    needs: [Sisl11Deps]
     uses: eBay/iomanager/.github/workflows/build_dependencies.yml@master
     with:
       branch: master

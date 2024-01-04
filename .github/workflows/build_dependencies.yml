@@ -104,13 +104,6 @@ jobs:
         testing: ${{ inputs.testing }}
         key_prefix: HomeObjectDeps-${{ inputs.platform }}-${{ inputs.build-type }}-${{ inputs.malloc-impl }}-${{ inputs.prerelease }}
 
-    - name: Load Sisl10 Cache
-      uses: eBay/sisl/.github/actions/load_conan@stable/v8.x
-      with:
-        load_any: 'True'
-        key_prefix: Sisl10Deps-${{ inputs.platform }}-${{ inputs.build-type }}-${{ inputs.malloc-impl }}-${{ inputs.prerelease }}
-      if: ${{ inputs.testing == 'True' || steps.restore-cache.outputs.cache-hit != 'true' }}
-
     - name: Load Sisl Cache
       uses: eBay/sisl/.github/actions/load_conan@stable/v8.x
       with:
@@ -197,11 +190,11 @@ jobs:
         key_prefix: HomeObjectDeps-${{ inputs.platform }}-${{ inputs.build-type }}-${{ inputs.malloc-impl }}-${{ inputs.prerelease }}
       if: ${{ github.event_name != 'pull_request' && steps.restore-cache.outputs.cache-hit != 'true' }}
 
-    - name: Reload Sisl10 Cache
+    - name: Reload Sisl11 Cache
       uses: eBay/sisl/.github/actions/load_conan@stable/v8.x
       with:
         load_any: 'True'
-        key_prefix: Sisl10Deps-${{ inputs.platform }}-${{ inputs.build-type }}-${{ inputs.malloc-impl }}-${{ inputs.prerelease }}
+        key_prefix: Sisl11Deps-${{ inputs.platform }}-${{ inputs.build-type }}-${{ inputs.malloc-impl }}-${{ inputs.prerelease }}
       if: ${{ inputs.testing == 'True' && github.event_name != 'pull_request' && steps.restore-cache.outputs.cache-hit != 'true' }}
 
     - name: Reload Sisl Cache
