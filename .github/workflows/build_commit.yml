@@ -43,7 +43,7 @@ jobs:
     if: ${{ github.event_name != 'pull_request' }}
 
   NuraftMesgDeps:
-    needs: SislDeps
+    needs: Sisl11Deps
     uses: eBay/nuraft_mesg/.github/workflows/build_dependencies.yml@main
     with:
       branch: main
