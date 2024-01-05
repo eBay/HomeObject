@@ -112,6 +112,12 @@ void HSHomeObject::init_timer_thread() {
 
 void HSHomeObject::trigger_timed_events() { persist_pg_sb(); }
 
+void HSHomeObject::set_semaphore() { smphSignal = std::make_shared< std::binary_semaphore >(0); }
+
+void HSHomeObject::release_semaphore() {
+    if (smphSignal) smphSignal->release();
+}
+
 void HSHomeObject::register_homestore_metablk_callback() {
     // register some callbacks for metadata recovery;
     using namespace homestore;

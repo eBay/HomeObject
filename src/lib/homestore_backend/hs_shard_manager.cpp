@@ -142,6 +142,99 @@ ShardManager::AsyncResult< ShardInfo > HSHomeObject::_seal_shard(ShardInfo const
     return req->result();
 }
 
+bool HSHomeObject::on_pre_commit_shard_msg(int64_t lsn, sisl::blob const& header, sisl::blob const& key,
+                                           cintrusive< homestore::repl_req_ctx >& hs_ctx) {
+    if (hs_ctx != nullptr) {
+        auto ctx = boost::static_pointer_cast< repl_result_ctx< ShardManager::Result< ShardInfo > > >(hs_ctx);
+        return do_shard_message_pre_commit(lsn, *r_cast< ReplicationMessageHeader* >(header.bytes), ctx->hdr_buf_,
+                                           hs_ctx);
+    }
+    return true;
+}
+
+bool HSHomeObject::do_shard_message_pre_commit(int64_t lsn, ReplicationMessageHeader& header, sisl::blob value,
+                                               cintrusive< homestore::repl_req_ctx >& hs_ctx) {
+    repl_result_ctx< ShardManager::Result< ShardInfo > >* ctx{nullptr};
+    if (hs_ctx != nullptr) {
+        ctx = boost::static_pointer_cast< repl_result_ctx< ShardManager::Result< ShardInfo > > >(hs_ctx).get();
+    }
+
+    if (ctx) {
+        RELEASE_ASSERT(!ctx->promise_.isFulfilled(), "do_shard_message_pre_commit promise is already fulfilled");
+    }
+
+    if (header.corrupted()) {
+        LOGW("replication message header is corrupted with crc error, lsn:{}", lsn);
+        if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(ShardError::CRC_MISMATCH)); }
+        return false;
+    }
+
+    if (crc32_ieee(init_crc32, value.bytes, value.size) != header.payload_crc) {
+        // header & value is inconsistent;
+        LOGW("replication message header is inconsistent with value, lsn:{}", lsn);
+        if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(ShardError::CRC_MISMATCH)); }
+        return false;
+    }
+
+    auto shard_info = deserialize_shard_info(r_cast< const char* >(value.bytes), value.size);
+    switch (header.msg_type) {
+    case ReplicationMessageType::SEAL_SHARD_MSG: {
+        // we can not release chunk here, since if rollback happens, we can not make sure we can get the same chunk.
+        // chunk selector will always return the a chunk of least used, and GC will happen at the time window
+        // we can not make sure we can get the same chunk as before, so we need to wait for the commit phase to release
+        // chunk;
+        update_shard_in_map(shard_info);
+        break;
+    }
+    default: {
+        break;
+    }
+    }
+
+    return true;
+}
+
+void HSHomeObject::on_rollback_shard_msg(int64_t lsn, sisl::blob const& header, sisl::blob const& key,
+                                         cintrusive< homestore::repl_req_ctx >& hs_ctx) {
+    if (hs_ctx != nullptr) {
+        auto ctx = boost::static_pointer_cast< repl_result_ctx< ShardManager::Result< ShardInfo > > >(hs_ctx);
+        do_shard_message_rollback(lsn, *r_cast< ReplicationMessageHeader* >(header.bytes), ctx->hdr_buf_, hs_ctx);
+    }
+}
+
+void HSHomeObject::do_shard_message_rollback(int64_t lsn, ReplicationMessageHeader& header, sisl::blob value,
+                                             [[maybe_unused]] cintrusive< homestore::repl_req_ctx >& hs_ctx) {
+    if (header.corrupted()) {
+        LOGW("replication message header is corrupted with crc error, lsn:{}", lsn);
+        return;
+    }
+
+    if (crc32_ieee(init_crc32, value.bytes, value.size) != header.payload_crc) {
+        // header & value is inconsistent;
+        LOGW("replication message header is inconsistent with value, lsn:{}", lsn);
+        return;
+    }
+
+    // TODO:: what if we pre_commit successfully , but rollback failed(e.g., log header corrupted) ?
+    // seem we just crash here if that happens
+
+    auto shard_info = deserialize_shard_info(r_cast< const char* >(value.bytes), value.size);
+    switch (header.msg_type) {
+    case ReplicationMessageType::SEAL_SHARD_MSG: {
+        shard_info.state = ShardInfo::State::OPEN;
+        update_shard_in_map(shard_info);
+        break;
+    }
+    default: {
+        break;
+    }
+    }
+
+    // promise should not be setvalue in roll back
+    // 1 if the actual execution happens in pre_commit, the promise will be setvalue in pre_commit
+    // 2 if the actual execution happens in commit, the promise will be setvalue in commit
+}
+
 void HSHomeObject::on_shard_message_commit(int64_t lsn, sisl::blob const& header, homestore::MultiBlkId const& blkids,
                                            homestore::ReplDev* repl_dev,
                                            cintrusive< homestore::repl_req_ctx >& hs_ctx) {
@@ -179,22 +272,29 @@ void HSHomeObject::do_shard_message_commit(int64_t lsn, ReplicationMessageHeader
                                            homestore::MultiBlkId const& blkids, sisl::blob value,
                                            cintrusive< homestore::repl_req_ctx >& hs_ctx) {
     repl_result_ctx< ShardManager::Result< ShardInfo > >* ctx{nullptr};
+
+    // for create_shard, we need to fulfill the promise;
+    // for seal_shard, the promise is already fulfilled in pre_commit;
+    bool ctxFullfilled{true};
     if (hs_ctx != nullptr) {
         ctx = boost::static_pointer_cast< repl_result_ctx< ShardManager::Result< ShardInfo > > >(hs_ctx).get();
+        ctxFullfilled = ctx->promise_.isFulfilled();
     }
 
     if (header.corrupted()) {
         LOGW("replication message header is corrupted with crc error, lsn:{}", lsn);
-        if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(ShardError::CRC_MISMATCH)); }
+        if (!ctxFullfilled) { ctx->promise_.setValue(folly::makeUnexpected(ShardError::CRC_MISMATCH)); }
         return;
     }
 
     if (crc32_ieee(init_crc32, value.bytes, value.size) != header.payload_crc) {
         // header & value is inconsistent;
         LOGW("replication message header is inconsistent with value, lsn:{}", lsn);
-        if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(ShardError::CRC_MISMATCH)); }
+        if (!ctxFullfilled) { ctx->promise_.setValue(folly::makeUnexpected(ShardError::CRC_MISMATCH)); }
         return;
     }
+
+    // TODO:: for seal_shard, what if we pre_commit successfully , but commit failed(e.g., log header corrupted) ?
 
     auto shard_info = deserialize_shard_info(r_cast< const char* >(value.bytes), value.size);
     switch (header.msg_type) {
@@ -214,7 +314,6 @@ void HSHomeObject::do_shard_message_commit(int64_t lsn, ReplicationMessageHeader
 
         break;
     }
-
     case ReplicationMessageType::SEAL_SHARD_MSG: {
         ShardInfo::State state;
         {
@@ -224,21 +323,20 @@ void HSHomeObject::do_shard_message_commit(int64_t lsn, ReplicationMessageHeader
             state = (*iter->second)->info.state;
         }
 
-        if (state == ShardInfo::State::OPEN) {
-            auto chunk_id = get_shard_chunk(shard_info.id);
-            RELEASE_ASSERT(chunk_id.has_value(), "Chunk id not found");
-            chunk_selector()->release_chunk(chunk_id.value());
-            update_shard_in_map(shard_info);
-        }
+        RELEASE_ASSERT(state == ShardInfo::State::SEALED, "Shard should be sealed before commit");
 
-        break;
+        auto chunk_id = get_shard_chunk(shard_info.id);
+        RELEASE_ASSERT(chunk_id.has_value(), "Chunk id not found");
+        // when restarting, the chunk is not selected since the metablk indicates the shard is sealed.
+        // handle this in chunk selector
+        chunk_selector()->release_chunk(chunk_id.value());
     }
     default: {
         break;
     }
     }
 
-    if (ctx) { ctx->promise_.setValue(ShardManager::Result< ShardInfo >(shard_info)); }
+    if (!ctxFullfilled) { ctx->promise_.setValue(ShardManager::Result< ShardInfo >(shard_info)); }
 }
 
 void HSHomeObject::add_new_shard_to_map(ShardPtr&& shard) {

@@ -17,7 +17,11 @@ namespace homeobject {
 // 2 the key collection of m_chunks will never change
 
 // this should only be called when initializing HeapChunkSelector in Homestore
-void HeapChunkSelector::add_chunk(csharedChunk& chunk) { m_chunks.emplace(VChunk(chunk).get_chunk_id(), chunk); }
+void HeapChunkSelector::add_chunk(csharedChunk& chunk) {
+    auto chunk_id = VChunk(chunk).get_chunk_id();
+    m_chunks.emplace(chunk_id, chunk);
+    m_selected_chunks.emplace(chunk_id);
+}
 
 void HeapChunkSelector::add_chunk_internal(const chunk_num_t chunkID, bool add_to_heap) {
     if (m_chunks.find(chunkID) == m_chunks.end()) {
@@ -45,6 +49,7 @@ void HeapChunkSelector::add_chunk_internal(const chunk_num_t chunkID, bool add_t
         {
             std::lock_guard< std::mutex > l(m_defrag_mtx);
             m_defrag_heap.emplace(chunk);
+            m_selected_chunks.erase(chunkID);
         }
         std::lock_guard< std::mutex > l(heapLock);
         heap.emplace(chunk);
@@ -178,6 +183,7 @@ void HeapChunkSelector::remove_chunk_from_defrag_heap(const chunk_num_t chunkID)
     for (auto& c : chunks) {
         m_defrag_heap.emplace(c);
     }
+    m_selected_chunks.emplace(chunkID);
 }
 
 void HeapChunkSelector::foreach_chunks(std::function< void(csharedChunk&) >&& cb) {

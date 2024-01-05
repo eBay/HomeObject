@@ -121,6 +121,7 @@ private:
     void add_chunk_internal(const chunk_num_t, bool add_to_heap = true);
 
     VChunkDefragHeap m_defrag_heap;
+    std::unordered_set< chunk_num_t > m_selected_chunks;
     std::mutex m_defrag_mtx;
 
     void remove_chunk_from_defrag_heap(const chunk_num_t);

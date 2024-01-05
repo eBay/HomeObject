@@ -2,6 +2,7 @@
 
 #include <memory>
 #include <mutex>
+#include <semaphore>
 
 #include <homestore/homestore.hpp>
 #include <homestore/index/index_table.hpp>
@@ -187,6 +188,10 @@ private:
     shared< HeapChunkSelector > chunk_selector_;
     iomgr::timer_handle_t ho_timer_thread_handle_;
 
+    // used for testing when we only have solo_repl_dev.
+    // TODO: remove or change this when we have raft_repl_dev.
+    shared< std::binary_semaphore > smphSignal;
+
 private:
     static homestore::ReplicationService& hs_repl_service() { return homestore::hs()->repl_service(); }
 
@@ -200,6 +205,10 @@ private:
     void update_shard_in_map(const ShardInfo& shard_info);
     void do_shard_message_commit(int64_t lsn, ReplicationMessageHeader& header, homestore::MultiBlkId const& blkids,
                                  sisl::blob value, cintrusive< homestore::repl_req_ctx >& hs_ctx);
+    bool do_shard_message_pre_commit(int64_t lsn, ReplicationMessageHeader& header, sisl::blob value,
+                                     cintrusive< homestore::repl_req_ctx >& hs_ctx);
+    void do_shard_message_rollback(int64_t lsn, ReplicationMessageHeader& header, sisl::blob value,
+                                   cintrusive< homestore::repl_req_ctx >& hs_ctx);
     // recover part
     void register_homestore_metablk_callback();
     void on_pg_meta_blk_found(sisl::byte_view const& buf, void* meta_cookie);
@@ -226,15 +235,19 @@ public:
     cshared< HeapChunkSelector > chunk_selector() const { return chunk_selector_; }
 
     bool on_pre_commit_shard_msg(int64_t lsn, sisl::blob const& header, sisl::blob const& key,
-                                 cintrusive< homestore::repl_req_ctx >&);
+                                 cintrusive< homestore::repl_req_ctx >& hs_ctx);
     void on_rollback_shard_msg(int64_t lsn, sisl::blob const& header, sisl::blob const& key,
-                               cintrusive< homestore::repl_req_ctx >&);
+                               cintrusive< homestore::repl_req_ctx >& hs_ctx);
     void on_shard_message_commit(int64_t lsn, sisl::blob const& header, sisl::blob const& key,
                                  cintrusive< homestore::repl_req_ctx >& hs_ctx);
 
     // Blob manager related.
     void on_blob_put_commit(int64_t lsn, sisl::blob const& header, sisl::blob const& key,
                             const homestore::MultiBlkId& pbas, cintrusive< homestore::repl_req_ctx >& hs_ctx);
+    bool on_blob_put_pre_commit(int64_t lsn, sisl::blob const& header, sisl::blob const& key,
+                                cintrusive< homestore::repl_req_ctx >& hs_ctx);
+    void on_blob_put_rollback(int64_t lsn, sisl::blob const& header, sisl::blob const& key,
+                              cintrusive< homestore::repl_req_ctx >& hs_ctx);
     void on_blob_del_commit(int64_t lsn, sisl::blob const& header, sisl::blob const& key,
                             cintrusive< homestore::repl_req_ctx >& hs_ctx);
     homestore::blk_alloc_hints blob_put_get_blk_alloc_hints(sisl::blob const& header,
@@ -257,6 +270,11 @@ public:
     void print_btree_index(pg_id_t pg_id);
 
     void trigger_timed_events();
+
+    // used for testing when we only have solo_repl_dev.
+    // TODO: remove or change this when we have raft_repl_dev.
+    void set_semaphore();
+    void release_semaphore();
 };
 
 class BlobIndexServiceCallbacks : public homestore::IndexServiceCallbacks {
