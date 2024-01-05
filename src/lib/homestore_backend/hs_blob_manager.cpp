@@ -363,14 +363,22 @@ void HSHomeObject::on_blob_del_commit(int64_t lsn, sisl::blob const& header, sis
 
     auto r = move_to_tombstone(index_table, blob_info);
     if (!r) {
-        LOGW("fail to move blob to tombstone,  blob_id {}, shard_id {}, {}", blob_info.blob_id, blob_info.shard_id,
-             r.error());
-        if (ctx) ctx->promise_.setValue(folly::makeUnexpected(r.error()));
-        return;
+        if (recovery_done_) {
+            LOGE("fail to move blob to tombstone,  blob_id {}, shard_id {}, {}", blob_info.blob_id, blob_info.shard_id,
+                 r.error());
+            if (ctx) ctx->promise_.setValue(folly::makeUnexpected(r.error()));
+            return;
+        } else {
+            if (ctx) { ctx->promise_.setValue(BlobManager::Result< BlobInfo >(blob_info)); }
+            return;
+        }
     }
 
     auto& multiBlks = r.value();
-    repl_dev->async_free_blks(lsn, multiBlks);
+    if (multiBlks != tombstone_pbas) {
+        repl_dev->async_free_blks(lsn, multiBlks);
+    }
+
     if (ctx) { ctx->promise_.setValue(BlobManager::Result< BlobInfo >(blob_info)); }
 }
 

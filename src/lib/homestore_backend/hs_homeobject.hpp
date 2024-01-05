@@ -186,6 +186,7 @@ public:
 private:
     shared< HeapChunkSelector > chunk_selector_;
     iomgr::timer_handle_t ho_timer_thread_handle_;
+    bool recovery_done_{false};
 
 private:
     static homestore::ReplicationService& hs_repl_service() { return homestore::hs()->repl_service(); }
