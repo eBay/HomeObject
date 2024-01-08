@@ -20,17 +20,6 @@ on:
         type: string
 
 jobs:
-  Sisl10Deps:
-    uses: eBay/sisl/.github/workflows/build_dependencies.yml@stable/v10.x
-    with:
-      branch: stable/v10.x
-      platform: ${{ inputs.platform }}
-      build-type: ${{ inputs.build-type }}
-      malloc-impl: ${{ inputs.malloc-impl }}
-      prerelease: ${{ inputs.prerelease }}
-      tooling: None
-    if: ${{ github.event_name != 'pull_request' }}
-
   Sisl11Deps:
     uses: eBay/sisl/.github/workflows/build_dependencies.yml@master
     with:
@@ -55,7 +44,7 @@ jobs:
     if: ${{ github.event_name != 'pull_request' }}
 
   IOMgrDeps:
-    needs: [Sisl10Deps, Sisl11Deps]
+    needs: [Sisl11Deps]
     uses: eBay/iomanager/.github/workflows/build_dependencies.yml@master
     with:
       branch: master
