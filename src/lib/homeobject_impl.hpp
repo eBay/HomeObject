@@ -13,10 +13,6 @@
 #define LOGE(...) LOGERRORMOD(homeobject, ##__VA_ARGS__)
 #define LOGC(...) LOGCRITICALMOD(homeobject, ##__VA_ARGS__)
 
-namespace homestore {
-class ReplicationService;
-}
-
 namespace homeobject {
 
 template < typename T >

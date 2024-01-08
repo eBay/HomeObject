@@ -43,6 +43,7 @@ public:
             _home_object(home_object),
             _ho_application(ho_application) {}
 
+    // TODO: make this override after the base class in homestore adds a virtual destructor
     virtual ~HSReplApplication() = default;
 
     // overrides
