@@ -69,6 +69,8 @@ void TestFixture::SetUp() {
     });
 }
 
+void TestFixture::TearDown() { std::dynamic_pointer_cast< FixtureApp >(app)->clean(); }
+
 int main(int argc, char* argv[]) {
     int parsed_argc = argc;
     ::testing::InitGoogleTest(&parsed_argc, argv);

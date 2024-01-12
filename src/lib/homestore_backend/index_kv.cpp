@@ -43,10 +43,18 @@ HSHomeObject::recover_index_table(homestore::superblk< homestore::index_table_sb
 BlobManager::NullResult HSHomeObject::add_to_index_table(shared< BlobIndexTable > index_table,
                                                          const BlobInfo& blob_info) {
     BlobRouteKey index_key{BlobRoute{blob_info.shard_id, blob_info.blob_id}};
-    BlobRouteValue index_value{blob_info.pbas};
-    homestore::BtreeSinglePutRequest put_req{&index_key, &index_value, homestore::btree_put_type::INSERT};
+    BlobRouteValue index_value{blob_info.pbas}, existing_value;
+    homestore::BtreeSinglePutRequest put_req{&index_key, &index_value, homestore::btree_put_type::INSERT,
+                                             &existing_value};
     auto status = index_table->put(put_req);
-    if (status != homestore::btree_status_t::success) { return folly::makeUnexpected(BlobError::INDEX_ERROR); }
+    if (status != homestore::btree_status_t::success) {
+        if (existing_value.pbas().is_valid() || existing_value.pbas() == tombstone_pbas) {
+            // Check if the blob id already exists in the index or its tombstone.
+            return folly::Unit();
+        }
+        LOGE("Failed to put to index table error {}", status);
+        return folly::makeUnexpected(BlobError::INDEX_ERROR);
+    }
 
     return folly::Unit();
 }
@@ -75,7 +83,7 @@ BlobManager::Result< homestore::MultiBlkId > HSHomeObject::move_to_tombstone(sha
     homestore::BtreeSingleGetRequest get_req{&index_key, &index_value_get};
     auto status = index_table->get(get_req);
     if (status != homestore::btree_status_t::success) {
-        LOGDEBUG("Failed to get from index table [route={}]", index_key);
+        LOGE("Failed to get from index table [route={}]", index_key);
         return folly::makeUnexpected(BlobError::UNKNOWN_BLOB);
     }
 

@@ -3,7 +3,7 @@
 #include <homeobject/homeobject.hpp>
 #include <boost/uuid/random_generator.hpp>
 
-SISL_LOGGING_DEF(HOMEOBJECT_LOG_MODS)
+SISL_LOGGING_INIT(HOMEOBJECT_LOG_MODS)
 
 SISL_OPTIONS_ENABLE(logging, homeobject)
 

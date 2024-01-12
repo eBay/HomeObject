@@ -46,6 +46,8 @@ public:
         _obj_inst = homeobject::init_homeobject(std::weak_ptr< homeobject::HomeObjectApplication >(app));
     }
 
+    void TearDown() override { app->clean(); }
+
     void create_pg(pg_id_t pg_id) {
         auto info = homeobject::PGInfo(pg_id);
         auto peer1 = _obj_inst->our_uuid();
@@ -187,6 +189,14 @@ TEST_F(HomeObjectFixture, BasicPutGetDelBlobWRestart) {
     verify_get_blob(blob_map, true /* use_random_offset */);
 
     // Delete all blobs
+    for (const auto& [id, blob] : blob_map) {
+        int64_t shard_id = std::get< 1 >(id), blob_id = std::get< 2 >(id);
+        auto g = _obj_inst->blob_manager()->del(shard_id, blob_id).get();
+        ASSERT_TRUE(g);
+        LOGINFO("delete blob shard {} blob {}", shard_id, blob_id);
+    }
+
+    // Delete again should have no errors.
     for (const auto& [id, blob] : blob_map) {
         int64_t shard_id = std::get< 1 >(id), blob_id = std::get< 2 >(id);
         auto g = _obj_inst->blob_manager()->del(shard_id, blob_id).get();

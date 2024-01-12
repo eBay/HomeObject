@@ -1,4 +1,3 @@
-
 #include <latch>
 #include <optional>
 #include <spdlog/fmt/bin_to_hex.h>
@@ -142,6 +141,7 @@ void HSHomeObject::init_homestore() {
         RELEASE_ASSERT(new_id == _our_id, "Received new SvcId [{}] AFTER recovery of [{}]?!", to_string(new_id),
                        to_string(_our_id));
     }
+    recovery_done_ = true;
     LOGI("Initialize and start HomeStore is successfully");
 }
 

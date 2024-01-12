@@ -140,6 +140,8 @@ class ShardManagerTestingRecovery : public ::testing::Test {
 public:
     void SetUp() override { app = std::make_shared< FixtureAppWithRecovery >(); }
 
+    void TearDown() override { app->clean(); }
+
 protected:
     std::shared_ptr< FixtureApp > app;
 };
