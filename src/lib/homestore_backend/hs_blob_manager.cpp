@@ -37,7 +37,7 @@ BlobManager::AsyncResult< blob_id_t > HSHomeObject::_put_blob(ShardInfo const& s
     const uint32_t needed_size = sizeof(ReplicationMessageHeader);
     auto req = repl_result_ctx< BlobManager::Result< BlobInfo > >::make(needed_size, io_align);
 
-    uint8_t* raw_ptr = req->hdr_buf_.bytes;
+    uint8_t* raw_ptr = req->hdr_buf_.bytes();
     ReplicationMessageHeader* header = new (raw_ptr) ReplicationMessageHeader();
     header->msg_type = ReplicationMessageType::PUT_BLOB_MSG;
     header->payload_size = 0;
@@ -59,21 +59,21 @@ BlobManager::AsyncResult< blob_id_t > HSHomeObject::_put_blob(ShardInfo const& s
     blob_header->shard_id = shard.id;
     blob_header->blob_id = new_blob_id;
     blob_header->hash_algorithm = BlobHeader::HashAlgorithm::CRC32;
-    blob_header->blob_size = blob.body.size;
+    blob_header->blob_size = blob.body.size();
     blob_header->user_key_size = blob.user_key.size();
     blob_header->object_offset = blob.object_off;
     sgs.iovs.emplace_back(iovec{.iov_base = blob_header, .iov_len = blob_header_size});
     sgs.size += blob_header_size;
 
     // Append blob bytes.
-    auto blob_bytes = blob.body.bytes;
-    auto blob_size = blob.body.size;
-    if ((reinterpret_cast< uintptr_t >(blob.body.bytes) % io_align != 0) || (blob_size % io_align != 0)) {
+    auto blob_bytes = blob.body.bytes();
+    auto blob_size = blob.body.size();
+    if ((reinterpret_cast< uintptr_t >(blob.body.cbytes()) % io_align != 0) || (blob_size % io_align != 0)) {
         // If address or size is not aligned, align it and create a separate buffer
         // and do expensive memcpy.
         blob_size = sisl::round_up(blob_size, io_align);
         blob_bytes = iomanager.iobuf_alloc(io_align, blob_size);
-        std::memcpy(blob_bytes, blob.body.bytes, blob.body.size);
+        std::memcpy(blob_bytes, blob.body.cbytes(), blob.body.size());
         blob_copied = true;
     }
 
@@ -112,13 +112,13 @@ BlobManager::AsyncResult< blob_id_t > HSHomeObject::_put_blob(ShardInfo const& s
     }
 
     // Compute the checksum of blob and metadata.
-    compute_blob_payload_hash(blob_header->hash_algorithm, blob.body.bytes, blob.body.size,
+    compute_blob_payload_hash(blob_header->hash_algorithm, blob.body.cbytes(), blob.body.size(),
                               (uint8_t*)blob.user_key.data(), blob.user_key.size(), blob_header->hash,
                               BlobHeader::blob_max_hash_len);
 
     // serialize blob_id as key
     auto key_blob = sisl::blob(iomanager.iobuf_alloc(sizeof(blob_id_t), io_align), sizeof(blob_id_t));
-    *(reinterpret_cast< blob_id_t* >(key_blob.bytes)) = new_blob_id;
+    *(reinterpret_cast< blob_id_t* >(key_blob.bytes())) = new_blob_id;
     // TODO: too many captures in a lambda is not good for performance, find a way to move all the captures to a context
     // struct
     repl_dev->async_alloc_write(req->hdr_buf_, key_blob, sgs, req);
@@ -130,7 +130,7 @@ BlobManager::AsyncResult< blob_id_t > HSHomeObject::_put_blob(ShardInfo const& s
         if (blob_copied) { iomanager.iobuf_free(blob_bytes); }
         if (user_key_copied) { iomanager.iobuf_free(r_cast< uint8_t* >(user_key_bytes)); }
         if (pad_zeroes) { iomanager.iobuf_free(r_cast< uint8_t* >(pad_zeroes)); }
-        iomanager.iobuf_free(r_cast< uint8_t* >(key_blob.bytes));
+        iomanager.iobuf_free(r_cast< uint8_t* >(const_cast< uint8_t* >(key_blob.cbytes())));
 
         if (result.hasError()) { return folly::makeUnexpected(result.error()); }
         auto blob_info = result.value();
@@ -149,14 +149,14 @@ void HSHomeObject::on_blob_put_commit(int64_t lsn, sisl::blob const& header, sis
         ctx = boost::static_pointer_cast< repl_result_ctx< BlobManager::Result< BlobInfo > > >(hs_ctx).get();
     }
 
-    auto msg_header = r_cast< ReplicationMessageHeader* >(header.bytes);
+    auto msg_header = r_cast< ReplicationMessageHeader* >(const_cast< uint8_t* >(header.cbytes()));
     if (msg_header->corrupted()) {
         LOGE("replication message header is corrupted with crc error, lsn:{}", lsn);
         if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(BlobError::CHECKSUM_MISMATCH)); }
         return;
     }
 
-    auto const blob_id = *(reinterpret_cast< blob_id_t* >(key.bytes));
+    auto const blob_id = *(reinterpret_cast< blob_id_t* >(const_cast< uint8_t* >(key.cbytes())));
     shared< BlobIndexTable > index_table;
     {
         std::shared_lock lock_guard(_pg_lock);
@@ -272,7 +272,7 @@ BlobManager::AsyncResult< Blob > HSHomeObject::_get_blob(ShardInfo const& shard,
             // whole blob size else copy only the request length.
             auto res_len = req_len == 0 ? blob_size - req_offset : req_len;
             auto body = sisl::io_blob_safe(res_len);
-            std::memcpy(body.bytes, blob_bytes + req_offset, res_len);
+            std::memcpy(body.bytes(), blob_bytes + req_offset, res_len);
 
             // Copy the metadata if its present.
             std::string user_key{};
@@ -294,7 +294,7 @@ homestore::blk_alloc_hints HSHomeObject::blob_put_get_blk_alloc_hints(sisl::blob
         ctx = boost::static_pointer_cast< repl_result_ctx< BlobManager::Result< BlobInfo > > >(hs_ctx).get();
     }
 
-    auto msg_header = r_cast< ReplicationMessageHeader* >(header.bytes);
+    auto msg_header = r_cast< ReplicationMessageHeader* >(const_cast< uint8_t* >(header.cbytes()));
     if (msg_header->corrupted()) {
         LOGE("replication message header is corrupted with crc error shard:{}", msg_header->shard_id);
         if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(BlobError::CHECKSUM_MISMATCH)); }
@@ -333,10 +333,10 @@ BlobManager::NullAsyncResult HSHomeObject::_del_blob(ShardInfo const& shard, blo
     req->header_.pg_id = pg_id;
     req->header_.seal();
     sisl::blob header;
-    header.bytes = r_cast< uint8_t* >(&req->header_);
-    header.size = sizeof(req->header_);
+    header.set_bytes(r_cast< uint8_t* >(&req->header_));
+    header.set_size(sizeof(req->header_));
 
-    memcpy(req->hdr_buf_.bytes, &blob_id, sizeof(blob_id_t));
+    memcpy(req->hdr_buf_.bytes(), &blob_id, sizeof(blob_id_t));
 
     repl_dev->async_alloc_write(header, req->hdr_buf_, sisl::sg_list{}, req);
     return req->result().deferValue([](const auto& result) -> folly::Expected< folly::Unit, BlobError > {
@@ -355,7 +355,7 @@ void HSHomeObject::on_blob_del_commit(int64_t lsn, sisl::blob const& header, sis
         ctx = boost::static_pointer_cast< repl_result_ctx< BlobManager::Result< BlobInfo > > >(hs_ctx).get();
     }
 
-    auto msg_header = r_cast< ReplicationMessageHeader* >(header.bytes);
+    auto msg_header = r_cast< ReplicationMessageHeader* >(const_cast< uint8_t* >(header.cbytes()));
     if (msg_header->corrupted()) {
         LOGERROR("replication message header is corrupted with crc error, lsn:{}", lsn);
         if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(BlobError::CHECKSUM_MISMATCH)); }
@@ -376,18 +376,26 @@ void HSHomeObject::on_blob_del_commit(int64_t lsn, sisl::blob const& header, sis
 
     BlobInfo blob_info;
     blob_info.shard_id = msg_header->shard_id;
-    blob_info.blob_id = *r_cast< blob_id_t* >(key.bytes);
+    blob_info.blob_id = *r_cast< blob_id_t* >(const_cast< uint8_t* >(key.cbytes()));
 
     auto r = move_to_tombstone(index_table, blob_info);
     if (!r) {
-        LOGW("fail to move blob to tombstone,  blob_id {}, shard_id {}, {}", blob_info.blob_id, blob_info.shard_id,
-             r.error());
-        if (ctx) ctx->promise_.setValue(folly::makeUnexpected(r.error()));
-        return;
+        if (recovery_done_) {
+            LOGE("fail to move blob to tombstone,  blob_id {}, shard_id {}, {}", blob_info.blob_id, blob_info.shard_id,
+                 r.error());
+            if (ctx) ctx->promise_.setValue(folly::makeUnexpected(r.error()));
+            return;
+        } else {
+            if (ctx) { ctx->promise_.setValue(BlobManager::Result< BlobInfo >(blob_info)); }
+            return;
+        }
     }
 
     auto& multiBlks = r.value();
-    repl_dev->async_free_blks(lsn, multiBlks);
+    if (multiBlks != tombstone_pbas) {
+        repl_dev->async_free_blks(lsn, multiBlks);
+    }
+
     if (ctx) { ctx->promise_.setValue(BlobManager::Result< BlobInfo >(blob_info)); }
 }
 

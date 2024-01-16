@@ -12,7 +12,7 @@ SISL_OPTION_GROUP(
     (num_shards, "", "num_shards", "number of shards", ::cxxopts::value< uint64_t >()->default_value("20"), "number"),
     (num_blobs, "", "num_blobs", "number of blobs", ::cxxopts::value< uint64_t >()->default_value("50"), "number"));
 
-SISL_LOGGING_INIT(logging, HOMEOBJECT_LOG_MODS)
+SISL_LOGGING_INIT(HOMEOBJECT_LOG_MODS)
 
 SISL_OPTIONS_ENABLE(logging, iomgr, homeobject, test_home_object)
 
@@ -24,8 +24,7 @@ FixtureApp::FixtureApp() {
 }
 
 homeobject::peer_id_t FixtureApp::discover_svcid(std::optional< homeobject::peer_id_t > const& p) const {
-    auto const& new_id = p.value();
-    return new_id.is_nil() ? boost::uuids::random_generator()() : new_id;
+    return p.has_value() ? p.value() : boost::uuids::random_generator()();
 }
 
 void TestFixture::SetUp() {
@@ -69,6 +68,8 @@ void TestFixture::SetUp() {
         EXPECT_EQ(blob.object_off, 4 * Mi);
     });
 }
+
+void TestFixture::TearDown() { std::dynamic_pointer_cast< FixtureApp >(app)->clean(); }
 
 int main(int argc, char* argv[]) {
     int parsed_argc = argc;

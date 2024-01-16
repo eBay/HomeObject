@@ -9,7 +9,7 @@ extern std::shared_ptr< HomeObject > init_homeobject(std::weak_ptr< HomeObjectAp
 
 MemoryHomeObject::MemoryHomeObject(std::weak_ptr< HomeObjectApplication >&& application) :
         HomeObjectImpl::HomeObjectImpl(std::move(application)) {
-    _our_id = _application.lock()->discover_svcid(_our_id);
+    _our_id = _application.lock()->discover_svcid(std::nullopt);
 }
 
 ShardIndex::~ShardIndex() {

@@ -40,7 +40,7 @@ class HSHomeObject : public HomeObjectImpl {
                                                uint64_t len = 0) const override;
     BlobManager::NullAsyncResult _del_blob(ShardInfo const&, blob_id_t) override;
 
-    PGManager::NullAsyncResult _create_pg(PGInfo&& pg_info, std::set< std::string, std::less<> > peers) override;
+    PGManager::NullAsyncResult _create_pg(PGInfo&& pg_info, std::set< peer_id_t > const& peers) override;
     PGManager::NullAsyncResult _replace_member(pg_id_t id, peer_id_t const& old_member,
                                                PGMember const& new_member) override;
 
@@ -214,7 +214,7 @@ public:
 
 private:
     shared< HeapChunkSelector > chunk_selector_;
-    // iomgr::timer_handle_t ho_timer_thread_handle_;
+    bool recovery_done_{false};
 
 private:
     static homestore::ReplicationService& hs_repl_service() { return homestore::hs()->repl_service(); }

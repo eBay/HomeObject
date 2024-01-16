@@ -36,7 +36,7 @@ public:
         }
     }
 
-    static void gen_random_bits(sisl::blob& b) { gen_random_bits(b.size, b.bytes); }
+    static void gen_random_bits(sisl::blob& b) { gen_random_bits(b.size(), b.bytes()); }
 };
 
 }; // namespace homeobject

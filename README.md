@@ -91,12 +91,15 @@ Brian Szmyd bszmyd@ebay.com
 ## License Information
 Copyright 2023 eBay Inc.
 
-Primary Author: Brian Szmyd
+Primary Author: [Brian Szmyd](https://github.com/szmyd)
 
 Primary Developers:
+[Ravi Nagarjun Akella](https://github.com/raakella1),
 [Harihara Kadayam](https://github.com/hkadayam),
+[Yaming Kuang](https://github.com/yamingk),
 [Zichang Lai](https://github.com/zichanglai),
-[Brian Szmyd](https://github.com/szmyd)
+[Sanal Pillai](https://github.com/sanebay),
+[Jackson Yao](https://github.com/JacksonYao287)
 
 Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with the
 License. You may obtain a copy of the License at https://www.apache.org/licenses/LICENSE-2.0.

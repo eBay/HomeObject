@@ -65,6 +65,14 @@ TEST_F(HomeObjectFixture, BasicPutGetDelBlobWRestart) {
         LOGINFO("delete blob shard {} blob {}", shard_id, blob_id);
     }
 
+    // Delete again should have no errors.
+    for (const auto& [id, blob] : blob_map) {
+        int64_t shard_id = std::get< 1 >(id), blob_id = std::get< 2 >(id);
+        auto g = _obj_inst->blob_manager()->del(shard_id, blob_id).get();
+        ASSERT_TRUE(g);
+        LOGINFO("delete blob shard {} blob {}", shard_id, blob_id);
+    }
+
     // After delete all blobs, get should fail
     for (const auto& [id, blob] : blob_map) {
         int64_t shard_id = std::get< 1 >(id), blob_id = std::get< 2 >(id);
