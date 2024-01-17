@@ -4,6 +4,7 @@
 #include <folly/Uri.h>
 
 #include <homestore/homestore.hpp>
+#include <homestore/checkpoint/cp_mgr.hpp>
 #include <homestore/meta_service.hpp>
 #include <homestore/replication_service.hpp>
 #include <homestore/index_service.hpp>
@@ -14,7 +15,9 @@
 #include "heap_chunk_selector.h"
 #include "index_kv.hpp"
 #include "hs_backend_config.hpp"
+#include "hs_hmobj_cp.hpp"
 #include "replication_state_machine.hpp"
+
 
 namespace homeobject {
 
@@ -28,7 +31,8 @@ extern std::shared_ptr< HomeObject > init_homeobject(std::weak_ptr< HomeObjectAp
     LOGI("Initializing HomeObject");
     auto instance = std::make_shared< HSHomeObject >(std::move(application));
     instance->init_homestore();
-    instance->init_timer_thread();
+    // instance->init_timer_thread();
+    instance->init_cp();
     return instance;
 }
 
@@ -145,6 +149,7 @@ void HSHomeObject::init_homestore() {
     LOGI("Initialize and start HomeStore is successfully");
 }
 
+#if 0
 void HSHomeObject::init_timer_thread() {
     auto ctx = std::make_shared< std::latch >(1);
     iomanager.create_reactor("ho_timer_thread", iomgr::INTERRUPT_LOOP, 4u,
@@ -161,8 +166,16 @@ void HSHomeObject::init_timer_thread() {
         iomgr::reactor_regex::all_user, [this](void*) { trigger_timed_events(); }, true /* wait_to_schedule */);
     LOGI("homeobject timer thread started successfully with freq {} usec", HS_BACKEND_DYNAMIC_CONFIG(backend_timer_us));
 }
+#endif
 
-void HSHomeObject::trigger_timed_events() { persist_pg_sb(); }
+void HSHomeObject::init_cp() {
+    using namespace homestore;
+    // Register to CP for flush dirty buffers;
+    HomeStore::instance()->cp_mgr().register_consumer(cp_consumer_t::HS_CLIENT,
+                                                      std::move(std::make_unique< HomeObjCPCallbacks >(this)));
+}
+
+// void HSHomeObject::trigger_timed_events() { persist_pg_sb(); }
 
 void HSHomeObject::register_homestore_metablk_callback() {
     // register some callbacks for metadata recovery;
@@ -193,12 +206,13 @@ void HSHomeObject::register_homestore_metablk_callback() {
 }
 
 HSHomeObject::~HSHomeObject() {
+#if 0
     if (ho_timer_thread_handle_.first) {
         iomanager.cancel_timer(ho_timer_thread_handle_, true);
         ho_timer_thread_handle_ = iomgr::null_timer_handle;
     }
-
     trigger_timed_events();
+#endif
     homestore::HomeStore::instance()->shutdown();
     homestore::HomeStore::reset_instance();
     iomanager.stop();

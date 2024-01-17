@@ -2,6 +2,7 @@
 #include <homestore/replication_service.hpp>
 #include "hs_homeobject.hpp"
 #include "replication_state_machine.hpp"
+#include "hs_hmobj_cp.hpp"
 
 using namespace homestore;
 namespace homeobject {
@@ -171,14 +172,23 @@ HSHomeObject::HS_PG::HS_PG(PGInfo info, shared< homestore::ReplDev > rdev, share
         pg_sb_->members[i].priority = m.priority;
         ++i;
     }
-
     pg_sb_.write();
+    init_cp();
+}
+
+void HSHomeObject::HS_PG::init_cp() {
+    cache_pg_sb_ = (pg_info_superblk*)malloc(pg_sb_->size());
+    cache_pg_sb_->copy(*(pg_sb_.get()));
+    HomeObjCPContext::init_pg_sb(std::move(pg_sb_));
+
+    // pg_sb_ will not be accessible after this point.
 }
 
 HSHomeObject::HS_PG::HS_PG(homestore::superblk< HSHomeObject::pg_info_superblk >&& sb,
                            shared< homestore::ReplDev > rdev) :
         PG{pg_info_from_sb(sb)}, pg_sb_{std::move(sb)}, repl_dev_{std::move(rdev)} {
     blob_sequence_num_ = pg_sb_->blob_sequence_num;
+    init_cp();
 }
 
 uint32_t HSHomeObject::HS_PG::total_shards() const { return shards_.size(); }
@@ -195,12 +205,14 @@ std::optional< uint32_t > HSHomeObject::HS_PG::dev_hint(cshared< HeapChunkSelect
 }
 
 void HSHomeObject::persist_pg_sb() {
+#if 0
     auto lg = std::shared_lock(_pg_lock);
     for (auto& [_, pg] : _pg_map) {
         auto hs_pg = static_cast< HS_PG* >(pg.get());
         hs_pg->pg_sb_->blob_sequence_num = hs_pg->blob_sequence_num_;
         hs_pg->pg_sb_.write();
     }
+#endif
 }
 
 bool HSHomeObject::_get_stats(pg_id_t id, PGStats& stats) const {
@@ -251,4 +263,5 @@ void HSHomeObject::_get_pg_ids(std::vector< pg_id_t >& pg_ids) const {
         }
     }
 }
+
 } // namespace homeobject

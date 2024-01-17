@@ -3,6 +3,8 @@
 #include "replication_state_machine.hpp"
 #include "lib/homeobject_impl.hpp"
 #include "lib/blob_route.hpp"
+#include "hs_hmobj_cp.hpp"
+#include <homestore/homestore.hpp>
 
 SISL_LOGGING_DECL(blobmgr)
 
@@ -17,8 +19,15 @@ BlobManager::AsyncResult< blob_id_t > HSHomeObject::_put_blob(ShardInfo const& s
         std::shared_lock lock_guard(_pg_lock);
         auto iter = _pg_map.find(pg_id);
         RELEASE_ASSERT(iter != _pg_map.end(), "PG not found");
-        repl_dev = static_cast< HS_PG* >(iter->second.get())->repl_dev_;
-        new_blob_id = iter->second->blob_sequence_num_.fetch_add(1, std::memory_order_relaxed);
+        auto hs_pg = static_cast< HS_PG* >(iter->second.get());
+        repl_dev = hs_pg->repl_dev_;
+        new_blob_id = hs_pg->blob_sequence_num_.fetch_add(1, std::memory_order_relaxed);
+
+        hs_pg->cache_pg_sb_->blob_sequence_num = hs_pg->blob_sequence_num_.load();
+        auto cur_cp = homestore::HomeStore::instance()->cp_mgr().cp_guard();
+        auto cp_ctx = s_cast< HomeObjCPContext* >(cur_cp->context(homestore::cp_consumer_t::HS_CLIENT));
+        cp_ctx->add_pg_to_dirty_list(hs_pg->cache_pg_sb_);
+
         RELEASE_ASSERT(new_blob_id < std::numeric_limits< decltype(new_blob_id) >::max(),
                        "exhausted all available blob ids");
     }
@@ -153,9 +162,17 @@ void HSHomeObject::on_blob_put_commit(int64_t lsn, sisl::blob const& header, sis
         std::shared_lock lock_guard(_pg_lock);
         auto iter = _pg_map.find(msg_header->pg_id);
         RELEASE_ASSERT(iter != _pg_map.end(), "PG not found");
-        index_table = static_cast< HS_PG* >(iter->second.get())->index_table_;
+        auto hs_pg = static_cast< HS_PG* >(iter->second.get());
+        index_table = hs_pg->index_table_;
         RELEASE_ASSERT(index_table != nullptr, "Index table not intialized");
-        if (iter->second->blob_sequence_num_.load() <= blob_id) { iter->second->blob_sequence_num_.store(blob_id + 1); }
+        if (hs_pg->blob_sequence_num_.load() <= blob_id) {
+            hs_pg->blob_sequence_num_.store(blob_id + 1);
+            hs_pg->cache_pg_sb_->blob_sequence_num = hs_pg->blob_sequence_num_.load();
+
+            auto cur_cp = homestore::HomeStore::instance()->cp_mgr().cp_guard();
+            auto cp_ctx = s_cast< HomeObjCPContext* >(cur_cp->context(homestore::cp_consumer_t::HS_CLIENT));
+            cp_ctx->add_pg_to_dirty_list(hs_pg->cache_pg_sb_);
+        }
     }
 
     BlobInfo blob_info;

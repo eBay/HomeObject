@@ -22,6 +22,7 @@ namespace homeobject {
 class BlobRouteKey;
 class BlobRouteValue;
 using BlobIndexTable = homestore::IndexTable< BlobRouteKey, BlobRouteValue >;
+class HomeObjCPContext;
 
 class HSHomeObject : public HomeObjectImpl {
     /// NOTE: Be wary to change these as they effect on-disk format!
@@ -72,6 +73,24 @@ public:
         homestore::uuid_t index_table_uuid;
         blob_id_t blob_sequence_num;
         pg_members members[1]; // ISO C++ forbids zero-size array
+
+        uint32_t size() const { return sizeof(pg_info_superblk) + ((num_members - 1) * sizeof(pg_members)); }
+        static std::string name() { return _pg_meta_name; }
+
+        pg_info_superblk() = default;
+        pg_info_superblk(pg_info_superblk const& rhs) { *this = rhs; }
+
+        pg_info_superblk& operator=(pg_info_superblk const& rhs) {
+            id = rhs.id;
+            num_members = rhs.num_members;
+            replica_set_uuid = rhs.replica_set_uuid;
+            index_table_uuid = rhs.index_table_uuid;
+            blob_sequence_num = rhs.blob_sequence_num;
+            memcpy(members, rhs.members, sizeof(pg_members) * num_members);
+            return *this;
+        }
+
+        void copy(pg_info_superblk const& rhs) { *this = rhs; }
     };
 
     struct shard_info_superblk {
@@ -88,7 +107,9 @@ public:
 #pragma pack()
 
     struct HS_PG : public PG {
+        // Only accessible during PG creation, after that it is not accessible.
         homestore::superblk< pg_info_superblk > pg_sb_;
+        pg_info_superblk* cache_pg_sb_{nullptr}; // always up-to-date;
         shared< homestore::ReplDev > repl_dev_;
 
         std::optional< homestore::chunk_num_t > any_allocated_chunk_id_{};
@@ -96,7 +117,15 @@ public:
 
         HS_PG(PGInfo info, shared< homestore::ReplDev > rdev, shared< BlobIndexTable > index_table);
         HS_PG(homestore::superblk< pg_info_superblk >&& sb, shared< homestore::ReplDev > rdev);
-        virtual ~HS_PG() = default;
+
+        void init_cp();
+
+        virtual ~HS_PG() {
+            if (cache_pg_sb_) {
+                free(cache_pg_sb_);
+                cache_pg_sb_ = nullptr;
+            }
+        }
 
         static PGInfo pg_info_from_sb(homestore::superblk< pg_info_superblk > const& sb);
 
@@ -185,7 +214,6 @@ public:
 
 private:
     shared< HeapChunkSelector > chunk_selector_;
-    iomgr::timer_handle_t ho_timer_thread_handle_;
     bool recovery_done_{false};
 
 private:
@@ -213,15 +241,51 @@ public:
     using HomeObjectImpl::HomeObjectImpl;
     ~HSHomeObject() override;
 
+    /**
+     * Initializes the homestore.
+     */
     void init_homestore();
 
+#if 0
+    /**
+     * @brief Initializes a timer thread.
+     *
+     */
     void init_timer_thread();
+#endif
 
+    /**
+     * @brief Initializes the checkpinting for the home object.
+     *
+     */
+    void init_cp();
+
+    /**
+     * @brief Callback function invoked when a message is committed on a shard.
+     *
+     * @param lsn The logical sequence number of the message.
+     * @param header The header of the message.
+     * @param blkids The IDs of the blocks associated with the message.
+     * @param repl_dev The replication device.
+     * @param hs_ctx The replication request context.
+     */
     void on_shard_message_commit(int64_t lsn, sisl::blob const& header, homestore::MultiBlkId const& blkids,
                                  homestore::ReplDev* repl_dev, cintrusive< homestore::repl_req_ctx >& hs_ctx);
 
+    /**
+     * @brief Retrieves the chunk number associated with the given shard ID.
+     *
+     * @param id The ID of the shard to retrieve the chunk number for.
+     * @return An optional chunk number if the shard ID is valid, otherwise an empty optional.
+     */
     std::optional< homestore::chunk_num_t > get_shard_chunk(shard_id_t id) const;
 
+    /**
+     * @brief Returns any chunk number for the given pg ID.
+     *
+     * @param pg The pg ID to get the chunk number for.
+     * @return An optional chunk number if the pg ID exists, otherwise std::nullopt.
+     */
     std::optional< homestore::chunk_num_t > get_any_chunk_id(pg_id_t const pg);
 
     cshared< HeapChunkSelector > chunk_selector() const { return chunk_selector_; }
@@ -257,7 +321,7 @@ public:
                                                                    const BlobInfo& blob_info);
     void print_btree_index(pg_id_t pg_id);
 
-    void trigger_timed_events();
+    // void trigger_timed_events();
 };
 
 class BlobIndexServiceCallbacks : public homestore::IndexServiceCallbacks {
