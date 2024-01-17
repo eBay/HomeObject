@@ -82,12 +82,16 @@ public:
     void add_pg_to_dirty_list(HSHomeObject::pg_info_superblk* pg_sb);
 
     static void init_pg_sb(homestore::superblk< HSHomeObject::pg_info_superblk >&& sb) {
+        std::scoped_lock lock_guard(s_mtx_);
         pg_sb_[sb->id] = std::move(sb); // move the sb to the map;
     };
 
-    std::mutex dl_mtx_;
+    //////////////// Per-CP instance members ////////////////
+    std::mutex dl_mtx_; // mutex to protect dirty list
     std::unordered_map< pg_id_t, HSHomeObject::pg_info_superblk* > pg_dirty_list_;
 
+    //////////////// Shared by all CPs ////////////////
+    static std::mutex s_mtx_; // mutex to protect pg_sb_
     // static so that only one superblk instance can write to metablk;
     static std::unordered_map< pg_id_t, homestore::superblk< HSHomeObject::pg_info_superblk > > pg_sb_;
 };

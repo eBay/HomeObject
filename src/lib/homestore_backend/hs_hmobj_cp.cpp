@@ -79,6 +79,6 @@ void HomeObjCPContext::add_pg_to_dirty_list(HSHomeObject::pg_info_superblk* pg_s
     sb_copy->copy(*pg_sb);
     pg_dirty_list_.emplace(pg_sb->id, sb_copy);
 }
-
+std::mutex HomeObjCPContext::s_mtx_;
 std::unordered_map< pg_id_t, homestore::superblk< HSHomeObject::pg_info_superblk > > HomeObjCPContext::pg_sb_;
 } // namespace homeobject
