@@ -67,6 +67,14 @@ void TestFixture::SetUp() {
         EXPECT_STREQ(blob.user_key.c_str(), "test_blob");
         EXPECT_EQ(blob.object_off, 4 * Mi);
     });
+
+    // cover the memory version of get_stats
+    // homestore version has a dedicated test for this.
+    homeobject::PGStats stats;
+    std::vector< homeobject::pg_id_t > pg_ids;
+    homeobj_->pg_manager()->get_stats(_pg_id, stats);
+    homeobj_->get_stats();
+    homeobj_->pg_manager()->get_pg_ids(pg_ids);
 }
 
 void TestFixture::TearDown() { std::dynamic_pointer_cast< FixtureApp >(app)->clean(); }
