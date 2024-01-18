@@ -18,7 +18,7 @@
 #include "hs_hmobj_cp.hpp"
 #include "replication_state_machine.hpp"
 
-constexpr char* uri_prefix = "http://";
+const string uri_prefix{"http://"};
 
 namespace homeobject {
 
