@@ -35,7 +35,7 @@ void TestFixture::SetUp() {
 
     auto info = homeobject::PGInfo(_pg_id);
     info.members.insert(homeobject::PGMember{_peer1, "peer1", 1});
-    info.members.insert(homeobject::PGMember{_peer2, "peer2", 0});
+    // info.members.insert(homeobject::PGMember{_peer2, "peer2", 0});
 
     LOGDEBUG("Setup Pg");
     EXPECT_TRUE(homeobj_->pg_manager()->create_pg(std::move(info)).get());

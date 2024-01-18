@@ -18,6 +18,7 @@
 #include "hs_hmobj_cp.hpp"
 #include "replication_state_machine.hpp"
 
+constexpr char* uri_prefix = "http://";
 
 namespace homeobject {
 
@@ -63,6 +64,8 @@ public:
 
     std::pair< std::string, uint16_t > lookup_peer(homestore::replica_id_t uuid) const override {
         auto endpoint = _ho_application->lookup_peer(uuid);
+        // for folly::uri to parse correctly, we need to add "http://" prefix
+        endpoint = uri_prefix + endpoint;
         std::pair< std::string, uint16_t > host_port;
         try {
             folly::Uri uri(endpoint);
@@ -108,7 +111,7 @@ void HSHomeObject::init_homestore() {
 
     chunk_selector_ = std::make_shared< HeapChunkSelector >();
     using namespace homestore;
-    auto repl_app = std::make_shared< HSReplApplication >(repl_impl_type::solo, false, this, app);
+    auto repl_app = std::make_shared< HSReplApplication >(repl_impl_type::server_side, false, this, app);
     bool need_format = HomeStore::instance()
                            ->with_index_service(std::make_unique< BlobIndexServiceCallbacks >(this))
                            .with_repl_data_service(repl_app, chunk_selector_)
