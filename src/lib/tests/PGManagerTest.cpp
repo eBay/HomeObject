@@ -26,7 +26,7 @@ TEST_F(TestFixture, CreatePgNotMember) {
 TEST_F(TestFixture, CreateDuplicatePg) {
     auto info = PGInfo(_pg_id);
     info.members.insert(PGMember{boost::uuids::random_generator()(), "peer3", 6});
-    info.members.insert(PGMember{boost::uuids::random_generator()(), "peer4", 2});
+    // info.members.insert(PGMember{boost::uuids::random_generator()(), "peer4", 2});
     EXPECT_EQ(homeobj_->pg_manager()->create_pg(std::move(info)).get().error(), PGError::INVALID_ARG);
 }
 

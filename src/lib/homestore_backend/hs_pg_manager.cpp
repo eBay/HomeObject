@@ -51,7 +51,8 @@ PGManager::NullAsyncResult HSHomeObject::_create_pg(PGInfo&& pg_info, std::set< 
     pg_info.replica_set_uuid = boost::uuids::random_generator()();
     return hs_repl_service()
         .create_repl_dev(pg_info.replica_set_uuid, peers)
-        .deferValue([this, pg_info = std::move(pg_info)](auto&& v) mutable -> PGManager::NullResult {
+        .via(executor_)
+        .thenValue([this, pg_info = std::move(pg_info)](auto&& v) mutable -> PGManager::NullResult {
             if (v.hasError()) { return folly::makeUnexpected(toPgError(v.error())); }
 
             // TODO create index table during create shard.

@@ -39,11 +39,16 @@ public:
     void create_pg(pg_id_t pg_id) {
         auto info = homeobject::PGInfo(pg_id);
         auto peer1 = _obj_inst->our_uuid();
+        info.members.insert(homeobject::PGMember{peer1, "peer1", 1});
+
+        // TODO:: add the following back when we have 3-replica raft test framework
+        /*
         auto peer2 = boost::uuids::random_generator()();
         auto peer3 = boost::uuids::random_generator()();
-        info.members.insert(homeobject::PGMember{peer1, "peer1", 1});
         info.members.insert(homeobject::PGMember{peer2, "peer2", 0});
         info.members.insert(homeobject::PGMember{peer3, "peer3", 0});
+        */
+
         auto p = _obj_inst->pg_manager()->create_pg(std::move(info)).get();
         ASSERT_TRUE(!!p);
     }
