@@ -7,8 +7,8 @@
 
 namespace homeobject {
 
-VENUM(ReplicationMessageType, uint16_t, CREATE_SHARD_MSG = 0, SEAL_SHARD_MSG = 1, PUT_BLOB_MSG = 2, DEL_BLOB_MSG = 3,
-      UNKNOWN_MSG = 4);
+VENUM(ReplicationMessageType, uint16_t, CREATE_PG_MSG = 0, CREATE_SHARD_MSG = 1, SEAL_SHARD_MSG = 2, PUT_BLOB_MSG = 3,
+      DEL_BLOB_MSG = 4, UNKNOWN_MSG = 5);
 
 // magic num comes from the first 8 bytes of 'echo homeobject_replication | md5sum'
 static constexpr uint64_t HOMEOBJECT_REPLICATION_MAGIC = 0x11153ca24efc8d34;
