@@ -220,7 +220,7 @@ private:
     static homestore::ReplicationService& hs_repl_service() { return homestore::hs()->repl_service(); }
 
     // create pg related
-    PGManager::NullAsyncResult replicate_create_pg_msg(cshared< homestore::ReplDev > repl_dev, PGInfo&& pg_info);
+    PGManager::NullAsyncResult do_create_pg(cshared< homestore::ReplDev > repl_dev, PGInfo&& pg_info);
     static std::string serialize_pg_info(const PGInfo& info);
     static PGInfo deserialize_pg_info(const char* pg_info_str, size_t size);
     void add_pg_to_map(unique< HS_PG > hs_pg);
