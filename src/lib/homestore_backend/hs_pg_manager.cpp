@@ -36,8 +36,6 @@ PGError toPgError(ReplServiceError const& e) {
     case ReplServiceError::SERVER_NOT_FOUND:
         return PGError::UNKNOWN_PG;
     /* TODO: enable this after add erro type to homestore
-    case ReplServiceError::ALREADY_EXISTS:
-        return PGError::PG_ALREADY_EXISTS;
     case ReplServiceError::CRC_MISMATCH:
         return PGError::CRC_MISMATCH;
      */
@@ -56,11 +54,7 @@ PGError toPgError(ReplServiceError const& e) {
 
 PGManager::NullAsyncResult HSHomeObject::_create_pg(PGInfo&& pg_info, std::set< peer_id_t > const& peers) {
     auto pg_id = pg_info.id;
-    {
-        auto lg = std::shared_lock(_pg_lock);
-        auto it = _pg_map.find(pg_id);
-        if (_pg_map.end() != it) return folly::makeUnexpected(PGError::PG_ALREADY_EXISTS);
-    }
+    if (auto lg = std::shared_lock(_pg_lock); _pg_map.end() != _pg_map.find(pg_id)) return folly::Unit();
 
     pg_info.replica_set_uuid = boost::uuids::random_generator()();
     return hs_repl_service()
@@ -68,8 +62,8 @@ PGManager::NullAsyncResult HSHomeObject::_create_pg(PGInfo&& pg_info, std::set< 
         .via(executor_)
         .thenValue([this, pg_info = std::move(pg_info)](auto&& v) mutable -> PGManager::NullAsyncResult {
             if (v.hasError()) { return folly::makeUnexpected(toPgError(v.error())); }
-            // we will write a PGHeader to the raft group and commit it when PGHeader is commited on raft
-            // group. so that all raft members will create the PGinfo and index table for this PG.
+            // we will write a PGHeader across the raft group and when it is committed
+            // all raft members will create PGinfo and index table for this PG.
             return do_create_pg(v.value(), std::move(pg_info));
         });
 }
@@ -155,14 +149,11 @@ void HSHomeObject::do_create_pg_message_commit(int64_t lsn, ReplicationMessageHe
 
     auto pg_info = deserialize_pg_info(r_cast< const char* >(value.cbytes()), value.size());
     auto pg_id = pg_info.id;
-    {
-        auto lg = std::shared_lock(_pg_lock);
-        auto it = _pg_map.find(pg_id);
-        if (_pg_map.end() != it) {
-            LOGW("PG already exists, lsn:{}, pg_id {}", lsn, pg_id);
-            if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(PGError::PG_ALREADY_EXISTS)); }
-            return;
-        }
+
+    if (auto lg = std::shared_lock(_pg_lock); _pg_map.end() != _pg_map.find(pg_id)) {
+        LOGW("PG already exists, lsn:{}, pg_id {}", lsn, pg_id);
+        if (ctx) { ctx->promise_.setValue(folly::Unit()); }
+        return;
     }
 
     // create index table and pg
