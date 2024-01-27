@@ -91,7 +91,7 @@ PGManager::NullAsyncResult HSHomeObject::do_create_pg(cshared< homestore::ReplDe
     value.size = msg_size;
     value.iovs.push_back(iovec(buf_ptr, msg_size));
     // replicate this create pg message to all raft members of this group
-    repl_dev->async_alloc_write(header, sisl::blob{}, value, req);
+    repl_dev->async_alloc_write(header, sisl::blob{buf_ptr, (uint32_t)msg_size}, value, req);
     return req->result().deferValue([this](auto const& e) -> PGManager::NullAsyncResult {
         if (!e) { return folly::makeUnexpected(e.error()); }
         return folly::Unit();
@@ -102,9 +102,8 @@ void HSHomeObject::on_create_pg_message_commit(int64_t lsn, sisl::blob const& he
                                                homestore::MultiBlkId const& blkids, homestore::ReplDev* repl_dev,
                                                cintrusive< homestore::repl_req_ctx >& hs_ctx) {
     if (hs_ctx != nullptr) {
-        auto ctx = boost::static_pointer_cast< repl_result_ctx< PGManager::NullResult > >(hs_ctx);
         do_create_pg_message_commit(lsn, *r_cast< ReplicationMessageHeader* >(const_cast< uint8_t* >(header.cbytes())),
-                                    blkids, ctx->hdr_buf_, hs_ctx);
+                                    blkids, hs_ctx->key, hs_ctx);
         return;
     }
 
@@ -130,7 +129,11 @@ void HSHomeObject::do_create_pg_message_commit(int64_t lsn, ReplicationMessageHe
                                                homestore::MultiBlkId const& blkids, sisl::blob value,
                                                cintrusive< homestore::repl_req_ctx >& hs_ctx) {
     repl_result_ctx< PGManager::NullResult >* ctx{nullptr};
-    if (hs_ctx != nullptr) {
+    // if this is a follower, the promise_ of hs_ctx will be nullptr, so need to setValue.
+    // but we can not judge whether this is leader from hs_ctx directly at this time.
+    // since repl_req_ctx::value is only applicable for leader, so we take it as a criteria to determine
+    // it is a leader or not.
+    if (hs_ctx && hs_ctx->value.size > 0) {
         ctx = boost::static_pointer_cast< repl_result_ctx< PGManager::NullResult > >(hs_ctx).get();
     }
 
@@ -149,7 +152,6 @@ void HSHomeObject::do_create_pg_message_commit(int64_t lsn, ReplicationMessageHe
 
     auto pg_info = deserialize_pg_info(r_cast< const char* >(value.cbytes()), value.size());
     auto pg_id = pg_info.id;
-
     if (auto lg = std::shared_lock(_pg_lock); _pg_map.end() != _pg_map.find(pg_id)) {
         LOGW("PG already exists, lsn:{}, pg_id {}", lsn, pg_id);
         if (ctx) { ctx->promise_.setValue(folly::Unit()); }
