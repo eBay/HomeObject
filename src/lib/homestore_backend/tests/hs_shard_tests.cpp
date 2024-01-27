@@ -108,7 +108,7 @@ TEST_F(TestFixture, MockSealShard) {
     sisl::sg_list value;
     value.size = msg_size;
     value.iovs.push_back(iovec(buf_ptr, msg_size));
-    repl_dev->async_alloc_write(header, sisl::blob{}, value, req);
+    repl_dev->async_alloc_write(header, sisl::blob{buf_ptr, (uint32_t)msg_size}, value, req);
     auto info = req->result().get();
     EXPECT_TRUE(info);
     EXPECT_TRUE(info.value().id == shard_info.id);

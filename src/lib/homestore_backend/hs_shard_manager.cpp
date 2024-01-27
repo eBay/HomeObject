@@ -95,7 +95,7 @@ ShardManager::AsyncResult< ShardInfo > HSHomeObject::_create_shard(pg_id_t pg_ow
     value.size = msg_size;
     value.iovs.push_back(iovec(buf_ptr, msg_size));
     // replicate this create shard message to PG members;
-    repl_dev->async_alloc_write(header, sisl::blob{}, value, req);
+    repl_dev->async_alloc_write(header, sisl::blob{buf_ptr, (uint32_t)msg_size}, value, req);
     return req->result().deferValue([this](auto const& e) -> ShardManager::Result< ShardInfo > {
         if (!e) return folly::makeUnexpected(e.error());
         return e.value();
@@ -138,7 +138,7 @@ ShardManager::AsyncResult< ShardInfo > HSHomeObject::_seal_shard(ShardInfo const
     value.iovs.push_back(iovec(buf_ptr, msg_size));
 
     // replicate this seal shard message to PG members;
-    repl_dev->async_alloc_write(header, sisl::blob{}, value, req);
+    repl_dev->async_alloc_write(header, sisl::blob{buf_ptr, (uint32_t)msg_size}, value, req);
     return req->result();
 }
 
@@ -147,9 +147,8 @@ void HSHomeObject::on_shard_message_commit(int64_t lsn, sisl::blob const& header
                                            cintrusive< homestore::repl_req_ctx >& hs_ctx) {
 
     if (hs_ctx != nullptr) {
-        auto ctx = boost::static_pointer_cast< repl_result_ctx< ShardManager::Result< ShardInfo > > >(hs_ctx);
         do_shard_message_commit(lsn, *r_cast< ReplicationMessageHeader* >(const_cast< uint8_t* >(header.cbytes())),
-                                blkids, ctx->hdr_buf_, hs_ctx);
+                                blkids, hs_ctx->key, hs_ctx);
         return;
     }
 
@@ -180,7 +179,11 @@ void HSHomeObject::do_shard_message_commit(int64_t lsn, ReplicationMessageHeader
                                            homestore::MultiBlkId const& blkids, sisl::blob value,
                                            cintrusive< homestore::repl_req_ctx >& hs_ctx) {
     repl_result_ctx< ShardManager::Result< ShardInfo > >* ctx{nullptr};
-    if (hs_ctx != nullptr) {
+    // if this is a follower, the promise_ of hs_ctx will be nullptr, so need to setValue.
+    // but we can not judge whether this is leader from hs_ctx directly at this time.
+    // since repl_req_ctx::value is only applicable for leader, so we take it as a criteria to determine
+    // it is a leader or not.
+    if (hs_ctx && hs_ctx->value.size > 0) {
         ctx = boost::static_pointer_cast< repl_result_ctx< ShardManager::Result< ShardInfo > > >(hs_ctx).get();
     }
 
