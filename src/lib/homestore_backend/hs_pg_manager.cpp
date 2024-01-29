@@ -129,11 +129,7 @@ void HSHomeObject::do_create_pg_message_commit(int64_t lsn, ReplicationMessageHe
                                                homestore::MultiBlkId const& blkids, sisl::blob value,
                                                cintrusive< homestore::repl_req_ctx >& hs_ctx) {
     repl_result_ctx< PGManager::NullResult >* ctx{nullptr};
-    // if this is a follower, the promise_ of hs_ctx will be nullptr, so need to setValue.
-    // but we can not judge whether this is leader from hs_ctx directly at this time.
-    // since repl_req_ctx::value is only applicable for leader, so we take it as a criteria to determine
-    // it is a leader or not.
-    if (hs_ctx && hs_ctx->value.size > 0) {
+    if (hs_ctx && hs_ctx->is_proposer) {
         ctx = boost::static_pointer_cast< repl_result_ctx< PGManager::NullResult > >(hs_ctx).get();
     }
 
