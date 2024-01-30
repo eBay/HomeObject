@@ -64,6 +64,8 @@ PGManager::NullAsyncResult HSHomeObject::_create_pg(PGInfo&& pg_info, std::set< 
             if (v.hasError()) { return folly::makeUnexpected(toPgError(v.error())); }
             // we will write a PGHeader across the raft group and when it is committed
             // all raft members will create PGinfo and index table for this PG.
+
+            // FIXME:https://github.com/eBay/HomeObject/pull/136#discussion_r1470504271
             return do_create_pg(v.value(), std::move(pg_info));
         });
 }
