@@ -7,6 +7,7 @@
 
 using namespace homestore;
 namespace homeobject {
+static constexpr uint64_t io_align{512};
 
 PGError toPgError(ReplServiceError const& e) {
     switch (e) {
@@ -72,83 +73,58 @@ PGManager::NullAsyncResult HSHomeObject::_create_pg(PGInfo&& pg_info, std::set< 
 
 PGManager::NullAsyncResult HSHomeObject::do_create_pg(cshared< homestore::ReplDev > repl_dev, PGInfo&& pg_info) {
     auto serailized_pg_info = serialize_pg_info(pg_info);
-    auto msg_size = sisl::round_up(serailized_pg_info.size(), repl_dev->get_blk_size());
-    auto req = repl_result_ctx< PGManager::NullResult >::make(msg_size, 512 /*alignment*/);
+    auto info_size = serailized_pg_info.size();
 
-    auto buf_ptr = req->hdr_buf_.bytes();
-    std::memset(buf_ptr, 0, msg_size);
-    std::memcpy(buf_ptr, serailized_pg_info.c_str(), serailized_pg_info.size());
+    auto total_size = sizeof(ReplicationMessageHeader) + info_size;
+    auto header = sisl::blob(iomanager.iobuf_alloc(total_size, io_align), total_size);
+    ReplicationMessageHeader repl_msg_header;
+    repl_msg_header.msg_type = ReplicationMessageType::CREATE_PG_MSG;
+    repl_msg_header.payload_size = info_size;
+    repl_msg_header.payload_crc =
+        crc32_ieee(init_crc32, r_cast< const unsigned char* >(serailized_pg_info.c_str()), info_size);
+    repl_msg_header.seal();
+    std::memcpy(header.bytes(), &repl_msg_header, sizeof(ReplicationMessageHeader));
+    std::memcpy(header.bytes() + sizeof(ReplicationMessageHeader), serailized_pg_info.c_str(), info_size);
 
-    req->header_.msg_type = ReplicationMessageType::CREATE_PG_MSG;
-    req->header_.pg_id = pg_info.id;
-    req->header_.shard_id = 0;
-    req->header_.payload_size = msg_size;
-    req->header_.payload_crc = crc32_ieee(init_crc32, buf_ptr, msg_size);
-    req->header_.seal();
-    sisl::blob header;
-    header.set_bytes(r_cast< uint8_t* >(&req->header_));
-    header.set_size(sizeof(req->header_));
+    // we do not need any hdr_buf_ , since we put everything in header blob
+    auto req = repl_result_ctx< PGManager::NullResult >::make(0, io_align);
 
-    sisl::sg_list value;
-    value.size = msg_size;
-    value.iovs.push_back(iovec(buf_ptr, msg_size));
     // replicate this create pg message to all raft members of this group
-    repl_dev->async_alloc_write(header, sisl::blob{buf_ptr, (uint32_t)msg_size}, value, req);
-    return req->result().deferValue([this](auto const& e) -> PGManager::NullAsyncResult {
+    repl_dev->async_alloc_write(header, sisl::blob{}, sisl::sg_list{}, req);
+    return req->result().deferValue([header = std::move(header)](auto const& e) -> PGManager::NullAsyncResult {
+        iomanager.iobuf_free(const_cast< uint8_t* >(header.cbytes()));
         if (!e) { return folly::makeUnexpected(e.error()); }
         return folly::Unit();
     });
 }
 
 void HSHomeObject::on_create_pg_message_commit(int64_t lsn, sisl::blob const& header,
-                                               homestore::MultiBlkId const& blkids, homestore::ReplDev* repl_dev,
-                                               cintrusive< homestore::repl_req_ctx >& hs_ctx) {
-    if (hs_ctx != nullptr) {
-        do_create_pg_message_commit(lsn, *r_cast< ReplicationMessageHeader* >(const_cast< uint8_t* >(header.cbytes())),
-                                    blkids, hs_ctx->key, hs_ctx);
-        return;
-    }
-
-    // when homeobject restarts and replay the committed log, hs_ctx will be nullptr
-    sisl::sg_list value;
-    value.size = blkids.blk_count() * repl_dev->get_blk_size();
-    auto value_buf = iomanager.iobuf_alloc(512, value.size);
-    value.iovs.push_back(iovec{.iov_base = value_buf, .iov_len = value.size});
-    auto header_ptr = r_cast< const ReplicationMessageHeader* >(header.cbytes());
-    repl_dev->async_read(blkids, value, value.size)
-        .thenValue([this, lsn, msg_header = *header_ptr, blkids, value](auto&& err) mutable {
-            if (err) {
-                LOGW("failed to read data from homestore pba, lsn:{}", lsn);
-            } else {
-                sisl::blob value_blob(r_cast< uint8_t* >(value.iovs[0].iov_base), value.size);
-                do_create_pg_message_commit(lsn, msg_header, blkids, value_blob, nullptr);
-            }
-            iomanager.iobuf_free(r_cast< uint8_t* >(value.iovs[0].iov_base));
-        });
-}
-
-void HSHomeObject::do_create_pg_message_commit(int64_t lsn, ReplicationMessageHeader& header,
-                                               homestore::MultiBlkId const& blkids, sisl::blob value,
+                                               shared< homestore::ReplDev > repl_dev,
                                                cintrusive< homestore::repl_req_ctx >& hs_ctx) {
     repl_result_ctx< PGManager::NullResult >* ctx{nullptr};
     if (hs_ctx && hs_ctx->is_proposer) {
         ctx = boost::static_pointer_cast< repl_result_ctx< PGManager::NullResult > >(hs_ctx).get();
     }
 
-    if (header.corrupted()) {
+    ReplicationMessageHeader* msg_header = r_cast< ReplicationMessageHeader* >(const_cast< uint8_t* >(header.cbytes()));
+
+    if (msg_header->corrupted()) {
         LOGE("create PG message header is corrupted , lsn:{}", lsn);
         if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(PGError::CRC_MISMATCH)); }
         return;
     }
 
-    if (crc32_ieee(init_crc32, value.cbytes(), value.size()) != header.payload_crc) {
+    auto serailized_pg_info_buf = header.cbytes() + sizeof(ReplicationMessageHeader);
+    const auto serailized_pg_info_size = header.size() - sizeof(ReplicationMessageHeader);
+
+    if (crc32_ieee(init_crc32, serailized_pg_info_buf, serailized_pg_info_size) != msg_header->payload_crc) {
         // header & value is inconsistent;
         LOGE("create PG message header is inconsistent with value, lsn:{}", lsn);
         if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(PGError::CRC_MISMATCH)); }
         return;
     }
 
-    auto pg_info = deserialize_pg_info(r_cast< const char* >(value.cbytes()), value.size());
+    auto pg_info = deserialize_pg_info(serailized_pg_info_buf, serailized_pg_info_size);
     auto pg_id = pg_info.id;
     if (auto lg = std::shared_lock(_pg_lock); _pg_map.end() != _pg_map.find(pg_id)) {
         LOGW("PG already exists, lsn:{}, pg_id {}", lsn, pg_id);
@@ -161,11 +137,7 @@ void HSHomeObject::do_create_pg_message_commit(int64_t lsn, ReplicationMessageHe
     auto index_table = create_index_table();
     auto uuid_str = boost::uuids::to_string(index_table->uuid());
 
-    auto repl_dev = hs_repl_service().get_repl_dev(pg_info.replica_set_uuid);
-    RELEASE_ASSERT(repl_dev.hasValue(), "Failed to get ReplDev for group_id={}",
-                   boost::uuids::to_string(pg_info.replica_set_uuid));
-    auto repl_dev_ptr = repl_dev.value();
-    auto hs_pg = std::make_unique< HS_PG >(std::move(pg_info), std::move(repl_dev_ptr), index_table);
+    auto hs_pg = std::make_unique< HS_PG >(std::move(pg_info), std::move(repl_dev), index_table);
     std::scoped_lock lock_guard(index_lock_);
     RELEASE_ASSERT(index_table_pg_map_.count(uuid_str) == 0, "duplicate index table found");
     index_table_pg_map_[uuid_str] = PgIndexTable{pg_id, index_table};
@@ -210,7 +182,7 @@ std::string HSHomeObject::serialize_pg_info(const PGInfo& pginfo) {
     return j.dump();
 }
 
-PGInfo HSHomeObject::deserialize_pg_info(const char* json_str, size_t size) {
+PGInfo HSHomeObject::deserialize_pg_info(const unsigned char* json_str, size_t size) {
     auto pg_json = nlohmann::json::parse(json_str, json_str + size);
 
     PGInfo pg_info(pg_json["pg_info"]["pg_id_t"].get< pg_id_t >());

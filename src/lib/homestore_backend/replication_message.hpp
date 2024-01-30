@@ -20,8 +20,8 @@ struct ReplicationMessageHeader {
     uint64_t magic_num{HOMEOBJECT_REPLICATION_MAGIC};
     uint32_t protocol_version{HOMEOBJECT_REPLICATION_PROTOCOL_VERSION_V1};
     ReplicationMessageType msg_type; // message type
-    pg_id_t pg_id;
-    shard_id_t shard_id;
+    pg_id_t pg_id{0};
+    shard_id_t shard_id{0};
     uint32_t payload_size;
     uint32_t payload_crc;
     uint8_t reserved_pad[4]{};

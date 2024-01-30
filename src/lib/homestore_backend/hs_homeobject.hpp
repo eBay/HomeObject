@@ -222,10 +222,8 @@ private:
     // create pg related
     PGManager::NullAsyncResult do_create_pg(cshared< homestore::ReplDev > repl_dev, PGInfo&& pg_info);
     static std::string serialize_pg_info(const PGInfo& info);
-    static PGInfo deserialize_pg_info(const char* pg_info_str, size_t size);
+    static PGInfo deserialize_pg_info(const unsigned char* pg_info_str, size_t size);
     void add_pg_to_map(unique< HS_PG > hs_pg);
-    void do_create_pg_message_commit(int64_t lsn, ReplicationMessageHeader& header, homestore::MultiBlkId const& blkids,
-                                     sisl::blob value, cintrusive< homestore::repl_req_ctx >& hs_ctx);
 
     // create shard related
     shard_id_t generate_new_shard_id(pg_id_t pg);
@@ -273,12 +271,11 @@ public:
      *
      * @param lsn The logical sequence number of the message.
      * @param header The header of the message.
-     * @param blkids The IDs of the blocks associated with the message.
      * @param repl_dev The replication device.
      * @param hs_ctx The replication request context.
      */
-    void on_create_pg_message_commit(int64_t lsn, sisl::blob const& header, homestore::MultiBlkId const& blkids,
-                                     homestore::ReplDev* repl_dev, cintrusive< homestore::repl_req_ctx >& hs_ctx);
+    void on_create_pg_message_commit(int64_t lsn, sisl::blob const& header, shared< homestore::ReplDev > repl_dev,
+                                     cintrusive< homestore::repl_req_ctx >& hs_ctx);
 
     /**
      * @brief Callback function invoked when a message is committed on a shard.
@@ -290,7 +287,7 @@ public:
      * @param hs_ctx The replication request context.
      */
     void on_shard_message_commit(int64_t lsn, sisl::blob const& header, homestore::MultiBlkId const& blkids,
-                                 homestore::ReplDev* repl_dev, cintrusive< homestore::repl_req_ctx >& hs_ctx);
+                                 shared< homestore::ReplDev > repl_dev, cintrusive< homestore::repl_req_ctx >& hs_ctx);
 
     /**
      * @brief Retrieves the chunk number associated with the given shard ID.

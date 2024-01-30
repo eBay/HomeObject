@@ -8,7 +8,7 @@ void ReplicationStateMachine::on_commit(int64_t lsn, const sisl::blob& header, c
     const ReplicationMessageHeader* msg_header = r_cast< const ReplicationMessageHeader* >(header.cbytes());
     switch (msg_header->msg_type) {
     case ReplicationMessageType::CREATE_PG_MSG: {
-        home_object_->on_create_pg_message_commit(lsn, header, pbas, repl_dev(), ctx);
+        home_object_->on_create_pg_message_commit(lsn, header, repl_dev(), ctx);
         break;
     }
     case ReplicationMessageType::CREATE_SHARD_MSG:
