@@ -44,6 +44,12 @@ void ReplicationStateMachine::on_rollback(int64_t lsn, sisl::blob const&, sisl::
     LOGI("on_rollback  with lsn:{}", lsn);
 }
 
+void ReplicationStateMachine::on_error(ReplServiceError error, const sisl::blob& header, const sisl::blob& key,
+                                       cintrusive< repl_req_ctx >& ctx) {
+    LOGE("on_error  with :{}, lsn {}", error, ctx->lsn);
+    // TODO:: block is already freeed at homestore side, handle error if necessay.
+}
+
 homestore::blk_alloc_hints ReplicationStateMachine::get_blk_alloc_hints(sisl::blob const& header, uint32_t data_size) {
     const ReplicationMessageHeader* msg_header = r_cast< const ReplicationMessageHeader* >(header.cbytes());
     switch (msg_header->msg_type) {

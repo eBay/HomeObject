@@ -36,6 +36,10 @@ PGError toPgError(ReplServiceError const& e) {
         return PGError::TIMEOUT;
     case ReplServiceError::SERVER_NOT_FOUND:
         return PGError::UNKNOWN_PG;
+    case ReplServiceError::NO_SPACE_LEFT:
+        return PGError::NO_SPACE_LEFT;
+    case ReplServiceError::DRIVE_WRITE_ERROR:
+        return PGError::DRIVE_WRITE_ERROR;
     /* TODO: enable this after add erro type to homestore
     case ReplServiceError::CRC_MISMATCH:
         return PGError::CRC_MISMATCH;

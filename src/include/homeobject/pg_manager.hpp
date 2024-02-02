@@ -9,7 +9,8 @@
 
 namespace homeobject {
 
-ENUM(PGError, uint16_t, UNKNOWN = 1, INVALID_ARG, TIMEOUT, UNKNOWN_PG, UNKNOWN_PEER, UNSUPPORTED_OP, CRC_MISMATCH);
+ENUM(PGError, uint16_t, UNKNOWN = 1, INVALID_ARG, TIMEOUT, UNKNOWN_PG, UNKNOWN_PEER, UNSUPPORTED_OP, CRC_MISMATCH,
+     NO_SPACE_LEFT, DRIVE_WRITE_ERROR);
 
 struct PGMember {
     explicit PGMember(peer_id_t _id) : id(_id) {}

@@ -126,8 +126,9 @@ void HSHomeObject::init_homestore() {
 
         HomeStore::instance()->format_and_start({
             {HS_SERVICE::META, hs_format_params{.size_pct = 5.0}},
-            {HS_SERVICE::LOG_REPLICATED, hs_format_params{.size_pct = 10.0}},
-            {HS_SERVICE::LOG_LOCAL, hs_format_params{.size_pct = 0.1}}, // TODO: Remove this after HS disables LOG_LOCAL
+            {HS_SERVICE::LOG_REPLICATED, hs_format_params{.size_pct = 10.0, .chunk_size = 32 * Mi}},
+            {HS_SERVICE::LOG_LOCAL,
+             hs_format_params{.size_pct = 0.1, .chunk_size = 32 * Mi}}, // TODO: Remove this after HS disables LOG_LOCAL
             {HS_SERVICE::REPLICATION,
              hs_format_params{.size_pct = 79.0,
                               .num_chunks = 65000,
