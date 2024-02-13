@@ -7,6 +7,10 @@ void ReplicationStateMachine::on_commit(int64_t lsn, const sisl::blob& header, c
     LOGI("applying raft log commit with lsn:{}", lsn);
     const ReplicationMessageHeader* msg_header = r_cast< const ReplicationMessageHeader* >(header.cbytes());
     switch (msg_header->msg_type) {
+    case ReplicationMessageType::CREATE_PG_MSG: {
+        home_object_->on_create_pg_message_commit(lsn, header, repl_dev(), ctx);
+        break;
+    }
     case ReplicationMessageType::CREATE_SHARD_MSG:
     case ReplicationMessageType::SEAL_SHARD_MSG: {
         home_object_->on_shard_message_commit(lsn, header, pbas, repl_dev(), ctx);
@@ -38,6 +42,12 @@ bool ReplicationStateMachine::on_pre_commit(int64_t lsn, sisl::blob const&, sisl
 void ReplicationStateMachine::on_rollback(int64_t lsn, sisl::blob const&, sisl::blob const&,
                                           cintrusive< homestore::repl_req_ctx >&) {
     LOGI("on_rollback  with lsn:{}", lsn);
+}
+
+void ReplicationStateMachine::on_error(ReplServiceError error, const sisl::blob& header, const sisl::blob& key,
+                                       cintrusive< repl_req_ctx >& ctx) {
+    LOGE("on_error  with :{}, lsn {}", error, ctx->lsn);
+    // TODO:: block is already freeed at homestore side, handle error if necessay.
 }
 
 homestore::blk_alloc_hints ReplicationStateMachine::get_blk_alloc_hints(sisl::blob const& header, uint32_t data_size) {

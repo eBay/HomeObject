@@ -8,6 +8,8 @@
 namespace homeobject {
 
 class HSHomeObject;
+using homestore::repl_req_ctx;
+using homestore::ReplServiceError;
 
 struct ho_repl_ctx : public homestore::repl_req_ctx {
     ReplicationMessageHeader header_;
@@ -91,6 +93,19 @@ public:
     /// @param ctx - User contenxt passed as part of the replica_set::write() api
     void on_rollback(int64_t lsn, const sisl::blob& header, const sisl::blob& key,
                      cintrusive< homestore::repl_req_ctx >& ctx) override;
+
+    /// @brief Called when the async_alloc_write call failed to initiate replication
+    ///
+    /// Called only on the node which called async_alloc_write
+    ///
+    ///
+    /// NOTE: Listener should do the free any resources created as part of pre-commit.
+    ///
+    /// @param header - Header originally passed with ReplDev::async_alloc_write() api
+    /// @param key - Key originally passed with ReplDev::async_alloc_write() api
+    /// @param ctx - Context passed as part of the ReplDev::async_alloc_write() api
+    void on_error(ReplServiceError error, const sisl::blob& header, const sisl::blob& key,
+                  cintrusive< repl_req_ctx >& ctx);
 
     /// @brief Called when replication module is trying to allocate a block to write the value
     ///

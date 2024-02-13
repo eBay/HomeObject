@@ -145,7 +145,7 @@ void HSHomeObject::on_blob_put_commit(int64_t lsn, sisl::blob const& header, sis
                                       const homestore::MultiBlkId& pbas,
                                       cintrusive< homestore::repl_req_ctx >& hs_ctx) {
     repl_result_ctx< BlobManager::Result< BlobInfo > >* ctx{nullptr};
-    if (hs_ctx != nullptr) {
+    if (hs_ctx && hs_ctx->is_proposer) {
         ctx = boost::static_pointer_cast< repl_result_ctx< BlobManager::Result< BlobInfo > > >(hs_ctx).get();
     }
 
@@ -290,7 +290,7 @@ BlobManager::AsyncResult< Blob > HSHomeObject::_get_blob(ShardInfo const& shard,
 homestore::blk_alloc_hints HSHomeObject::blob_put_get_blk_alloc_hints(sisl::blob const& header,
                                                                       cintrusive< homestore::repl_req_ctx >& hs_ctx) {
     repl_result_ctx< BlobManager::Result< BlobInfo > >* ctx{nullptr};
-    if (hs_ctx != nullptr) {
+    if (hs_ctx && hs_ctx->is_proposer) {
         ctx = boost::static_pointer_cast< repl_result_ctx< BlobManager::Result< BlobInfo > > >(hs_ctx).get();
     }
 
@@ -351,7 +351,7 @@ BlobManager::NullAsyncResult HSHomeObject::_del_blob(ShardInfo const& shard, blo
 void HSHomeObject::on_blob_del_commit(int64_t lsn, sisl::blob const& header, sisl::blob const& key,
                                       cintrusive< homestore::repl_req_ctx >& hs_ctx) {
     repl_result_ctx< BlobManager::Result< BlobInfo > >* ctx{nullptr};
-    if (hs_ctx != nullptr) {
+    if (hs_ctx && hs_ctx->is_proposer) {
         ctx = boost::static_pointer_cast< repl_result_ctx< BlobManager::Result< BlobInfo > > >(hs_ctx).get();
     }
 
@@ -392,9 +392,7 @@ void HSHomeObject::on_blob_del_commit(int64_t lsn, sisl::blob const& header, sis
     }
 
     auto& multiBlks = r.value();
-    if (multiBlks != tombstone_pbas) {
-        repl_dev->async_free_blks(lsn, multiBlks);
-    }
+    if (multiBlks != tombstone_pbas) { repl_dev->async_free_blks(lsn, multiBlks); }
 
     if (ctx) { ctx->promise_.setValue(BlobManager::Result< BlobInfo >(blob_info)); }
 }

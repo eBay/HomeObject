@@ -219,7 +219,13 @@ private:
 private:
     static homestore::ReplicationService& hs_repl_service() { return homestore::hs()->repl_service(); }
 
+    // create pg related
+    PGManager::NullAsyncResult do_create_pg(cshared< homestore::ReplDev > repl_dev, PGInfo&& pg_info);
+    static std::string serialize_pg_info(const PGInfo& info);
+    static PGInfo deserialize_pg_info(const unsigned char* pg_info_str, size_t size);
     void add_pg_to_map(unique< HS_PG > hs_pg);
+
+    // create shard related
     shard_id_t generate_new_shard_id(pg_id_t pg);
     uint64_t get_sequence_num_from_shard_id(uint64_t shard_id_t);
 
@@ -261,6 +267,17 @@ public:
     void init_cp();
 
     /**
+     * @brief Callback function invoked when createPG message is committed on a shard.
+     *
+     * @param lsn The logical sequence number of the message.
+     * @param header The header of the message.
+     * @param repl_dev The replication device.
+     * @param hs_ctx The replication request context.
+     */
+    void on_create_pg_message_commit(int64_t lsn, sisl::blob const& header, shared< homestore::ReplDev > repl_dev,
+                                     cintrusive< homestore::repl_req_ctx >& hs_ctx);
+
+    /**
      * @brief Callback function invoked when a message is committed on a shard.
      *
      * @param lsn The logical sequence number of the message.
@@ -270,7 +287,7 @@ public:
      * @param hs_ctx The replication request context.
      */
     void on_shard_message_commit(int64_t lsn, sisl::blob const& header, homestore::MultiBlkId const& blkids,
-                                 homestore::ReplDev* repl_dev, cintrusive< homestore::repl_req_ctx >& hs_ctx);
+                                 shared< homestore::ReplDev > repl_dev, cintrusive< homestore::repl_req_ctx >& hs_ctx);
 
     /**
      * @brief Retrieves the chunk number associated with the given shard ID.

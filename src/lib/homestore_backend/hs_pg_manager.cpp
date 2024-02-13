@@ -1,4 +1,5 @@
 #include <boost/uuid/random_generator.hpp>
+#include <boost/uuid/string_generator.hpp>
 #include <homestore/replication_service.hpp>
 #include "hs_homeobject.hpp"
 #include "replication_state_machine.hpp"
@@ -6,6 +7,7 @@
 
 using namespace homestore;
 namespace homeobject {
+static constexpr uint64_t io_align{512};
 
 PGError toPgError(ReplServiceError const& e) {
     switch (e) {
@@ -34,6 +36,14 @@ PGError toPgError(ReplServiceError const& e) {
         return PGError::TIMEOUT;
     case ReplServiceError::SERVER_NOT_FOUND:
         return PGError::UNKNOWN_PG;
+    case ReplServiceError::NO_SPACE_LEFT:
+        return PGError::NO_SPACE_LEFT;
+    case ReplServiceError::DRIVE_WRITE_ERROR:
+        return PGError::DRIVE_WRITE_ERROR;
+    /* TODO: enable this after add erro type to homestore
+    case ReplServiceError::CRC_MISMATCH:
+        return PGError::CRC_MISMATCH;
+     */
     case ReplServiceError::OK:
         DEBUG_ASSERT(false, "Should not process OK!");
         [[fallthrough]];
@@ -48,30 +58,100 @@ PGError toPgError(ReplServiceError const& e) {
 }
 
 PGManager::NullAsyncResult HSHomeObject::_create_pg(PGInfo&& pg_info, std::set< peer_id_t > const& peers) {
+    auto pg_id = pg_info.id;
+    if (auto lg = std::shared_lock(_pg_lock); _pg_map.end() != _pg_map.find(pg_id)) return folly::Unit();
+
     pg_info.replica_set_uuid = boost::uuids::random_generator()();
     return hs_repl_service()
         .create_repl_dev(pg_info.replica_set_uuid, peers)
         .via(executor_)
-        .thenValue([this, pg_info = std::move(pg_info)](auto&& v) mutable -> PGManager::NullResult {
+        .thenValue([this, pg_info = std::move(pg_info)](auto&& v) mutable -> PGManager::NullAsyncResult {
             if (v.hasError()) { return folly::makeUnexpected(toPgError(v.error())); }
+            // we will write a PGHeader across the raft group and when it is committed
+            // all raft members will create PGinfo and index table for this PG.
 
-            // TODO create index table during create shard.
-            auto index_table = create_index_table();
-            auto uuid_str = boost::uuids::to_string(index_table->uuid());
-
-            auto pg_id = pg_info.id;
-            auto hs_pg = std::make_unique< HS_PG >(std::move(pg_info), std::move(v.value()), index_table);
-            std::scoped_lock lock_guard(index_lock_);
-            RELEASE_ASSERT(index_table_pg_map_.count(uuid_str) == 0, "duplicate index table found");
-            index_table_pg_map_[uuid_str] = PgIndexTable{pg_id, index_table};
-
-            LOGI("Index table created for pg {} uuid {}", pg_id, uuid_str);
-            hs_pg->index_table_ = index_table;
-            // Add to index service, so that it gets cleaned up when index service is shutdown.
-            homestore::hs()->index_service().add_index_table(index_table);
-            add_pg_to_map(std::move(hs_pg));
-            return folly::Unit();
+            // FIXME:https://github.com/eBay/HomeObject/pull/136#discussion_r1470504271
+            return do_create_pg(v.value(), std::move(pg_info));
         });
+}
+
+PGManager::NullAsyncResult HSHomeObject::do_create_pg(cshared< homestore::ReplDev > repl_dev, PGInfo&& pg_info) {
+    auto serailized_pg_info = serialize_pg_info(pg_info);
+    auto info_size = serailized_pg_info.size();
+
+    auto total_size = sizeof(ReplicationMessageHeader) + info_size;
+    auto header = sisl::blob(iomanager.iobuf_alloc(total_size, io_align), total_size);
+    ReplicationMessageHeader repl_msg_header;
+    repl_msg_header.msg_type = ReplicationMessageType::CREATE_PG_MSG;
+    repl_msg_header.payload_size = info_size;
+    repl_msg_header.payload_crc =
+        crc32_ieee(init_crc32, r_cast< const unsigned char* >(serailized_pg_info.c_str()), info_size);
+    repl_msg_header.seal();
+    std::memcpy(header.bytes(), &repl_msg_header, sizeof(ReplicationMessageHeader));
+    std::memcpy(header.bytes() + sizeof(ReplicationMessageHeader), serailized_pg_info.c_str(), info_size);
+
+    // we do not need any hdr_buf_ , since we put everything in header blob
+    auto req = repl_result_ctx< PGManager::NullResult >::make(0, io_align);
+
+    // replicate this create pg message to all raft members of this group
+    repl_dev->async_alloc_write(header, sisl::blob{}, sisl::sg_list{}, req);
+    return req->result().deferValue([header = std::move(header)](auto const& e) -> PGManager::NullAsyncResult {
+        iomanager.iobuf_free(const_cast< uint8_t* >(header.cbytes()));
+        if (!e) { return folly::makeUnexpected(e.error()); }
+        return folly::Unit();
+    });
+}
+
+void HSHomeObject::on_create_pg_message_commit(int64_t lsn, sisl::blob const& header,
+                                               shared< homestore::ReplDev > repl_dev,
+                                               cintrusive< homestore::repl_req_ctx >& hs_ctx) {
+    repl_result_ctx< PGManager::NullResult >* ctx{nullptr};
+    if (hs_ctx && hs_ctx->is_proposer) {
+        ctx = boost::static_pointer_cast< repl_result_ctx< PGManager::NullResult > >(hs_ctx).get();
+    }
+
+    ReplicationMessageHeader* msg_header = r_cast< ReplicationMessageHeader* >(const_cast< uint8_t* >(header.cbytes()));
+
+    if (msg_header->corrupted()) {
+        LOGE("create PG message header is corrupted , lsn:{}", lsn);
+        if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(PGError::CRC_MISMATCH)); }
+        return;
+    }
+
+    auto serailized_pg_info_buf = header.cbytes() + sizeof(ReplicationMessageHeader);
+    const auto serailized_pg_info_size = header.size() - sizeof(ReplicationMessageHeader);
+
+    if (crc32_ieee(init_crc32, serailized_pg_info_buf, serailized_pg_info_size) != msg_header->payload_crc) {
+        // header & value is inconsistent;
+        LOGE("create PG message header is inconsistent with value, lsn:{}", lsn);
+        if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(PGError::CRC_MISMATCH)); }
+        return;
+    }
+
+    auto pg_info = deserialize_pg_info(serailized_pg_info_buf, serailized_pg_info_size);
+    auto pg_id = pg_info.id;
+    if (auto lg = std::shared_lock(_pg_lock); _pg_map.end() != _pg_map.find(pg_id)) {
+        LOGW("PG already exists, lsn:{}, pg_id {}", lsn, pg_id);
+        if (ctx) { ctx->promise_.setValue(folly::Unit()); }
+        return;
+    }
+
+    // create index table and pg
+    // TODO create index table during create shard.
+    auto index_table = create_index_table();
+    auto uuid_str = boost::uuids::to_string(index_table->uuid());
+
+    auto hs_pg = std::make_unique< HS_PG >(std::move(pg_info), std::move(repl_dev), index_table);
+    std::scoped_lock lock_guard(index_lock_);
+    RELEASE_ASSERT(index_table_pg_map_.count(uuid_str) == 0, "duplicate index table found");
+    index_table_pg_map_[uuid_str] = PgIndexTable{pg_id, index_table};
+
+    LOGI("Index table created for pg {} uuid {}", pg_id, uuid_str);
+    hs_pg->index_table_ = index_table;
+    // Add to index service, so that it gets cleaned up when index service is shutdown.
+    homestore::hs()->index_service().add_index_table(index_table);
+    add_pg_to_map(std::move(hs_pg));
+    if (ctx) ctx->promise_.setValue(folly::Unit());
 }
 
 PGManager::NullAsyncResult HSHomeObject::_replace_member(pg_id_t id, peer_id_t const& old_member,
@@ -89,16 +169,15 @@ void HSHomeObject::add_pg_to_map(unique< HS_PG > hs_pg) {
     RELEASE_ASSERT(_pg_map.end() != it1, "Unknown map insert error!");
 }
 
-#if 0
-std::string HSHomeObject::serialize_pg_info(PGInfo const& pginfo) {
+std::string HSHomeObject::serialize_pg_info(const PGInfo& pginfo) {
     nlohmann::json j;
     j["pg_info"]["pg_id_t"] = pginfo.id;
     j["pg_info"]["repl_uuid"] = boost::uuids::to_string(pginfo.replica_set_uuid);
 
-    nlohmann::json members_j = {};
+    nlohmann::json members_j{};
     for (auto const& member : pginfo.members) {
         nlohmann::json member_j;
-        member_j["member_id"] = member.id;
+        member_j["member_id"] = boost::uuids::to_string(member.id);
         member_j["name"] = member.name;
         member_j["priority"] = member.priority;
         members_j.push_back(member_j);
@@ -107,23 +186,21 @@ std::string HSHomeObject::serialize_pg_info(PGInfo const& pginfo) {
     return j.dump();
 }
 
-PGInfo HSHomeObject::deserialize_pg_info(std::string const& json_str) {
-    auto pg_json = nlohmann::json::parse(json_str);
+PGInfo HSHomeObject::deserialize_pg_info(const unsigned char* json_str, size_t size) {
+    auto pg_json = nlohmann::json::parse(json_str, json_str + size);
 
-    PGInfo pg_info;
-    pg_info.id = pg_json["pg_info"]["pg_id_t"].get< pg_id_t >();
+    PGInfo pg_info(pg_json["pg_info"]["pg_id_t"].get< pg_id_t >());
     pg_info.replica_set_uuid = boost::uuids::string_generator()(pg_json["pg_info"]["repl_uuid"].get< std::string >());
 
-    for (auto const& m : pg_info["pg_info"]["members"]) {
-        PGMember member;
-        member.id = m["member_id"].get< pg_id_t >();
+    for (auto const& m : pg_json["pg_info"]["members"]) {
+        auto uuid_str = m["member_id"].get< std::string >();
+        PGMember member(boost::uuids::string_generator()(uuid_str));
         member.name = m["name"].get< std::string >();
         member.priority = m["priority"].get< int32_t >();
         pg_info.members.emplace(std::move(member));
     }
     return pg_info;
 }
-#endif
 
 void HSHomeObject::on_pg_meta_blk_found(sisl::byte_view const& buf, void* meta_cookie) {
     homestore::superblk< pg_info_superblk > pg_sb(_pg_meta_name);
