@@ -130,7 +130,7 @@ void HSHomeObject::init_homestore() {
             {HS_SERVICE::REPLICATION,
              hs_format_params{.size_pct = 79.0,
                               .num_chunks = 65000,
-                              .block_size = 1024,
+                              .block_size = _data_block_size,
                               .alloc_type = blk_allocator_type_t::append,
                               .chunk_sel_type = chunk_selector_type_t::CUSTOM}},
             {HS_SERVICE::INDEX, hs_format_params{.size_pct = 5.0}},
@@ -149,6 +149,13 @@ void HSHomeObject::init_homestore() {
     }
     recovery_done_ = true;
     LOGI("Initialize and start HomeStore is successfully");
+
+    // Now cache the zero padding bufs to avoid allocating during IO time
+    for (size_t i{0}; i < max_zpad_bufs; ++i) {
+        size_t const size = io_align * (i + 1);
+        zpad_bufs_[i] = std::move(sisl::io_blob_safe(uint32_cast(size), io_align));
+        std::memset(zpad_bufs_[i].bytes(), 0, size);
+    }
 }
 
 #if 0
@@ -256,6 +263,17 @@ HomeObjectStats HSHomeObject::_get_stats() const {
     stats.num_open_shards = num_open_shards;
     stats.avail_open_shards = chunk_selector()->total_chunks() - num_open_shards;
     return stats;
+}
+
+size_t HSHomeObject::max_pad_size() const { return zpad_bufs_[max_zpad_bufs - 1].size(); }
+
+sisl::io_blob_safe& HSHomeObject::get_pad_buf(uint32_t pad_len) {
+    auto const idx = pad_len / io_align;
+    if (idx >= max_zpad_bufs) {
+        RELEASE_ASSERT(false, "Requested pad len {} is too large", pad_len);
+        return zpad_bufs_[0];
+    }
+    return zpad_bufs_[idx];
 }
 
 } // namespace homeobject

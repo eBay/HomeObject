@@ -12,13 +12,56 @@ using homestore::repl_req_ctx;
 using homestore::ReplServiceError;
 
 struct ho_repl_ctx : public homestore::repl_req_ctx {
-    ReplicationMessageHeader header_;
     sisl::io_blob_safe hdr_buf_;
+    sisl::io_blob_safe key_buf_;
+    folly::small_vector< sisl::io_blob_safe, 3 > data_bufs_;
+    sisl::sg_list data_sgs_;
 
-    ho_repl_ctx(uint32_t size, uint32_t alignment) : homestore::repl_req_ctx{}, hdr_buf_{size, alignment} {}
+    ho_repl_ctx(uint32_t hdr_extn_size, uint32_t key_size = 0) : homestore::repl_req_ctx{} {
+        hdr_buf_ = std::move(sisl::io_blob_safe{uint32_cast(sizeof(ReplicationMessageHeader) + hdr_extn_size), 0});
+        new (hdr_buf_.bytes()) ReplicationMessageHeader();
+
+        if (key_size) { key_buf_ = std::move(sisl::io_blob_safe{key_size, 0}); }
+        data_sgs_.size = 0;
+    }
+
+    ~ho_repl_ctx() {
+        if (hdr_buf_.bytes()) { header()->~ReplicationMessageHeader(); }
+    }
+
     template < typename T >
     T* to() {
         return r_cast< T* >(this);
+    }
+
+    ReplicationMessageHeader* header() { return r_cast< ReplicationMessageHeader* >(hdr_buf_.bytes()); }
+    uint8_t* header_extn() { return hdr_buf_.bytes() + sizeof(ReplicationMessageHeader); }
+
+    sisl::io_blob_safe& header_buf() { return hdr_buf_; }
+    sisl::io_blob_safe const& cheader_buf() const { return hdr_buf_; }
+
+    sisl::io_blob_safe& key_buf() { return key_buf_; }
+    sisl::io_blob_safe const& ckey_buf() const { return key_buf_; }
+
+    void add_data_sg(uint8_t* buf, uint32_t size) {
+        data_sgs_.iovs.emplace_back(iovec{.iov_base = buf, .iov_len = size});
+        data_sgs_.size += size;
+    }
+
+    void add_data_sg(sisl::io_blob_safe&& buf) {
+        add_data_sg(buf.bytes(), buf.size());
+        data_bufs_.emplace_back(std::move(buf));
+    }
+
+    sisl::sg_list& data_sgs() { return data_sgs_; }
+    std::string data_sgs_string() const {
+        fmt::memory_buffer buf;
+        fmt::format_to(fmt::appender(buf), "total_size={} iovcnt={} [", data_sgs_.size, data_sgs_.iovs.size());
+        for (auto const& iov : data_sgs_.iovs) {
+            fmt::format_to(fmt::appender(buf), "<base={},len={}> ", iov.iov_base, iov.iov_len);
+        }
+        fmt::format_to(fmt::appender(buf), "]");
+        return fmt::to_string(buf);
     }
 };
 
@@ -31,7 +74,7 @@ struct repl_result_ctx : public ho_repl_ctx {
         return intrusive< repl_result_ctx< T > >{new repl_result_ctx< T >(std::forward< Args >(args)...)};
     }
 
-    repl_result_ctx(uint32_t hdr_size, uint32_t alignment) : ho_repl_ctx{hdr_size, alignment} {}
+    repl_result_ctx(uint32_t hdr_extn_size, uint32_t key_size = 0) : ho_repl_ctx{hdr_extn_size, key_size} {}
     folly::SemiFuture< T > result() { return promise_.getSemiFuture(); }
 };
 

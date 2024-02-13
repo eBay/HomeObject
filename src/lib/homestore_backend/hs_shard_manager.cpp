@@ -74,38 +74,49 @@ ShardManager::AsyncResult< ShardInfo > HSHomeObject::_create_shard(pg_id_t pg_ow
 
     auto new_shard_id = generate_new_shard_id(pg_owner);
     auto create_time = get_current_timestamp();
-    std::string const create_shard_message = serialize_shard_info(
-        ShardInfo(new_shard_id, pg_owner, ShardInfo::State::OPEN, create_time, create_time, size_bytes, size_bytes, 0));
-    const auto msg_size = sisl::round_up(create_shard_message.size(), repl_dev->get_blk_size());
-    auto req = repl_result_ctx< ShardManager::Result< ShardInfo > >::make(msg_size, 512 /*alignment*/);
-    auto buf_ptr = req->hdr_buf_.bytes();
-    std::memset(buf_ptr, 0, msg_size);
-    std::memcpy(buf_ptr, create_shard_message.c_str(), create_shard_message.size());
+
+    // Prepare the shard info block
+    sisl::io_blob_safe sb_blob(sisl::round_up(sizeof(shard_info_superblk), repl_dev->get_blk_size()), io_align);
+    shard_info_superblk* sb = new (sb_blob.bytes()) shard_info_superblk();
+    sb->type = DataHeader::data_type_t::SHARD_INFO;
+    sb->info = ShardInfo{.id = new_shard_id,
+                         .placement_group = pg_owner,
+                         .state = ShardInfo::State::OPEN,
+                         .created_time = create_time,
+                         .last_modified_time = create_time,
+                         .available_capacity_bytes = size_bytes,
+                         .total_capacity_bytes = size_bytes,
+                         .deleted_capacity_bytes = 0};
+    sb->chunk_id = 0;
+
+    auto req = repl_result_ctx< ShardManager::Result< ShardInfo > >::make(
+        sizeof(shard_info_superblk) /* header_extn_size */, 0u /* key_size */);
+
     // preapre msg header;
-    req->header_.msg_type = ReplicationMessageType::CREATE_SHARD_MSG;
-    req->header_.pg_id = pg_owner;
-    req->header_.shard_id = new_shard_id;
-    req->header_.payload_size = msg_size;
-    req->header_.payload_crc = crc32_ieee(init_crc32, buf_ptr, msg_size);
-    req->header_.seal();
-    sisl::blob header;
-    header.set_bytes(r_cast< uint8_t* >(&req->header_));
-    header.set_size(sizeof(req->header_));
-    sisl::sg_list value;
-    value.size = msg_size;
-    value.iovs.push_back(iovec(buf_ptr, msg_size));
+    req->header()->msg_type = ReplicationMessageType::CREATE_SHARD_MSG;
+    req->header()->pg_id = pg_owner;
+    req->header()->shard_id = new_shard_id;
+    req->header()->payload_size = sizeof(shard_info_superblk);
+    req->header()->payload_crc = crc32_ieee(init_crc32, sb_blob.cbytes(), sizeof(shard_info_superblk));
+    req->header()->seal();
+
+    // ShardInfo block is persisted on both on header and in data portion.
+    // It is persisted in header portion, so that it is written in journal and hence replay of journal on most cases
+    // doesn't need additional read from data blks.
+    // We also persist in data blocks for following reasons:
+    //   * To recover the shard information in case both journal and metablk are lost
+    //   * For garbage collection, we directly read from the data chunk and get shard information.
+    std::memcpy(req->header_extn(), sb_blob.cbytes(), sizeof(shard_info_superblk));
+    req->add_data_sg(std::move(sb_blob));
+
     // replicate this create shard message to PG members;
-    repl_dev->async_alloc_write(header, sisl::blob{buf_ptr, (uint32_t)msg_size}, value, req);
-    return req->result().deferValue([this](auto const& e) -> ShardManager::Result< ShardInfo > {
-        if (!e) return folly::makeUnexpected(e.error());
-        return e.value();
-    });
+    repl_dev->async_alloc_write(req->cheader_buf(), sisl::blob{}, req->data_sgs(), req);
+    return req->result();
 }
 
 ShardManager::AsyncResult< ShardInfo > HSHomeObject::_seal_shard(ShardInfo const& info) {
-    auto& pg_id = info.placement_group;
-    auto& shard_id = info.id;
-    ShardInfo shard_info = info;
+    auto pg_id = info.placement_group;
+    auto shard_id = info.id;
 
     shared< homestore::ReplDev > repl_dev;
     {
@@ -116,66 +127,120 @@ ShardManager::AsyncResult< ShardInfo > HSHomeObject::_seal_shard(ShardInfo const
         RELEASE_ASSERT(repl_dev != nullptr, "Repl dev null");
     }
 
-    shard_info.state = ShardInfo::State::SEALED;
-    auto seal_shard_message = serialize_shard_info(shard_info);
-    const auto msg_size = sisl::round_up(seal_shard_message.size(), repl_dev->get_blk_size());
-    auto req = repl_result_ctx< ShardManager::Result< ShardInfo > >::make(msg_size, 512 /*alignment*/);
-    auto buf_ptr = req->hdr_buf_.bytes();
-    std::memset(buf_ptr, 0, msg_size);
-    std::memcpy(buf_ptr, seal_shard_message.c_str(), seal_shard_message.size());
+    ShardInfo tmp_info = info;
+    tmp_info.state = ShardInfo::State::SEALED;
 
-    req->header_.msg_type = ReplicationMessageType::SEAL_SHARD_MSG;
-    req->header_.pg_id = pg_id;
-    req->header_.shard_id = shard_id;
-    req->header_.payload_size = msg_size;
-    req->header_.payload_crc = crc32_ieee(init_crc32, buf_ptr, msg_size);
-    req->header_.seal();
-    sisl::blob header;
-    header.set_bytes(r_cast< uint8_t* >(&req->header_));
-    header.set_size(sizeof(req->header_));
-    sisl::sg_list value;
-    value.size = msg_size;
-    value.iovs.push_back(iovec(buf_ptr, msg_size));
+    // Prepare the shard info block
+    sisl::io_blob_safe sb_blob(sisl::round_up(sizeof(shard_info_superblk), repl_dev->get_blk_size()), io_align);
+    shard_info_superblk* sb = new (sb_blob.bytes()) shard_info_superblk();
+    sb->type = DataHeader::data_type_t::SHARD_INFO;
+    sb->info = tmp_info;
+    sb->chunk_id = 0;
+
+    auto req = repl_result_ctx< ShardManager::Result< ShardInfo > >::make(
+        sizeof(shard_info_superblk) /* header_extn_size */, 0u /* key_size */);
+    req->header()->msg_type = ReplicationMessageType::SEAL_SHARD_MSG;
+    req->header()->pg_id = pg_id;
+    req->header()->shard_id = shard_id;
+    req->header()->payload_size = sizeof(shard_info_superblk);
+    req->header()->payload_crc = crc32_ieee(init_crc32, sb_blob.cbytes(), sizeof(shard_info_superblk));
+    req->header()->seal();
+
+    // Similar to create shard - ShardInfo block is persisted on both on header and in data portion.
+    std::memcpy(req->header_extn(), sb_blob.cbytes(), sizeof(shard_info_superblk));
+    req->add_data_sg(std::move(sb_blob));
 
     // replicate this seal shard message to PG members;
-    repl_dev->async_alloc_write(header, sisl::blob{buf_ptr, (uint32_t)msg_size}, value, req);
+    repl_dev->async_alloc_write(req->cheader_buf(), sisl::blob{}, req->data_sgs(), req);
     return req->result();
 }
 
-void HSHomeObject::on_shard_message_commit(int64_t lsn, sisl::blob const& header, homestore::MultiBlkId const& blkids,
+void HSHomeObject::on_shard_message_commit(int64_t lsn, sisl::blob const& h, homestore::MultiBlkId const& blkids,
                                            shared< homestore::ReplDev > repl_dev,
                                            cintrusive< homestore::repl_req_ctx >& hs_ctx) {
+    repl_result_ctx< ShardManager::Result< ShardInfo > >* ctx{nullptr};
+    if (hs_ctx && hs_ctx->is_proposer) {
+        ctx = boost::static_pointer_cast< repl_result_ctx< ShardManager::Result< ShardInfo > > >(hs_ctx).get();
+    }
 
-    if (hs_ctx != nullptr) {
-        do_shard_message_commit(lsn, *r_cast< ReplicationMessageHeader* >(const_cast< uint8_t* >(header.cbytes())),
-                                blkids, hs_ctx->key, hs_ctx);
+    auto header = r_cast< const ReplicationMessageHeader* >(h.cbytes());
+    if (header->corrupted()) {
+        LOGW("replication message header is corrupted with crc error, lsn:{}", lsn);
+        if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(ShardError::CRC_MISMATCH)); }
         return;
     }
 
-    // hs_ctx will be nullptr when HS is restarting and replay all commited log entries from the last checkpoint;
-    // most of time, the create_shard/seal_shard on_commit() is already completed before restarting/crash and shard info
-    // is already be written into metablk, so we need to do nothing in this case to avoid duplication when replay this
-    // journal log. but there is still a smaller chance that HO is stopped/crashed before writing metablk is called or
-    // completed and we need to recover shard info from journal log in such case.
-    sisl::sg_list value;
-    value.size = blkids.blk_count() * repl_dev->get_blk_size();
-    auto value_buf = iomanager.iobuf_alloc(512, value.size);
-    value.iovs.push_back(iovec{.iov_base = value_buf, .iov_len = value.size});
-    // header will be released when this function returns, but we still need the header when async_read() finished.
-    auto header_ptr = r_cast< const ReplicationMessageHeader* >(header.cbytes());
-    repl_dev->async_read(blkids, value, value.size)
-        .thenValue([this, lsn, msg_header = *header_ptr, blkids, value](auto&& err) mutable {
-            if (err) {
-                LOGW("failed to read data from homestore pba, lsn:{}", lsn);
-            } else {
-                sisl::blob value_blob(r_cast< uint8_t* >(value.iovs[0].iov_base), value.size);
-                do_shard_message_commit(lsn, msg_header, blkids, value_blob, nullptr);
-            }
-            iomanager.iobuf_free(r_cast< uint8_t* >(value.iovs[0].iov_base));
-        });
+#ifdef VADLIDATE_ON_REPLAY
+    sisl::io_blob_safe value_blob(blkids.blk_count() * repl_dev->get_blk_size(), io_align);
+    sisl::sg_list value_sgs;
+    value_sgs.iovs.emplace_back(iovec{.iov_base = value_blob.bytes(), .iov_len = value_blob.size()});
+    value_sgs.size += value_blob.size();
+
+    // Do a read sync read and validate the crc
+    std::error_code err = repl_dev->async_read(blkids, value_sgs, value_blob.size()).get();
+    if (err) {
+        LOGW("failed to read data from homestore blks, lsn:{}", lsn);
+        if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(ShardError::UNKNOWN)); }
+        return;
+    }
+
+    if (crc32_ieee(init_crc32, value.cbytes(), value.size()) != header->payload_crc) {
+        // header & value is inconsistent;
+        LOGW("replication message header is inconsistent with value, lsn:{}", lsn);
+        if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(ShardError::CRC_MISMATCH)); }
+        return;
+    }
+#endif
+
+    switch (header->msg_type) {
+    case ReplicationMessageType::CREATE_SHARD_MSG: {
+        auto sb = r_cast< shard_info_superblk const* >(h.cbytes() + sizeof(ReplicationMessageHeader));
+        auto const shard_info = sb->info;
+
+        bool shard_exist = false;
+        {
+            std::scoped_lock lock_guard(_shard_lock);
+            shard_exist = (_shard_map.find(shard_info.id) != _shard_map.end());
+        }
+
+        if (!shard_exist) {
+            add_new_shard_to_map(std::make_unique< HS_Shard >(std::move(shard_info), blkids.chunk_num()));
+            // select_specific_chunk() will do something only when we are relaying journal after restart, during the
+            // runtime flow chunk is already been be mark busy when we write the shard info to the repldev.
+            chunk_selector_->select_specific_chunk(blkids.chunk_num());
+        }
+        if (ctx) { ctx->promise_.setValue(ShardManager::Result< ShardInfo >(shard_info)); }
+        break;
+    }
+
+    case ReplicationMessageType::SEAL_SHARD_MSG: {
+        auto sb = r_cast< shard_info_superblk const* >(h.cbytes() + sizeof(ReplicationMessageHeader));
+        auto const shard_info = sb->info;
+
+        ShardInfo::State state;
+        {
+            std::scoped_lock lock_guard(_shard_lock);
+            auto iter = _shard_map.find(shard_info.id);
+            RELEASE_ASSERT(iter != _shard_map.end(), "Missing shard info");
+            state = (*iter->second)->info.state;
+        }
+
+        if (state == ShardInfo::State::OPEN) {
+            auto chunk_id = get_shard_chunk(shard_info.id);
+            RELEASE_ASSERT(chunk_id.has_value(), "Chunk id not found");
+            chunk_selector()->release_chunk(chunk_id.value());
+            update_shard_in_map(shard_info);
+        }
+        if (ctx) { ctx->promise_.setValue(ShardManager::Result< ShardInfo >(shard_info)); }
+        break;
+    }
+    default:
+        break;
+    }
 }
 
-void HSHomeObject::do_shard_message_commit(int64_t lsn, ReplicationMessageHeader& header,
+#if 0
+void HSHomeObject::do_shard_message_commit(int64_t lsn, ReplicationMessageHeader const& header,
                                            homestore::MultiBlkId const& blkids, sisl::blob value,
                                            cintrusive< homestore::repl_req_ctx >& hs_ctx) {
     repl_result_ctx< ShardManager::Result< ShardInfo > >* ctx{nullptr};
@@ -240,6 +305,7 @@ void HSHomeObject::do_shard_message_commit(int64_t lsn, ReplicationMessageHeader
 
     if (ctx) { ctx->promise_.setValue(ShardManager::Result< ShardInfo >(shard_info)); }
 }
+#endif
 
 void HSHomeObject::add_new_shard_to_map(ShardPtr&& shard) {
     // TODO: We are taking a global lock for all pgs to create shard. Is it really needed??
@@ -295,41 +361,18 @@ std::optional< homestore::chunk_num_t > HSHomeObject::get_any_chunk_id(pg_id_t c
 HSHomeObject::HS_Shard::HS_Shard(ShardInfo shard_info, homestore::chunk_num_t chunk_id) :
         Shard(std::move(shard_info)), sb_(_shard_meta_name) {
     sb_.create(sizeof(shard_info_superblk));
+    sb_->info = info;
     sb_->chunk_id = chunk_id;
-    write_sb();
-}
-
-HSHomeObject::HS_Shard::HS_Shard(homestore::superblk< shard_info_superblk >&& sb) :
-        Shard(shard_info_from_sb(sb)), sb_(std::move(sb)) {}
-
-void HSHomeObject::HS_Shard::update_info(const ShardInfo& shard_info) {
-    info = shard_info;
-    write_sb();
-}
-
-void HSHomeObject::HS_Shard::write_sb() {
-    sb_->id = info.id;
-    sb_->placement_group = info.placement_group;
-    sb_->state = info.state;
-    sb_->created_time = info.created_time;
-    sb_->last_modified_time = info.last_modified_time;
-    sb_->available_capacity_bytes = info.available_capacity_bytes;
-    sb_->total_capacity_bytes = info.total_capacity_bytes;
-    sb_->deleted_capacity_bytes = info.deleted_capacity_bytes;
     sb_.write();
 }
 
-ShardInfo HSHomeObject::HS_Shard::shard_info_from_sb(homestore::superblk< shard_info_superblk > const& sb) {
-    ShardInfo info;
-    info.id = sb->id;
-    info.placement_group = sb->placement_group;
-    info.state = sb->state;
-    info.created_time = sb->created_time;
-    info.last_modified_time = sb->last_modified_time;
-    info.available_capacity_bytes = sb->available_capacity_bytes;
-    info.total_capacity_bytes = sb->total_capacity_bytes;
-    info.deleted_capacity_bytes = sb->deleted_capacity_bytes;
-    return info;
+HSHomeObject::HS_Shard::HS_Shard(homestore::superblk< shard_info_superblk >&& sb) :
+        Shard(sb->info), sb_(std::move(sb)) {}
+
+void HSHomeObject::HS_Shard::update_info(const ShardInfo& shard_info) {
+    info = shard_info;
+    sb_->info = info;
+    sb_.write();
 }
 
 } // namespace homeobject
