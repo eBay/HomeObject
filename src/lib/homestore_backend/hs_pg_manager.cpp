@@ -7,8 +7,6 @@
 
 using namespace homestore;
 namespace homeobject {
-static constexpr uint64_t io_align{512};
-
 PGError toPgError(ReplServiceError const& e) {
     switch (e) {
     case ReplServiceError::BAD_REQUEST:
@@ -79,24 +77,16 @@ PGManager::NullAsyncResult HSHomeObject::do_create_pg(cshared< homestore::ReplDe
     auto serailized_pg_info = serialize_pg_info(pg_info);
     auto info_size = serailized_pg_info.size();
 
-    auto total_size = sizeof(ReplicationMessageHeader) + info_size;
-    auto header = sisl::blob(iomanager.iobuf_alloc(total_size, io_align), total_size);
-    ReplicationMessageHeader repl_msg_header;
-    repl_msg_header.msg_type = ReplicationMessageType::CREATE_PG_MSG;
-    repl_msg_header.payload_size = info_size;
-    repl_msg_header.payload_crc =
-        crc32_ieee(init_crc32, r_cast< const unsigned char* >(serailized_pg_info.c_str()), info_size);
-    repl_msg_header.seal();
-    std::memcpy(header.bytes(), &repl_msg_header, sizeof(ReplicationMessageHeader));
-    std::memcpy(header.bytes() + sizeof(ReplicationMessageHeader), serailized_pg_info.c_str(), info_size);
-
-    // we do not need any hdr_buf_ , since we put everything in header blob
-    auto req = repl_result_ctx< PGManager::NullResult >::make(0, io_align);
+    auto req = repl_result_ctx< PGManager::NullResult >::make(info_size, 0);
+    req->header()->msg_type = ReplicationMessageType::CREATE_PG_MSG;
+    req->header()->payload_size = info_size;
+    req->header()->payload_crc = crc32_ieee(init_crc32, r_cast< const uint8_t* >(serailized_pg_info.data()), info_size);
+    req->header()->seal();
+    std::memcpy(req->header_extn(), serailized_pg_info.data(), info_size);
 
     // replicate this create pg message to all raft members of this group
-    repl_dev->async_alloc_write(header, sisl::blob{}, sisl::sg_list{}, req);
-    return req->result().deferValue([header = std::move(header)](auto const& e) -> PGManager::NullAsyncResult {
-        iomanager.iobuf_free(const_cast< uint8_t* >(header.cbytes()));
+    repl_dev->async_alloc_write(req->header_buf(), sisl::blob{}, sisl::sg_list{}, req);
+    return req->result().deferValue([req](auto const& e) -> PGManager::NullAsyncResult {
         if (!e) { return folly::makeUnexpected(e.error()); }
         return folly::Unit();
     });
@@ -110,7 +100,7 @@ void HSHomeObject::on_create_pg_message_commit(int64_t lsn, sisl::blob const& he
         ctx = boost::static_pointer_cast< repl_result_ctx< PGManager::NullResult > >(hs_ctx).get();
     }
 
-    ReplicationMessageHeader* msg_header = r_cast< ReplicationMessageHeader* >(const_cast< uint8_t* >(header.cbytes()));
+    auto const* msg_header = r_cast< ReplicationMessageHeader const* >(header.cbytes());
 
     if (msg_header->corrupted()) {
         LOGE("create PG message header is corrupted , lsn:{}", lsn);

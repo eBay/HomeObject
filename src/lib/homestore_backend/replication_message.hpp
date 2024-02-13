@@ -25,13 +25,13 @@ struct ReplicationMessageHeader {
     uint32_t payload_size;
     uint32_t payload_crc;
     uint8_t reserved_pad[4]{};
-    uint32_t header_crc;
+    mutable uint32_t header_crc;
     void seal() {
         header_crc = 0;
         header_crc = calculate_crc();
     }
 
-    bool corrupted() {
+    bool corrupted() const {
         if (magic_num != HOMEOBJECT_REPLICATION_MAGIC ||
             protocol_version != HOMEOBJECT_REPLICATION_PROTOCOL_VERSION_V1) {
             return true;
@@ -46,6 +46,12 @@ struct ReplicationMessageHeader {
 
     uint32_t calculate_crc() const {
         return crc32_ieee(init_crc32, r_cast< const unsigned char* >(this), sizeof(*this));
+    }
+
+    std::string to_string() const {
+        return fmt::format(
+            "magic={:#x} version={} msg_type={} pg_id={} shard_id={} payload_size={} payload_crc={} header_crc={}\n",
+            magic_num, protocol_version, enum_name(msg_type), pg_id, shard_id, payload_size, payload_crc, header_crc);
     }
 };
 

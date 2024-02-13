@@ -24,11 +24,14 @@ class BlobRouteValue;
 using BlobIndexTable = homestore::IndexTable< BlobRouteKey, BlobRouteValue >;
 class HomeObjCPContext;
 
+static constexpr uint64_t io_align{512};
+
 class HSHomeObject : public HomeObjectImpl {
     /// NOTE: Be wary to change these as they effect on-disk format!
     inline static auto const _svc_meta_name = std::string("HomeObject");
     inline static auto const _pg_meta_name = std::string("PGManager");
     inline static auto const _shard_meta_name = std::string("ShardManager");
+    static constexpr uint32_t _data_block_size = 1024;
     ///
 
     /// Overridable Helpers
@@ -93,15 +96,19 @@ public:
         void copy(pg_info_superblk const& rhs) { *this = rhs; }
     };
 
-    struct shard_info_superblk {
-        shard_id_t id;
-        pg_id_t placement_group;
-        ShardInfo::State state;
-        uint64_t created_time;
-        uint64_t last_modified_time;
-        uint64_t available_capacity_bytes;
-        uint64_t total_capacity_bytes;
-        uint64_t deleted_capacity_bytes;
+    struct DataHeader {
+        static constexpr uint8_t data_header_version = 0x01;
+        static constexpr uint64_t data_header_magic = 0x21fdffdba8d68fc6; // echo "BlobHeader" | md5sum
+
+        enum class data_type_t : uint32_t { SHARD_INFO = 1, BLOB_INFO = 2 };
+
+        uint64_t magic{data_header_magic};
+        uint8_t version{data_header_version};
+        data_type_t type{data_type_t::BLOB_INFO};
+    };
+
+    struct shard_info_superblk : public DataHeader {
+        ShardInfo info;
         homestore::chunk_num_t chunk_id;
     };
 #pragma pack()
@@ -158,15 +165,13 @@ public:
         ~HS_Shard() override = default;
 
         void update_info(const ShardInfo& info);
-        void write_sb();
         auto chunk_id() const { return sb_->chunk_id; }
-        static ShardInfo shard_info_from_sb(homestore::superblk< shard_info_superblk > const& sb);
     };
 
 #pragma pack(1)
     // Every blob payload stored in disk as blob header | blob data | blob metadata(optional) | padding.
     // Padding of zeroes is added to make sure the whole payload be aligned to device block size.
-    struct BlobHeader {
+    struct BlobHeader : public DataHeader {
         static constexpr uint64_t blob_max_hash_len = 32;
         static constexpr uint8_t blob_header_version = 0x01;
         static constexpr uint64_t blob_header_magic = 0x21fdffdba8d68fc6; // echo "BlobHeader" | md5sum
@@ -178,21 +183,19 @@ public:
             SHA1 = 3,
         };
 
-        uint64_t magic{blob_header_magic};
-        uint8_t version{blob_header_version};
         HashAlgorithm hash_algorithm;
         uint8_t hash[blob_max_hash_len]{};
         shard_id_t shard_id;
         blob_id_t blob_id;
-        uint32_t blob_size{};
-        uint64_t object_offset{};   // Offset of this blob in the object. Provided by GW.
-        uint32_t user_key_offset{}; // Offset of metadata stored after the blob data.
-        uint32_t user_key_size{};
+        uint32_t blob_size;
+        uint64_t object_offset; // Offset of this blob in the object. Provided by GW.
+        uint32_t data_offset;   // Offset of actual data blob stored after the metadata.
+        uint32_t user_key_size; // Actual size of the user key.
 
         bool valid() const { return magic == blob_header_magic || version <= blob_header_version; }
-        std::string to_string() {
-            return fmt::format("magic={:#x} version={} shard={} blob_size={} user_size={} algo={} hash={}\n", magic,
-                               version, shard_id, blob_size, user_key_size, (uint8_t)hash_algorithm,
+        std::string to_string() const {
+            return fmt::format("magic={:#x} version={} shard={:#x} blob_size={} user_size={} algo={} hash={:np}\n",
+                               magic, version, shard_id, blob_size, user_key_size, (uint8_t)hash_algorithm,
                                spdlog::to_hex(hash, hash + blob_max_hash_len));
         }
     };
@@ -215,6 +218,9 @@ public:
 private:
     shared< HeapChunkSelector > chunk_selector_;
     bool recovery_done_{false};
+
+    static constexpr size_t max_zpad_bufs = _data_block_size / io_align;
+    std::array< sisl::io_blob_safe, max_zpad_bufs > zpad_bufs_; // Zero padded buffers for blob payload.
 
 private:
     static homestore::ReplicationService& hs_repl_service() { return homestore::hs()->repl_service(); }
@@ -245,6 +251,7 @@ private:
 
 public:
     using HomeObjectImpl::HomeObjectImpl;
+    HSHomeObject();
     ~HSHomeObject() override;
 
     /**
@@ -337,6 +344,10 @@ public:
     BlobManager::Result< homestore::MultiBlkId > move_to_tombstone(shared< BlobIndexTable > index_table,
                                                                    const BlobInfo& blob_info);
     void print_btree_index(pg_id_t pg_id);
+
+    // Zero padding buffer related.
+    size_t max_pad_size() const;
+    sisl::io_blob_safe& get_pad_buf(uint32_t pad_len);
 
     // void trigger_timed_events();
 };
