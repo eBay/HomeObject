@@ -5,8 +5,6 @@
 #include <folly/Unit.h>
 #include <folly/futures/Future.h>
 
-#include <homestore/homestore_decl.hpp>
-#include <iomgr/iomgr_types.hpp>
 #include <sisl/logging/logging.h>
 
 SISL_LOGGING_DECL(homeobject);

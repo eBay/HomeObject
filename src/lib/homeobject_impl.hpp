@@ -4,6 +4,7 @@
 #include "homeobject/blob_manager.hpp"
 #include "homeobject/pg_manager.hpp"
 #include "homeobject/shard_manager.hpp"
+#include <boost/intrusive_ptr.hpp>
 #include <sisl/logging/logging.h>
 
 #define LOGT(...) LOGTRACEMOD(homeobject, ##__VA_ARGS__)

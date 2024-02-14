@@ -14,11 +14,11 @@ SISL_OPTION_GROUP(
 
 SISL_LOGGING_INIT(HOMEOBJECT_LOG_MODS)
 
-SISL_OPTIONS_ENABLE(logging, iomgr, homeobject, test_home_object)
+SISL_OPTIONS_ENABLE(logging, homeobject, test_home_object)
 
 FixtureApp::FixtureApp() {
     clean();
-    LOGWARN("creating device {} file with size {} ", path_, homestore::in_bytes(2 * Gi));
+    LOGWARN("creating device {} file with size {} ", path_, 2 * Gi);
     std::ofstream ofs{path_, std::ios::binary | std::ios::out | std::ios::trunc};
     std::filesystem::resize_file(path_, 2 * Gi);
 }
@@ -82,7 +82,7 @@ void TestFixture::TearDown() { std::dynamic_pointer_cast< FixtureApp >(app)->cle
 int main(int argc, char* argv[]) {
     int parsed_argc = argc;
     ::testing::InitGoogleTest(&parsed_argc, argv);
-    SISL_OPTIONS_LOAD(parsed_argc, argv, logging, iomgr, homeobject, test_home_object);
+    SISL_OPTIONS_LOAD(parsed_argc, argv, logging, homeobject, test_home_object);
     sisl::logging::SetLogger(std::string(argv[0]));
     spdlog::set_pattern("[%D %T.%e] [%n] [%^%l%$] [%t] %v");
     parsed_argc = 1;

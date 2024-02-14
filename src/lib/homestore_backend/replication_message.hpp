@@ -3,6 +3,7 @@
 #include "homeobject/common.hpp"
 
 #include <sisl/utility/enum.hpp>
+#include <sisl/fds/utils.hpp>
 #include <isa-l/crc.h>
 
 namespace homeobject {

@@ -3,6 +3,7 @@
 #include <set>
 #include <string>
 
+#include <boost/uuid/uuid_io.hpp>
 #include <sisl/utility/enum.hpp>
 
 #include "common.hpp"
