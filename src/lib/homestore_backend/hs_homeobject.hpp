@@ -103,7 +103,7 @@ public:
         enum class data_type_t : uint32_t { SHARD_INFO = 1, BLOB_INFO = 2 };
 
     public:
-        bool valid() const { return magic == blob_header_magic || version <= blob_header_version; }
+        bool valid() const { return ((magic == data_header_magic) && (version <= data_header_version)); }
 
     public:
         uint64_t magic{data_header_magic};
