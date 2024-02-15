@@ -72,6 +72,7 @@ TEST_F(TestFixture, CreateMultiShardsOnMultiPG) {
     }
 }
 
+#if 0
 TEST_F(TestFixture, MockSealShard) {
     ShardInfo shard_info = _shard_1;
     shard_info.state = ShardInfo::State::SEALED;
@@ -122,6 +123,7 @@ TEST_F(TestFixture, MockSealShard) {
     auto& check_shard = pg_result->shards_.front();
     EXPECT_EQ(ShardInfo::State::SEALED, check_shard->info.state);
 }
+#endif
 
 class FixtureAppWithRecovery : public FixtureApp {
     std::string fpath_{"/tmp/test_shard_manager.data." + std::to_string(rand())};

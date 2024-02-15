@@ -16,7 +16,8 @@ target_sources("${PROJECT_NAME}_homestore" PRIVATE
     hs_hmobj_cp.cpp
     $<TARGET_OBJECTS:${PROJECT_NAME}_core>
 )
-target_link_libraries("${PROJECT_NAME}_homestore"
+target_link_libraries("${PROJECT_NAME}_homestore" PUBLIC
+    homestore::homestore
     ${COMMON_DEPS}
 )
 
@@ -36,7 +37,7 @@ target_sources(homestore_test PRIVATE
     $<TARGET_OBJECTS:homestore_tests>
     $<TARGET_OBJECTS:test_fixture>
 )
-target_link_libraries(homestore_test
+target_link_libraries(homestore_test PUBLIC
     homeobject_homestore
     ${COMMON_TEST_DEPS}
 )
