@@ -102,6 +102,10 @@ public:
 
         enum class data_type_t : uint32_t { SHARD_INFO = 1, BLOB_INFO = 2 };
 
+    public:
+        bool valid() const { return magic == blob_header_magic || version <= blob_header_version; }
+
+    public:
         uint64_t magic{data_header_magic};
         uint8_t version{data_header_version};
         data_type_t type{data_type_t::BLOB_INFO};
@@ -173,8 +177,6 @@ public:
     // Padding of zeroes is added to make sure the whole payload be aligned to device block size.
     struct BlobHeader : public DataHeader {
         static constexpr uint64_t blob_max_hash_len = 32;
-        static constexpr uint8_t blob_header_version = 0x01;
-        static constexpr uint64_t blob_header_magic = 0x21fdffdba8d68fc6; // echo "BlobHeader" | md5sum
 
         enum class HashAlgorithm : uint8_t {
             NONE = 0,
@@ -192,7 +194,6 @@ public:
         uint32_t data_offset;   // Offset of actual data blob stored after the metadata.
         uint32_t user_key_size; // Actual size of the user key.
 
-        bool valid() const { return magic == blob_header_magic || version <= blob_header_version; }
         std::string to_string() const {
             return fmt::format("magic={:#x} version={} shard={:#x} blob_size={} user_size={} algo={} hash={:np}\n",
                                magic, version, shard_id, blob_size, user_key_size, (uint8_t)hash_algorithm,
@@ -239,8 +240,7 @@ private:
     static std::string serialize_shard_info(const ShardInfo& info);
     void add_new_shard_to_map(ShardPtr&& shard);
     void update_shard_in_map(const ShardInfo& shard_info);
-    void do_shard_message_commit(int64_t lsn, ReplicationMessageHeader& header, homestore::MultiBlkId const& blkids,
-                                 sisl::blob value, cintrusive< homestore::repl_req_ctx >& hs_ctx);
+
     // recover part
     void register_homestore_metablk_callback();
     void on_pg_meta_blk_found(sisl::byte_view const& buf, void* meta_cookie);

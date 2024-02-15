@@ -67,7 +67,7 @@ BlobManager::AsyncResult< blob_id_t > HSHomeObject::_put_blob(ShardInfo const& s
 
     RELEASE_ASSERT(repl_dev != nullptr, "Repl dev instance null");
 
-    // Create a put_blob request which allocates for header, key and blob_header. Data sgs are added later
+    // Create a put_blob request which allocates for header, key and blob_header, user_key. Data sgs are added later
     auto req = put_blob_req_ctx::make(sizeof(BlobHeader) + blob.user_key.size());
     req->header()->msg_type = ReplicationMessageType::PUT_BLOB_MSG;
     req->header()->payload_size = 0;
@@ -101,7 +101,7 @@ BlobManager::AsyncResult< blob_id_t > HSHomeObject::_put_blob(ShardInfo const& s
     // Set offset of actual data after the blob header and user key (rounded off)
     req->blob_header()->data_offset = req->blob_header_buf().size();
 
-    // Append blob bytes.
+    // In case blob body is not aligned, create a new aligned buffer and copy the blob body.
     if (((r_cast< uintptr_t >(blob.body.cbytes()) % io_align) != 0) || ((blob_size % io_align) != 0)) {
         // If address or size is not aligned, create a separate aligned buffer and do expensive memcpy.
         sisl::io_blob_safe new_body = sisl::io_blob_safe(sisl::round_up(blob_size, io_align), io_align);
@@ -113,6 +113,8 @@ BlobManager::AsyncResult< blob_id_t > HSHomeObject::_put_blob(ShardInfo const& s
     compute_blob_payload_hash(req->blob_header()->hash_algorithm, blob.body.cbytes(), blob_size,
                               (uint8_t*)blob.user_key.data(), blob.user_key.size(), req->blob_header()->hash,
                               BlobHeader::blob_max_hash_len);
+
+    // Add blob body to the request
     req->add_data_sg(std::move(blob.body));
 
     // Check if any padding of zeroes needs to be added to be aligned to device block size.

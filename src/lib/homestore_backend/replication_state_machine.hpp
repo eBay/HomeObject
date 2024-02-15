@@ -14,6 +14,8 @@ using homestore::ReplServiceError;
 struct ho_repl_ctx : public homestore::repl_req_ctx {
     sisl::io_blob_safe hdr_buf_;
     sisl::io_blob_safe key_buf_;
+
+    // Data bufs corresponding to data_sgs_. Since data_sgs are raw pointers, we need to keep the data bufs alive
     folly::small_vector< sisl::io_blob_safe, 3 > data_bufs_;
     sisl::sg_list data_sgs_;
 
