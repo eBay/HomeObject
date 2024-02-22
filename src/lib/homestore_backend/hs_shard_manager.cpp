@@ -239,6 +239,15 @@ void HSHomeObject::on_shard_message_commit(int64_t lsn, sisl::blob const& h, hom
     }
 }
 
+void HSHomeObject::recover_shard() {
+    for (auto& [buf, mblk] : m_shard_sb_bufs) {
+        homestore::superblk< shard_info_superblk > sb(_shard_meta_name);
+        sb.load(buf, mblk);
+        add_new_shard_to_map(std::make_unique< HS_Shard >(std::move(sb)));
+    }
+    m_shard_sb_bufs.clear();
+}
+
 void HSHomeObject::add_new_shard_to_map(ShardPtr&& shard) {
     // TODO: We are taking a global lock for all pgs to create shard. Is it really needed??
     // We need to have fine grained per PG lock and take only that.
