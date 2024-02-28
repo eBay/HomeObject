@@ -146,7 +146,10 @@ void HSHomeObject::init_homestore() {
         auto const new_id = _application.lock()->discover_svcid(_our_id);
         RELEASE_ASSERT(new_id == _our_id, "Received new SvcId [{}] AFTER recovery of [{}]?!", to_string(new_id),
                        to_string(_our_id));
+        recover_pg();
+        recover_shard();
     }
+    initialize_chunk_selector();
     recovery_done_ = true;
     LOGI("Initialize and start HomeStore is successfully");
 
@@ -201,17 +204,18 @@ void HSHomeObject::register_homestore_metablk_callback() {
 
     HomeStore::instance()->meta_service().register_handler(
         _shard_meta_name,
-        [this](homestore::meta_blk* mblk, sisl::byte_view buf, size_t size) { on_shard_meta_blk_found(mblk, buf); },
-        [this](bool success) { on_shard_meta_blk_recover_completed(success); }, true,
-        std::optional< meta_subtype_vec_t >(meta_subtype_vec_t{_pg_meta_name}));
+        [this](homestore::meta_blk* mblk, sisl::byte_view buf, size_t size) {
+            m_shard_sb_bufs.emplace_back(std::pair(std::move(buf), voidptr_cast(mblk)));
+        },
+        nullptr, true);
 
     HomeStore::instance()->meta_service().register_handler(
         _pg_meta_name,
         [this](homestore::meta_blk* mblk, sisl::byte_view buf, size_t size) {
-            on_pg_meta_blk_found(std::move(buf), voidptr_cast(mblk));
+            m_pg_sb_bufs.emplace_back(std::pair(std::move(buf), voidptr_cast(mblk)));
         },
         // TODO: move "repl_dev" to homestore::repl_dev and "index" to homestore::index
-        nullptr, true, std::optional< meta_subtype_vec_t >(meta_subtype_vec_t{"repl_dev", "index"}));
+        nullptr, true);
 }
 
 HSHomeObject::~HSHomeObject() {
@@ -227,13 +231,7 @@ HSHomeObject::~HSHomeObject() {
     iomanager.stop();
 }
 
-void HSHomeObject::on_shard_meta_blk_found(homestore::meta_blk* mblk, sisl::byte_view buf) {
-    homestore::superblk< shard_info_superblk > sb(_shard_meta_name);
-    sb.load(buf, mblk);
-    add_new_shard_to_map(std::make_unique< HS_Shard >(std::move(sb)));
-}
-
-void HSHomeObject::on_shard_meta_blk_recover_completed(bool success) {
+void HSHomeObject::initialize_chunk_selector() {
     std::unordered_set< homestore::chunk_num_t > excluding_chunks;
     std::scoped_lock lock_guard(_pg_lock);
     for (auto& pair : _pg_map) {
