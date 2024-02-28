@@ -59,6 +59,8 @@ class HSHomeObject : public HomeObjectImpl {
         std::shared_ptr< BlobIndexTable > index_table;
     };
     std::unordered_map< std::string, PgIndexTable > index_table_pg_map_;
+    std::vector< std::pair< sisl::byte_view, void* > > m_pg_sb_bufs;
+    std::vector< std::pair< sisl::byte_view, void* > > m_shard_sb_bufs;
 
 public:
 #pragma pack(1)
@@ -243,9 +245,9 @@ private:
 
     // recover part
     void register_homestore_metablk_callback();
-    void on_pg_meta_blk_found(sisl::byte_view const& buf, void* meta_cookie);
-    void on_shard_meta_blk_found(homestore::meta_blk* mblk, sisl::byte_view buf);
-    void on_shard_meta_blk_recover_completed(bool success);
+    void initialize_chunk_selector();
+    void recover_pg();
+    void recover_shard();
 
     void persist_pg_sb();
 

@@ -18,7 +18,7 @@ SISL_OPTIONS_ENABLE(logging, homeobject, test_home_object)
 
 FixtureApp::FixtureApp() {
     clean();
-    LOGWARN("creating device {} file with size {} ", path_, 2 * Gi);
+    LOGWARN("creating device {} file with size {} ", path_, 10 * Gi);
     std::ofstream ofs{path_, std::ios::binary | std::ios::out | std::ios::trunc};
     std::filesystem::resize_file(path_, 10 * Gi);
 }

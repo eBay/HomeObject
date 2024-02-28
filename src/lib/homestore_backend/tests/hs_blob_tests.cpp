@@ -46,7 +46,7 @@ TEST_F(HomeObjectFixture, BasicPutGetDelBlobWRestart) {
     trigger_cp(true /* wait */);
 
     // Restart homeobject
-    // restart();
+    restart();
 
     // Verify all get blobs after restart
     verify_get_blob(blob_map);
@@ -101,7 +101,7 @@ TEST_F(HomeObjectFixture, BasicPutGetDelBlobWRestart) {
     trigger_cp(true /* wait */);
 
     // Restart homeobject
-    // restart();
+    restart();
 
     // After restart, for all deleted blobs, get should fail
     for (const auto& [id, blob] : blob_map) {
@@ -147,7 +147,7 @@ TEST_F(HomeObjectFixture, SealShardWithRestart) {
     LOGINFO("Put blob {}", b.error());
 
     // Restart homeobject
-    // restart();
+    restart();
 
     // Verify shard is sealed.
     s = _obj_inst->shard_manager()->get_shard(shard_id).get();
