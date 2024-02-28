@@ -295,6 +295,7 @@ homestore::blk_alloc_hints HSHomeObject::blob_put_get_blk_alloc_hints(sisl::blob
 }
 
 BlobManager::NullAsyncResult HSHomeObject::_del_blob(ShardInfo const& shard, blob_id_t blob_id) {
+    BLOGT(shard.id, blob_id, "deleting blob");
     auto& pg_id = shard.placement_group;
     shared< homestore::ReplDev > repl_dev;
     {

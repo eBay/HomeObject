@@ -34,17 +34,36 @@ TEST_F(TestFixture, BasicBlobTests) {
                     homeobj_->blob_manager()
                         ->put(i, Blob{sisl::io_blob_safe(512u, 512u), "test_blob", 0ul})
                         .deferValue([](auto const& e) { EXPECT_EQ(BlobError::UNKNOWN_SHARD, e.error()); }));
+                LOGINFO("Calling to put blob, shard {}", _shard_1.id);
                 our_calls.push_back(homeobj_->blob_manager()
                                         ->put(_shard_1.id, Blob{sisl::io_blob_safe(4 * Ki, 512u), "test_blob", 4 * Mi})
-                                        .deferValue([](auto const& e) { EXPECT_TRUE(!!e); }));
+                                        .deferValue([this](auto const& e) {
+                                            EXPECT_TRUE(!!e);
+                                            e.then([this](auto const& blob_id) {
+                                                LOGINFO("Successfully put blob, shard {}, blobID {}", _shard_1.id,
+                                                        blob_id);
+                                            });
+                                        }));
                 our_calls.push_back(
                     homeobj_->blob_manager()
                         ->put(_shard_2.id, Blob{sisl::io_blob_safe(8 * Ki, 512u), "test_blob_2", 4 * Mi})
                         .deferValue([](auto const& e) { EXPECT_TRUE(!!e); }));
-                our_calls.push_back(homeobj_->blob_manager()->del(i, _blob_id).deferValue([](auto const& e) {}));
+                our_calls.push_back(homeobj_->blob_manager()->del(i, _blob_id).deferValue([](auto const& e) {
+                    EXPECT_FALSE(!!e);
+                    EXPECT_EQ(BlobError::UNKNOWN_SHARD, e.error());
+                }));
+                LOGINFO("Calling to Deleting blob, shard {}, blobID {}", _shard_1.id, (i - _shard_2.id));
                 our_calls.push_back(
-                    homeobj_->blob_manager()->del(_shard_1.id, (i - _shard_2.id)).deferValue([](auto const& e) {
-                        EXPECT_EQ(BlobError::UNKNOWN_BLOB, e.error());
+                    homeobj_->blob_manager()->del(_shard_1.id, (i - _shard_2.id)).deferValue([this, i](auto const& e) {
+                        // It is a racing test with other threads as well as putBlob
+                        // the result should be either success or failed with UNKNOWN_BLOB
+                        LOGINFO("Deleted blob, shard {}, blobID {}, success {}", _shard_1.id, (i - _shard_2.id), !!e);
+                        if (!!e) {
+                            return;
+                        } else {
+                            EXPECT_FALSE(!!e);
+                            EXPECT_EQ(BlobError::UNKNOWN_BLOB, e.error());
+                        }
                     }));
             }
 
