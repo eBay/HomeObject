@@ -42,26 +42,27 @@ struct PGInfo {
 struct PGStats {
     pg_id_t id;
     peer_id_t replica_set_uuid;
+    peer_id_t leader_id;        // the leader of this PG from my perspective;
     uint32_t num_members;       // number of members in this PG;
     uint32_t total_shards;      // shards allocated on this PG (including open shards)
     uint32_t open_shards;       // active shards on this PG;
     uint32_t avail_open_shards; // total number of shards that could be opened on this PG;
     uint64_t used_bytes;        // total number of bytes used by all shards on this PG;
     uint64_t avail_bytes;       // total number of bytes available on this PG;
-    std::vector< std::tuple< peer_id_t, std::string, uint64_t /* last_commit_lsn */ > > members;
+    std::vector< std::tuple< peer_id_t, std::string, uint64_t /* last_commit_lsn */, uint64_t /* last_succ_resp_us_ */> > members;
 
     std::string to_string() {
         std::string members_str;
         uint32_t i = 0ul;
         for (auto const& m : members) {
             if (i++ > 0) { members_str += ", "; };
-            members_str += fmt::format("member-{}: id={}, name={}, last_commit_lsn={}", i,
-                                       boost::uuids::to_string(std::get< 0 >(m)), std::get< 1 >(m), std::get< 2 >(m));
+            members_str += fmt::format("member-{}: id={}, name={}, last_commit_lsn={}， last_succ_resp_us_={}", i,
+                                       boost::uuids::to_string(std::get< 0 >(m)), std::get< 1 >(m), std::get< 2 >(m), std::get< 3 >(m));
         }
 
-        return fmt::format("PGStats: id={}, replica_set_uuid={}, num_members={}, total_shards={}, open_shards={}, "
+        return fmt::format("PGStats: id={}, replica_set_uuid={}, leader={}, num_members={}, total_shards={}, open_shards={}, "
                            "avail_open_shards={}, used_bytes={}, avail_bytes={}, members: {}",
-                           id, boost::uuids::to_string(replica_set_uuid), num_members, total_shards, open_shards,
+                           id, boost::uuids::to_string(replica_set_uuid), boost::uuids::to_string(leader_id), num_members, total_shards, open_shards,
                            avail_open_shards, used_bytes, avail_bytes, members_str);
     }
 };

@@ -299,10 +299,21 @@ bool HSHomeObject::_get_stats(pg_id_t id, PGStats& stats) const {
     stats.num_members = hs_pg->pg_info_.members.size();
     stats.total_shards = hs_pg->total_shards();
     stats.open_shards = hs_pg->open_shards();
+    stats.leader_id = hs_pg->repl_dev_->get_leader_id();
 
+    auto const replication_status = hs_pg->repl_dev_->get_replication_status();
     for (auto const& m : hs_pg->pg_info_.members) {
-        // TODO: get last commit lsn from repl_dev when it is ready;
-        stats.members.emplace_back(std::make_tuple(m.id, m.name, 0 /* last commit lsn */));
+        auto last_commit_lsn = 0ul;
+        auto last_succ_resp_us = 0ul;
+        // replication_status can be empty in follower
+        for (auto const& r : replication_status) {
+            if (r.id_ == m.id) {
+                last_commit_lsn = r.replication_idx_;
+                last_succ_resp_us = r.last_succ_resp_us_;
+                break;
+            }
+        }
+        stats.members.emplace_back(std::make_tuple(m.id, m.name, last_commit_lsn, last_succ_resp_us));
     }
 
     auto const pdev_id_hint = hs_pg->dev_hint(chunk_selector());

@@ -25,7 +25,7 @@ bool MemoryHomeObject::_get_stats(pg_id_t id, PGStats& stats) const {
     stats.open_shards =
         std::count_if(pg->shards_.begin(), pg->shards_.end(), [](auto const& s) { return s->is_open(); });
     for (auto const& m : pg->pg_info_.members) {
-        stats.members.emplace_back(std::make_tuple(m.id, m.name, 0 /* last commit lsn */));
+        stats.members.emplace_back(std::make_tuple(m.id, m.name, 0 /* last commit lsn */, 0 /* last succ response us */));
     }
 
     return true;
