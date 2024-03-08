@@ -23,11 +23,11 @@ PGError toPgError(ReplServiceError const& e) {
         [[fallthrough]];
     case ReplServiceError::RESULT_NOT_EXIST_YET:
         [[fallthrough]];
-    case ReplServiceError::NOT_LEADER:
-        [[fallthrough]];
     case ReplServiceError::TERM_MISMATCH:
     case ReplServiceError::NOT_IMPLEMENTED:
         return PGError::INVALID_ARG;
+    case ReplServiceError::NOT_LEADER:
+        return PGError::NOT_LEADER;
     case ReplServiceError::CANNOT_REMOVE_LEADER:
         return PGError::UNKNOWN_PEER;
     case ReplServiceError::TIMEOUT:

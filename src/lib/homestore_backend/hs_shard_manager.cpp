@@ -10,6 +10,40 @@
 
 namespace homeobject {
 
+ShardError toShardError(ReplServiceError const& e) {
+    switch (e) {
+    case ReplServiceError::BAD_REQUEST:
+        [[fallthrough]];
+    case ReplServiceError::CANCELLED:
+        [[fallthrough]];
+    case ReplServiceError::CONFIG_CHANGING:
+        [[fallthrough]];
+    case ReplServiceError::SERVER_ALREADY_EXISTS:
+        [[fallthrough]];
+    case ReplServiceError::SERVER_IS_JOINING:
+        [[fallthrough]];
+    case ReplServiceError::SERVER_IS_LEAVING:
+        [[fallthrough]];
+    case ReplServiceError::RESULT_NOT_EXIST_YET:
+        [[fallthrough]];
+    case ReplServiceError::TERM_MISMATCH:
+        return ShardError::PG_NOT_READY;
+    case ReplServiceError::NOT_LEADER:
+        return ShardError::NOT_LEADER;
+    case ReplServiceError::TIMEOUT:
+        return ShardError::TIMEOUT;
+    case ReplServiceError::NOT_IMPLEMENTED:
+        return ShardError::UNSUPPORTED_OP;
+    case ReplServiceError::OK:
+        DEBUG_ASSERT(false, "Should not process OK!");
+        [[fallthrough]];
+    case ReplServiceError::FAILED:
+        return ShardError::UNKNOWN;
+    default:
+        return ShardError::UNKNOWN;
+    }
+}
+
 uint64_t ShardManager::max_shard_size() { return Gi; }
 
 uint64_t ShardManager::max_shard_num_in_pg() { return ((uint64_t)0x01) << shard_width; }

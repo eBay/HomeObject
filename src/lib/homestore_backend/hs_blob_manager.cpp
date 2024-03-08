@@ -20,6 +20,41 @@ SISL_LOGGING_DECL(blobmgr)
 #define BLOGC(shard_id, blob_id, msg, ...) BLOG(CRITICAL, shard_id, blob_id, msg, ##__VA_ARGS__)
 
 namespace homeobject {
+
+BlobError toBlobError(ReplServiceError const& e) {
+    switch (e) {
+    case ReplServiceError::BAD_REQUEST:
+        [[fallthrough]];
+    case ReplServiceError::CANCELLED:
+        [[fallthrough]];
+    case ReplServiceError::CONFIG_CHANGING:
+        [[fallthrough]];
+    case ReplServiceError::SERVER_ALREADY_EXISTS:
+        [[fallthrough]];
+    case ReplServiceError::SERVER_IS_JOINING:
+        [[fallthrough]];
+    case ReplServiceError::SERVER_IS_LEAVING:
+        [[fallthrough]];
+    case ReplServiceError::RESULT_NOT_EXIST_YET:
+        [[fallthrough]];
+    case ReplServiceError::TERM_MISMATCH:
+        return BlobError::REPLICATION_ERROR;
+    case ReplServiceError::NOT_LEADER:
+        return BlobError::NOT_LEADER;
+    case ReplServiceError::TIMEOUT:
+        return BlobError::TIMEOUT;
+    case ReplServiceError::NOT_IMPLEMENTED:
+        return BlobError::UNSUPPORTED_OP;
+    case ReplServiceError::OK:
+        DEBUG_ASSERT(false, "Should not process OK!");
+        [[fallthrough]];
+    case ReplServiceError::FAILED:
+        return BlobError::UNKNOWN;
+    default:
+        return BlobError::UNKNOWN;
+    }
+}
+
 struct put_blob_req_ctx : public repl_result_ctx< BlobManager::Result< HSHomeObject::BlobInfo > > {
     uint32_t blob_header_idx_{0};
 

@@ -25,6 +25,9 @@ using BlobIndexTable = homestore::IndexTable< BlobRouteKey, BlobRouteValue >;
 class HomeObjCPContext;
 
 static constexpr uint64_t io_align{512};
+PGError toPgError(homestore::ReplServiceError const&);
+BlobError toBlobError(homestore::ReplServiceError const&);
+ShardError toShardError(homestore::ReplServiceError const&);
 
 class HSHomeObject : public HomeObjectImpl {
     /// NOTE: Be wary to change these as they effect on-disk format!
