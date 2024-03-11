@@ -273,13 +273,23 @@ void HSHomeObject::on_shard_message_commit(int64_t lsn, sisl::blob const& h, hom
     }
 }
 
-void HSHomeObject::recover_shard() {
-    for (auto& [buf, mblk] : m_shard_sb_bufs) {
-        homestore::superblk< shard_info_superblk > sb(_shard_meta_name);
-        sb.load(buf, mblk);
-        add_new_shard_to_map(std::make_unique< HS_Shard >(std::move(sb)));
+void HSHomeObject::on_shard_meta_blk_found(homestore::meta_blk* mblk, sisl::byte_view buf) {
+    homestore::superblk< shard_info_superblk > sb(_shard_meta_name);
+    sb.load(buf, mblk);
+    add_new_shard_to_map(std::make_unique< HS_Shard >(std::move(sb)));
+}
+
+void HSHomeObject::on_shard_meta_blk_recover_completed(bool success) {
+    std::unordered_set< homestore::chunk_num_t > excluding_chunks;
+    std::scoped_lock lock_guard(_pg_lock);
+    for (auto& pair : _pg_map) {
+        for (auto& shard : pair.second->shards_) {
+            if (shard->info.state == ShardInfo::State::OPEN) {
+                excluding_chunks.emplace(d_cast< HS_Shard* >(shard.get())->sb_->chunk_id);
+            }
+        }
     }
-    m_shard_sb_bufs.clear();
+    chunk_selector_->build_per_dev_chunk_heap(excluding_chunks);
 }
 
 void HSHomeObject::add_new_shard_to_map(ShardPtr&& shard) {
