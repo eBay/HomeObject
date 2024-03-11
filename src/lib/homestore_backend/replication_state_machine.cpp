@@ -46,45 +46,35 @@ void ReplicationStateMachine::on_rollback(int64_t lsn, sisl::blob const&, sisl::
 
 void ReplicationStateMachine::on_error(ReplServiceError error, const sisl::blob& header, const sisl::blob& key,
                                        cintrusive< repl_req_ctx >& ctx) {
-
+    RELEASE_ASSERT(ctx, "ctx should not be nullptr in on_error");
     RELEASE_ASSERT(ctx->is_proposer, "on_error should only be called from proposer");
     const ReplicationMessageHeader* msg_header = r_cast< const ReplicationMessageHeader* >(header.cbytes());
     LOGE("on_error, message type {} with lsn {}, error {}", msg_header->msg_type, ctx->lsn, error);
     switch (msg_header->msg_type) {
     case ReplicationMessageType::CREATE_PG_MSG: {
-        if (ctx) {
-            auto result_ctx = boost::static_pointer_cast< repl_result_ctx< PGManager::NullResult > >(ctx).get();
-            result_ctx->promise_.setValue(folly::makeUnexpected(homeobject::toPgError(error)));
-        }
+        auto result_ctx = boost::static_pointer_cast< repl_result_ctx< PGManager::NullResult > >(ctx).get();
+        result_ctx->promise_.setValue(folly::makeUnexpected(homeobject::toPgError(error)));
         break;
     }
     case ReplicationMessageType::CREATE_SHARD_MSG:
     case ReplicationMessageType::SEAL_SHARD_MSG: {
-        if (ctx) {
-            auto result_ctx =
-                boost::static_pointer_cast< repl_result_ctx< ShardManager::Result< ShardInfo > > >(ctx).get();
-            result_ctx->promise_.setValue(folly::makeUnexpected(toShardError(error)));
-        }
+        auto result_ctx = boost::static_pointer_cast< repl_result_ctx< ShardManager::Result< ShardInfo > > >(ctx).get();
+        result_ctx->promise_.setValue(folly::makeUnexpected(toShardError(error)));
         break;
     }
 
     case ReplicationMessageType::PUT_BLOB_MSG: {
-        if (ctx) {
-            auto result_ctx =
-                boost::static_pointer_cast< repl_result_ctx< BlobManager::Result< HSHomeObject::BlobInfo > > >(ctx)
-                    .get();
-            result_ctx->promise_.setValue(folly::makeUnexpected(toBlobError(error)));
-        }
+        auto result_ctx =
+            boost::static_pointer_cast< repl_result_ctx< BlobManager::Result< HSHomeObject::BlobInfo > > >(ctx).get();
+        result_ctx->promise_.setValue(folly::makeUnexpected(toBlobError(error)));
         break;
     }
-    case ReplicationMessageType::DEL_BLOB_MSG:
-        if (ctx) {
-            auto result_ctx =
-                boost::static_pointer_cast< repl_result_ctx< BlobManager::Result< HSHomeObject::BlobInfo > > >(ctx)
-                    .get();
-            result_ctx->promise_.setValue(folly::makeUnexpected(toBlobError(error)));
-        }
+    case ReplicationMessageType::DEL_BLOB_MSG: {
+        auto result_ctx =
+            boost::static_pointer_cast< repl_result_ctx< BlobManager::Result< HSHomeObject::BlobInfo > > >(ctx).get();
+        result_ctx->promise_.setValue(folly::makeUnexpected(toBlobError(error)));
         break;
+    }
     default: {
         LOGE("Unknown message type, error unhandled , error :{}, lsn {}", error, ctx->lsn);
         break;
