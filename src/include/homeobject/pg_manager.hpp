@@ -10,8 +10,8 @@
 
 namespace homeobject {
 
-ENUM(PGError, uint16_t, UNKNOWN = 1, INVALID_ARG, TIMEOUT, UNKNOWN_PG, UNKNOWN_PEER, UNSUPPORTED_OP, CRC_MISMATCH,
-     NO_SPACE_LEFT, DRIVE_WRITE_ERROR);
+ENUM(PGError, uint16_t, UNKNOWN = 1, INVALID_ARG, TIMEOUT, UNKNOWN_PG, NOT_LEADER, UNKNOWN_PEER, UNSUPPORTED_OP,
+     CRC_MISMATCH, NO_SPACE_LEFT, DRIVE_WRITE_ERROR);
 
 struct PGMember {
     explicit PGMember(peer_id_t _id) : id(_id) {}
@@ -49,7 +49,9 @@ struct PGStats {
     uint32_t avail_open_shards; // total number of shards that could be opened on this PG;
     uint64_t used_bytes;        // total number of bytes used by all shards on this PG;
     uint64_t avail_bytes;       // total number of bytes available on this PG;
-    std::vector< std::tuple< peer_id_t, std::string, uint64_t /* last_commit_lsn */, uint64_t /* last_succ_resp_us_ */> > members;
+    std::vector<
+        std::tuple< peer_id_t, std::string, uint64_t /* last_commit_lsn */, uint64_t /* last_succ_resp_us_ */ > >
+        members;
 
     std::string to_string() {
         std::string members_str;
@@ -57,13 +59,15 @@ struct PGStats {
         for (auto const& m : members) {
             if (i++ > 0) { members_str += ", "; };
             members_str += fmt::format("member-{}: id={}, name={}, last_commit_lsn={}， last_succ_resp_us_={}", i,
-                                       boost::uuids::to_string(std::get< 0 >(m)), std::get< 1 >(m), std::get< 2 >(m), std::get< 3 >(m));
+                                       boost::uuids::to_string(std::get< 0 >(m)), std::get< 1 >(m), std::get< 2 >(m),
+                                       std::get< 3 >(m));
         }
 
-        return fmt::format("PGStats: id={}, replica_set_uuid={}, leader={}, num_members={}, total_shards={}, open_shards={}, "
-                           "avail_open_shards={}, used_bytes={}, avail_bytes={}, members: {}",
-                           id, boost::uuids::to_string(replica_set_uuid), boost::uuids::to_string(leader_id), num_members, total_shards, open_shards,
-                           avail_open_shards, used_bytes, avail_bytes, members_str);
+        return fmt::format(
+            "PGStats: id={}, replica_set_uuid={}, leader={}, num_members={}, total_shards={}, open_shards={}, "
+            "avail_open_shards={}, used_bytes={}, avail_bytes={}, members: {}",
+            id, boost::uuids::to_string(replica_set_uuid), boost::uuids::to_string(leader_id), num_members,
+            total_shards, open_shards, avail_open_shards, used_bytes, avail_bytes, members_str);
     }
 };
 
