@@ -162,6 +162,7 @@ TEST_F(ShardManagerTestingRecovery, ShardManagerRecovery) {
     _home_object.reset();
     LOGI("restart home_object");
     _home_object = homeobject::init_homeobject(std::weak_ptr< homeobject::HomeObjectApplication >(app));
+    std::this_thread::sleep_for(std::chrono::seconds{5});
     homeobject::HSHomeObject* ho = dynamic_cast< homeobject::HSHomeObject* >(_home_object.get());
     // check PG after recovery.
     EXPECT_TRUE(ho->_pg_map.size() == 1);
@@ -196,6 +197,7 @@ TEST_F(ShardManagerTestingRecovery, ShardManagerRecovery) {
     LOGI("restart home_object again");
     // re-create the homeobject and pg infos and shard infos will be recover automatically.
     _home_object = homeobject::init_homeobject(std::weak_ptr< homeobject::HomeObjectApplication >(app));
+    std::this_thread::sleep_for(std::chrono::seconds{5});
     auto s = _home_object->shard_manager()->get_shard(shard_id).get();
     ASSERT_TRUE(!!s);
     EXPECT_EQ(ShardInfo::State::SEALED, s.value().state);
@@ -250,6 +252,7 @@ TEST_F(ShardManagerTestingRecovery, SealedShardRecovery) {
     LOGI("restart home_object");
     // re-create the homeobject and pg infos and shard infos will be recover automatically.
     _home_object = homeobject::init_homeobject(std::weak_ptr< homeobject::HomeObjectApplication >(app));
+    std::this_thread::sleep_for(std::chrono::seconds{5});
     ho = dynamic_cast< homeobject::HSHomeObject* >(_home_object.get());
     EXPECT_TRUE(ho->_pg_map.size() == 1);
     // check shard internal state;
