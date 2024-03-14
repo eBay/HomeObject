@@ -125,41 +125,16 @@ TEST_F(TestFixture, MockSealShard) {
 }
 #endif
 
-class FixtureAppWithRecovery : public FixtureApp {
-    std::string fpath_{"/tmp/test_shard_manager.data." + std::to_string(rand())};
-
-public:
-    std::list< std::filesystem::path > devices() const override {
-        auto device_info = std::list< std::filesystem::path >();
-        device_info.emplace_back(std::filesystem::canonical(fpath_));
-        return device_info;
-    }
-
-    std::string path() const { return fpath_; }
-};
-
 class ShardManagerTestingRecovery : public ::testing::Test {
 public:
-    void SetUp() override { app = std::make_shared< FixtureAppWithRecovery >(); }
-
+    void SetUp() override { app = std::make_shared< FixtureApp >(); }
     void TearDown() override { app->clean(); }
 
 protected:
     std::shared_ptr< FixtureApp > app;
 };
 
-// TODO: enable the following test case after we fix raft repl dev recovery issue.
-/*
 TEST_F(ShardManagerTestingRecovery, ShardManagerRecovery) {
-    // prepare the env first;
-    auto app_with_recovery = dp_cast< FixtureAppWithRecovery >(app);
-    const std::string fpath = app_with_recovery->path();
-    if (std::filesystem::exists(fpath)) { std::filesystem::remove(fpath); }
-    LOGI("creating device files with size {} ", homestore::in_bytes(2 * Gi));
-    LOGI("creating {} device file", fpath);
-    std::ofstream ofs{fpath, std::ios::binary | std::ios::out | std::ios::trunc};
-    std::filesystem::resize_file(fpath, 2 * Gi);
-
     homeobject::pg_id_t _pg_id{1u};
     homeobject::peer_id_t _peer1;
     homeobject::peer_id_t _peer2;
@@ -187,6 +162,7 @@ TEST_F(ShardManagerTestingRecovery, ShardManagerRecovery) {
     _home_object.reset();
     LOGI("restart home_object");
     _home_object = homeobject::init_homeobject(std::weak_ptr< homeobject::HomeObjectApplication >(app));
+    std::this_thread::sleep_for(std::chrono::seconds{5});
     homeobject::HSHomeObject* ho = dynamic_cast< homeobject::HSHomeObject* >(_home_object.get());
     // check PG after recovery.
     EXPECT_TRUE(ho->_pg_map.size() == 1);
@@ -201,15 +177,15 @@ TEST_F(ShardManagerTestingRecovery, ShardManagerRecovery) {
     EXPECT_EQ(ShardInfo::State::OPEN, check_shard->info.state);
 
     auto hs_shard = d_cast< homeobject::HSHomeObject::HS_Shard* >(check_shard);
-    EXPECT_TRUE(hs_shard->info == shard_info);
-    EXPECT_TRUE(hs_shard->sb_->id == shard_info.id);
-    EXPECT_TRUE(hs_shard->sb_->placement_group == shard_info.placement_group);
-    EXPECT_TRUE(hs_shard->sb_->state == shard_info.state);
-    EXPECT_TRUE(hs_shard->sb_->created_time == shard_info.created_time);
-    EXPECT_TRUE(hs_shard->sb_->last_modified_time == shard_info.last_modified_time);
-    EXPECT_TRUE(hs_shard->sb_->available_capacity_bytes == shard_info.available_capacity_bytes);
-    EXPECT_TRUE(hs_shard->sb_->total_capacity_bytes == shard_info.total_capacity_bytes);
-    EXPECT_TRUE(hs_shard->sb_->deleted_capacity_bytes == shard_info.deleted_capacity_bytes);
+    auto& recovered_shard_info = hs_shard->info;
+    EXPECT_TRUE(recovered_shard_info == shard_info);
+    EXPECT_TRUE(recovered_shard_info.placement_group == shard_info.placement_group);
+    EXPECT_TRUE(recovered_shard_info.state == shard_info.state);
+    EXPECT_TRUE(recovered_shard_info.created_time == shard_info.created_time);
+    EXPECT_TRUE(recovered_shard_info.last_modified_time == shard_info.last_modified_time);
+    EXPECT_TRUE(recovered_shard_info.available_capacity_bytes == shard_info.available_capacity_bytes);
+    EXPECT_TRUE(recovered_shard_info.total_capacity_bytes == shard_info.total_capacity_bytes);
+    EXPECT_TRUE(recovered_shard_info.deleted_capacity_bytes == shard_info.deleted_capacity_bytes);
 
     // seal the shard when shard is recovery
     e = _home_object->shard_manager()->seal_shard(shard_id).get();
@@ -221,6 +197,7 @@ TEST_F(ShardManagerTestingRecovery, ShardManagerRecovery) {
     LOGI("restart home_object again");
     // re-create the homeobject and pg infos and shard infos will be recover automatically.
     _home_object = homeobject::init_homeobject(std::weak_ptr< homeobject::HomeObjectApplication >(app));
+    std::this_thread::sleep_for(std::chrono::seconds{5});
     auto s = _home_object->shard_manager()->get_shard(shard_id).get();
     ASSERT_TRUE(!!s);
     EXPECT_EQ(ShardInfo::State::SEALED, s.value().state);
@@ -237,19 +214,9 @@ TEST_F(ShardManagerTestingRecovery, ShardManagerRecovery) {
     EXPECT_EQ(2, pg_iter->second->shard_sequence_num_);
     // finally close the homeobject and homestore.
     _home_object.reset();
-    std::filesystem::remove(fpath);
 }
 
 TEST_F(ShardManagerTestingRecovery, SealedShardRecovery) {
-    // prepare the env first;
-    auto app_with_recovery = dp_cast< FixtureAppWithRecovery >(app);
-    const std::string fpath = app_with_recovery->path();
-    if (std::filesystem::exists(fpath)) { std::filesystem::remove(fpath); }
-    LOGI("creating device files with size {} ", homestore::in_bytes(2 * Gi));
-    LOGI("creating {} device file", fpath);
-    std::ofstream ofs{fpath, std::ios::binary | std::ios::out | std::ios::trunc};
-    std::filesystem::resize_file(fpath, 2 * Gi);
-
     homeobject::pg_id_t _pg_id{1u};
     homeobject::peer_id_t _peer1;
     homeobject::peer_id_t _peer2;
@@ -285,6 +252,7 @@ TEST_F(ShardManagerTestingRecovery, SealedShardRecovery) {
     LOGI("restart home_object");
     // re-create the homeobject and pg infos and shard infos will be recover automatically.
     _home_object = homeobject::init_homeobject(std::weak_ptr< homeobject::HomeObjectApplication >(app));
+    std::this_thread::sleep_for(std::chrono::seconds{5});
     ho = dynamic_cast< homeobject::HSHomeObject* >(_home_object.get());
     EXPECT_TRUE(ho->_pg_map.size() == 1);
     // check shard internal state;
@@ -292,17 +260,15 @@ TEST_F(ShardManagerTestingRecovery, SealedShardRecovery) {
     EXPECT_TRUE(pg_iter != ho->_pg_map.end());
     EXPECT_EQ(1, pg_iter->second->shards_.size());
     auto hs_shard = d_cast< homeobject::HSHomeObject::HS_Shard* >(pg_iter->second->shards_.front().get());
-    EXPECT_TRUE(hs_shard->info == shard_info);
-    EXPECT_TRUE(hs_shard->sb_->id == shard_info.id);
-    EXPECT_TRUE(hs_shard->sb_->placement_group == shard_info.placement_group);
-    EXPECT_TRUE(hs_shard->sb_->state == shard_info.state);
-    EXPECT_TRUE(hs_shard->sb_->created_time == shard_info.created_time);
-    EXPECT_TRUE(hs_shard->sb_->last_modified_time == shard_info.last_modified_time);
-    EXPECT_TRUE(hs_shard->sb_->available_capacity_bytes == shard_info.available_capacity_bytes);
-    EXPECT_TRUE(hs_shard->sb_->total_capacity_bytes == shard_info.total_capacity_bytes);
-    EXPECT_TRUE(hs_shard->sb_->deleted_capacity_bytes == shard_info.deleted_capacity_bytes);
+    auto& recovered_shard_info = hs_shard->info;
+    EXPECT_TRUE(recovered_shard_info == shard_info);
+    EXPECT_TRUE(recovered_shard_info.placement_group == shard_info.placement_group);
+    EXPECT_TRUE(recovered_shard_info.state == shard_info.state);
+    EXPECT_TRUE(recovered_shard_info.created_time == shard_info.created_time);
+    EXPECT_TRUE(recovered_shard_info.last_modified_time == shard_info.last_modified_time);
+    EXPECT_TRUE(recovered_shard_info.available_capacity_bytes == shard_info.available_capacity_bytes);
+    EXPECT_TRUE(recovered_shard_info.total_capacity_bytes == shard_info.total_capacity_bytes);
+    EXPECT_TRUE(recovered_shard_info.deleted_capacity_bytes == shard_info.deleted_capacity_bytes);
     // finally close the homeobject and homestore.
     _home_object.reset();
-    std::filesystem::remove(fpath);
 }
-*/

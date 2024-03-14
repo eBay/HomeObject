@@ -150,10 +150,24 @@ void HSHomeObject::init_homestore() {
         auto const new_id = app->discover_svcid(_our_id);
         RELEASE_ASSERT(new_id == _our_id, "Received new SvcId [{}] AFTER recovery of [{}]?!", to_string(new_id),
                        to_string(_our_id));
-        recover_pg();
-        recover_shard();
     }
-    initialize_chunk_selector();
+
+    // recover PG
+    HomeStore::instance()->meta_service().register_handler(
+        _pg_meta_name,
+        [this](homestore::meta_blk* mblk, sisl::byte_view buf, size_t size) {
+            on_pg_meta_blk_found(std::move(buf), voidptr_cast(mblk));
+        },
+        nullptr, true);
+    HomeStore::instance()->meta_service().read_sub_sb(_pg_meta_name);
+
+    // recover shard
+    HomeStore::instance()->meta_service().register_handler(
+        _shard_meta_name,
+        [this](homestore::meta_blk* mblk, sisl::byte_view buf, size_t size) { on_shard_meta_blk_found(mblk, buf); },
+        [this](bool success) { on_shard_meta_blk_recover_completed(success); }, true);
+    HomeStore::instance()->meta_service().read_sub_sb(_shard_meta_name);
+
     recovery_done_ = true;
     LOGI("Initialize and start HomeStore is successfully");
 
@@ -205,21 +219,6 @@ void HSHomeObject::register_homestore_metablk_callback() {
             LOGI("Found existing SvcId: [{}]", to_string(_our_id));
         },
         nullptr, true);
-
-    HomeStore::instance()->meta_service().register_handler(
-        _shard_meta_name,
-        [this](homestore::meta_blk* mblk, sisl::byte_view buf, size_t size) {
-            m_shard_sb_bufs.emplace_back(std::pair(std::move(buf), voidptr_cast(mblk)));
-        },
-        nullptr, true);
-
-    HomeStore::instance()->meta_service().register_handler(
-        _pg_meta_name,
-        [this](homestore::meta_blk* mblk, sisl::byte_view buf, size_t size) {
-            m_pg_sb_bufs.emplace_back(std::pair(std::move(buf), voidptr_cast(mblk)));
-        },
-        // TODO: move "repl_dev" to homestore::repl_dev and "index" to homestore::index
-        nullptr, true);
 }
 
 HSHomeObject::~HSHomeObject() {
@@ -233,20 +232,6 @@ HSHomeObject::~HSHomeObject() {
     homestore::HomeStore::instance()->shutdown();
     homestore::HomeStore::reset_instance();
     iomanager.stop();
-}
-
-void HSHomeObject::initialize_chunk_selector() {
-    std::unordered_set< homestore::chunk_num_t > excluding_chunks;
-    std::scoped_lock lock_guard(_pg_lock);
-    for (auto& pair : _pg_map) {
-        for (auto& shard : pair.second->shards_) {
-            if (shard->info.state == ShardInfo::State::OPEN) {
-                excluding_chunks.emplace(d_cast< HS_Shard* >(shard.get())->sb_->chunk_id);
-            }
-        }
-    }
-
-    chunk_selector_->build_per_dev_chunk_heap(excluding_chunks);
 }
 
 HomeObjectStats HSHomeObject::_get_stats() const {

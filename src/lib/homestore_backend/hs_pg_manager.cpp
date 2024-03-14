@@ -192,31 +192,28 @@ PGInfo HSHomeObject::deserialize_pg_info(const unsigned char* json_str, size_t s
     return pg_info;
 }
 
-void HSHomeObject::recover_pg() {
-    for (auto const& [buf, mblk] : m_pg_sb_bufs) {
-        homestore::superblk< pg_info_superblk > pg_sb(_pg_meta_name);
-        pg_sb.load(buf, mblk);
+void HSHomeObject::on_pg_meta_blk_found(sisl::byte_view const& buf, void* meta_cookie) {
+    homestore::superblk< pg_info_superblk > pg_sb(_pg_meta_name);
+    pg_sb.load(buf, meta_cookie);
 
-        auto v = hs_repl_service().get_repl_dev(pg_sb->replica_set_uuid);
-        if (v.hasError()) {
-            // TODO: We need to raise an alert here, since without pg repl_dev all operations on that pg will fail
-            LOGE("open_repl_dev for group_id={} has failed", boost::uuids::to_string(pg_sb->replica_set_uuid));
-            return;
-        }
-        auto pg_id = pg_sb->id;
-        auto uuid_str = boost::uuids::to_string(pg_sb->index_table_uuid);
-        auto hs_pg = std::make_unique< HS_PG >(std::move(pg_sb), std::move(v.value()));
-        // During PG recovery check if index is already recoverd else
-        // add entry in map, so that index recovery can update the PG.
-        std::scoped_lock lg(index_lock_);
-        auto it = index_table_pg_map_.find(uuid_str);
-        RELEASE_ASSERT(it != index_table_pg_map_.end(), "IndexTable should be recovered before PG");
-        hs_pg->index_table_ = it->second.index_table;
-        it->second.pg_id = pg_id;
-
-        add_pg_to_map(std::move(hs_pg));
+    auto v = hs_repl_service().get_repl_dev(pg_sb->replica_set_uuid);
+    if (v.hasError()) {
+        // TODO: We need to raise an alert here, since without pg repl_dev all operations on that pg will fail
+        LOGE("open_repl_dev for group_id={} has failed", boost::uuids::to_string(pg_sb->replica_set_uuid));
+        return;
     }
-    m_pg_sb_bufs.clear();
+    auto pg_id = pg_sb->id;
+    auto uuid_str = boost::uuids::to_string(pg_sb->index_table_uuid);
+    auto hs_pg = std::make_unique< HS_PG >(std::move(pg_sb), std::move(v.value()));
+    // During PG recovery check if index is already recoverd else
+    // add entry in map, so that index recovery can update the PG.
+    std::scoped_lock lg(index_lock_);
+    auto it = index_table_pg_map_.find(uuid_str);
+    RELEASE_ASSERT(it != index_table_pg_map_.end(), "IndexTable should be recovered before PG");
+    hs_pg->index_table_ = it->second.index_table;
+    it->second.pg_id = pg_id;
+
+    add_pg_to_map(std::move(hs_pg));
 }
 
 PGInfo HSHomeObject::HS_PG::pg_info_from_sb(homestore::superblk< pg_info_superblk > const& sb) {
