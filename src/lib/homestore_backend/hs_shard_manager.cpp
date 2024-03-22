@@ -189,6 +189,64 @@ ShardManager::AsyncResult< ShardInfo > HSHomeObject::_seal_shard(ShardInfo const
     return req->result();
 }
 
+bool HSHomeObject::on_shard_message_pre_commit(int64_t lsn, sisl::blob const& header, sisl::blob const& key,
+                                               cintrusive< homestore::repl_req_ctx >& ctx) {
+    const ReplicationMessageHeader* msg_header = r_cast< const ReplicationMessageHeader* >(header.cbytes());
+    switch (msg_header->msg_type) {
+    case ReplicationMessageType::SEAL_SHARD_MSG: {
+        auto sb = r_cast< shard_info_superblk const* >(header.cbytes() + sizeof(ReplicationMessageHeader));
+        auto const shard_info = sb->info;
+
+        {
+            std::scoped_lock lock_guard(_shard_lock);
+            auto iter = _shard_map.find(shard_info.id);
+            RELEASE_ASSERT(iter != _shard_map.end(), "Missing shard info");
+            auto& state = (*iter->second)->info.state;
+            // we just change the state to SEALED, since it will be easy for rollback
+            // the update of superblk will be done in on_shard_message_commit;
+            if (state == ShardInfo::State::OPEN) {
+                state = ShardInfo::State::SEALED;
+            } else {
+                LOGW("try to seal an unopen shard, shard_id: {}", shard_info.id);
+            }
+        }
+    }
+    default: {
+        break;
+    }
+    }
+    return true;
+}
+
+void HSHomeObject::on_shard_message_rollback(int64_t lsn, sisl::blob const& header, sisl::blob const& key,
+                                             cintrusive< homestore::repl_req_ctx >&) {
+    const ReplicationMessageHeader* msg_header = r_cast< const ReplicationMessageHeader* >(header.cbytes());
+    switch (msg_header->msg_type) {
+    case ReplicationMessageType::SEAL_SHARD_MSG: {
+        auto sb = r_cast< shard_info_superblk const* >(header.cbytes() + sizeof(ReplicationMessageHeader));
+        auto const shard_info = sb->info;
+
+        {
+            std::scoped_lock lock_guard(_shard_lock);
+            auto iter = _shard_map.find(shard_info.id);
+            RELEASE_ASSERT(iter != _shard_map.end(), "Missing shard info");
+            auto& state = (*iter->second)->info.state;
+            // we just change the state to SEALED, since it will be easy for rollback
+            // the update of superblk will be done in on_shard_message_commit;
+            if (state == ShardInfo::State::SEALED) {
+                state = ShardInfo::State::OPEN;
+            } else {
+                LOGW("try to rollback seal_shard message , but the shard state is not sealed. shard_id: {}",
+                     shard_info.id);
+            }
+        }
+    }
+    default: {
+        break;
+    }
+    }
+}
+
 void HSHomeObject::on_shard_message_commit(int64_t lsn, sisl::blob const& h, homestore::MultiBlkId const& blkids,
                                            shared< homestore::ReplDev > repl_dev,
                                            cintrusive< homestore::repl_req_ctx >& hs_ctx) {
@@ -259,12 +317,13 @@ void HSHomeObject::on_shard_message_commit(int64_t lsn, sisl::blob const& h, hom
             state = (*iter->second)->info.state;
         }
 
-        if (state == ShardInfo::State::OPEN) {
+        if (state == ShardInfo::State::SEALED) {
             auto chunk_id = get_shard_chunk(shard_info.id);
             RELEASE_ASSERT(chunk_id.has_value(), "Chunk id not found");
             chunk_selector()->release_chunk(chunk_id.value());
             update_shard_in_map(shard_info);
-        }
+        } else
+            LOGW("try to commit SEAL_SHARD_MSG but shard state is not sealed, shard_id: {}", shard_info.id);
         if (ctx) { ctx->promise_.setValue(ShardManager::Result< ShardInfo >(shard_info)); }
         break;
     }
