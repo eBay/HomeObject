@@ -37,6 +37,10 @@ bool ReplicationStateMachine::on_pre_commit(int64_t lsn, sisl::blob const& heade
     // function is called. So there is nothing is needed to do and we can get the binding chunk_id with the newly shard
     // from the blkid in on_commit()
     const ReplicationMessageHeader* msg_header = r_cast< const ReplicationMessageHeader* >(header.cbytes());
+    if (msg_header->corrupted()) {
+        LOGE("corrupted message in pre_commit, lsn:{}", lsn);
+        return false;
+    }
     switch (msg_header->msg_type) {
     case ReplicationMessageType::SEAL_SHARD_MSG: {
         return home_object_->on_shard_message_pre_commit(lsn, header, key, ctx);
@@ -52,6 +56,10 @@ void ReplicationStateMachine::on_rollback(int64_t lsn, sisl::blob const& header,
                                           cintrusive< homestore::repl_req_ctx >& ctx) {
     LOGI("on_rollback  with lsn:{}", lsn);
     const ReplicationMessageHeader* msg_header = r_cast< const ReplicationMessageHeader* >(header.cbytes());
+    if (msg_header->corrupted()) {
+        LOGE("corrupted message in rollback, lsn:{}", lsn);
+        return;
+    }
     switch (msg_header->msg_type) {
     case ReplicationMessageType::SEAL_SHARD_MSG: {
         home_object_->on_shard_message_rollback(lsn, header, key, ctx);
