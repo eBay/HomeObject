@@ -191,7 +191,7 @@ ShardManager::AsyncResult< ShardInfo > HSHomeObject::_seal_shard(ShardInfo const
 
 // move seal_shard to pre_commit can not fundamentally solve the conflict between seal_shard and put_blob, since
 // put_blob handler will only check the shard state at the very beginning and will not check again before proposing to
-// raft, so we need a callback to check whether we can handle this requeest before appending log, which is previous to
+// raft, so we need a callback to check whether we can handle this request before appending log, which is previous to
 // pre_commit.
 
 // FIXME after we have the callback, which is coming in homestore.
