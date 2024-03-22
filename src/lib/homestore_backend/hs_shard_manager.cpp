@@ -189,9 +189,25 @@ ShardManager::AsyncResult< ShardInfo > HSHomeObject::_seal_shard(ShardInfo const
     return req->result();
 }
 
+// move seal_shard to pre_commit can not fundamentally solve the conflict between seal_shard and put_blob, since
+// put_blob handler will only check the shard state at the very beginning and will not check again before proposing to
+// raft, so we need a callback to check whether we can handle this requeest before appending log, which is previous to
+// pre_commit.
+
+// FIXME after we have the callback, which is coming in homestore.
+
 bool HSHomeObject::on_shard_message_pre_commit(int64_t lsn, sisl::blob const& header, sisl::blob const& key,
-                                               cintrusive< homestore::repl_req_ctx >& ctx) {
+                                               cintrusive< homestore::repl_req_ctx >& hs_ctx) {
+    repl_result_ctx< ShardManager::Result< ShardInfo > >* ctx{nullptr};
+    if (hs_ctx && hs_ctx->is_proposer) {
+        ctx = boost::static_pointer_cast< repl_result_ctx< ShardManager::Result< ShardInfo > > >(hs_ctx).get();
+    }
     const ReplicationMessageHeader* msg_header = r_cast< const ReplicationMessageHeader* >(header.cbytes());
+    if (msg_header->corrupted()) {
+        LOGW("replication message header is corrupted with crc error, lsn:{}", lsn);
+        if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(ShardError::CRC_MISMATCH)); }
+        return false;
+    }
     switch (msg_header->msg_type) {
     case ReplicationMessageType::SEAL_SHARD_MSG: {
         auto sb = r_cast< shard_info_superblk const* >(header.cbytes() + sizeof(ReplicationMessageHeader));
@@ -202,7 +218,8 @@ bool HSHomeObject::on_shard_message_pre_commit(int64_t lsn, sisl::blob const& he
             auto iter = _shard_map.find(shard_info.id);
             RELEASE_ASSERT(iter != _shard_map.end(), "Missing shard info");
             auto& state = (*iter->second)->info.state;
-            // we just change the state to SEALED, since it will be easy for rollback
+            // we just change the state to SEALED, so that it will fail the later coming put_blob on this shard and will
+            // be easy for rollback.
             // the update of superblk will be done in on_shard_message_commit;
             if (state == ShardInfo::State::OPEN) {
                 state = ShardInfo::State::SEALED;
@@ -219,13 +236,22 @@ bool HSHomeObject::on_shard_message_pre_commit(int64_t lsn, sisl::blob const& he
 }
 
 void HSHomeObject::on_shard_message_rollback(int64_t lsn, sisl::blob const& header, sisl::blob const& key,
-                                             cintrusive< homestore::repl_req_ctx >&) {
+                                             cintrusive< homestore::repl_req_ctx >& hs_ctx) {
+    repl_result_ctx< ShardManager::Result< ShardInfo > >* ctx{nullptr};
+    if (hs_ctx && hs_ctx->is_proposer) {
+        ctx = boost::static_pointer_cast< repl_result_ctx< ShardManager::Result< ShardInfo > > >(hs_ctx).get();
+    }
     const ReplicationMessageHeader* msg_header = r_cast< const ReplicationMessageHeader* >(header.cbytes());
+    if (msg_header->corrupted()) {
+        LOGW("replication message header is corrupted with crc error, lsn:{}", lsn);
+        if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(ShardError::CRC_MISMATCH)); }
+        return;
+    }
+
     switch (msg_header->msg_type) {
     case ReplicationMessageType::SEAL_SHARD_MSG: {
         auto sb = r_cast< shard_info_superblk const* >(header.cbytes() + sizeof(ReplicationMessageHeader));
         auto const shard_info = sb->info;
-
         {
             std::scoped_lock lock_guard(_shard_lock);
             auto iter = _shard_map.find(shard_info.id);
