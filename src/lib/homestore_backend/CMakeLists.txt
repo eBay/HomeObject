@@ -13,7 +13,8 @@ target_sources("${PROJECT_NAME}_homestore" PRIVATE
     index_kv.cpp
     heap_chunk_selector.cpp
     replication_state_machine.cpp
-    hs_hmobj_cp.cpp
+    hs_cp_callbacks.cpp
+    hs_http_manager.cpp
     $<TARGET_OBJECTS:${PROJECT_NAME}_core>
 )
 target_link_libraries("${PROJECT_NAME}_homestore" PUBLIC

@@ -9,7 +9,6 @@
 #define protected public
 #include <homestore/homestore.hpp>
 #include "lib/homestore_backend/hs_homeobject.hpp"
-#include "lib/homestore_backend/hs_hmobj_cp.hpp"
 #include "lib/tests/fixture_app.hpp"
 #include "bits_generator.hpp"
 using namespace std::chrono_literals;
@@ -135,6 +134,19 @@ public:
             EXPECT_EQ(result.user_key.size(), blob.user_key.size());
             EXPECT_EQ(blob.user_key, result.user_key);
             EXPECT_EQ(blob.object_off, result.object_off);
+        }
+    }
+
+    void verify_obj_count(uint32_t num_pgs, uint32_t shards_per_pg, uint32_t blobs_per_shard,
+                          bool deleted_all = false) {
+        uint32_t exp_active_blobs = deleted_all ? 0 : shards_per_pg * blobs_per_shard;
+        uint32_t exp_tombstone_blobs = deleted_all ? shards_per_pg * blobs_per_shard : 0;
+
+        for (uint32_t i = 1; i <= num_pgs; i++) {
+            PGStats stats;
+            _obj_inst->pg_manager()->get_stats(i, stats);
+            ASSERT_EQ(stats.num_active_objects, exp_active_blobs) << "Active objs stats not correct";
+            ASSERT_EQ(stats.num_tombstone_objects, exp_tombstone_blobs) << "Deleted objs stats not correct";
         }
     }
 

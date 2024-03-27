@@ -23,6 +23,7 @@ class BlobRouteKey;
 class BlobRouteValue;
 using BlobIndexTable = homestore::IndexTable< BlobRouteKey, BlobRouteValue >;
 class HomeObjCPContext;
+class HttpManager;
 
 static constexpr uint64_t io_align{512};
 PGError toPgError(homestore::ReplServiceError const&);
@@ -78,7 +79,9 @@ public:
         peer_id_t replica_set_uuid;
         homestore::uuid_t index_table_uuid;
         blob_id_t blob_sequence_num;
-        pg_members members[1]; // ISO C++ forbids zero-size array
+        uint64_t active_blob_count;    // Total number of active blobs
+        uint64_t tombstone_blob_count; // Total number of tombstones
+        pg_members members[1];         // ISO C++ forbids zero-size array
 
         uint32_t size() const { return sizeof(pg_info_superblk) + ((num_members - 1) * sizeof(pg_members)); }
         static std::string name() { return _pg_meta_name; }
@@ -120,26 +123,75 @@ public:
     };
 #pragma pack()
 
-    struct HS_PG : public PG {
-        // Only accessible during PG creation, after that it is not accessible.
-        homestore::superblk< pg_info_superblk > pg_sb_;
-        pg_info_superblk* cache_pg_sb_{nullptr}; // always up-to-date;
-        shared< homestore::ReplDev > repl_dev_;
+public:
+    class MyCPCallbacks : public homestore::CPCallbacks {
+    public:
+        MyCPCallbacks(HSHomeObject& ho) : home_obj_{ho} {};
+        virtual ~MyCPCallbacks() = default;
 
+    public:
+        std::unique_ptr< homestore::CPContext > on_switchover_cp(homestore::CP* cur_cp, homestore::CP* new_cp) override;
+        folly::Future< bool > cp_flush(homestore::CP* cp) override;
+        void cp_cleanup(homestore::CP* cp) override;
+        int cp_progress_percent() override;
+
+    private:
+        HSHomeObject& home_obj_;
+    };
+
+    struct HS_PG : public PG {
+        struct PGMetrics : public sisl::MetricsGroup {
+        public:
+            PGMetrics(HS_PG const& pg) :
+                    sisl::MetricsGroup{"PG", boost::uuids::to_string(pg.pg_info_.replica_set_uuid)}, pg_(pg) {
+                // We use replica_set_uuid instead of pg_id for metrics to make it globally unique to allow aggregating
+                // across multiple nodes
+                REGISTER_GAUGE(shard_count, "Number of shards");
+                REGISTER_GAUGE(open_shard_count, "Number of open shards");
+                REGISTER_GAUGE(active_blob_count, "Number of valid blobs present");
+                REGISTER_GAUGE(tombstone_blob_count, "Number of tombstone blobs which can be garbage collected");
+                REGISTER_COUNTER(total_user_key_size, "Total user key size provided",
+                                 sisl::_publish_as::publish_as_gauge);
+                REGISTER_COUNTER(total_occupied_space,
+                                 "Total Size occupied (including padding, user_key, blob) rounded to block size",
+                                 sisl::_publish_as::publish_as_gauge);
+
+                REGISTER_HISTOGRAM(blobs_per_shard,
+                                   "Distribution of blobs per shard"); // TODO: Add a bucket for blob sizes
+                REGISTER_HISTOGRAM(actual_blob_size, "Distribution of actual blob sizes");
+
+                register_me_to_farm();
+                attach_gather_cb(std::bind(&PGMetrics::on_gather, this));
+            }
+            ~PGMetrics() { deregister_me_from_farm(); }
+            PGMetrics(const PGMetrics&) = delete;
+            PGMetrics(PGMetrics&&) noexcept = delete;
+            PGMetrics& operator=(const PGMetrics&) = delete;
+            PGMetrics& operator=(PGMetrics&&) noexcept = delete;
+
+            void on_gather() {
+                GAUGE_UPDATE(*this, shard_count, pg_.total_shards());
+                GAUGE_UPDATE(*this, open_shard_count, pg_.open_shards());
+                GAUGE_UPDATE(*this, active_blob_count,
+                             pg_.durable_entities_.active_blob_count.load(std::memory_order_relaxed));
+                GAUGE_UPDATE(*this, tombstone_blob_count,
+                             pg_.durable_entities_.tombstone_blob_count.load(std::memory_order_relaxed));
+            }
+
+        private:
+            HS_PG const& pg_;
+        };
+
+    public:
+        homestore::superblk< pg_info_superblk > pg_sb_;
+        shared< homestore::ReplDev > repl_dev_;
         std::optional< homestore::chunk_num_t > any_allocated_chunk_id_{};
         std::shared_ptr< BlobIndexTable > index_table_;
+        PGMetrics metrics_;
 
         HS_PG(PGInfo info, shared< homestore::ReplDev > rdev, shared< BlobIndexTable > index_table);
         HS_PG(homestore::superblk< pg_info_superblk >&& sb, shared< homestore::ReplDev > rdev);
-
-        void init_cp();
-
-        virtual ~HS_PG() {
-            if (cache_pg_sb_) {
-                free(cache_pg_sb_);
-                cache_pg_sb_ = nullptr;
-            }
-        }
+        ~HS_PG() override = default;
 
         static PGInfo pg_info_from_sb(homestore::superblk< pg_info_superblk > const& sb);
 
@@ -221,6 +273,7 @@ public:
 
 private:
     shared< HeapChunkSelector > chunk_selector_;
+    unique< HttpManager > http_mgr_;
     bool recovery_done_{false};
 
     static constexpr size_t max_zpad_bufs = _data_block_size / io_align;
@@ -237,7 +290,7 @@ private:
 
     // create shard related
     shard_id_t generate_new_shard_id(pg_id_t pg);
-    uint64_t get_sequence_num_from_shard_id(uint64_t shard_id_t);
+    uint64_t get_sequence_num_from_shard_id(uint64_t shard_id_t) const;
 
     static ShardInfo deserialize_shard_info(const char* shard_info_str, size_t size);
     static std::string serialize_shard_info(const ShardInfo& info);
@@ -311,9 +364,9 @@ public:
      * @brief Returns any chunk number for the given pg ID.
      *
      * @param pg The pg ID to get the chunk number for.
-     * @return An optional chunk number if the pg ID exists, otherwise std::nullopt.
+     * @return A tuple of <if pg exist, if shard exist, chunk number if both exist>.
      */
-    std::optional< homestore::chunk_num_t > get_any_chunk_id(pg_id_t const pg);
+    std::tuple< bool, bool, homestore::chunk_num_t > get_any_chunk_id(pg_id_t pg);
 
     cshared< HeapChunkSelector > chunk_selector() const { return chunk_selector_; }
 
@@ -329,8 +382,8 @@ public:
                             const homestore::MultiBlkId& pbas, cintrusive< homestore::repl_req_ctx >& hs_ctx);
     void on_blob_del_commit(int64_t lsn, sisl::blob const& header, sisl::blob const& key,
                             cintrusive< homestore::repl_req_ctx >& hs_ctx);
-    homestore::blk_alloc_hints blob_put_get_blk_alloc_hints(sisl::blob const& header,
-                                                            cintrusive< homestore::repl_req_ctx >& ctx);
+    homestore::ReplResult< homestore::blk_alloc_hints >
+    blob_put_get_blk_alloc_hints(sisl::blob const& header, cintrusive< homestore::repl_req_ctx >& ctx);
     void compute_blob_payload_hash(BlobHeader::HashAlgorithm algorithm, const uint8_t* blob_bytes, size_t blob_size,
                                    const uint8_t* user_key_bytes, size_t user_key_size, uint8_t* hash_bytes,
                                    size_t hash_len) const;
