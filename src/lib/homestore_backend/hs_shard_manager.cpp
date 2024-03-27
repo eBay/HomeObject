@@ -58,7 +58,7 @@ shard_id_t HSHomeObject::generate_new_shard_id(pg_id_t pgid) {
     return make_new_shard_id(pgid, new_sequence_num);
 }
 
-uint64_t HSHomeObject::get_sequence_num_from_shard_id(uint64_t shard_id_t) {
+uint64_t HSHomeObject::get_sequence_num_from_shard_id(uint64_t shard_id_t) const {
     return shard_id_t & (max_shard_num_in_pg() - 1);
 }
 
@@ -325,22 +325,22 @@ std::optional< homestore::chunk_num_t > HSHomeObject::get_shard_chunk(shard_id_t
     return std::make_optional< homestore::chunk_num_t >(hs_shard->sb_->chunk_id);
 }
 
-std::optional< homestore::chunk_num_t > HSHomeObject::get_any_chunk_id(pg_id_t const pg_id) {
+std::tuple< bool, bool, homestore::chunk_num_t > HSHomeObject::get_any_chunk_id(pg_id_t pg_id) {
     std::scoped_lock lock_guard(_pg_lock);
     auto pg_iter = _pg_map.find(pg_id);
-    RELEASE_ASSERT(pg_iter != _pg_map.end(), "Missing PG info");
+    if (pg_iter == _pg_map.end()) { return {false /* pg_found */, false /* shards_found */, 0 /* chunk_id */}; }
+
     HS_PG* pg = static_cast< HS_PG* >(pg_iter->second.get());
-    if (pg->any_allocated_chunk_id_.has_value()) {
-        // it is already cached and use it;
-        return pg->any_allocated_chunk_id_;
+    if (pg->any_allocated_chunk_id_.has_value()) { // it is already cached and use it;
+        return {true /* pg_found */, true /* shards_found */, *pg->any_allocated_chunk_id_};
     }
 
     auto& shards = pg->shards_;
-    if (shards.empty()) { return std::nullopt; }
+    if (shards.empty()) { return {true /* pg_found */, false /* shards_found */, 0 /* chunk_id */}; }
+
     auto hs_shard = d_cast< HS_Shard* >(shards.front().get());
-    // cache it;
-    pg->any_allocated_chunk_id_ = hs_shard->sb_->chunk_id;
-    return pg->any_allocated_chunk_id_;
+    pg->any_allocated_chunk_id_ = hs_shard->sb_->chunk_id; // cache it;
+    return {true /* pg_found */, true /* shards_found */, *pg->any_allocated_chunk_id_};
 }
 
 HSHomeObject::HS_Shard::HS_Shard(ShardInfo shard_info, homestore::chunk_num_t chunk_id) :

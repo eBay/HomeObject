@@ -160,7 +160,8 @@ public:
     ///
     /// @param header Header originally passed with repl_dev::write() api on the leader
     /// @return Expected to return blk_alloc_hints for this write
-    homestore::blk_alloc_hints get_blk_alloc_hints(sisl::blob const& header, uint32_t data_size) override;
+    homestore::ReplResult< homestore::blk_alloc_hints > get_blk_alloc_hints(sisl::blob const& header,
+                                                                            uint32_t data_size) override;
 
     /// @brief Called when the replica set is being stopped
     void on_replica_stop() override;

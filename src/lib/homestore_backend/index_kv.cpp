@@ -50,7 +50,7 @@ BlobManager::NullResult HSHomeObject::add_to_index_table(shared< BlobIndexTable 
     if (status != homestore::btree_status_t::success) {
         if (existing_value.pbas().is_valid() || existing_value.pbas() == tombstone_pbas) {
             // Check if the blob id already exists in the index or its tombstone.
-            return folly::Unit();
+            return folly::makeUnexpected(BlobError::DATA_EXIST_ALREADY);
         }
         LOGE("Failed to put to index table error {}", status);
         return folly::makeUnexpected(BlobError::INDEX_ERROR);

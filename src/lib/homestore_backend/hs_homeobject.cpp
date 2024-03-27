@@ -13,9 +13,9 @@
 #include <homeobject/homeobject.hpp>
 #include "hs_homeobject.hpp"
 #include "heap_chunk_selector.h"
+#include "hs_http_manager.hpp"
 #include "index_kv.hpp"
 #include "hs_backend_config.hpp"
-#include "hs_hmobj_cp.hpp"
 #include "replication_state_machine.hpp"
 
 namespace homeobject {
@@ -102,7 +102,13 @@ void HSHomeObject::init_homestore() {
     RELEASE_ASSERT(app, "HomeObjectApplication lifetime unexpected!");
 
     LOGI("Starting iomgr with {} threads, spdk: {}", app->threads(), false);
-    ioenvironment.with_iomgr(iomgr::iomgr_params{.num_threads = app->threads(), .is_spdk = app->spdk_mode()});
+    ioenvironment.with_iomgr(iomgr::iomgr_params{.num_threads = app->threads(), .is_spdk = app->spdk_mode()})
+        .with_http_server();
+
+    // TODO: Fixme. This is a hack to restart http server. We should remove this once IOEnvironment has an api
+    // called stop_iomgr, stop_http_server. Until that this restart call allows us to cleanup previous instances
+    ioenvironment.restart_http_server();
+    http_mgr_ = std::make_unique< HttpManager >(*this);
 
     /// TODO Where should this come from?
     const uint64_t app_mem_size = 2 * Gi;
@@ -202,7 +208,7 @@ void HSHomeObject::init_cp() {
     using namespace homestore;
     // Register to CP for flush dirty buffers;
     HomeStore::instance()->cp_mgr().register_consumer(cp_consumer_t::HS_CLIENT,
-                                                      std::move(std::make_unique< HomeObjCPCallbacks >(this)));
+                                                      std::move(std::make_unique< MyCPCallbacks >(*this)));
 }
 
 // void HSHomeObject::trigger_timed_events() { persist_pg_sb(); }
