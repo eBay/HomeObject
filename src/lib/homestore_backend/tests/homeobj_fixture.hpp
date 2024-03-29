@@ -92,18 +92,20 @@ public:
                 // Keep a copy of random payload to verify later.
                 homeobject::Blob clone{sisl::io_blob_safe(blob_size, alignment), user_key, 42ul};
                 std::memcpy(clone.body.bytes(), put_blob.body.bytes(), put_blob.body.size());
+
+            retry:
                 auto b = _obj_inst->blob_manager()->put(shard_id, std::move(put_blob)).get();
+                if (!b && b.error() == BlobError::NOT_LEADER) {
+                    LOGINFO("Failed to put blob due to not leader, sleep 1s and retry put", pg_id, shard_id);
+                    std::this_thread::sleep_for(1s);
+                    goto retry;
+                }
+
                 if (!b) {
-                    if (b.error() == BlobError::NOT_LEADER) {
-                        LOGINFO("Failed to put blob due to not leader, sleep 1s and continue", pg_id, shard_id);
-                        std::this_thread::sleep_for(1s);
-                    } else {
-                        LOGERROR("Failed to put blob pg {} shard {}", pg_id, shard_id);
-                        ASSERT_TRUE(false);
-                    }
+                    LOGERROR("Failed to put blob pg {} shard {} error={}", pg_id, shard_id, b.error());
+                    ASSERT_TRUE(false);
                     continue;
                 }
-                ASSERT_TRUE(!!b);
                 auto blob_id = b.value();
 
                 LOGINFO("Put blob pg {} shard {} blob {} data {}", pg_id, shard_id, blob_id,
