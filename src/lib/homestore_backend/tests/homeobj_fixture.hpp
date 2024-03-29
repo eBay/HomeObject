@@ -142,7 +142,7 @@ public:
         uint32_t exp_active_blobs = deleted_all ? 0 : shards_per_pg * blobs_per_shard;
         uint32_t exp_tombstone_blobs = deleted_all ? shards_per_pg * blobs_per_shard : 0;
 
-        for (uint32_t i = 1; i <= num_pgs; i++) {
+        for (uint32_t i = 1; i <= num_pgs; ++i) {
             PGStats stats;
             _obj_inst->pg_manager()->get_stats(i, stats);
             ASSERT_EQ(stats.num_active_objects, exp_active_blobs) << "Active objs stats not correct";

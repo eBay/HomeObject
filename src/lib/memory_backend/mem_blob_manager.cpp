@@ -24,7 +24,8 @@ BlobManager::AsyncResult< blob_id_t > MemoryHomeObject::_put_blob(ShardInfo cons
         auto lg = std::shared_lock(_pg_lock);
         auto iter = _pg_map.find(_shard.placement_group);
         RELEASE_ASSERT(iter != _pg_map.end(), "PG not found");
-        new_blob_id = iter->second->durable_entities_.blob_sequence_num.fetch_add(1, std::memory_order_relaxed);
+        iter->second->durable_entities_update(
+            [&new_blob_id](auto& de) { new_blob_id = de.blob_sequence_num.fetch_add(1, std::memory_order_relaxed); });
     }
     WITH_ROUTE(new_blob_id);
 

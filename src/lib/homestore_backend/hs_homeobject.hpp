@@ -22,7 +22,6 @@ namespace homeobject {
 class BlobRouteKey;
 class BlobRouteValue;
 using BlobIndexTable = homestore::IndexTable< BlobRouteKey, BlobRouteValue >;
-class HomeObjCPContext;
 class HttpManager;
 
 static constexpr uint64_t io_align{512};
@@ -173,9 +172,9 @@ public:
                 GAUGE_UPDATE(*this, shard_count, pg_.total_shards());
                 GAUGE_UPDATE(*this, open_shard_count, pg_.open_shards());
                 GAUGE_UPDATE(*this, active_blob_count,
-                             pg_.durable_entities_.active_blob_count.load(std::memory_order_relaxed));
+                             pg_.durable_entities().active_blob_count.load(std::memory_order_relaxed));
                 GAUGE_UPDATE(*this, tombstone_blob_count,
-                             pg_.durable_entities_.tombstone_blob_count.load(std::memory_order_relaxed));
+                             pg_.durable_entities().tombstone_blob_count.load(std::memory_order_relaxed));
             }
 
         private:

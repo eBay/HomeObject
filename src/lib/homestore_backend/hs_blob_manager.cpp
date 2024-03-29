@@ -88,7 +88,9 @@ BlobManager::AsyncResult< blob_id_t > HSHomeObject::_put_blob(ShardInfo const& s
         RELEASE_ASSERT(iter != _pg_map.end(), "PG not found");
         auto hs_pg = static_cast< HS_PG* >(iter->second.get());
         repl_dev = hs_pg->repl_dev_;
-        new_blob_id = hs_pg->durable_entities_.blob_sequence_num.fetch_add(1, std::memory_order_relaxed);
+        hs_pg->durable_entities_update(
+            [&new_blob_id](auto& de) { new_blob_id = de.blob_sequence_num.fetch_add(1, std::memory_order_relaxed); },
+            false /* dirty */);
 
         DEBUG_ASSERT_LT(new_blob_id, std::numeric_limits< decltype(new_blob_id) >::max(),
                         "exhausted all available blob ids");
@@ -212,11 +214,12 @@ void HSHomeObject::on_blob_put_commit(int64_t lsn, sisl::blob const& header, sis
 
         // Update the durable counters. We need to update the blob_sequence_num here only for replay case, as the
         // number is already updated in the put_blob call.
-        auto existing_blob_id = hs_pg->durable_entities_.blob_sequence_num.load();
-        while ((blob_id > existing_blob_id) &&
-               !hs_pg->durable_entities_.blob_sequence_num.compare_exchange_weak(existing_blob_id, blob_id)) {}
-        hs_pg->durable_entities_.active_blob_count.fetch_add(1, std::memory_order_relaxed);
-        hs_pg->is_dirty_.store(true);
+        hs_pg->durable_entities_update([&blob_id](auto& de) {
+            auto existing_blob_id = de.blob_sequence_num.load();
+            while ((blob_id > existing_blob_id) &&
+                   !de.blob_sequence_num.compare_exchange_weak(existing_blob_id, blob_id)) {}
+            de.active_blob_count.fetch_add(1, std::memory_order_relaxed);
+        });
     }
     if (ctx) { ctx->promise_.setValue(BlobManager::Result< BlobInfo >(blob_info)); }
 }
@@ -417,9 +420,10 @@ void HSHomeObject::on_blob_del_commit(int64_t lsn, sisl::blob const& header, sis
     auto& multiBlks = r.value();
     if (multiBlks != tombstone_pbas) {
         repl_dev->async_free_blks(lsn, multiBlks);
-        hs_pg->durable_entities_.active_blob_count.fetch_sub(1, std::memory_order_relaxed);
-        hs_pg->durable_entities_.tombstone_blob_count.fetch_add(1, std::memory_order_relaxed);
-        hs_pg->is_dirty_.store(true);
+        hs_pg->durable_entities_update([](auto& de) {
+            de.active_blob_count.fetch_sub(1, std::memory_order_relaxed);
+            de.tombstone_blob_count.fetch_add(1, std::memory_order_relaxed);
+        });
     }
 
     if (ctx) { ctx->promise_.setValue(BlobManager::Result< BlobInfo >(blob_info)); }

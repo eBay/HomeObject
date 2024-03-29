@@ -41,7 +41,7 @@ class HomeObjectConan(ConanFile):
 
     def requirements(self):
         self.requires("homestore/[~=6.0,      include_prerelease=True]@oss/master")
-        self.requires("sisl/[~=12.0, include_prerelease=True]@oss/master")
+        self.requires("sisl/[~=12.1, include_prerelease=True]@oss/master")
         self.requires("lz4/1.9.4", override=True)
 
     def validate(self):

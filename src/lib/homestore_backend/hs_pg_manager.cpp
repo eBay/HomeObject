@@ -283,8 +283,8 @@ bool HSHomeObject::_get_stats(pg_id_t id, PGStats& stats) const {
     stats.total_shards = hs_pg->total_shards();
     stats.open_shards = hs_pg->open_shards();
     stats.leader_id = hs_pg->repl_dev_->get_leader_id();
-    stats.num_active_objects = hs_pg->durable_entities_.active_blob_count;
-    stats.num_tombstone_objects = hs_pg->durable_entities_.tombstone_blob_count;
+    stats.num_active_objects = hs_pg->durable_entities().active_blob_count.load(std::memory_order_relaxed);
+    stats.num_tombstone_objects = hs_pg->durable_entities().tombstone_blob_count.load(std::memory_order_relaxed);
 
     auto const replication_status = hs_pg->repl_dev_->get_replication_status();
     for (auto const& m : hs_pg->pg_info_.members) {
