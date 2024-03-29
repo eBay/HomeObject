@@ -6,8 +6,11 @@
 #include <boost/uuid/random_generator.hpp>
 #include <gtest/gtest.h>
 
-#define protected public
 #include <homestore/homestore.hpp>
+// will allow unit tests to access object private/protected for validation;
+#define protected public
+#define private public
+
 #include "lib/homestore_backend/hs_homeobject.hpp"
 #include "lib/tests/fixture_app.hpp"
 #include "bits_generator.hpp"

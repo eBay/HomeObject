@@ -369,6 +369,7 @@ public:
 
     cshared< HeapChunkSelector > chunk_selector() const { return chunk_selector_; }
 
+    //////////// Called by internal classes. These are not Public APIs ///////////////////
     bool on_pre_commit_shard_msg(int64_t lsn, sisl::blob const& header, sisl::blob const& key,
                                  cintrusive< homestore::repl_req_ctx >&);
     void on_rollback_shard_msg(int64_t lsn, sisl::blob const& header, sisl::blob const& key,
@@ -387,11 +388,13 @@ public:
                                    const uint8_t* user_key_bytes, size_t user_key_size, uint8_t* hash_bytes,
                                    size_t hash_len) const;
 
-    std::shared_ptr< BlobIndexTable > create_index_table();
-
     std::shared_ptr< BlobIndexTable > recover_index_table(homestore::superblk< homestore::index_table_sb >&& sb);
 
-    BlobManager::NullResult add_to_index_table(shared< BlobIndexTable > index_table, const BlobInfo& blob_info);
+private:
+    std::shared_ptr< BlobIndexTable > create_index_table();
+
+    std::pair< bool, homestore::btree_status_t > add_to_index_table(shared< BlobIndexTable > index_table,
+                                                                    const BlobInfo& blob_info);
 
     BlobManager::Result< homestore::MultiBlkId >
     get_blob_from_index_table(shared< BlobIndexTable > index_table, shard_id_t shard_id, blob_id_t blob_id) const;

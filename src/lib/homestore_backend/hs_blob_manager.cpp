@@ -201,25 +201,28 @@ void HSHomeObject::on_blob_put_commit(int64_t lsn, sisl::blob const& header, sis
     blob_info.pbas = pbas;
 
     // Write to index table with key {shard id, blob id } and value {pba}.
-    auto r = add_to_index_table(index_table, blob_info);
-    if (r.hasError() && (r.error() != BlobError::DATA_EXIST_ALREADY)) {
-        LOGE("Failed to insert into index table for blob {} err {}", lsn, r.error());
-        if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(r.error())); }
-        return;
-    } else {
-        // The PG superblock (durable entities) will be persisted as part of HS_CLIENT Checkpoint, which is always done
-        // ahead of the Index Checkpoint. Hence if the index already has this entity, whatever durable counters updated
-        // as part of the update would have been persisted already in PG superblock. So if we were to increment now, it
-        // will be a duplicate increment, hence ignorning for cases where index already exist for this blob put.
+    auto const [exist_already, status] = add_to_index_table(index_table, blob_info);
+    if (!exist_already) {
+        if (status != homestore::btree_status_t::success) {
+            LOGE("Failed to insert into index table for blob {} err {}", lsn, enum_name(status));
+            if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(BlobError::INDEX_ERROR)); }
+            return;
+        } else {
+            // The PG superblock (durable entities) will be persisted as part of HS_CLIENT Checkpoint, which is always
+            // done ahead of the Index Checkpoint. Hence if the index already has this entity, whatever durable counters
+            // updated as part of the update would have been persisted already in PG superblock. So if we were to
+            // increment now, it will be a duplicate increment, hence ignorning for cases where index already exist for
+            // this blob put.
 
-        // Update the durable counters. We need to update the blob_sequence_num here only for replay case, as the
-        // number is already updated in the put_blob call.
-        hs_pg->durable_entities_update([&blob_id](auto& de) {
-            auto existing_blob_id = de.blob_sequence_num.load();
-            while ((blob_id > existing_blob_id) &&
-                   !de.blob_sequence_num.compare_exchange_weak(existing_blob_id, blob_id)) {}
-            de.active_blob_count.fetch_add(1, std::memory_order_relaxed);
-        });
+            // Update the durable counters. We need to update the blob_sequence_num here only for replay case, as the
+            // number is already updated in the put_blob call.
+            hs_pg->durable_entities_update([&blob_id](auto& de) {
+                auto existing_blob_id = de.blob_sequence_num.load();
+                while ((blob_id > existing_blob_id) &&
+                       !de.blob_sequence_num.compare_exchange_weak(existing_blob_id, blob_id)) {}
+                de.active_blob_count.fetch_add(1, std::memory_order_relaxed);
+            });
+        }
     }
     if (ctx) { ctx->promise_.setValue(BlobManager::Result< BlobInfo >(blob_info)); }
 }
