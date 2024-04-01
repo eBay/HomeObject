@@ -57,12 +57,28 @@ struct PG {
     PG& operator=(PG&& pg) = default;
     virtual ~PG() = default;
 
+    struct DurableEntities {
+        std::atomic< blob_id_t > blob_sequence_num{0ull};
+        std::atomic< uint64_t > active_blob_count{0ull};
+        std::atomic< uint64_t > tombstone_blob_count{0ull};
+    };
+
     PGInfo pg_info_;
     uint64_t shard_sequence_num_{0};
-    std::atomic< blob_id_t > blob_sequence_num_{0ull};
+    std::atomic< bool > is_dirty_{false};
     ShardPtrList shards_;
+
+    void durable_entities_update(auto&& cb, bool dirty = true) {
+        cb(durable_entities_);
+        if (dirty) { is_dirty_.store(true, std::memory_order_relaxed); }
+    }
+
+    DurableEntities const& durable_entities() const { return durable_entities_; }
+
+protected:
+    DurableEntities durable_entities_;
 };
-class HomeObjCPContext;
+
 class HomeObjectImpl : public HomeObject,
                        public BlobManager,
                        public PGManager,

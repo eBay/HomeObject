@@ -3,7 +3,6 @@
 #include <homestore/replication_service.hpp>
 #include "hs_homeobject.hpp"
 #include "replication_state_machine.hpp"
-#include "hs_hmobj_cp.hpp"
 
 using namespace homestore;
 namespace homeobject {
@@ -226,12 +225,18 @@ PGInfo HSHomeObject::HS_PG::pg_info_from_sb(homestore::superblk< pg_info_superbl
 }
 
 HSHomeObject::HS_PG::HS_PG(PGInfo info, shared< homestore::ReplDev > rdev, shared< BlobIndexTable > index_table) :
-        PG{std::move(info)}, pg_sb_{_pg_meta_name}, repl_dev_{std::move(rdev)}, index_table_(index_table) {
+        PG{std::move(info)},
+        pg_sb_{_pg_meta_name},
+        repl_dev_{std::move(rdev)},
+        index_table_{std::move(index_table)},
+        metrics_{*this} {
     pg_sb_.create(sizeof(pg_info_superblk) + ((pg_info_.members.size() - 1) * sizeof(pg_members)));
     pg_sb_->id = pg_info_.id;
     pg_sb_->num_members = pg_info_.members.size();
     pg_sb_->replica_set_uuid = repl_dev_->group_id();
     pg_sb_->index_table_uuid = index_table_->uuid();
+    pg_sb_->active_blob_count = 0;
+    pg_sb_->tombstone_blob_count = 0;
 
     uint32_t i{0};
     for (auto const& m : pg_info_.members) {
@@ -241,22 +246,14 @@ HSHomeObject::HS_PG::HS_PG(PGInfo info, shared< homestore::ReplDev > rdev, share
         ++i;
     }
     pg_sb_.write();
-    init_cp();
-}
-
-void HSHomeObject::HS_PG::init_cp() {
-    cache_pg_sb_ = (pg_info_superblk*)malloc(pg_sb_->size());
-    cache_pg_sb_->copy(*(pg_sb_.get()));
-    HomeObjCPContext::init_pg_sb(std::move(pg_sb_));
-
-    // pg_sb_ will not be accessible after this point.
 }
 
 HSHomeObject::HS_PG::HS_PG(homestore::superblk< HSHomeObject::pg_info_superblk >&& sb,
                            shared< homestore::ReplDev > rdev) :
-        PG{pg_info_from_sb(sb)}, pg_sb_{std::move(sb)}, repl_dev_{std::move(rdev)} {
-    blob_sequence_num_ = pg_sb_->blob_sequence_num;
-    init_cp();
+        PG{pg_info_from_sb(sb)}, pg_sb_{std::move(sb)}, repl_dev_{std::move(rdev)}, metrics_{*this} {
+    durable_entities_.blob_sequence_num = pg_sb_->blob_sequence_num;
+    durable_entities_.active_blob_count = pg_sb_->active_blob_count;
+    durable_entities_.tombstone_blob_count = pg_sb_->tombstone_blob_count;
 }
 
 uint32_t HSHomeObject::HS_PG::total_shards() const { return shards_.size(); }
@@ -270,17 +267,6 @@ std::optional< uint32_t > HSHomeObject::HS_PG::dev_hint(cshared< HeapChunkSelect
     auto const hs_shard = d_cast< HS_Shard* >(shards_.front().get());
     auto const hint = chunk_sel->chunk_to_hints(hs_shard->chunk_id());
     return hint.pdev_id_hint;
-}
-
-void HSHomeObject::persist_pg_sb() {
-#if 0
-    auto lg = std::shared_lock(_pg_lock);
-    for (auto& [_, pg] : _pg_map) {
-        auto hs_pg = static_cast< HS_PG* >(pg.get());
-        hs_pg->pg_sb_->blob_sequence_num = hs_pg->blob_sequence_num_;
-        hs_pg->pg_sb_.write();
-    }
-#endif
 }
 
 bool HSHomeObject::_get_stats(pg_id_t id, PGStats& stats) const {
@@ -297,6 +283,8 @@ bool HSHomeObject::_get_stats(pg_id_t id, PGStats& stats) const {
     stats.total_shards = hs_pg->total_shards();
     stats.open_shards = hs_pg->open_shards();
     stats.leader_id = hs_pg->repl_dev_->get_leader_id();
+    stats.num_active_objects = hs_pg->durable_entities().active_blob_count.load(std::memory_order_relaxed);
+    stats.num_tombstone_objects = hs_pg->durable_entities().tombstone_blob_count.load(std::memory_order_relaxed);
 
     auto const replication_status = hs_pg->repl_dev_->get_replication_status();
     for (auto const& m : hs_pg->pg_info_.members) {

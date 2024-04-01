@@ -82,16 +82,20 @@ void ReplicationStateMachine::on_error(ReplServiceError error, const sisl::blob&
     }
 }
 
-homestore::blk_alloc_hints ReplicationStateMachine::get_blk_alloc_hints(sisl::blob const& header, uint32_t data_size) {
+homestore::ReplResult< homestore::blk_alloc_hints >
+ReplicationStateMachine::get_blk_alloc_hints(sisl::blob const& header, uint32_t data_size) {
     const ReplicationMessageHeader* msg_header = r_cast< const ReplicationMessageHeader* >(header.cbytes());
     switch (msg_header->msg_type) {
     case ReplicationMessageType::CREATE_SHARD_MSG: {
-        auto any_allocated_chunk_id = home_object_->get_any_chunk_id(msg_header->pg_id);
-        if (!any_allocated_chunk_id.has_value()) {
+        auto const [pg_found, shards_found, chunk_id] = home_object_->get_any_chunk_id(msg_header->pg_id);
+        if (!pg_found) {
+            LOGW("Requesting a chunk for an unknown pg={}, letting the caller retry after sometime", msg_header->pg_id);
+            return folly::makeUnexpected(homestore::ReplServiceError::RESULT_NOT_EXIST_YET);
+        } else if (!shards_found) {
             // pg is empty without any shards, we leave the decision the HeapChunkSelector to select a pdev
             // with most available space and then select one chunk based on that pdev
         } else {
-            return home_object_->chunk_selector()->chunk_to_hints(any_allocated_chunk_id.value());
+            return home_object_->chunk_selector()->chunk_to_hints(chunk_id);
         }
         break;
     }
@@ -105,12 +109,11 @@ homestore::blk_alloc_hints ReplicationStateMachine::get_blk_alloc_hints(sisl::bl
     }
 
     case ReplicationMessageType::PUT_BLOB_MSG:
-        // TODO fixme
         return home_object_->blob_put_get_blk_alloc_hints(header, nullptr);
+
     case ReplicationMessageType::DEL_BLOB_MSG:
-    default: {
+    default:
         break;
-    }
     }
 
     return homestore::blk_alloc_hints();

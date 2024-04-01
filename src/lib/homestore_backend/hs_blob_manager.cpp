@@ -3,7 +3,6 @@
 #include "replication_state_machine.hpp"
 #include "lib/homeobject_impl.hpp"
 #include "lib/blob_route.hpp"
-#include "hs_hmobj_cp.hpp"
 #include <homestore/homestore.hpp>
 
 SISL_LOGGING_DECL(blobmgr)
@@ -89,15 +88,12 @@ BlobManager::AsyncResult< blob_id_t > HSHomeObject::_put_blob(ShardInfo const& s
         RELEASE_ASSERT(iter != _pg_map.end(), "PG not found");
         auto hs_pg = static_cast< HS_PG* >(iter->second.get());
         repl_dev = hs_pg->repl_dev_;
-        new_blob_id = hs_pg->blob_sequence_num_.fetch_add(1, std::memory_order_relaxed);
+        hs_pg->durable_entities_update(
+            [&new_blob_id](auto& de) { new_blob_id = de.blob_sequence_num.fetch_add(1, std::memory_order_relaxed); },
+            false /* dirty */);
 
-        hs_pg->cache_pg_sb_->blob_sequence_num = hs_pg->blob_sequence_num_.load();
-        auto cur_cp = homestore::HomeStore::instance()->cp_mgr().cp_guard();
-        auto cp_ctx = s_cast< HomeObjCPContext* >(cur_cp->context(homestore::cp_consumer_t::HS_CLIENT));
-        cp_ctx->add_pg_to_dirty_list(hs_pg->cache_pg_sb_);
-
-        RELEASE_ASSERT(new_blob_id < std::numeric_limits< decltype(new_blob_id) >::max(),
-                       "exhausted all available blob ids");
+        DEBUG_ASSERT_LT(new_blob_id, std::numeric_limits< decltype(new_blob_id) >::max(),
+                        "exhausted all available blob ids");
     }
 
     RELEASE_ASSERT(repl_dev != nullptr, "Repl dev instance null");
@@ -188,22 +184,16 @@ void HSHomeObject::on_blob_put_commit(int64_t lsn, sisl::blob const& header, sis
 
     auto const blob_id = *(reinterpret_cast< blob_id_t* >(const_cast< uint8_t* >(key.cbytes())));
     shared< BlobIndexTable > index_table;
+    HS_PG* hs_pg{nullptr};
     {
         std::shared_lock lock_guard(_pg_lock);
         auto iter = _pg_map.find(msg_header->pg_id);
         RELEASE_ASSERT(iter != _pg_map.end(), "PG not found");
-        auto hs_pg = static_cast< HS_PG* >(iter->second.get());
-        index_table = hs_pg->index_table_;
-        RELEASE_ASSERT(index_table != nullptr, "Index table not intialized");
-        if (hs_pg->blob_sequence_num_.load() <= blob_id) {
-            hs_pg->blob_sequence_num_.store(blob_id + 1);
-            hs_pg->cache_pg_sb_->blob_sequence_num = hs_pg->blob_sequence_num_.load();
-
-            auto cur_cp = homestore::HomeStore::instance()->cp_mgr().cp_guard();
-            auto cp_ctx = s_cast< HomeObjCPContext* >(cur_cp->context(homestore::cp_consumer_t::HS_CLIENT));
-            cp_ctx->add_pg_to_dirty_list(hs_pg->cache_pg_sb_);
-        }
+        hs_pg = static_cast< HS_PG* >(iter->second.get());
     }
+
+    index_table = hs_pg->index_table_;
+    RELEASE_ASSERT(index_table != nullptr, "Index table not intialized");
 
     BlobInfo blob_info;
     blob_info.shard_id = msg_header->shard_id;
@@ -211,13 +201,29 @@ void HSHomeObject::on_blob_put_commit(int64_t lsn, sisl::blob const& header, sis
     blob_info.pbas = pbas;
 
     // Write to index table with key {shard id, blob id } and value {pba}.
-    auto r = add_to_index_table(index_table, blob_info);
-    if (r.hasError()) {
-        LOGE("Failed to insert into index table for blob {} err {}", lsn, r.error());
-        if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(r.error())); }
-        return;
-    }
+    auto const [exist_already, status] = add_to_index_table(index_table, blob_info);
+    if (!exist_already) {
+        if (status != homestore::btree_status_t::success) {
+            LOGE("Failed to insert into index table for blob {} err {}", lsn, enum_name(status));
+            if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(BlobError::INDEX_ERROR)); }
+            return;
+        } else {
+            // The PG superblock (durable entities) will be persisted as part of HS_CLIENT Checkpoint, which is always
+            // done ahead of the Index Checkpoint. Hence if the index already has this entity, whatever durable counters
+            // updated as part of the update would have been persisted already in PG superblock. So if we were to
+            // increment now, it will be a duplicate increment, hence ignorning for cases where index already exist for
+            // this blob put.
 
+            // Update the durable counters. We need to update the blob_sequence_num here only for replay case, as the
+            // number is already updated in the put_blob call.
+            hs_pg->durable_entities_update([&blob_id](auto& de) {
+                auto existing_blob_id = de.blob_sequence_num.load();
+                while ((blob_id > existing_blob_id) &&
+                       !de.blob_sequence_num.compare_exchange_weak(existing_blob_id, blob_id)) {}
+                de.active_blob_count.fetch_add(1, std::memory_order_relaxed);
+            });
+        }
+    }
     if (ctx) { ctx->promise_.setValue(BlobManager::Result< BlobInfo >(blob_info)); }
 }
 
@@ -304,8 +310,8 @@ BlobManager::AsyncResult< Blob > HSHomeObject::_get_blob(ShardInfo const& shard,
         });
 }
 
-homestore::blk_alloc_hints HSHomeObject::blob_put_get_blk_alloc_hints(sisl::blob const& header,
-                                                                      cintrusive< homestore::repl_req_ctx >& hs_ctx) {
+homestore::ReplResult< homestore::blk_alloc_hints >
+HSHomeObject::blob_put_get_blk_alloc_hints(sisl::blob const& header, cintrusive< homestore::repl_req_ctx >& hs_ctx) {
     repl_result_ctx< BlobManager::Result< BlobInfo > >* ctx{nullptr};
     if (hs_ctx && hs_ctx->is_proposer) {
         ctx = boost::static_pointer_cast< repl_result_ctx< BlobManager::Result< BlobInfo > > >(hs_ctx).get();
@@ -315,12 +321,16 @@ homestore::blk_alloc_hints HSHomeObject::blob_put_get_blk_alloc_hints(sisl::blob
     if (msg_header->corrupted()) {
         LOGE("replication message header is corrupted with crc error shard:{}", msg_header->shard_id);
         if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(BlobError::CHECKSUM_MISMATCH)); }
-        return {};
+        return folly::makeUnexpected(homestore::ReplServiceError::FAILED);
     }
 
     std::scoped_lock lock_guard(_shard_lock);
     auto shard_iter = _shard_map.find(msg_header->shard_id);
-    RELEASE_ASSERT(shard_iter != _shard_map.end(), "Couldnt find shard id");
+    if (shard_iter == _shard_map.end()) {
+        LOGW("Received a blob_put on an unknown shard, underlying engine will retry this later");
+        return folly::makeUnexpected(homestore::ReplServiceError::RESULT_NOT_EXIST_YET);
+    }
+
     auto hs_shard = d_cast< HS_Shard* >((*shard_iter->second).get());
     BLOGD(msg_header->shard_id, "n/a", "Picked chunk_id={}", hs_shard->sb_->chunk_id);
 
@@ -382,12 +392,14 @@ void HSHomeObject::on_blob_del_commit(int64_t lsn, sisl::blob const& header, sis
 
     shared< BlobIndexTable > index_table;
     shared< homestore::ReplDev > repl_dev;
+    HSHomeObject::HS_PG* hs_pg{nullptr};
     {
         std::shared_lock lock_guard(_pg_lock);
         auto iter = _pg_map.find(msg_header->pg_id);
         RELEASE_ASSERT(iter != _pg_map.end(), "PG not found");
-        index_table = static_cast< HS_PG* >(iter->second.get())->index_table_;
-        repl_dev = static_cast< HS_PG* >(iter->second.get())->repl_dev_;
+        hs_pg = static_cast< HSHomeObject::HS_PG* >(iter->second.get());
+        index_table = hs_pg->index_table_;
+        repl_dev = hs_pg->repl_dev_;
         RELEASE_ASSERT(index_table != nullptr, "Index table not intialized");
         RELEASE_ASSERT(repl_dev != nullptr, "Repl dev instance null");
     }
@@ -409,7 +421,13 @@ void HSHomeObject::on_blob_del_commit(int64_t lsn, sisl::blob const& header, sis
     }
 
     auto& multiBlks = r.value();
-    if (multiBlks != tombstone_pbas) { repl_dev->async_free_blks(lsn, multiBlks); }
+    if (multiBlks != tombstone_pbas) {
+        repl_dev->async_free_blks(lsn, multiBlks);
+        hs_pg->durable_entities_update([](auto& de) {
+            de.active_blob_count.fetch_sub(1, std::memory_order_relaxed);
+            de.tombstone_blob_count.fetch_add(1, std::memory_order_relaxed);
+        });
+    }
 
     if (ctx) { ctx->promise_.setValue(BlobManager::Result< BlobInfo >(blob_info)); }
 }

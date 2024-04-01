@@ -38,6 +38,9 @@ TEST_F(HomeObjectFixture, BasicPutGetDelBlobWRestart) {
     // Verify all get blobs
     verify_get_blob(blob_map);
 
+    // Verify the stats
+    verify_obj_count(num_pgs, num_blobs_per_shard, num_shards_per_pg, false /* deleted */);
+
     // for (uint64_t i = 1; i <= num_pgs; i++) {
     //     r_cast< HSHomeObject* >(_obj_inst.get())->print_btree_index(i);
     // }
@@ -51,11 +54,17 @@ TEST_F(HomeObjectFixture, BasicPutGetDelBlobWRestart) {
     // Verify all get blobs after restart
     verify_get_blob(blob_map);
 
+    // Verify the stats after restart
+    verify_obj_count(num_pgs, num_blobs_per_shard, num_shards_per_pg, false /* deleted */);
+
     // Put blob after restart to test the persistance of blob sequence number
     put_blob(blob_map, pg_shard_id_vec, num_blobs_per_shard, max_blob_size);
 
     // Verify all get blobs with random offset and length.
     verify_get_blob(blob_map, true /* use_random_offset */);
+
+    // Verify the stats after put blobs after restart
+    verify_obj_count(num_pgs, num_blobs_per_shard * 2, num_shards_per_pg, false /* deleted */);
 
     // Delete all blobs
     for (const auto& [id, blob] : blob_map) {
@@ -65,6 +74,9 @@ TEST_F(HomeObjectFixture, BasicPutGetDelBlobWRestart) {
         LOGINFO("delete blob shard {} blob {}", shard_id, blob_id);
     }
 
+    // Verify the stats after restart
+    verify_obj_count(num_pgs, num_blobs_per_shard * 2, num_shards_per_pg, true /* deleted */);
+
     // Delete again should have no errors.
     for (const auto& [id, blob] : blob_map) {
         int64_t shard_id = std::get< 1 >(id), blob_id = std::get< 2 >(id);
@@ -72,6 +84,8 @@ TEST_F(HomeObjectFixture, BasicPutGetDelBlobWRestart) {
         ASSERT_TRUE(g);
         LOGINFO("delete blob shard {} blob {}", shard_id, blob_id);
     }
+
+    verify_obj_count(num_pgs, num_blobs_per_shard * 2, num_shards_per_pg, true /* deleted */);
 
     // After delete all blobs, get should fail
     for (const auto& [id, blob] : blob_map) {
@@ -109,6 +123,9 @@ TEST_F(HomeObjectFixture, BasicPutGetDelBlobWRestart) {
         auto g = _obj_inst->blob_manager()->get(shard_id, blob_id).get();
         ASSERT_TRUE(!g);
     }
+
+    // Verify the stats after restart
+    verify_obj_count(num_pgs, num_blobs_per_shard * 2, num_shards_per_pg, true /* deleted */);
 }
 
 TEST_F(HomeObjectFixture, SealShardWithRestart) {

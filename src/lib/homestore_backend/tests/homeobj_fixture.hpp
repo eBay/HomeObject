@@ -6,10 +6,12 @@
 #include <boost/uuid/random_generator.hpp>
 #include <gtest/gtest.h>
 
-#define protected public
 #include <homestore/homestore.hpp>
+// will allow unit tests to access object private/protected for validation;
+#define protected public
+#define private public
+
 #include "lib/homestore_backend/hs_homeobject.hpp"
-#include "lib/homestore_backend/hs_hmobj_cp.hpp"
 #include "lib/tests/fixture_app.hpp"
 #include "bits_generator.hpp"
 using namespace std::chrono_literals;
@@ -90,18 +92,20 @@ public:
                 // Keep a copy of random payload to verify later.
                 homeobject::Blob clone{sisl::io_blob_safe(blob_size, alignment), user_key, 42ul};
                 std::memcpy(clone.body.bytes(), put_blob.body.bytes(), put_blob.body.size());
+
+            retry:
                 auto b = _obj_inst->blob_manager()->put(shard_id, std::move(put_blob)).get();
+                if (!b && b.error() == BlobError::NOT_LEADER) {
+                    LOGINFO("Failed to put blob due to not leader, sleep 1s and retry put", pg_id, shard_id);
+                    std::this_thread::sleep_for(1s);
+                    goto retry;
+                }
+
                 if (!b) {
-                    if (b.error() == BlobError::NOT_LEADER) {
-                        LOGINFO("Failed to put blob due to not leader, sleep 1s and continue", pg_id, shard_id);
-                        std::this_thread::sleep_for(1s);
-                    } else {
-                        LOGERROR("Failed to put blob pg {} shard {}", pg_id, shard_id);
-                        ASSERT_TRUE(false);
-                    }
+                    LOGERROR("Failed to put blob pg {} shard {} error={}", pg_id, shard_id, b.error());
+                    ASSERT_TRUE(false);
                     continue;
                 }
-                ASSERT_TRUE(!!b);
                 auto blob_id = b.value();
 
                 LOGINFO("Put blob pg {} shard {} blob {} data {}", pg_id, shard_id, blob_id,
@@ -135,6 +139,19 @@ public:
             EXPECT_EQ(result.user_key.size(), blob.user_key.size());
             EXPECT_EQ(blob.user_key, result.user_key);
             EXPECT_EQ(blob.object_off, result.object_off);
+        }
+    }
+
+    void verify_obj_count(uint32_t num_pgs, uint32_t shards_per_pg, uint32_t blobs_per_shard,
+                          bool deleted_all = false) {
+        uint32_t exp_active_blobs = deleted_all ? 0 : shards_per_pg * blobs_per_shard;
+        uint32_t exp_tombstone_blobs = deleted_all ? shards_per_pg * blobs_per_shard : 0;
+
+        for (uint32_t i = 1; i <= num_pgs; ++i) {
+            PGStats stats;
+            _obj_inst->pg_manager()->get_stats(i, stats);
+            ASSERT_EQ(stats.num_active_objects, exp_active_blobs) << "Active objs stats not correct";
+            ASSERT_EQ(stats.num_tombstone_objects, exp_tombstone_blobs) << "Deleted objs stats not correct";
         }
     }
 

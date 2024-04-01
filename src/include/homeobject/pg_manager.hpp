@@ -42,13 +42,15 @@ struct PGInfo {
 struct PGStats {
     pg_id_t id;
     peer_id_t replica_set_uuid;
-    peer_id_t leader_id;        // the leader of this PG from my perspective;
-    uint32_t num_members;       // number of members in this PG;
-    uint32_t total_shards;      // shards allocated on this PG (including open shards)
-    uint32_t open_shards;       // active shards on this PG;
-    uint32_t avail_open_shards; // total number of shards that could be opened on this PG;
-    uint64_t used_bytes;        // total number of bytes used by all shards on this PG;
-    uint64_t avail_bytes;       // total number of bytes available on this PG;
+    peer_id_t leader_id;            // the leader of this PG from my perspective;
+    uint32_t num_members;           // number of members in this PG;
+    uint32_t total_shards;          // shards allocated on this PG (including open shards)
+    uint32_t open_shards;           // active shards on this PG;
+    uint32_t avail_open_shards;     // total number of shards that could be opened on this PG;
+    uint64_t used_bytes;            // total number of bytes used by all shards on this PG;
+    uint64_t avail_bytes;           // total number of bytes available on this PG;
+    uint64_t num_active_objects;    // total number of active objects on this PG;
+    uint64_t num_tombstone_objects; // total number of tombstone objects on this PG;
     std::vector<
         std::tuple< peer_id_t, std::string, uint64_t /* last_commit_lsn */, uint64_t /* last_succ_resp_us_ */ > >
         members;
