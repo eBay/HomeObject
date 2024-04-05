@@ -351,6 +351,11 @@ public:
     void on_shard_message_commit(int64_t lsn, sisl::blob const& header, homestore::MultiBlkId const& blkids,
                                  shared< homestore::ReplDev > repl_dev, cintrusive< homestore::repl_req_ctx >& hs_ctx);
 
+    bool on_shard_message_pre_commit(int64_t lsn, sisl::blob const& header, sisl::blob const& key,
+                                     cintrusive< homestore::repl_req_ctx >&);
+    void on_shard_message_rollback(int64_t lsn, sisl::blob const& header, sisl::blob const& key,
+                                   cintrusive< homestore::repl_req_ctx >&);
+
     /**
      * @brief Retrieves the chunk number associated with the given shard ID.
      *
@@ -368,14 +373,6 @@ public:
     std::tuple< bool, bool, homestore::chunk_num_t > get_any_chunk_id(pg_id_t pg);
 
     cshared< HeapChunkSelector > chunk_selector() const { return chunk_selector_; }
-
-    //////////// Called by internal classes. These are not Public APIs ///////////////////
-    bool on_pre_commit_shard_msg(int64_t lsn, sisl::blob const& header, sisl::blob const& key,
-                                 cintrusive< homestore::repl_req_ctx >&);
-    void on_rollback_shard_msg(int64_t lsn, sisl::blob const& header, sisl::blob const& key,
-                               cintrusive< homestore::repl_req_ctx >&);
-    void on_shard_message_commit(int64_t lsn, sisl::blob const& header, sisl::blob const& key,
-                                 cintrusive< homestore::repl_req_ctx >& hs_ctx);
 
     // Blob manager related.
     void on_blob_put_commit(int64_t lsn, sisl::blob const& header, sisl::blob const& key,
