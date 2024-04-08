@@ -49,7 +49,6 @@ HttpManager::HttpManager(HSHomeObject& ho) : ho_(ho) {
         http_server->setup_route(Http::Method::Post, "/api/v1/crashSystem",
                                  Routes::bind(&HttpManager::crash_system, this));
 #endif
-        http_server->start();
     } catch (const std::runtime_error& e) { LOGWARN("{}", e.what()) }
 }
 
