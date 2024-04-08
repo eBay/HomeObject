@@ -1,4 +1,4 @@
-name: Check Modified File
+name: Check Version Update
 
 on:
   pull_request:
