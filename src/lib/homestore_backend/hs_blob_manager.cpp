@@ -160,7 +160,10 @@ BlobManager::AsyncResult< blob_id_t > HSHomeObject::_put_blob(ShardInfo const& s
 
     repl_dev->async_alloc_write(req->cheader_buf(), req->ckey_buf(), req->data_sgs(), req);
     return req->result().deferValue([this, req](const auto& result) -> BlobManager::AsyncResult< blob_id_t > {
-        if (result.hasError()) { return folly::makeUnexpected(result.error()); }
+        if (result.hasError()) {
+            LOGE("Put blob complete with error {}", result.error());
+            return folly::makeUnexpected(result.error());
+        }
         auto blob_info = result.value();
         BLOGT(blob_info.shard_id, blob_info.blob_id, "Put blob success blkid=[{}]", blob_info.pbas.to_string());
         return blob_info.blob_id;
