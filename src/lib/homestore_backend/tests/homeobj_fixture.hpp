@@ -95,8 +95,9 @@ public:
 
             retry:
                 auto b = _obj_inst->blob_manager()->put(shard_id, std::move(put_blob)).get();
+                LOGERROR("result of put blob {}", !b);
                 if (!b && b.error() == BlobError::NOT_LEADER) {
-                    LOGINFO("Failed to put blob due to not leader, sleep 1s and retry put", pg_id, shard_id);
+                    LOGERROR("Failed to put blob due to not leader, sleep 1s and retry put", pg_id, shard_id);
                     std::this_thread::sleep_for(1s);
                     goto retry;
                 }

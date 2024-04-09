@@ -64,6 +64,7 @@ TEST_F(HomeObjectFixture, BasicPutGetDelBlobWRestart) {
     // Put blob after restart to test the persistance of blob sequence number
     put_blob(blob_map, pg_shard_id_vec, num_blobs_per_shard, max_blob_size);
 
+    LOGERROR("After put blob.");
     // Verify all get blobs with random offset and length.
     verify_get_blob(blob_map, true /* use_random_offset */);
 
