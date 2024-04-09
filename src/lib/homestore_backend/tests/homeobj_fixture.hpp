@@ -97,6 +97,8 @@ public:
                 auto b = _obj_inst->blob_manager()->put(shard_id, std::move(put_blob)).get();
                 if (!b && b.error() == BlobError::NOT_LEADER) {
                     LOGINFO("Failed to put blob due to not leader, sleep 1s and retry put", pg_id, shard_id);
+                    put_blob = homeobject::Blob{sisl::io_blob_safe(blob_size, alignment), user_key, 42ul};
+                    std::memcpy(put_blob.body.bytes(), clone.body.bytes(), clone.body.size());
                     std::this_thread::sleep_for(1s);
                     goto retry;
                 }
