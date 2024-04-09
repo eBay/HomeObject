@@ -6,12 +6,19 @@
 #include <string>
 
 #include "common.hpp"
+#include <sisl/utility/enum.hpp>
 
 namespace homeobject {
 
 class BlobManager;
 class PGManager;
 class ShardManager;
+ENUM(DevType, uint8_t, AUTO_DETECT = 1, HDD, NVME, UNSUPPORTED);
+struct device_info_t {
+    explicit device_info_t(std::string name, DevType dtype = DevType::AUTO_DETECT) : path{std::filesystem::canonical(name)}, type{dtype} {}
+    std::filesystem::path path;
+    DevType type;
+};
 
 class HomeObjectApplication {
 public:
@@ -19,7 +26,7 @@ public:
 
     virtual bool spdk_mode() const = 0;
     virtual uint32_t threads() const = 0;
-    virtual std::list< std::filesystem::path > devices() const = 0;
+    virtual std::list< device_info_t > devices() const = 0;
 
     // Callback made after determining if a SvcId exists or not during initialization, will consume response
     virtual peer_id_t discover_svcid(std::optional< peer_id_t > const& found) const = 0;

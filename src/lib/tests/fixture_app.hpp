@@ -32,9 +32,9 @@ public:
         if (std::filesystem::exists(path_)) std::filesystem::remove(path_);
     }
 
-    std::list< std::filesystem::path > devices() const override {
-        auto device_info = std::list< std::filesystem::path >();
-        device_info.emplace_back(std::filesystem::canonical(path_));
+    std::list< homeobject::device_info_t > devices() const override {
+        auto device_info = std::list< homeobject::device_info_t >();
+        device_info.emplace_back(homeobject::device_info_t(path_));
         return device_info;
     }
 
