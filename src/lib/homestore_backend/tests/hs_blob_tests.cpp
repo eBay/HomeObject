@@ -48,14 +48,18 @@ TEST_F(HomeObjectFixture, BasicPutGetDelBlobWRestart) {
     LOGINFO("Flushing CP.");
     trigger_cp(true /* wait */);
 
+    LOGERROR("Before restart.");
     // Restart homeobject
     restart();
+    LOGERROR("After restart.");
 
     // Verify all get blobs after restart
     verify_get_blob(blob_map);
 
     // Verify the stats after restart
     verify_obj_count(num_pgs, num_blobs_per_shard, num_shards_per_pg, false /* deleted */);
+
+    LOGERROR("After verify stat.");
 
     // Put blob after restart to test the persistance of blob sequence number
     put_blob(blob_map, pg_shard_id_vec, num_blobs_per_shard, max_blob_size);
