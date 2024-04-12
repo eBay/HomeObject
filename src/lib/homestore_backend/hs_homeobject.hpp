@@ -142,7 +142,7 @@ public:
         struct PGMetrics : public sisl::MetricsGroup {
         public:
             PGMetrics(HS_PG const& pg) :
-                    sisl::MetricsGroup{"PG", boost::uuids::to_string(pg.pg_info_.replica_set_uuid)}, pg_(pg) {
+                    sisl::MetricsGroup{"PG", std::to_string(pg.pg_info_.id)}, pg_(pg) {
                 // We use replica_set_uuid instead of pg_id for metrics to make it globally unique to allow aggregating
                 // across multiple nodes
                 REGISTER_GAUGE(shard_count, "Number of shards");
