@@ -133,7 +133,7 @@ void HSHomeObject::init_homestore() {
             LOGW("Device {} is not supported, skipping", dev.path.string());
             continue;
         }
-        if (input_dev_type != DevType::AUTO_DETECT && input_dev_type != final_type) {
+        if (input_dev_type != DevType::AUTO_DETECT && detected_type != final_type) {
             LOGW("Device {} detected as {}, but input type is {}, using input type", dev.path.string(), detected_type,
                  input_dev_type);
         }
