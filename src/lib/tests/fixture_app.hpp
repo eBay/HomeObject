@@ -19,22 +19,30 @@ using homeobject::blob_id_t;
 using homeobject::peer_id_t;
 
 class FixtureApp : public homeobject::HomeObjectApplication {
-    std::string path_{"/tmp/homeobject_test.data"};
+    std::string path_hdd_{"/tmp/homeobject_test.hdd"};
+    std::string path_ssd_{"/tmp/homeobject_test.ssd"};
+    bool is_hybrid_{false};
 
 public:
-    FixtureApp();
+    FixtureApp(bool is_hybrid=false);
     ~FixtureApp() = default;
 
     bool spdk_mode() const override { return false; }
     uint32_t threads() const override { return 2; }
 
     void clean() {
-        if (std::filesystem::exists(path_)) std::filesystem::remove(path_);
+        if (std::filesystem::exists(path_hdd_)) std::filesystem::remove(path_hdd_);
+        if (std::filesystem::exists(path_ssd_)) std::filesystem::remove(path_ssd_);
     }
 
     std::list< homeobject::device_info_t > devices() const override {
         auto device_info = std::list< homeobject::device_info_t >();
-        device_info.emplace_back(homeobject::device_info_t(path_));
+        // add HDD
+        device_info.emplace_back(path_hdd_, homeobject::DevType::HDD);
+        if (is_hybrid_) {
+            // add SSD
+            device_info.emplace_back(path_ssd_, homeobject::DevType::NVME);
+        }
         return device_info;
     }
 
