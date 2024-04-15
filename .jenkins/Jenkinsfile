@@ -6,7 +6,6 @@ pipeline {
         CONAN_USER = 'oss'
         TARGET_BRANCH = 'main'
         STABLE_BRANCH = 'stable/v*'
-        built_chain = ''
         failed_pkg = ''
     }
 
@@ -86,7 +85,6 @@ pipeline {
                     steps {
                         script {
                             def hobj_res = build job: "StorageManager/main", parameters: [[$class: 'StringParameterValue', name: 'upstream_triggered', value: 'true']], propagate: true
-                            built_chain = "${built_chain}" + ", " + "$hobj_res.buildVariables.pkg_version"
                         }
                     }
                     post {
@@ -101,7 +99,7 @@ pipeline {
         failure {
             script {
                 if ("${failed_pkg}" != "") {
-                    slackSend color: '#E43237', channel: '#sds-ci', message: "@here HomeObject downstream pkg - *${failed_pkg}* build failed.\n*URL:* ${BUILD_URL}\nIf result not expected, revert (aka `conan remove -r ebay-local`) these pkgs: ```${built_chain}```"
+                    slackSend color: '#E43237', channel: '#sds-ci', message: "@here HomeObject downstream pkg - *${failed_pkg}* build failed.\n*URL:* ${BUILD_URL}"
                 } else {
                     slackSend color: '#E43237', channel: '#sds-ci', message: "*${PROJECT}/${TAG}* has had a failure : ${BUILD_URL}"
                 }
