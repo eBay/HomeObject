@@ -162,10 +162,10 @@ void HSHomeObject::init_homestore() {
             // Hybrid mode
             LOGD("Has both Data and Fast, running with Hybrid mode");
             HomeStore::instance()->format_and_start({
-                {HS_SERVICE::META, hs_format_params{.dev_type = HSDevType::Fast, .size_pct = 9.0}},
+                {HS_SERVICE::META, hs_format_params{.dev_type = HSDevType::Fast, .size_pct = 9.0, .num_chunks = 64}},
                 {HS_SERVICE::LOG,
                  hs_format_params{.dev_type = HSDevType::Fast, .size_pct = 45.0, .chunk_size = 32 * Mi}},
-                {HS_SERVICE::INDEX, hs_format_params{.dev_type = HSDevType::Fast, .size_pct = 45.0}},
+                {HS_SERVICE::INDEX, hs_format_params{.dev_type = HSDevType::Fast, .size_pct = 45.0, .num_chunks = 128}},
                 {HS_SERVICE::REPLICATION,
                  hs_format_params{.dev_type = HSDevType::Data,
                                   .size_pct = 99.0,
@@ -178,9 +178,10 @@ void HSHomeObject::init_homestore() {
             auto run_on_type = has_fast_dev ? homestore::HSDevType::Fast : homestore::HSDevType::Data;
             LOGD("Running with Single mode, all service on {}", run_on_type);
             HomeStore::instance()->format_and_start({
-                {HS_SERVICE::META, hs_format_params{.dev_type = run_on_type, .size_pct = 5.0}},
+	        // FIXME:  this is to work around the issue in HS that varsize allocator doesnt work with small chunk size.
+                {HS_SERVICE::META, hs_format_params{.dev_type = run_on_type, .size_pct = 5.0, .num_chunks = 1}},
                 {HS_SERVICE::LOG, hs_format_params{.dev_type = run_on_type, .size_pct = 10.0, .chunk_size = 32 * Mi}},
-                {HS_SERVICE::INDEX, hs_format_params{.dev_type = run_on_type, .size_pct = 5.0}},
+                {HS_SERVICE::INDEX, hs_format_params{.dev_type = run_on_type, .size_pct = 5.0, .num_chunks = 1}},
                 {HS_SERVICE::REPLICATION,
                  hs_format_params{.dev_type = run_on_type,
                                   .size_pct = 79.0,
