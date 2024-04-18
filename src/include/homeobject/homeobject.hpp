@@ -16,6 +16,7 @@ class ShardManager;
 ENUM(DevType, uint8_t, AUTO_DETECT = 1, HDD, NVME, UNSUPPORTED);
 struct device_info_t {
     explicit device_info_t(std::string name, DevType dtype = DevType::AUTO_DETECT) : path{std::filesystem::canonical(name)}, type{dtype} {}
+    bool operator ==(device_info_t const& rhs) const { return path == rhs.path && type == rhs.type; }
     std::filesystem::path path;
     DevType type;
 };
