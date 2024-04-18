@@ -142,6 +142,7 @@ void HSHomeObject::init_homestore() {
         if (hs_type == homestore::HSDevType::Fast) { has_fast_dev = true; }
         device_info.emplace_back(std::filesystem::canonical(dev.path).string(), hs_type);
     }
+    RELEASE_ASSERT(device_info.size() != 0, "No supported devices found!");
 
     chunk_selector_ = std::make_shared< HeapChunkSelector >();
     using namespace homestore;
