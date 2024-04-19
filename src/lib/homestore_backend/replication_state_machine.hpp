@@ -170,7 +170,7 @@ public:
     /// @param snapshot - The snapshot object which contains the lsn and term;
     homestore::AsyncReplResult<> create_snapshot(homestore::repl_snapshot&) override {
         // To be implemented;
-        return make_async_success<>();
+        return homestore::make_async_success<>();
     }
 
 private:
