@@ -168,8 +168,9 @@ public:
 
     /// @brief Called when the snapshot is being created.
     /// @param snapshot - The snapshot object which contains the lsn and term;
-    void create_snapshot(homestore::repl_snapshot&) override {
+    AsyncReplResult<> create_snapshot(homestore::repl_snapshot&) override {
         // To be implemented;
+        return make_async_success<>();
     }
 
 private:
