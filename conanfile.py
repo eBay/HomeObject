@@ -9,7 +9,7 @@ required_conan_version = ">=1.50.0"
 
 class HomeObjectConan(ConanFile):
     name = "homeobject"
-    version = "1.0.16"
+    version = "1.2.1"
     homepage = "https://github.com/eBay/HomeObject"
     description = "Blob Store built on HomeReplication"
     topics = ("ebay")
@@ -40,7 +40,7 @@ class HomeObjectConan(ConanFile):
         self.build_requires("gtest/1.14.0")
 
     def requirements(self):
-        self.requires("homestore/[>=6.2,      include_prerelease=True]@oss/master")
+        self.requires("homestore/[>=6.3,      include_prerelease=True]@oss/master")
         self.requires("sisl/[>=12.1, include_prerelease=True]@oss/master")
         self.requires("lz4/1.9.4", override=True)
 

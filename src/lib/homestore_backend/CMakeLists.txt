@@ -4,6 +4,13 @@ if(NOT ${CMAKE_CURRENT_BINARY_DIR} STREQUAL ${CMAKE_CURRENT_SOURCE_DIR})
   include_directories(BEFORE ${CMAKE_CURRENT_BINARY_DIR})
 endif()
 
+#list(APPEND SCHEMA_FLAGS "--scoped-enums" "--gen-name-strings" "--cpp-std=c++17" "--cpp-static-reflection" "--reflect-names")
+#flatbuffers_generate_headers(
+#    TARGET ho_replication_fb
+#    SCHEMAS resync_pg_shard.fbs resync_blob_data.fbs
+#    FLAGS ${SCHEMA_FLAGS}
+#)
+
 add_library ("${PROJECT_NAME}_homestore")
 target_sources("${PROJECT_NAME}_homestore" PRIVATE
     hs_homeobject.cpp
@@ -28,6 +35,8 @@ settings_gen_cpp(
     ${CMAKE_CURRENT_BINARY_DIR}/generated/
     "${PROJECT_NAME}_homestore"
     hs_backend_config.fbs
+    resync_pg_shard.fbs
+    resync_blob_data.fbs
   )
 
 if(BUILD_TESTING)

@@ -1,0 +1,14 @@
+namespace homeobject;
+
+table BlobData {
+    shard_id : uint64;
+    key : [ubyte];
+    size : uint32;
+    data : [ubyte];
+}
+
+table ResyncBlobDataBatch {
+    data_array : [BlobData];
+}
+
+root_type ResyncBlobDataBatch;
