@@ -2,8 +2,10 @@ namespace homeobject;
 
 table BlobData {
     shard_id : uint64;
-    key : [ubyte];
-    size : uint32;
+    user_key_size : uint32;
+    user_key : [ubyte];
+    blob_id : uint64;
+    data_size : uint32;
     data : [ubyte];
 }
 
