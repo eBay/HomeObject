@@ -32,7 +32,7 @@ public:
     std::default_random_engine rnd_engine{rnd()};
 
     void SetUp() override {
-        app = std::make_shared< FixtureApp >();
+        app = std::make_shared< FixtureApp >(true /* is_hybrid */);
         _obj_inst = homeobject::init_homeobject(std::weak_ptr< homeobject::HomeObjectApplication >(app));
     }
 

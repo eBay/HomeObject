@@ -304,6 +304,9 @@ private:
 
     void persist_pg_sb();
 
+    // helpers
+    DevType get_device_type(string const& devname);
+
 public:
     using HomeObjectImpl::HomeObjectImpl;
     HSHomeObject();
