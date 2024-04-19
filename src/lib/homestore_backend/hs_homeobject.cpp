@@ -97,6 +97,13 @@ private:
 //
 // This should assert if we can not initialize HomeStore.
 //
+DevType HSHomeObject::get_device_type(string const& devname) {
+    const iomgr::drive_type dtype = iomgr::DriveInterface::get_drive_type(devname);
+    if (dtype == iomgr::drive_type::block_hdd || dtype == iomgr::drive_type::file_on_hdd) { return DevType::HDD; }
+    if (dtype == iomgr::drive_type::file_on_nvme || dtype == iomgr::drive_type::block_nvme) { return DevType::NVME; }
+    return DevType::UNSUPPORTED;
+}
+
 void HSHomeObject::init_homestore() {
     auto app = _application.lock();
     RELEASE_ASSERT(app, "HomeObjectApplication lifetime unexpected!");
@@ -115,9 +122,27 @@ void HSHomeObject::init_homestore() {
     LOGI("Initialize and start HomeStore with app_mem_size = {}", homestore::in_bytes(app_mem_size));
 
     std::vector< homestore::dev_info > device_info;
-    for (auto const& path : app->devices()) {
-        device_info.emplace_back(std::filesystem::canonical(path).string(), homestore::HSDevType::Data);
+    bool has_data_dev = false;
+    bool has_fast_dev = false;
+    for (auto const& dev : app->devices()) {
+        auto input_dev_type = dev.type;
+        auto detected_type = get_device_type(dev.path.string());
+        LOGD("Device {} detected as {}", dev.path.string(), detected_type);
+        auto final_type = (dev.type == DevType::AUTO_DETECT) ? detected_type : input_dev_type;
+        if (final_type == DevType::UNSUPPORTED) {
+            LOGW("Device {} is not supported, skipping", dev.path.string());
+            continue;
+        }
+        if (input_dev_type != DevType::AUTO_DETECT && detected_type != final_type) {
+            LOGW("Device {} detected as {}, but input type is {}, using input type", dev.path.string(), detected_type,
+                 input_dev_type);
+        }
+        auto hs_type = (final_type == DevType::HDD) ? homestore::HSDevType::Data : homestore::HSDevType::Fast;
+        if (hs_type == homestore::HSDevType::Data) { has_data_dev = true; }
+        if (hs_type == homestore::HSDevType::Fast) { has_fast_dev = true; }
+        device_info.emplace_back(std::filesystem::canonical(dev.path).string(), hs_type);
     }
+    RELEASE_ASSERT(device_info.size() != 0, "No supported devices found!");
 
     chunk_selector_ = std::make_shared< HeapChunkSelector >();
     using namespace homestore;
@@ -134,17 +159,39 @@ void HSHomeObject::init_homestore() {
         RELEASE_ASSERT(!_our_id.is_nil(), "Received no SvcId and need FORMAT!");
         LOGW("We are starting for the first time on [{}], Formatting!!", to_string(_our_id));
 
-        HomeStore::instance()->format_and_start({
-            {HS_SERVICE::META, hs_format_params{.size_pct = 5.0}},
-            {HS_SERVICE::LOG, hs_format_params{.size_pct = 10.0, .chunk_size = 32 * Mi}},
-            {HS_SERVICE::REPLICATION,
-             hs_format_params{.size_pct = 79.0,
-                              .num_chunks = 65000,
-                              .block_size = _data_block_size,
-                              .alloc_type = blk_allocator_type_t::append,
-                              .chunk_sel_type = chunk_selector_type_t::CUSTOM}},
-            {HS_SERVICE::INDEX, hs_format_params{.size_pct = 5.0}},
-        });
+        if (has_data_dev && has_fast_dev) {
+            // Hybrid mode
+            LOGD("Has both Data and Fast, running with Hybrid mode");
+            HomeStore::instance()->format_and_start({
+                {HS_SERVICE::META, hs_format_params{.dev_type = HSDevType::Fast, .size_pct = 9.0, .num_chunks = 64}},
+                {HS_SERVICE::LOG,
+                 hs_format_params{.dev_type = HSDevType::Fast, .size_pct = 45.0, .chunk_size = 32 * Mi}},
+                {HS_SERVICE::INDEX, hs_format_params{.dev_type = HSDevType::Fast, .size_pct = 45.0, .num_chunks = 128}},
+                {HS_SERVICE::REPLICATION,
+                 hs_format_params{.dev_type = HSDevType::Data,
+                                  .size_pct = 99.0,
+                                  .num_chunks = 60000,
+                                  .block_size = _data_block_size,
+                                  .alloc_type = blk_allocator_type_t::append,
+                                  .chunk_sel_type = chunk_selector_type_t::CUSTOM}},
+            });
+        } else {
+            auto run_on_type = has_fast_dev ? homestore::HSDevType::Fast : homestore::HSDevType::Data;
+            LOGD("Running with Single mode, all service on {}", run_on_type);
+            HomeStore::instance()->format_and_start({
+	        // FIXME:  this is to work around the issue in HS that varsize allocator doesnt work with small chunk size.
+                {HS_SERVICE::META, hs_format_params{.dev_type = run_on_type, .size_pct = 5.0, .num_chunks = 1}},
+                {HS_SERVICE::LOG, hs_format_params{.dev_type = run_on_type, .size_pct = 10.0, .chunk_size = 32 * Mi}},
+                {HS_SERVICE::INDEX, hs_format_params{.dev_type = run_on_type, .size_pct = 5.0, .num_chunks = 1}},
+                {HS_SERVICE::REPLICATION,
+                 hs_format_params{.dev_type = run_on_type,
+                                  .size_pct = 79.0,
+                                  .num_chunks = 60000,
+                                  .block_size = _data_block_size,
+                                  .alloc_type = blk_allocator_type_t::append,
+                                  .chunk_sel_type = chunk_selector_type_t::CUSTOM}},
+            });
+        }
 
         // Create a superblock that contains our SvcId
         auto svc_sb = homestore::superblk< svc_info_superblk_t >(_svc_meta_name);

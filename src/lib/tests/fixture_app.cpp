@@ -16,11 +16,17 @@ SISL_LOGGING_INIT(HOMEOBJECT_LOG_MODS)
 
 SISL_OPTIONS_ENABLE(logging, homeobject, test_home_object)
 
-FixtureApp::FixtureApp() {
+FixtureApp::FixtureApp(bool is_hybrid) : is_hybrid_(is_hybrid) {
     clean();
-    LOGWARN("creating device {} file with size {} ", path_, 10 * Gi);
-    std::ofstream ofs{path_, std::ios::binary | std::ios::out | std::ios::trunc};
-    std::filesystem::resize_file(path_, 10 * Gi);
+    LOGWARN("creating HDD device {} file with size {} ", path_hdd_, 10 * Gi);
+    std::ofstream ofs{path_hdd_, std::ios::binary | std::ios::out | std::ios::trunc};
+    std::filesystem::resize_file(path_hdd_, 10 * Gi);
+
+    if (is_hybrid_) {
+        LOGWARN("creating SSD device {} file with size {} ", path_ssd_, 10 * Gi);
+        std::ofstream ofs{path_ssd_, std::ios::binary | std::ios::out | std::ios::trunc};
+        std::filesystem::resize_file(path_ssd_, 10 * Gi);
+    }
 }
 
 homeobject::peer_id_t FixtureApp::discover_svcid(std::optional< homeobject::peer_id_t > const& p) const {
