@@ -11,7 +11,9 @@ class TestApp : public homeobject::HomeObjectApplication {
 public:
     bool spdk_mode() const override { return false; }
     uint32_t threads() const override { return 1; }
-    std::list< std::filesystem::path > devices() const override { return std::list< std::filesystem::path >(); }
+    std::list< homeobject::device_info_t > devices() const override {
+        return std::list< homeobject::device_info_t >();
+    }
     homeobject::peer_id_t discover_svcid(std::optional< homeobject::peer_id_t > const& p) const override {
         return boost::uuids::random_generator()();
     }
