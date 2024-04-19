@@ -170,7 +170,7 @@ public:
     /// @param snapshot - The snapshot object which contains the lsn and term;
     homestore::AsyncReplResult<> create_snapshot(homestore::repl_snapshot&) override {
         // To be implemented;
-        return homestore::make_async_success<>();
+        return folly::makeSemiFuture< homestore::ReplResult< folly::Unit > >(folly::Unit{});
     }
 
 private:
