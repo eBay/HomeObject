@@ -22,7 +22,9 @@ struct device_info_t {
     friend std::istream& operator>>(std::istream& input, device_info_t& di) {
         std::string i_path, i_type;
         std::getline(input, i_path, ':');
-        std::getline(input, i_type);
+        if (input.peek() != EOF) {
+            std::getline(input, i_type);
+        }
         di.path = std::filesystem::canonical(i_path);
         if (i_type == "HDD") {
             di.type = DevType::HDD;
