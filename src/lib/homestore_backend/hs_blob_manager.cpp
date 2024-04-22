@@ -216,11 +216,12 @@ void HSHomeObject::on_blob_put_commit(int64_t lsn, sisl::blob const& header, sis
 
             // Update the durable counters. We need to update the blob_sequence_num here only for replay case, as the
             // number is already updated in the put_blob call.
-            hs_pg->durable_entities_update([&blob_id](auto& de) {
+            hs_pg->durable_entities_update([&blob_id, &pbas](auto& de) {
                 auto existing_blob_id = de.blob_sequence_num.load();
                 while ((blob_id > existing_blob_id) &&
                        !de.blob_sequence_num.compare_exchange_weak(existing_blob_id, blob_id)) {}
                 de.active_blob_count.fetch_add(1, std::memory_order_relaxed);
+                de.total_occupied_blk_count.fetch_add(pbas.blk_count(), std::memory_order_relaxed);
             });
         }
     }

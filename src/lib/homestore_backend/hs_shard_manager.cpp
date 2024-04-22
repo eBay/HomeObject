@@ -328,6 +328,18 @@ void HSHomeObject::on_shard_message_commit(int64_t lsn, sisl::blob const& h, hom
             chunk_selector_->select_specific_chunk(blkids.chunk_num());
         }
         if (ctx) { ctx->promise_.setValue(ShardManager::Result< ShardInfo >(shard_info)); }
+
+        // update pg's total_occupied_blk_count
+        HS_PG* hs_pg{nullptr};
+        {
+            std::shared_lock lock_guard(_pg_lock);
+            auto iter = _pg_map.find(shard_info.placement_group);
+            RELEASE_ASSERT(iter != _pg_map.end(), "PG not found");
+            hs_pg = static_cast< HS_PG* >(iter->second.get());
+        }
+        hs_pg->durable_entities_update([&blkids](auto& de) {
+            de.total_occupied_blk_count.fetch_add(blkids.blk_count(), std::memory_order_relaxed);
+        });
         break;
     }
 

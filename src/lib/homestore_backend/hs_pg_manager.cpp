@@ -237,6 +237,7 @@ HSHomeObject::HS_PG::HS_PG(PGInfo info, shared< homestore::ReplDev > rdev, share
     pg_sb_->index_table_uuid = index_table_->uuid();
     pg_sb_->active_blob_count = 0;
     pg_sb_->tombstone_blob_count = 0;
+    pg_sb_->total_occupied_blk_count = 0;
 
     uint32_t i{0};
     for (auto const& m : pg_info_.members) {
@@ -254,6 +255,7 @@ HSHomeObject::HS_PG::HS_PG(homestore::superblk< HSHomeObject::pg_info_superblk >
     durable_entities_.blob_sequence_num = pg_sb_->blob_sequence_num;
     durable_entities_.active_blob_count = pg_sb_->active_blob_count;
     durable_entities_.tombstone_blob_count = pg_sb_->tombstone_blob_count;
+    durable_entities_.total_occupied_blk_count = pg_sb_->total_occupied_blk_count;
 }
 
 uint32_t HSHomeObject::HS_PG::total_shards() const { return shards_.size(); }
@@ -305,7 +307,8 @@ bool HSHomeObject::_get_stats(pg_id_t id, PGStats& stats) const {
     if (pdev_id_hint.has_value()) {
         stats.avail_open_shards = chunk_selector()->avail_num_chunks(pdev_id_hint.value());
         stats.avail_bytes = chunk_selector()->avail_blks(pdev_id_hint) * blk_size;
-        stats.used_bytes = chunk_selector()->total_blks(pdev_id_hint.value()) * blk_size - stats.avail_bytes;
+        stats.used_bytes =
+            hs_pg->durable_entities().total_occupied_blk_count.load(std::memory_order_relaxed) * blk_size;
     } else {
         // if no shard has been created on this PG yet, it means this PG could arrive on any drive that has the most
         // available open shards;
