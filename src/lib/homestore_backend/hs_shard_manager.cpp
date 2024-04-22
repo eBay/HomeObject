@@ -329,7 +329,10 @@ void HSHomeObject::on_shard_message_commit(int64_t lsn, sisl::blob const& h, hom
         }
         if (ctx) { ctx->promise_.setValue(ShardManager::Result< ShardInfo >(shard_info)); }
 
-        // update pg's total_occupied_blk_count
+        // TODO: add shard header blk count to total_occupied_blk_count and handle the case of replaying journal after
+        // restart. note that , replaying log might increase the counter that should not be increased again.
+        /*
+        //update pg's total_occupied_blk_count
         HS_PG* hs_pg{nullptr};
         {
             std::shared_lock lock_guard(_pg_lock);
@@ -340,6 +343,7 @@ void HSHomeObject::on_shard_message_commit(int64_t lsn, sisl::blob const& h, hom
         hs_pg->durable_entities_update([&blkids](auto& de) {
             de.total_occupied_blk_count.fetch_add(blkids.blk_count(), std::memory_order_relaxed);
         });
+        */
         break;
     }
 
