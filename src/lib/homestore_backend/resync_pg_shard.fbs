@@ -7,14 +7,18 @@ table Member {
 
 table PGInfoEntry {
     pg_id : uint32;                     // only low 16 bit is used for pg_id;
+    priority : int32;                   // pg priority;
     replica_set_uuid : [ubyte];         // uuid of replica set
     members : [Member];                 // peers;
 }
 
 table ShardInfoEntry {
+    state : ubyte;                      // shard state;
     pg_id : uint32;                     // pg id which this shard belongs to;
     shard_id : uint64;                  // shard id to be created with;
     shard_size : uint64;                // shard size;
+    created_time : uint64;              // shard creation time
+    last_modified_time : uint64;        // shard last modify time
 }
 
 table ResyncPGShardInfo {
