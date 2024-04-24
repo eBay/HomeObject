@@ -170,7 +170,7 @@ void HSHomeObject::init_homestore() {
                 {HS_SERVICE::REPLICATION,
                  hs_format_params{.dev_type = HSDevType::Data,
                                   .size_pct = 99.0,
-                                  .num_chunks = 60000,
+                                  .num_chunks = 32768,
                                   .block_size = _data_block_size,
                                   .alloc_type = blk_allocator_type_t::append,
                                   .chunk_sel_type = chunk_selector_type_t::CUSTOM}},
