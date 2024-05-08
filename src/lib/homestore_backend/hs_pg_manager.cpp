@@ -95,7 +95,7 @@ void HSHomeObject::on_create_pg_message_commit(int64_t lsn, sisl::blob const& he
                                                shared< homestore::ReplDev > repl_dev,
                                                cintrusive< homestore::repl_req_ctx >& hs_ctx) {
     repl_result_ctx< PGManager::NullResult >* ctx{nullptr};
-    if (hs_ctx && hs_ctx->is_proposer) {
+    if (hs_ctx && hs_ctx->is_proposer()) {
         ctx = boost::static_pointer_cast< repl_result_ctx< PGManager::NullResult > >(hs_ctx).get();
     }
 

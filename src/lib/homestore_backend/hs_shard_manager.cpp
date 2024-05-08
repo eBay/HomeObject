@@ -199,7 +199,7 @@ ShardManager::AsyncResult< ShardInfo > HSHomeObject::_seal_shard(ShardInfo const
 bool HSHomeObject::on_shard_message_pre_commit(int64_t lsn, sisl::blob const& header, sisl::blob const& key,
                                                cintrusive< homestore::repl_req_ctx >& hs_ctx) {
     repl_result_ctx< ShardManager::Result< ShardInfo > >* ctx{nullptr};
-    if (hs_ctx && hs_ctx->is_proposer) {
+    if (hs_ctx && hs_ctx->is_proposer()) {
         ctx = boost::static_pointer_cast< repl_result_ctx< ShardManager::Result< ShardInfo > > >(hs_ctx).get();
     }
     const ReplicationMessageHeader* msg_header = r_cast< const ReplicationMessageHeader* >(header.cbytes());
@@ -238,7 +238,7 @@ bool HSHomeObject::on_shard_message_pre_commit(int64_t lsn, sisl::blob const& he
 void HSHomeObject::on_shard_message_rollback(int64_t lsn, sisl::blob const& header, sisl::blob const& key,
                                              cintrusive< homestore::repl_req_ctx >& hs_ctx) {
     repl_result_ctx< ShardManager::Result< ShardInfo > >* ctx{nullptr};
-    if (hs_ctx && hs_ctx->is_proposer) {
+    if (hs_ctx && hs_ctx->is_proposer()) {
         ctx = boost::static_pointer_cast< repl_result_ctx< ShardManager::Result< ShardInfo > > >(hs_ctx).get();
     }
     const ReplicationMessageHeader* msg_header = r_cast< const ReplicationMessageHeader* >(header.cbytes());
@@ -277,7 +277,7 @@ void HSHomeObject::on_shard_message_commit(int64_t lsn, sisl::blob const& h, hom
                                            shared< homestore::ReplDev > repl_dev,
                                            cintrusive< homestore::repl_req_ctx >& hs_ctx) {
     repl_result_ctx< ShardManager::Result< ShardInfo > >* ctx{nullptr};
-    if (hs_ctx && hs_ctx->is_proposer) {
+    if (hs_ctx && hs_ctx->is_proposer()) {
         ctx = boost::static_pointer_cast< repl_result_ctx< ShardManager::Result< ShardInfo > > >(hs_ctx).get();
     }
 

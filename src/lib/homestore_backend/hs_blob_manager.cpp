@@ -171,7 +171,7 @@ void HSHomeObject::on_blob_put_commit(int64_t lsn, sisl::blob const& header, sis
                                       homestore::MultiBlkId const& pbas,
                                       cintrusive< homestore::repl_req_ctx >& hs_ctx) {
     repl_result_ctx< BlobManager::Result< BlobInfo > >* ctx{nullptr};
-    if (hs_ctx && hs_ctx->is_proposer) {
+    if (hs_ctx && hs_ctx->is_proposer()) {
         ctx = boost::static_pointer_cast< repl_result_ctx< BlobManager::Result< BlobInfo > > >(hs_ctx).get();
     }
 
@@ -314,7 +314,7 @@ BlobManager::AsyncResult< Blob > HSHomeObject::_get_blob(ShardInfo const& shard,
 homestore::ReplResult< homestore::blk_alloc_hints >
 HSHomeObject::blob_put_get_blk_alloc_hints(sisl::blob const& header, cintrusive< homestore::repl_req_ctx >& hs_ctx) {
     repl_result_ctx< BlobManager::Result< BlobInfo > >* ctx{nullptr};
-    if (hs_ctx && hs_ctx->is_proposer) {
+    if (hs_ctx && hs_ctx->is_proposer()) {
         ctx = boost::static_pointer_cast< repl_result_ctx< BlobManager::Result< BlobInfo > > >(hs_ctx).get();
     }
 
@@ -378,7 +378,7 @@ BlobManager::NullAsyncResult HSHomeObject::_del_blob(ShardInfo const& shard, blo
 void HSHomeObject::on_blob_del_commit(int64_t lsn, sisl::blob const& header, sisl::blob const& key,
                                       cintrusive< homestore::repl_req_ctx >& hs_ctx) {
     repl_result_ctx< BlobManager::Result< BlobInfo > >* ctx{nullptr};
-    if (hs_ctx && hs_ctx->is_proposer) {
+    if (hs_ctx && hs_ctx->is_proposer()) {
         ctx = boost::static_pointer_cast< repl_result_ctx< BlobManager::Result< BlobInfo > > >(hs_ctx).get();
     }
 
