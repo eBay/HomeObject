@@ -41,6 +41,7 @@ folly::Future< bool > HSHomeObject::MyCPCallbacks::cp_flush(CP* cp) {
             hs_pg->pg_sb_->blob_sequence_num = hs_pg->durable_entities().blob_sequence_num.load();
             hs_pg->pg_sb_->active_blob_count = hs_pg->durable_entities().active_blob_count.load();
             hs_pg->pg_sb_->tombstone_blob_count = hs_pg->durable_entities().tombstone_blob_count.load();
+            hs_pg->pg_sb_->total_occupied_blk_count = hs_pg->durable_entities().total_occupied_blk_count.load();
             dirty_pg_list.push_back(hs_pg);
         }
     }

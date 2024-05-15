@@ -74,9 +74,9 @@ void ReplicationStateMachine::on_rollback(int64_t lsn, sisl::blob const& header,
 void ReplicationStateMachine::on_error(ReplServiceError error, const sisl::blob& header, const sisl::blob& key,
                                        cintrusive< repl_req_ctx >& ctx) {
     RELEASE_ASSERT(ctx, "ctx should not be nullptr in on_error");
-    RELEASE_ASSERT(ctx->is_proposer, "on_error should only be called from proposer");
+    RELEASE_ASSERT(ctx->is_proposer(), "on_error should only be called from proposer");
     const ReplicationMessageHeader* msg_header = r_cast< const ReplicationMessageHeader* >(header.cbytes());
-    LOGE("on_error, message type {} with lsn {}, error {}", msg_header->msg_type, ctx->lsn, error);
+    LOGE("on_error, message type {} with lsn {}, error {}", msg_header->msg_type, ctx->lsn(), error);
     switch (msg_header->msg_type) {
     case ReplicationMessageType::CREATE_PG_MSG: {
         auto result_ctx = boost::static_pointer_cast< repl_result_ctx< PGManager::NullResult > >(ctx).get();
@@ -103,7 +103,7 @@ void ReplicationStateMachine::on_error(ReplServiceError error, const sisl::blob&
         break;
     }
     default: {
-        LOGE("Unknown message type, error unhandled , error :{}, lsn {}", error, ctx->lsn);
+        LOGE("Unknown message type, error unhandled , error :{}, lsn {}", error, ctx->lsn());
         break;
     }
     }
@@ -146,6 +146,15 @@ ReplicationStateMachine::get_blk_alloc_hints(sisl::blob const& header, uint32_t 
     return homestore::blk_alloc_hints();
 }
 
-void ReplicationStateMachine::on_replica_stop() {}
+void ReplicationStateMachine::on_destroy() {
+    // TODO:: add the logic to handle destroy
+    LOGI("replica destroyed");
+}
+
+homestore::AsyncReplResult<> ReplicationStateMachine::create_snapshot(homestore::repl_snapshot& s) {
+    // TODO::add create snapshot logic
+    LOGI("create snapshot, last_log_idx_: {} , last_log_term_: {}", s.last_log_idx_, s.last_log_term_);
+    return folly::makeSemiFuture< homestore::ReplResult< folly::Unit > >(folly::Unit{});
+}
 
 } // namespace homeobject

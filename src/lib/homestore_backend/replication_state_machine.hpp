@@ -163,8 +163,11 @@ public:
     homestore::ReplResult< homestore::blk_alloc_hints > get_blk_alloc_hints(sisl::blob const& header,
                                                                             uint32_t data_size) override;
 
-    /// @brief Called when the replica set is being stopped
-    void on_replica_stop() override;
+    /// @brief Called when the replica is being destroyed by nuraft;
+    void on_destroy() override;
+
+    /// @brief Called when the snapshot is being created by nuraft;
+    homestore::AsyncReplResult<> create_snapshot(homestore::repl_snapshot& s) override;
 
 private:
     HSHomeObject* home_object_{nullptr};

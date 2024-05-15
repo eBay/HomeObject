@@ -78,9 +78,10 @@ public:
         peer_id_t replica_set_uuid;
         homestore::uuid_t index_table_uuid;
         blob_id_t blob_sequence_num;
-        uint64_t active_blob_count;    // Total number of active blobs
-        uint64_t tombstone_blob_count; // Total number of tombstones
-        pg_members members[1];         // ISO C++ forbids zero-size array
+        uint64_t active_blob_count;        // Total number of active blobs
+        uint64_t tombstone_blob_count;     // Total number of tombstones
+        uint64_t total_occupied_blk_count; // Total number of occupied blocks
+        pg_members members[1];             // ISO C++ forbids zero-size array
 
         uint32_t size() const { return sizeof(pg_info_superblk) + ((num_members - 1) * sizeof(pg_members)); }
         static std::string name() { return _pg_meta_name; }
@@ -141,18 +142,16 @@ public:
     struct HS_PG : public PG {
         struct PGMetrics : public sisl::MetricsGroup {
         public:
-            PGMetrics(HS_PG const& pg) :
-                    sisl::MetricsGroup{"PG", std::to_string(pg.pg_info_.id)}, pg_(pg) {
+            PGMetrics(HS_PG const& pg) : sisl::MetricsGroup{"PG", std::to_string(pg.pg_info_.id)}, pg_(pg) {
                 // We use replica_set_uuid instead of pg_id for metrics to make it globally unique to allow aggregating
                 // across multiple nodes
                 REGISTER_GAUGE(shard_count, "Number of shards");
                 REGISTER_GAUGE(open_shard_count, "Number of open shards");
                 REGISTER_GAUGE(active_blob_count, "Number of valid blobs present");
                 REGISTER_GAUGE(tombstone_blob_count, "Number of tombstone blobs which can be garbage collected");
+                REGISTER_GAUGE(total_occupied_space,
+                               "Total Size occupied (including padding, user_key, blob) rounded to block size");
                 REGISTER_COUNTER(total_user_key_size, "Total user key size provided",
-                                 sisl::_publish_as::publish_as_gauge);
-                REGISTER_COUNTER(total_occupied_space,
-                                 "Total Size occupied (including padding, user_key, blob) rounded to block size",
                                  sisl::_publish_as::publish_as_gauge);
 
                 REGISTER_HISTOGRAM(blobs_per_shard,
@@ -161,6 +160,7 @@ public:
 
                 register_me_to_farm();
                 attach_gather_cb(std::bind(&PGMetrics::on_gather, this));
+                blk_size = pg_.repl_dev_->get_blk_size();
             }
             ~PGMetrics() { deregister_me_from_farm(); }
             PGMetrics(const PGMetrics&) = delete;
@@ -175,10 +175,14 @@ public:
                              pg_.durable_entities().active_blob_count.load(std::memory_order_relaxed));
                 GAUGE_UPDATE(*this, tombstone_blob_count,
                              pg_.durable_entities().tombstone_blob_count.load(std::memory_order_relaxed));
+                GAUGE_UPDATE(*this, total_occupied_space,
+                             pg_.durable_entities().total_occupied_blk_count.load(std::memory_order_relaxed) *
+                                 blk_size);
             }
 
         private:
             HS_PG const& pg_;
+            uint32_t blk_size;
         };
 
     public:
