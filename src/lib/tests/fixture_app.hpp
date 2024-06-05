@@ -24,7 +24,7 @@ class FixtureApp : public homeobject::HomeObjectApplication {
     bool is_hybrid_{false};
 
 public:
-    FixtureApp(bool is_hybrid=false);
+    FixtureApp(bool is_hybrid = false);
     ~FixtureApp() = default;
 
     bool spdk_mode() const override { return false; }
