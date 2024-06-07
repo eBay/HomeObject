@@ -157,6 +157,34 @@ public:
         }
     }
 
+    void verify_hs_pg(HSHomeObject::HS_PG* lhs_pg, HSHomeObject::HS_PG* rhs_pg) {
+        // verify index table
+        EXPECT_EQ(lhs_pg->index_table_->uuid(), rhs_pg->index_table_->uuid());
+        EXPECT_EQ(lhs_pg->index_table_->used_size(), rhs_pg->index_table_->used_size());
+
+        // verify repl_dev
+        EXPECT_EQ(lhs_pg->repl_dev_->group_id(), rhs_pg->repl_dev_->group_id());
+
+        // verify pg_info_superblk
+        auto lhs = lhs_pg->pg_sb_.get();
+        auto rhs = rhs_pg->pg_sb_.get();
+
+        EXPECT_EQ(lhs->id, rhs->id);
+        EXPECT_EQ(lhs->num_members, rhs->num_members);
+        EXPECT_EQ(lhs->replica_set_uuid, rhs->replica_set_uuid);
+        EXPECT_EQ(lhs->index_table_uuid, rhs->index_table_uuid);
+        EXPECT_EQ(lhs->blob_sequence_num, rhs->blob_sequence_num);
+        EXPECT_EQ(lhs->active_blob_count, rhs->active_blob_count);
+        EXPECT_EQ(lhs->tombstone_blob_count, rhs->tombstone_blob_count);
+        EXPECT_EQ(lhs->total_occupied_blk_count, rhs->total_occupied_blk_count);
+        EXPECT_EQ(lhs->tombstone_blob_count, rhs->tombstone_blob_count);
+        for (uint32_t i = 0; i < lhs->num_members; i++) {
+            EXPECT_EQ(lhs->members[i].id, rhs->members[i].id);
+            EXPECT_EQ(lhs->members[i].priority, rhs->members[i].priority);
+            EXPECT_EQ(0, std::strcmp(lhs->members[i].name, rhs->members[i].name));
+        }
+    }
+
     void restart() {
         LOGINFO("Restarting homeobject.");
         _obj_inst.reset();
