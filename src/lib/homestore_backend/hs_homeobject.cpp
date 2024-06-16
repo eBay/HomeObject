@@ -26,12 +26,14 @@ struct svc_info_superblk_t {
     peer_id_t svc_id_;
 };
 
-extern std::shared_ptr< HomeObject > init_homeobject(std::weak_ptr< HomeObjectApplication >&& application) {
+extern std::shared_ptr< HomeObject > init_homeobject(std::weak_ptr< HomeObjectApplication >&& application,
+                                                     uint32_t gc_defrag_refresh_interval_second) {
     LOGI("Initializing HomeObject");
     auto instance = std::make_shared< HSHomeObject >(std::move(application));
     instance->init_homestore();
     // instance->init_timer_thread();
     instance->init_cp();
+    instance->start_gc_manager(gc_defrag_refresh_interval_second);
     return instance;
 }
 
@@ -179,7 +181,8 @@ void HSHomeObject::init_homestore() {
             auto run_on_type = has_fast_dev ? homestore::HSDevType::Fast : homestore::HSDevType::Data;
             LOGD("Running with Single mode, all service on {}", run_on_type);
             HomeStore::instance()->format_and_start({
-	        // FIXME:  this is to work around the issue in HS that varsize allocator doesnt work with small chunk size.
+                // FIXME:  this is to work around the issue in HS that varsize allocator doesnt work with small chunk
+                // size.
                 {HS_SERVICE::META, hs_format_params{.dev_type = run_on_type, .size_pct = 5.0, .num_chunks = 1}},
                 {HS_SERVICE::LOG, hs_format_params{.dev_type = run_on_type, .size_pct = 10.0, .chunk_size = 32 * Mi}},
                 {HS_SERVICE::INDEX, hs_format_params{.dev_type = run_on_type, .size_pct = 5.0, .num_chunks = 1}},
@@ -258,6 +261,10 @@ void HSHomeObject::init_cp() {
                                                       std::move(std::make_unique< MyCPCallbacks >(*this)));
 }
 
+void HSHomeObject::start_gc_manager(uint32_t gc_defrag_refresh_interval_second) {
+    gc_manager_->start(gc_defrag_refresh_interval_second);
+}
+
 // void HSHomeObject::trigger_timed_events() { persist_pg_sb(); }
 
 void HSHomeObject::register_homestore_metablk_callback() {
@@ -282,6 +289,7 @@ HSHomeObject::~HSHomeObject() {
     }
     trigger_timed_events();
 #endif
+    gc_manager_->stop();
     homestore::HomeStore::instance()->shutdown();
     homestore::HomeStore::reset_instance();
     iomanager.stop();

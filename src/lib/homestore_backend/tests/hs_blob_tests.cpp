@@ -2,7 +2,7 @@
 
 TEST(HomeObject, BasicEquivalence) {
     auto app = std::make_shared< FixtureApp >();
-    auto obj_inst = homeobject::init_homeobject(std::weak_ptr< homeobject::HomeObjectApplication >(app));
+    auto obj_inst = homeobject::init_homeobject(std::weak_ptr< homeobject::HomeObjectApplication >(app), 1ul);
     ASSERT_TRUE(!!obj_inst);
     auto shard_mgr = obj_inst->shard_manager();
     auto pg_mgr = obj_inst->pg_manager();

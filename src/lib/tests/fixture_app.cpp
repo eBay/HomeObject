@@ -35,7 +35,7 @@ homeobject::peer_id_t FixtureApp::discover_svcid(std::optional< homeobject::peer
 
 void TestFixture::SetUp() {
     app = std::make_shared< FixtureApp >();
-    homeobj_ = homeobject::init_homeobject(std::weak_ptr< homeobject::HomeObjectApplication >(app));
+    homeobj_ = homeobject::init_homeobject(std::weak_ptr< homeobject::HomeObjectApplication >(app), 1ul);
     _peer1 = homeobj_->our_uuid();
     _peer2 = boost::uuids::random_generator()();
 

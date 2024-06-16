@@ -32,7 +32,7 @@ TEST_F(HomeObjectFixture, HSHomeObjectCPTestBasic) {
     _obj_inst.reset();
 
     // Step-4: re-create the homeobject and pg infos and shard infos will be recover automatically.
-    _obj_inst = homeobject::init_homeobject(std::weak_ptr< homeobject::HomeObjectApplication >(app));
+    _obj_inst = homeobject::init_homeobject(std::weak_ptr< homeobject::HomeObjectApplication >(app), 1ul);
 
     ho = dynamic_cast< homeobject::HSHomeObject* >(_obj_inst.get());
 

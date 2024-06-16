@@ -73,7 +73,8 @@ public:
     virtual HomeObjectStats get_stats() const = 0;
 };
 
-extern std::shared_ptr< HomeObject > init_homeobject(std::weak_ptr< HomeObjectApplication >&& application);
+extern std::shared_ptr< HomeObject > init_homeobject(std::weak_ptr< HomeObjectApplication >&& application,
+                                                     uint32_t gc_defrag_refresh_interval_second = 60ul);
 
 } // namespace homeobject
   //

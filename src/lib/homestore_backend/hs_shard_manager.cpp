@@ -387,7 +387,9 @@ void HSHomeObject::on_shard_meta_blk_recover_completed(bool success) {
             }
         }
     }
+
     chunk_selector_->build_per_dev_chunk_heap(excluding_chunks);
+    gc_manager_ = std::make_shared< GCManager >(chunk_selector_);
 }
 
 void HSHomeObject::add_new_shard_to_map(ShardPtr&& shard) {

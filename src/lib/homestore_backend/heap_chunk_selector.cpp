@@ -1,4 +1,4 @@
-#include "heap_chunk_selector.h"
+#include "gc_manager.hpp"
 
 #include <execution>
 #include <algorithm>
@@ -17,7 +17,11 @@ namespace homeobject {
 // 2 the key collection of m_chunks will never change
 
 // this should only be called when initializing HeapChunkSelector in Homestore
-void HeapChunkSelector::add_chunk(csharedChunk& chunk) { m_chunks.emplace(VChunk(chunk).get_chunk_id(), chunk); }
+void HeapChunkSelector::add_chunk(csharedChunk& chunk) {
+    VChunk vchunk(chunk);
+    m_chunks.emplace(vchunk.get_chunk_id(), chunk);
+    m_pdev_chunks[vchunk.get_pdev_id()].emplace_back(chunk);
+}
 
 void HeapChunkSelector::add_chunk_internal(const chunk_num_t chunkID, bool add_to_heap) {
     if (m_chunks.find(chunkID) == m_chunks.end()) {
@@ -42,10 +46,7 @@ void HeapChunkSelector::add_chunk_internal(const chunk_num_t chunkID, bool add_t
 
         auto& heapLock = it->second->mtx;
         auto& heap = it->second->m_heap;
-        {
-            std::lock_guard< std::mutex > l(m_defrag_mtx);
-            m_defrag_heap.emplace(chunk);
-        }
+
         std::lock_guard< std::mutex > l(heapLock);
         heap.emplace(chunk);
     }
@@ -97,7 +98,6 @@ csharedChunk HeapChunkSelector::select_chunk(homestore::blk_count_t count, const
     if (vchunk.get_internal_chunk()) {
         auto& avalableBlkCounter = it->second->available_blk_count;
         avalableBlkCounter.fetch_sub(vchunk.available_blks());
-        remove_chunk_from_defrag_heap(vchunk.get_chunk_id());
     } else {
         LOGWARNMOD(homeobject, "No pdev found for pdev {}", pdevID);
     }
@@ -142,42 +142,9 @@ csharedChunk HeapChunkSelector::select_specific_chunk(const chunk_num_t chunkID)
     if (vchunk.get_internal_chunk()) {
         auto& avalableBlkCounter = it->second->available_blk_count;
         avalableBlkCounter.fetch_sub(vchunk.available_blks());
-        remove_chunk_from_defrag_heap(vchunk.get_chunk_id());
     }
 
     return vchunk.get_internal_chunk();
-}
-
-// most_defrag_chunk will only be called when GC is triggered, and will return the chunk with the most
-// defrag blocks
-csharedChunk HeapChunkSelector::most_defrag_chunk() {
-    chunk_num_t chunkID{0};
-    // the chunk might be seleted for creating shard. if this happens, we need to select another chunk
-    for (;;) {
-        {
-            std::lock_guard< std::mutex > lg(m_defrag_mtx);
-            if (m_defrag_heap.empty()) break;
-            chunkID = m_defrag_heap.top().get_chunk_id();
-        }
-        auto chunk = select_specific_chunk(chunkID);
-        if (chunk) return chunk;
-    }
-    return nullptr;
-}
-
-void HeapChunkSelector::remove_chunk_from_defrag_heap(const chunk_num_t chunkID) {
-    std::vector< VChunk > chunks;
-    std::lock_guard< std::mutex > lg(m_defrag_mtx);
-    chunks.reserve(m_defrag_heap.size());
-    while (!m_defrag_heap.empty()) {
-        auto c = m_defrag_heap.top();
-        m_defrag_heap.pop();
-        if (c.get_chunk_id() == chunkID) break;
-        chunks.emplace_back(std::move(c));
-    }
-    for (auto& c : chunks) {
-        m_defrag_heap.emplace(c);
-    }
 }
 
 void HeapChunkSelector::foreach_chunks(std::function< void(csharedChunk&) >&& cb) {
@@ -265,5 +232,14 @@ uint64_t HeapChunkSelector::total_blks(uint32_t dev_id) const {
 
     return it->second->m_total_blks;
 }
+
+std::set< uint32_t > HeapChunkSelector::get_all_pdev_ids() const {
+    std::set< uint32_t > pdev_ids;
+    for (const auto& [pdev_id, _] : m_pdev_chunks)
+        pdev_ids.insert(pdev_id);
+    return pdev_ids;
+}
+
+const std::vector< VChunk >& HeapChunkSelector::get_all_chunks(uint32_t pdev_id) { return m_pdev_chunks[pdev_id]; };
 
 } // namespace homeobject
