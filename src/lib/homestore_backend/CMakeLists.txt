@@ -15,6 +15,7 @@ target_sources("${PROJECT_NAME}_homestore" PRIVATE
     replication_state_machine.cpp
     hs_cp_callbacks.cpp
     hs_http_manager.cpp
+    gc_manager.cpp
     $<TARGET_OBJECTS:${PROJECT_NAME}_core>
 )
 target_link_libraries("${PROJECT_NAME}_homestore" PUBLIC

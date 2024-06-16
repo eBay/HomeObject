@@ -7,6 +7,7 @@ list(APPEND TEST_SOURCES
     hs_blob_tests.cpp
     hs_pg_tests.cpp
     homeobj_cp_tests.cpp
+    gc_manager_tests.cpp
     )
 
 add_library(homestore_tests OBJECT)
@@ -17,6 +18,6 @@ target_link_libraries(homestore_tests
         )
 
 add_executable (test_heap_chunk_selector)
-target_sources(test_heap_chunk_selector PRIVATE test_heap_chunk_selector.cpp ../heap_chunk_selector.cpp)
+target_sources(test_heap_chunk_selector PRIVATE test_heap_chunk_selector.cpp ../heap_chunk_selector.cpp ../gc_manager.cpp)
 target_link_libraries(test_heap_chunk_selector homestore::homestore ${COMMON_TEST_DEPS})
 add_test(NAME HeapChunkSelectorTest COMMAND ${CMAKE_BINARY_DIR}/bin/test_heap_chunk_selector)

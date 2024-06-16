@@ -152,7 +152,7 @@ TEST_F(ShardManagerTestingRecovery, ShardManagerRecovery) {
     homeobject::peer_id_t _peer1;
     homeobject::peer_id_t _peer2;
     std::shared_ptr< homeobject::HomeObject > _home_object;
-    _home_object = homeobject::init_homeobject(std::weak_ptr< homeobject::HomeObjectApplication >(app));
+    _home_object = homeobject::init_homeobject(std::weak_ptr< homeobject::HomeObjectApplication >(app), 1ul);
     _peer1 = _home_object->our_uuid();
     _peer2 = boost::uuids::random_generator()();
 
@@ -174,7 +174,7 @@ TEST_F(ShardManagerTestingRecovery, ShardManagerRecovery) {
     // restart homeobject and check if pg/shard info will be recovered.
     _home_object.reset();
     LOGI("restart home_object");
-    _home_object = homeobject::init_homeobject(std::weak_ptr< homeobject::HomeObjectApplication >(app));
+    _home_object = homeobject::init_homeobject(std::weak_ptr< homeobject::HomeObjectApplication >(app), 1ul);
     std::this_thread::sleep_for(std::chrono::seconds{5});
     homeobject::HSHomeObject* ho = dynamic_cast< homeobject::HSHomeObject* >(_home_object.get());
     // check PG after recovery.
@@ -202,7 +202,7 @@ TEST_F(ShardManagerTestingRecovery, ShardManagerRecovery) {
     _home_object.reset();
     LOGI("restart home_object again");
     // re-create the homeobject and pg infos and shard infos will be recover automatically.
-    _home_object = homeobject::init_homeobject(std::weak_ptr< homeobject::HomeObjectApplication >(app));
+    _home_object = homeobject::init_homeobject(std::weak_ptr< homeobject::HomeObjectApplication >(app), 1ul);
     std::this_thread::sleep_for(std::chrono::seconds{5});
     auto s = _home_object->shard_manager()->get_shard(shard_id).get();
     ASSERT_TRUE(!!s);
@@ -227,7 +227,7 @@ TEST_F(ShardManagerTestingRecovery, SealedShardRecovery) {
     homeobject::peer_id_t _peer1;
     homeobject::peer_id_t _peer2;
     std::shared_ptr< homeobject::HomeObject > _home_object;
-    _home_object = homeobject::init_homeobject(std::weak_ptr< homeobject::HomeObjectApplication >(app));
+    _home_object = homeobject::init_homeobject(std::weak_ptr< homeobject::HomeObjectApplication >(app), 1ul);
     _peer1 = _home_object->our_uuid();
     _peer2 = boost::uuids::random_generator()();
 
@@ -257,7 +257,7 @@ TEST_F(ShardManagerTestingRecovery, SealedShardRecovery) {
 
     LOGI("restart home_object");
     // re-create the homeobject and pg infos and shard infos will be recover automatically.
-    _home_object = homeobject::init_homeobject(std::weak_ptr< homeobject::HomeObjectApplication >(app));
+    _home_object = homeobject::init_homeobject(std::weak_ptr< homeobject::HomeObjectApplication >(app), 1ul);
     std::this_thread::sleep_for(std::chrono::seconds{5});
     ho = dynamic_cast< homeobject::HSHomeObject* >(_home_object.get());
     EXPECT_TRUE(ho->_pg_map.size() == 1);

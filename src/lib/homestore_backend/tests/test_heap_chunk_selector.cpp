@@ -144,19 +144,6 @@ TEST_F(HeapChunkSelectorTest, test_select_specific_chunk) {
     ASSERT_EQ(chunk_id, chunk->get_chunk_id());
 }
 
-TEST_F(HeapChunkSelectorTest, test_most_defrag_chunk) {
-    for (uint32_t i = 1; i < 6; i++) {
-        auto chunk = HCS.most_defrag_chunk();
-        // should always select the chunk with the most defrag blocks
-        ASSERT_EQ(chunk->get_chunk_id(), i);
-    }
-
-    // after release a chunk with the most defrag blocks, most_defrag_chunk should select this chunk.
-    HCS.release_chunk(1);
-    auto chunk = HCS.most_defrag_chunk();
-    ASSERT_EQ(chunk->get_chunk_id(), 1);
-}
-
 TEST_F(HeapChunkSelectorTest, test_release_chunk) {
     homestore::blk_count_t count = 1;
     homestore::blk_alloc_hints hints;

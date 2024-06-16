@@ -11,6 +11,7 @@
 #include "heap_chunk_selector.h"
 #include "lib/homeobject_impl.hpp"
 #include "replication_message.hpp"
+#include "gc_manager.hpp"
 
 namespace homestore {
 struct meta_blk;
@@ -276,6 +277,7 @@ public:
 
 private:
     shared< HeapChunkSelector > chunk_selector_;
+    shared< GCManager > gc_manager_;
     unique< HttpManager > http_mgr_;
     bool recovery_done_{false};
 
@@ -334,6 +336,12 @@ public:
      *
      */
     void init_cp();
+
+    /**
+     * @brief start gc_manager for the homeobject.
+     *
+     */
+    void start_gc_manager(uint32_t);
 
     /**
      * @brief Callback function invoked when createPG message is committed on a shard.

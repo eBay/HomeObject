@@ -3,7 +3,8 @@
 namespace homeobject {
 
 /// NOTE: We give ourselves the option to provide a different HR instance here than libhomeobject.a
-extern std::shared_ptr< HomeObject > init_homeobject(std::weak_ptr< HomeObjectApplication >&& application) {
+extern std::shared_ptr< HomeObject > init_homeobject(std::weak_ptr< HomeObjectApplication >&& application,
+                                                     uint32_t gc_defrag_refresh_interval_second) {
     return std::make_shared< MemoryHomeObject >(std::move(application));
 }
 

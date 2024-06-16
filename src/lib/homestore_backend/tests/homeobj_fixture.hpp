@@ -33,7 +33,7 @@ public:
 
     void SetUp() override {
         app = std::make_shared< FixtureApp >(true /* is_hybrid */);
-        _obj_inst = homeobject::init_homeobject(std::weak_ptr< homeobject::HomeObjectApplication >(app));
+        _obj_inst = homeobject::init_homeobject(std::weak_ptr< homeobject::HomeObjectApplication >(app), 1ul);
     }
 
     void TearDown() override { app->clean(); }
@@ -188,7 +188,7 @@ public:
     void restart() {
         LOGINFO("Restarting homeobject.");
         _obj_inst.reset();
-        _obj_inst = homeobject::init_homeobject(std::weak_ptr< homeobject::HomeObjectApplication >(app));
+        _obj_inst = homeobject::init_homeobject(std::weak_ptr< homeobject::HomeObjectApplication >(app), 1ul);
         std::this_thread::sleep_for(std::chrono::seconds{1});
     }
 };
