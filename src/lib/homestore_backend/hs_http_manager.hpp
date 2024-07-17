@@ -24,15 +24,8 @@ public:
     HttpManager(HSHomeObject& ho);
 
 private:
-    void get_version(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response);
-    void get_metrics(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response);
-    void get_prometheus_metrics(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response);
     void get_obj_life(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response);
-    void set_log_level(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response);
-    void get_log_level(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response);
     void get_malloc_stats(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response);
-    void get_config(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response);
-    void reload_dynamic_config(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response);
 
 #ifdef _PRERELEASE
     void crash_system(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response);
