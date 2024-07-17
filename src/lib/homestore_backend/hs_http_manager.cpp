@@ -26,18 +26,31 @@ HttpManager::HttpManager(HSHomeObject& ho) : ho_(ho) {
     using namespace Pistache;
     using namespace Pistache::Rest;
 
-    LOGINFO("Starting HomeObject HTTP Manager");
-    auto http_server = ioenvironment.get_http_server();
-    try {
-        http_server->setup_route(Http::Method::Get, "/api/v1/getObjLife",
-                                 Routes::bind(&HttpManager::get_obj_life, this));
-        http_server->setup_route(Http::Method::Get, "/api/v1/mallocStats",
-                                 Routes::bind(&HttpManager::get_malloc_stats, this));
+    LOGINFO("Setting up HomeObject HTTP routes");
+    struct http_route {
+        Pistache::Http::Method method;
+        std::string resource;
+        Pistache::Rest::Route::Handler handler;
+        iomgr::url_type type{iomgr::url_type::regular};
+    };
+
+    std::vector< http_route > routes = {
+        {Pistache::Http::Method::Get, "/api/v1/getObjLife",
+         Pistache::Rest::Routes::bind(&HttpManager::get_obj_life, this)},
+        {Pistache::Http::Method::Get, "/api/v1/mallocStats",
+         Pistache::Rest::Routes::bind(&HttpManager::get_malloc_stats, this)},
 #ifdef _PRERELEASE
-        http_server->setup_route(Http::Method::Post, "/api/v1/crashSystem",
-                                 Routes::bind(&HttpManager::crash_system, this));
+        {Pistache::Http::Method::Post, "/api/v1/crashSystem",
+         Pistache::Rest::Routes::bind(&HttpManager::crash_system, this)},
 #endif
-    } catch (const std::runtime_error& e) { LOGWARN("{}", e.what()) }
+    };
+
+    auto http_server = ioenvironment.get_http_server();
+    for (auto& route : routes) {
+        try {
+            http_server->setup_route(std::move(route.method), route.resource, std::move(route.handler), route.type);
+        } catch (std::runtime_error const& e) { LOGERROR("setup route {} failed, {}", route.resource, e.what()) }
+    }
 }
 
 void HttpManager::get_obj_life(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response) {
