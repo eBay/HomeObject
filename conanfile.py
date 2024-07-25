@@ -1,15 +1,16 @@
-from os.path import join
 from conan import ConanFile
 from conan.errors import ConanInvalidConfiguration
-from conan.tools.files import copy
 from conan.tools.build import check_min_cppstd
-from conans import CMake
+from conan.tools.cmake import CMakeToolchain, CMakeDeps, CMake, cmake_layout
+from conan.tools.files import copy
+from os.path import join
 
-required_conan_version = ">=1.50.0"
+required_conan_version = ">=1.60.0"
 
 class HomeObjectConan(ConanFile):
     name = "homeobject"
-    version = "2.0.4"
+    version = "2.0.5"
+
     homepage = "https://github.com/eBay/HomeObject"
     description = "Blob Store built on HomeReplication"
     topics = ("ebay")
@@ -33,26 +34,11 @@ class HomeObjectConan(ConanFile):
                 'testing': True,
             }
 
-    generators = "cmake", "cmake_find_package"
     exports_sources = ("CMakeLists.txt", "cmake/*", "src/*", "LICENSE")
-
-    def build_requirements(self):
-        self.build_requires("gtest/1.14.0")
-
-    def requirements(self):
-        self.requires("homestore/[~6.4, include_prerelease=True]@oss/master")
-        self.requires("sisl/[~12.2, include_prerelease=True]@oss/master")
-        self.requires("lz4/1.9.4", override=True)
-
-    def validate(self):
-        if self.info.settings.os in ["Macos", "Windows"]:
-            raise ConanInvalidConfiguration("{} Builds are unsupported".format(self.info.settings.os))
-        if self.info.settings.compiler.cppstd:
-            check_min_cppstd(self, 20)
 
     def configure(self):
         if self.options.shared:
-            del self.options.fPIC
+            self.options.rm_safe("fPIC")
         if self.settings.build_type == "Debug":
             if self.options.coverage and self.options.sanitize:
                 raise ConanInvalidConfiguration("Sanitizer does not work with Code Coverage!")
@@ -60,26 +46,50 @@ class HomeObjectConan(ConanFile):
                 if self.options.coverage or self.options.sanitize:
                     raise ConanInvalidConfiguration("Coverage/Sanitizer requires Testing!")
 
-    def build(self):
-        definitions = {
-            'CMAKE_EXPORT_COMPILE_COMMANDS': 'ON',
-            'CONAN_CMAKE_SILENT_OUTPUT': 'ON',
-            'BUILD_TESTING': 'OFF',
-        }
-        if self.options.testing:
-            definitions['BUILD_TESTING'] = 'ON'
+    def build_requirements(self):
+        self.test_requires("gtest/1.14.0")
 
+    def requirements(self):
+        self.requires("homestore/[~6.4, include_prerelease=True]@oss/master", transitive_headers=True)
+        self.requires("sisl/[~12.2, include_prerelease=True]@oss/master", transitive_headers=True)
+        self.requires("lz4/1.9.4", override=True)
+
+    def validate(self):
+        if self.info.settings.compiler.cppstd:
+            check_min_cppstd(self, 20)
+
+    def layout(self):
+        cmake_layout(self)
+
+    def generate(self):
+        # This generates "conan_toolchain.cmake" in self.generators_folder
+        tc = CMakeToolchain(self)
+        if not self.conf.get("tools.build:skip_test", default=False):
+            tc.variables["BUILD_TESTING"] = "ON"
+        tc.variables["CONAN_CMAKE_SILENT_OUTPUT"] = "ON"
+        tc.variables['CMAKE_EXPORT_COMPILE_COMMANDS'] = 'ON'
+        tc.variables["CTEST_OUTPUT_ON_FAILURE"] = "ON"
+        tc.variables["MEMORY_SANITIZER_ON"] = "OFF"
+        tc.variables["CODE_COVERAGE"] = "OFF"
         if self.settings.build_type == "Debug":
-            if self.options.sanitize:
-                definitions['MEMORY_SANITIZER_ON'] = 'ON'
-            elif self.options.coverage:
-                definitions['CODE_COVERAGE'] = 'ON'
+            if self.options.get_safe("coverage"):
+                tc.variables['CODE_COVERAGE'] = 'ON'
+            elif self.options.get_safe("sanitize"):
+                tc.variables['MEMORY_SANITIZER_ON'] = 'ON'
+        tc.generate()
 
+        # This generates "boost-config.cmake" and "grpc-config.cmake" etc in self.generators_folder
+        deps = CMakeDeps(self)
+        deps.generate()
+
+    def build(self):
         cmake = CMake(self)
-        cmake.configure(defs=definitions)
+        cmake.configure()
         cmake.build()
         if self.options.testing:
-            cmake.test(output_on_failure=True)
+            cmake.test()
+        if not self.conf.get("tools.build:skip_test", default=False):
+            cmake.test()
 
     def package(self):
         lib_dir = join(self.package_folder, "lib")
@@ -97,9 +107,10 @@ class HomeObjectConan(ConanFile):
         self.cpp_info.names["cmake_find_package"] = "HomeObject"
         self.cpp_info.names["cmake_find_package_multi"] = "HomeObject"
         self.cpp_info.components["homestore"].libs = ["homeobject_homestore"]
-        self.cpp_info.components["homestore"].requires = ["homestore::homestore"]
+        self.cpp_info.components["homestore"].requires = ["homestore::homestore", "sisl::sisl"]
         self.cpp_info.components["memory"].libs = ["homeobject_memory"]
-        self.cpp_info.components["memory"].requires = ["homestore::homestore"]
+        self.cpp_info.components["memory"].requires = ["homestore::homestore", "sisl::sisl"]
+        self.cpp_info.components["homeobject"].requires = ["homestore"]
 
         if self.settings.os == "Linux":
             self.cpp_info.components["homestore"].system_libs.append("pthread")

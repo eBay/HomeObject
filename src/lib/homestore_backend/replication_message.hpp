@@ -4,7 +4,8 @@
 
 #include <sisl/utility/enum.hpp>
 #include <sisl/fds/utils.hpp>
-#include <isa-l/crc.h>
+
+#include <homestore/crc.h>
 
 namespace homeobject {
 

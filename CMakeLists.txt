@@ -3,13 +3,6 @@ project (homeobject LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 
-if(EXISTS ${CMAKE_BINARY_DIR}/conanbuildinfo.cmake)
-    include(${CMAKE_BINARY_DIR}/conanbuildinfo.cmake)
-    conan_basic_setup(TARGETS)
-else ()
-    message("The file conanbuildinfo.cmake doesn't exist, some properties will be unavailable")
-endif ()
-
 if (NOT DEFINED CMAKE_BUILD_TYPE)
     set (CMAKE_BUILD_TYPE "Debug")
 endif()
