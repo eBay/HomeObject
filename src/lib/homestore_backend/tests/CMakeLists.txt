@@ -19,4 +19,4 @@ target_link_libraries(homestore_tests
 add_executable (test_heap_chunk_selector)
 target_sources(test_heap_chunk_selector PRIVATE test_heap_chunk_selector.cpp ../heap_chunk_selector.cpp)
 target_link_libraries(test_heap_chunk_selector homestore::homestore ${COMMON_TEST_DEPS})
-add_test(NAME HeapChunkSelectorTest COMMAND ${CMAKE_BINARY_DIR}/bin/test_heap_chunk_selector)
+add_test(NAME HeapChunkSelectorTest COMMAND test_heap_chunk_selector)
