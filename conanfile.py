@@ -9,7 +9,7 @@ required_conan_version = ">=1.60.0"
 
 class HomeObjectConan(ConanFile):
     name = "homeobject"
-    version = "2.0.6"
+    version = "2.0.7"
 
     homepage = "https://github.com/eBay/HomeObject"
     description = "Blob Store built on HomeReplication"
@@ -42,7 +42,7 @@ class HomeObjectConan(ConanFile):
         if self.settings.build_type == "Debug":
             if self.options.coverage and self.options.sanitize:
                 raise ConanInvalidConfiguration("Sanitizer does not work with Code Coverage!")
-            if not self.options.testing:
+            if self.conf.get("tools.build:skip_test", default=False):
                 if self.options.coverage or self.options.sanitize:
                     raise ConanInvalidConfiguration("Coverage/Sanitizer requires Testing!")
 
@@ -50,8 +50,9 @@ class HomeObjectConan(ConanFile):
         self.test_requires("gtest/1.14.0")
 
     def requirements(self):
-        self.requires("homestore/[^6.4]@oss/master", transitive_headers=True)
         self.requires("sisl/[^12.2]@oss/master", transitive_headers=True)
+        self.requires("homestore/[^6.4]@oss/master")
+        self.requires("iomgr/[^11.3]@oss/master")
         self.requires("lz4/1.9.4", override=True)
 
     def validate(self):
@@ -64,8 +65,6 @@ class HomeObjectConan(ConanFile):
     def generate(self):
         # This generates "conan_toolchain.cmake" in self.generators_folder
         tc = CMakeToolchain(self)
-        if not self.conf.get("tools.build:skip_test", default=False):
-            tc.variables["BUILD_TESTING"] = "ON"
         tc.variables["CONAN_CMAKE_SILENT_OUTPUT"] = "ON"
         tc.variables['CMAKE_EXPORT_COMPILE_COMMANDS'] = 'ON'
         tc.variables["CTEST_OUTPUT_ON_FAILURE"] = "ON"
@@ -86,8 +85,6 @@ class HomeObjectConan(ConanFile):
         cmake = CMake(self)
         cmake.configure()
         cmake.build()
-        if self.options.testing:
-            cmake.test()
         if not self.conf.get("tools.build:skip_test", default=False):
             cmake.test()
 
@@ -107,9 +104,9 @@ class HomeObjectConan(ConanFile):
         self.cpp_info.names["cmake_find_package"] = "HomeObject"
         self.cpp_info.names["cmake_find_package_multi"] = "HomeObject"
         self.cpp_info.components["homestore"].libs = ["homeobject_homestore"]
-        self.cpp_info.components["homestore"].requires = ["homestore::homestore", "sisl::sisl"]
+        self.cpp_info.components["homestore"].requires = ["homestore::homestore", "iomgr::iomgr", "sisl::sisl"]
         self.cpp_info.components["memory"].libs = ["homeobject_memory"]
-        self.cpp_info.components["memory"].requires = ["homestore::homestore", "sisl::sisl"]
+        self.cpp_info.components["memory"].requires = ["sisl::sisl"]
         self.cpp_info.components["homeobject"].requires = ["homestore"]
 
         if self.settings.os == "Linux":

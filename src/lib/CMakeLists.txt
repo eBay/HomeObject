@@ -15,9 +15,6 @@ target_link_libraries(${PROJECT_NAME}_core
 
 include(${sisl_INCLUDE_DIRS}/../cmake/settings_gen.cmake)
 
-if(BUILD_TESTING)
-add_subdirectory(tests)
-endif()
-
 add_subdirectory(homestore_backend)
 add_subdirectory(memory_backend)
+add_subdirectory(tests)

@@ -1,5 +1,17 @@
 cmake_minimum_required (VERSION 3.11)
 
+list(APPEND COMMON_DEPS homestore::homestore)
+
+# This is a work-around for not being able to specify the link
+# order in a conan recipe. We link these explicitly and thus
+# need to specify the LINK path. They should only be needed
+# to build a DSO (test executable) however.
+link_directories(${spdk_LIB_DIRS} ${dpdk_LIB_DIRS})
+list(APPEND COMMON_TEST_DEPS
+    ${spdk_LIBRARY_LIST}
+    ${dpdk_LIBRARY_LIST}
+)
+
 if(NOT ${CMAKE_CURRENT_BINARY_DIR} STREQUAL ${CMAKE_CURRENT_SOURCE_DIR})
   include_directories(BEFORE ${CMAKE_CURRENT_BINARY_DIR})
 endif()
@@ -30,7 +42,6 @@ settings_gen_cpp(
     hs_backend_config.fbs
   )
 
-if(BUILD_TESTING)
 add_subdirectory(tests)
 
 add_executable (homestore_test)
@@ -44,4 +55,3 @@ target_link_libraries(homestore_test PUBLIC
 )
 add_test(NAME HomestoreTest COMMAND homestore_test -csv error --executor immediate)
 set_property(TEST HomestoreTest PROPERTY RUN_SERIAL 1)
-endif()
