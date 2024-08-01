@@ -205,21 +205,8 @@ void HSHomeObject::init_homestore() {
                        to_string(_our_id));
     }
 
-    // recover PG
-    HomeStore::instance()->meta_service().register_handler(
-        _pg_meta_name,
-        [this](homestore::meta_blk* mblk, sisl::byte_view buf, size_t size) {
-            on_pg_meta_blk_found(std::move(buf), voidptr_cast(mblk));
-        },
-        nullptr, true);
-    HomeStore::instance()->meta_service().read_sub_sb(_pg_meta_name);
-
-    // recover shard
-    HomeStore::instance()->meta_service().register_handler(
-        _shard_meta_name,
-        [this](homestore::meta_blk* mblk, sisl::byte_view buf, size_t size) { on_shard_meta_blk_found(mblk, buf); },
-        [this](bool success) { on_shard_meta_blk_recover_completed(success); }, true);
-    HomeStore::instance()->meta_service().read_sub_sb(_shard_meta_name);
+    // Replication service is started after PG sb is recovered
+    set_pg_repl_dev_after_recovery();
 
     recovery_done_ = true;
     LOGI("Initialize and start HomeStore is successfully");
@@ -272,6 +259,28 @@ void HSHomeObject::register_homestore_metablk_callback() {
             LOGI("Found existing SvcId: [{}]", to_string(_our_id));
         },
         nullptr, true);
+
+    // recover PG
+    HomeStore::instance()->meta_service().register_handler(
+        _pg_meta_name,
+        [this](homestore::meta_blk* mblk, sisl::byte_view buf, size_t size) {
+            on_pg_meta_blk_found(std::move(buf), voidptr_cast(mblk));
+        },
+        nullptr, true);
+
+    // recover shard
+    HomeStore::instance()->meta_service().register_handler(
+        _shard_meta_name,
+        [this](homestore::meta_blk* mblk, sisl::byte_view buf, size_t size) { on_shard_meta_blk_found(mblk, buf); },
+        [this](bool success) { on_shard_meta_blk_recover_completed(success); }, true);
+}
+
+void HSHomeObject::set_pg_repl_dev_after_recovery() {
+    std::scoped_lock lock_guard(_pg_lock);
+    for (auto const& [_, pg] : _pg_map) {
+        auto hs_pg = static_cast< HS_PG* >(pg.get());
+        hs_pg->set_repl_dev_after_recovery();
+    }
 }
 
 HSHomeObject::~HSHomeObject() {

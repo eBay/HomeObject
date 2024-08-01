@@ -32,9 +32,15 @@ HSHomeObject::recover_index_table(homestore::superblk< homestore::index_table_sb
 
     // Check if PG is already recovered.
     std::scoped_lock lock_guard(index_lock_);
-    auto it = index_table_pg_map_.find(uuid_str);
-    RELEASE_ASSERT(it == index_table_pg_map_.end(), "PG should be recovered after IndexTable");
-    index_table_pg_map_.emplace(uuid_str, PgIndexTable{0, index_table});
+    if (auto it = index_table_pg_map_.find(uuid_str); it == index_table_pg_map_.end()) {
+        index_table_pg_map_.emplace(uuid_str, PgIndexTable{0, index_table});
+    } else {
+        it->second.index_table = index_table;
+        auto lg = std::scoped_lock(_pg_lock);
+        auto iter = _pg_map.find(it->second.pg_id);
+        RELEASE_ASSERT(iter != _pg_map.end(), "PG not found");
+        static_cast< HS_PG* >(iter->second.get())->index_table_ = index_table;
+    }
 
     LOGTRACEMOD(blobmgr, "Recovered index table uuid {}", uuid_str);
     return index_table;
@@ -108,7 +114,7 @@ void HSHomeObject::print_btree_index(pg_id_t pg_id) {
     }
 
     LOGI("Index UUID {}", boost::uuids::to_string(index_table->uuid()));
-    index_table->print_tree();
+    index_table->dump_tree_to_file();
 }
 
 } // namespace homeobject

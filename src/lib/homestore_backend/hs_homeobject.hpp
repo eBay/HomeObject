@@ -160,8 +160,8 @@ public:
 
                 register_me_to_farm();
                 attach_gather_cb(std::bind(&PGMetrics::on_gather, this));
-                blk_size = pg_.repl_dev_->get_blk_size();
             }
+
             ~PGMetrics() { deregister_me_from_farm(); }
             PGMetrics(const PGMetrics&) = delete;
             PGMetrics(PGMetrics&&) noexcept = delete;
@@ -177,12 +177,11 @@ public:
                              pg_.durable_entities().tombstone_blob_count.load(std::memory_order_relaxed));
                 GAUGE_UPDATE(*this, total_occupied_space,
                              pg_.durable_entities().total_occupied_blk_count.load(std::memory_order_relaxed) *
-                                 blk_size);
+                                 pg_.repl_dev_->get_blk_size());
             }
 
         private:
             HS_PG const& pg_;
-            uint32_t blk_size;
         };
 
     public:
@@ -193,8 +192,11 @@ public:
         PGMetrics metrics_;
 
         HS_PG(PGInfo info, shared< homestore::ReplDev > rdev, shared< BlobIndexTable > index_table);
-        HS_PG(homestore::superblk< pg_info_superblk >&& sb, shared< homestore::ReplDev > rdev);
+        // during recovery, PG is created before repl dev
+        HS_PG(homestore::superblk< pg_info_superblk >&& sb);
         ~HS_PG() override = default;
+
+        void set_repl_dev_after_recovery();
 
         static PGInfo pg_info_from_sb(homestore::superblk< pg_info_superblk > const& sb);
 
@@ -305,6 +307,7 @@ private:
     void on_pg_meta_blk_found(sisl::byte_view const& buf, void* meta_cookie);
     void on_shard_meta_blk_found(homestore::meta_blk* mblk, sisl::byte_view buf);
     void on_shard_meta_blk_recover_completed(bool success);
+    void set_pg_repl_dev_after_recovery();
 
     void persist_pg_sb();
 
