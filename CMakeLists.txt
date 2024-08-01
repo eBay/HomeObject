@@ -8,25 +8,23 @@ if (NOT DEFINED CMAKE_BUILD_TYPE)
 endif()
 
 include (cmake/Flags.cmake)
-if (BUILD_TESTING)
-   enable_testing()
-   if ((DEFINED CODE_COVERAGE) AND (${CODE_COVERAGE}))
-      include (cmake/CodeCoverage.cmake)
-      APPEND_COVERAGE_COMPILER_FLAGS()
-   elseif ((DEFINED MEMORY_SANITIZER_ON) AND (${MEMORY_SANITIZER_ON}))
-      message(WARNING "********* Running with Memory Sanitizer *********")
-      add_flags("-fsanitize=address                 \
-                 -fsanitize=undefined               \
-                 -fsanitize-address-use-after-scope \
-                 -fno-sanitize=alignment            \
-                 -DCDS_ADDRESS_SANITIZER_ENABLED    \
-                 -fno-omit-frame-pointer            \
-                 -fno-optimize-sibling-calls        "
-                 )
-      set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -fsanitize=address -fsanitize=undefined")
-   endif()
-   find_package(GTest QUIET REQUIRED)
+enable_testing()
+if ((DEFINED CODE_COVERAGE) AND (${CODE_COVERAGE}))
+  include (cmake/CodeCoverage.cmake)
+  APPEND_COVERAGE_COMPILER_FLAGS()
+elseif ((DEFINED MEMORY_SANITIZER_ON) AND (${MEMORY_SANITIZER_ON}))
+  message(WARNING "********* Running with Memory Sanitizer *********")
+  add_flags("-fsanitize=address                 \
+             -fsanitize=undefined               \
+             -fsanitize-address-use-after-scope \
+             -fno-sanitize=alignment            \
+             -DCDS_ADDRESS_SANITIZER_ENABLED    \
+             -fno-omit-frame-pointer            \
+             -fno-optimize-sibling-calls        "
+             )
+  set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -fsanitize=address -fsanitize=undefined")
 endif()
+find_package(GTest QUIET REQUIRED)
 
 find_program(CCACHE_FOUND ccache QUIET)
 if (CCACHE_FOUND)

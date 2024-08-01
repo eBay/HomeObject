@@ -12,7 +12,6 @@ target_link_libraries("${PROJECT_NAME}_memory"
     ${COMMON_DEPS}
 )
 
-if(BUILD_TESTING)
 add_executable (memory_test)
 target_sources(memory_test PRIVATE
     $<TARGET_OBJECTS:test_fixture>
@@ -24,4 +23,3 @@ target_link_libraries(memory_test
 )
 add_test(NAME MemoryTestCPU COMMAND memory_test -csv error --executor cpu --num_iters 20000)
 add_test(NAME MemoryTestIO COMMAND memory_test -csv error --executor io --num_iters 20000)
-endif()
