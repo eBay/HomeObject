@@ -108,7 +108,7 @@ void HSHomeObject::print_btree_index(pg_id_t pg_id) {
     }
 
     LOGI("Index UUID {}", boost::uuids::to_string(index_table->uuid()));
-    index_table->print_tree();
+    index_table->dump_tree_to_file();
 }
 
 } // namespace homeobject
