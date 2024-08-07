@@ -198,6 +198,7 @@ void HSHomeObject::init_homestore() {
         svc_sb.create(sizeof(svc_info_superblk_t));
         svc_sb->svc_id_ = _our_id;
         svc_sb.write();
+        on_replica_restart();
     } else {
         RELEASE_ASSERT(!_our_id.is_nil(), "No SvcId read after HomeStore recovery!");
         auto const new_id = app->discover_svcid(_our_id);
@@ -205,6 +206,19 @@ void HSHomeObject::init_homestore() {
                        to_string(_our_id));
     }
 
+    recovery_done_ = true;
+    LOGI("Initialize and start HomeStore is successfully");
+
+    // Now cache the zero padding bufs to avoid allocating during IO time
+    for (size_t i{0}; i < max_zpad_bufs; ++i) {
+        size_t const size = io_align * (i + 1);
+        zpad_bufs_[i] = std::move(sisl::io_blob_safe(uint32_cast(size), io_align));
+        std::memset(zpad_bufs_[i].bytes(), 0, size);
+    }
+}
+
+void HSHomeObject::on_replica_restart() {
+    using namespace homestore;
     // recover PG
     HomeStore::instance()->meta_service().register_handler(
         _pg_meta_name,
@@ -220,16 +234,6 @@ void HSHomeObject::init_homestore() {
         [this](homestore::meta_blk* mblk, sisl::byte_view buf, size_t size) { on_shard_meta_blk_found(mblk, buf); },
         [this](bool success) { on_shard_meta_blk_recover_completed(success); }, true);
     HomeStore::instance()->meta_service().read_sub_sb(_shard_meta_name);
-
-    recovery_done_ = true;
-    LOGI("Initialize and start HomeStore is successfully");
-
-    // Now cache the zero padding bufs to avoid allocating during IO time
-    for (size_t i{0}; i < max_zpad_bufs; ++i) {
-        size_t const size = io_align * (i + 1);
-        zpad_bufs_[i] = std::move(sisl::io_blob_safe(uint32_cast(size), io_align));
-        std::memset(zpad_bufs_[i].bytes(), 0, size);
-    }
 }
 
 #if 0
