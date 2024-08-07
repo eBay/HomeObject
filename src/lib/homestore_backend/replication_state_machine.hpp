@@ -139,6 +139,11 @@ public:
     void on_rollback(int64_t lsn, const sisl::blob& header, const sisl::blob& key,
                      cintrusive< homestore::repl_req_ctx >& ctx) override;
 
+    /// @brief Called when the raft service is created after restart.
+    ///
+    /// homeobject should recover all the necessary components to serve log replay/commit requests.
+    void on_restart() override;
+
     /// @brief Called when the async_alloc_write call failed to initiate replication
     ///
     /// Called only on the node which called async_alloc_write

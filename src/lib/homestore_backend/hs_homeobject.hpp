@@ -372,6 +372,12 @@ public:
     std::optional< homestore::chunk_num_t > get_shard_chunk(shard_id_t id) const;
 
     /**
+     * @brief recover PG and shard from the superblock.
+     *
+     */
+    void on_replica_restart();
+
+    /**
      * @brief Returns any chunk number for the given pg ID.
      *
      * @param pg The pg ID to get the chunk number for.
