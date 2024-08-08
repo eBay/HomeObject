@@ -218,22 +218,26 @@ void HSHomeObject::init_homestore() {
 }
 
 void HSHomeObject::on_replica_restart() {
-    using namespace homestore;
-    // recover PG
-    HomeStore::instance()->meta_service().register_handler(
-        _pg_meta_name,
-        [this](homestore::meta_blk* mblk, sisl::byte_view buf, size_t size) {
-            on_pg_meta_blk_found(std::move(buf), voidptr_cast(mblk));
-        },
-        nullptr, true);
-    HomeStore::instance()->meta_service().read_sub_sb(_pg_meta_name);
+    static std::once_flag replica_restart_flag;
+    std::call_once(replica_restart_flag, [this]() {
+        LOGI("Register PG and shard meta blk handlers");
+        using namespace homestore;
+        // recover PG
+        HomeStore::instance()->meta_service().register_handler(
+            _pg_meta_name,
+            [this](homestore::meta_blk* mblk, sisl::byte_view buf, size_t size) {
+                on_pg_meta_blk_found(std::move(buf), voidptr_cast(mblk));
+            },
+            nullptr, true);
+        HomeStore::instance()->meta_service().read_sub_sb(_pg_meta_name);
 
-    // recover shard
-    HomeStore::instance()->meta_service().register_handler(
-        _shard_meta_name,
-        [this](homestore::meta_blk* mblk, sisl::byte_view buf, size_t size) { on_shard_meta_blk_found(mblk, buf); },
-        [this](bool success) { on_shard_meta_blk_recover_completed(success); }, true);
-    HomeStore::instance()->meta_service().read_sub_sb(_shard_meta_name);
+        // recover shard
+        HomeStore::instance()->meta_service().register_handler(
+            _shard_meta_name,
+            [this](homestore::meta_blk* mblk, sisl::byte_view buf, size_t size) { on_shard_meta_blk_found(mblk, buf); },
+            [this](bool success) { on_shard_meta_blk_recover_completed(success); }, true);
+        HomeStore::instance()->meta_service().read_sub_sb(_shard_meta_name);
+    });
 }
 
 #if 0
