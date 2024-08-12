@@ -171,8 +171,16 @@ public:
     /// @brief Called when the replica is being destroyed by nuraft;
     void on_destroy() override;
 
+    /// Not Implemented
     /// @brief Called when the snapshot is being created by nuraft;
-    homestore::AsyncReplResult<> create_snapshot(homestore::repl_snapshot& s) override;
+    homestore::AsyncReplResult<> create_snapshot(std::shared_ptr< homestore::snapshot_context > context) override;
+    virtual bool apply_snapshot(std::shared_ptr< homestore::snapshot_context > context) override;
+    virtual std::shared_ptr< homestore::snapshot_context > last_snapshot() override;
+    virtual int read_snapshot_data(std::shared_ptr< homestore::snapshot_context > context,
+                                   std::shared_ptr< homestore::snapshot_data > snp_data) override;
+    virtual void write_snapshot_data(std::shared_ptr< homestore::snapshot_context > context,
+                                     std::shared_ptr< homestore::snapshot_data > snp_data) override;
+    virtual void free_user_snp_ctx(void*& user_snp_ctx) override;
 
 private:
     HSHomeObject* home_object_{nullptr};

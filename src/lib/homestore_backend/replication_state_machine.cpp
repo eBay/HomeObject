@@ -153,10 +153,36 @@ void ReplicationStateMachine::on_destroy() {
     LOGI("replica destroyed");
 }
 
-homestore::AsyncReplResult<> ReplicationStateMachine::create_snapshot(homestore::repl_snapshot& s) {
+homestore::AsyncReplResult<>
+ReplicationStateMachine::create_snapshot(std::shared_ptr< homestore::snapshot_context > context) {
     // TODO::add create snapshot logic
-    LOGI("create snapshot, last_log_idx_: {} , last_log_term_: {}", s.last_log_idx_, s.last_log_term_);
+    auto ctx = dynamic_pointer_cast< homestore::nuraft_snapshot_context >(context);
+    auto s = ctx->nuraft_snapshot();
+    LOGI("create snapshot, last_log_idx_: {} , last_log_term_: {}", s->get_last_log_idx(), s->get_last_log_term());
     return folly::makeSemiFuture< homestore::ReplResult< folly::Unit > >(folly::Unit{});
 }
+
+bool ReplicationStateMachine::apply_snapshot(std::shared_ptr< homestore::snapshot_context > context) {
+    LOGE("apply_snapshot not implemented");
+    return false;
+}
+
+std::shared_ptr< homestore::snapshot_context > ReplicationStateMachine::last_snapshot() {
+    LOGE("last_snapshot not implemented");
+    return nullptr;
+}
+
+int ReplicationStateMachine::read_snapshot_data(std::shared_ptr< homestore::snapshot_context > context,
+                                                std::shared_ptr< homestore::snapshot_data > snp_data) {
+    LOGE("read_snapshot_data not implemented");
+    return -1;
+}
+
+void ReplicationStateMachine::write_snapshot_data(std::shared_ptr< homestore::snapshot_context > context,
+                                                  std::shared_ptr< homestore::snapshot_data > snp_data) {
+    LOGE("write_snapshot_data not implemented");
+}
+
+void ReplicationStateMachine::free_user_snp_ctx(void*& user_snp_ctx) { LOGE("free_user_snp_ctx not implemented"); }
 
 } // namespace homeobject
