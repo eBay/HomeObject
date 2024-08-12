@@ -54,6 +54,7 @@ class HomeObjectConan(ConanFile):
         self.requires("homestore/[^6.4]@oss/master")
         self.requires("iomgr/[^11.3]@oss/master")
         self.requires("lz4/1.9.4", override=True)
+        self.requires("openssl/3.3.1", override=True)
 
     def validate(self):
         if self.info.settings.compiler.cppstd:
