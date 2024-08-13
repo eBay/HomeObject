@@ -218,8 +218,7 @@ void HSHomeObject::init_homestore() {
 }
 
 void HSHomeObject::on_replica_restart() {
-    static std::once_flag replica_restart_flag;
-    std::call_once(replica_restart_flag, [this]() {
+    std::call_once(replica_restart_flag_, [this]() {
         LOGI("Register PG and shard meta blk handlers");
         using namespace homestore;
         // recover PG

@@ -14,7 +14,9 @@ SISL_OPTION_GROUP(
 
 SISL_LOGGING_INIT(HOMEOBJECT_LOG_MODS)
 
-SISL_OPTIONS_ENABLE(logging, homeobject, test_home_object)
+#define test_options logging, homeobject, config, test_home_object
+
+SISL_OPTIONS_ENABLE(test_options)
 
 FixtureApp::FixtureApp(bool is_hybrid) : is_hybrid_(is_hybrid) {
     clean();
@@ -88,7 +90,7 @@ void TestFixture::TearDown() { std::dynamic_pointer_cast< FixtureApp >(app)->cle
 int main(int argc, char* argv[]) {
     int parsed_argc = argc;
     ::testing::InitGoogleTest(&parsed_argc, argv);
-    SISL_OPTIONS_LOAD(parsed_argc, argv, logging, homeobject, test_home_object);
+    SISL_OPTIONS_LOAD(parsed_argc, argv, test_options);
     sisl::logging::SetLogger(std::string(argv[0]));
     sisl::logging::SetLogPattern("[%D %T%z] [%^%L%$] [%t] %v");
     parsed_argc = 1;

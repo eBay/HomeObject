@@ -62,6 +62,7 @@ class HSHomeObject : public HomeObjectImpl {
         std::shared_ptr< BlobIndexTable > index_table;
     };
     std::unordered_map< std::string, PgIndexTable > index_table_pg_map_;
+    std::once_flag replica_restart_flag_;
 
 public:
 #pragma pack(1)
