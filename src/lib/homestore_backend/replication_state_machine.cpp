@@ -4,8 +4,8 @@
 namespace homeobject {
 void ReplicationStateMachine::on_commit(int64_t lsn, const sisl::blob& header, const sisl::blob& key,
                                         const homestore::MultiBlkId& pbas, cintrusive< homestore::repl_req_ctx >& ctx) {
-    LOGI("applying raft log commit with lsn:{}", lsn);
     const ReplicationMessageHeader* msg_header = r_cast< const ReplicationMessageHeader* >(header.cbytes());
+    LOGD("applying raft log commit with lsn:{}, msg type: {}", lsn, msg_header->msg_type);
     switch (msg_header->msg_type) {
     case ReplicationMessageType::CREATE_PG_MSG: {
         home_object_->on_create_pg_message_commit(lsn, header, repl_dev(), ctx);
@@ -32,7 +32,6 @@ void ReplicationStateMachine::on_commit(int64_t lsn, const sisl::blob& header, c
 
 bool ReplicationStateMachine::on_pre_commit(int64_t lsn, sisl::blob const& header, sisl::blob const& key,
                                             cintrusive< homestore::repl_req_ctx >& ctx) {
-    LOGI("on_pre_commit with lsn:{}", lsn);
     // For shard creation, since homestore repldev inside will write shard header to data service first before this
     // function is called. So there is nothing is needed to do and we can get the binding chunk_id with the newly shard
     // from the blkid in on_commit()
@@ -41,6 +40,7 @@ bool ReplicationStateMachine::on_pre_commit(int64_t lsn, sisl::blob const& heade
         LOGE("corrupted message in pre_commit, lsn:{}", lsn);
         return false;
     }
+    LOGD("on_pre_commit with lsn:{}, msg type: {}", lsn, msg_header->msg_type);
     switch (msg_header->msg_type) {
     case ReplicationMessageType::SEAL_SHARD_MSG: {
         return home_object_->on_shard_message_pre_commit(lsn, header, key, ctx);
@@ -70,6 +70,8 @@ void ReplicationStateMachine::on_rollback(int64_t lsn, sisl::blob const& header,
     }
     }
 }
+
+void ReplicationStateMachine::on_restart() { home_object_->on_replica_restart(); }
 
 void ReplicationStateMachine::on_error(ReplServiceError error, const sisl::blob& header, const sisl::blob& key,
                                        cintrusive< repl_req_ctx >& ctx) {
@@ -151,10 +153,36 @@ void ReplicationStateMachine::on_destroy() {
     LOGI("replica destroyed");
 }
 
-homestore::AsyncReplResult<> ReplicationStateMachine::create_snapshot(homestore::repl_snapshot& s) {
+homestore::AsyncReplResult<>
+ReplicationStateMachine::create_snapshot(std::shared_ptr< homestore::snapshot_context > context) {
     // TODO::add create snapshot logic
-    LOGI("create snapshot, last_log_idx_: {} , last_log_term_: {}", s.last_log_idx_, s.last_log_term_);
+    auto ctx = dynamic_pointer_cast< homestore::nuraft_snapshot_context >(context);
+    auto s = ctx->nuraft_snapshot();
+    LOGI("create snapshot, last_log_idx_: {} , last_log_term_: {}", s->get_last_log_idx(), s->get_last_log_term());
     return folly::makeSemiFuture< homestore::ReplResult< folly::Unit > >(folly::Unit{});
 }
+
+bool ReplicationStateMachine::apply_snapshot(std::shared_ptr< homestore::snapshot_context > context) {
+    LOGE("apply_snapshot not implemented");
+    return false;
+}
+
+std::shared_ptr< homestore::snapshot_context > ReplicationStateMachine::last_snapshot() {
+    LOGE("last_snapshot not implemented");
+    return nullptr;
+}
+
+int ReplicationStateMachine::read_snapshot_data(std::shared_ptr< homestore::snapshot_context > context,
+                                                std::shared_ptr< homestore::snapshot_data > snp_data) {
+    LOGE("read_snapshot_data not implemented");
+    return -1;
+}
+
+void ReplicationStateMachine::write_snapshot_data(std::shared_ptr< homestore::snapshot_context > context,
+                                                  std::shared_ptr< homestore::snapshot_data > snp_data) {
+    LOGE("write_snapshot_data not implemented");
+}
+
+void ReplicationStateMachine::free_user_snp_ctx(void*& user_snp_ctx) { LOGE("free_user_snp_ctx not implemented"); }
 
 } // namespace homeobject

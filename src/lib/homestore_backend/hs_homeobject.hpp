@@ -62,6 +62,7 @@ class HSHomeObject : public HomeObjectImpl {
         std::shared_ptr< BlobIndexTable > index_table;
     };
     std::unordered_map< std::string, PgIndexTable > index_table_pg_map_;
+    std::once_flag replica_restart_flag_;
 
 public:
 #pragma pack(1)
@@ -370,6 +371,12 @@ public:
      * @return An optional chunk number if the shard ID is valid, otherwise an empty optional.
      */
     std::optional< homestore::chunk_num_t > get_shard_chunk(shard_id_t id) const;
+
+    /**
+     * @brief recover PG and shard from the superblock.
+     *
+     */
+    void on_replica_restart();
 
     /**
      * @brief Returns any chunk number for the given pg ID.

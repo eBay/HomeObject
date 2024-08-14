@@ -53,5 +53,5 @@ target_link_libraries(homestore_test PUBLIC
     homeobject_homestore
     ${COMMON_TEST_DEPS}
 )
-add_test(NAME HomestoreTest COMMAND homestore_test -csv error --executor immediate)
+add_test(NAME HomestoreTest COMMAND homestore_test -csv error --executor immediate --config_path ./ --override_config homestore_config.consensus.snapshot_freq_distance:0)
 set_property(TEST HomestoreTest PROPERTY RUN_SERIAL 1)
