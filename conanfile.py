@@ -1,7 +1,7 @@
 from conan import ConanFile
 from conan.errors import ConanInvalidConfiguration
 from conan.tools.build import check_min_cppstd
-from conan.tools.cmake import CMakeToolchain, CMakeDeps, CMake, cmake_layout
+from conan.tools.cmake import CMakeToolchain, CMakeDeps, CMake
 from conan.tools.files import copy
 from os.path import join
 
@@ -9,7 +9,7 @@ required_conan_version = ">=1.60.0"
 
 class HomeObjectConan(ConanFile):
     name = "homeobject"
-    version = "2.0.10"
+    version = "2.0.11"
 
     homepage = "https://github.com/eBay/HomeObject"
     description = "Blob Store built on HomeReplication"
@@ -24,14 +24,12 @@ class HomeObjectConan(ConanFile):
                 "fPIC": ['True', 'False'],
                 "coverage": ['True', 'False'],
                 "sanitize": ['True', 'False'],
-                "testing": ['True', 'False'],
               }
     default_options = {
                 'shared': False,
                 'fPIC': True,
                 'coverage': False,
                 'sanitize': False,
-                'testing': True,
             }
 
     exports_sources = ("CMakeLists.txt", "cmake/*", "src/*", "LICENSE")
@@ -61,7 +59,20 @@ class HomeObjectConan(ConanFile):
             check_min_cppstd(self, 20)
 
     def layout(self):
-        cmake_layout(self)
+        self.folders.source = "."
+        self.folders.build = join("build", str(self.settings.build_type))
+        self.folders.generators = join(self.folders.build, "generators")
+
+        self.cpp.source.components["homestore"].includedirs = ["src/include"]
+        self.cpp.source.components["memory"].includedirs = ["src/include"]
+
+        self.cpp.build.components["homestore"].libdirs = ["src/lib/homestore_backend"]
+        self.cpp.build.components["memory"].libdirs = ["src/lib/memory_backend"]
+
+        self.cpp.package.components["homestore"].libs = ["homeobject_homestore"]
+        self.cpp.package.components["memory"].libs = ["homeobject_memory"]
+        self.cpp.package.includedirs = ["include"] # includedirs is already set to 'include' by
+        self.cpp.package.libdirs = ["lib"]
 
     def generate(self):
         # This generates "conan_toolchain.cmake" in self.generators_folder
@@ -102,11 +113,7 @@ class HomeObjectConan(ConanFile):
         copy(self, "*.h*", join(self.source_folder, "src", "include"), join(self.package_folder, "include"), keep_path=True)
 
     def package_info(self):
-        self.cpp_info.names["cmake_find_package"] = "HomeObject"
-        self.cpp_info.names["cmake_find_package_multi"] = "HomeObject"
-        self.cpp_info.components["homestore"].libs = ["homeobject_homestore"]
         self.cpp_info.components["homestore"].requires = ["homestore::homestore", "iomgr::iomgr", "sisl::sisl"]
-        self.cpp_info.components["memory"].libs = ["homeobject_memory"]
         self.cpp_info.components["memory"].requires = ["sisl::sisl"]
         self.cpp_info.components["homeobject"].requires = ["homestore"]
 
@@ -118,3 +125,6 @@ class HomeObjectConan(ConanFile):
             self.cpp_info.components["memory"].exelinkflags.append("-fsanitize=address")
             self.cpp_info.components["memory"].sharedlinkflags.append("-fsanitize=undefined")
             self.cpp_info.components["memory"].exelinkflags.append("-fsanitize=undefined")
+
+        self.cpp_info.names["cmake_find_package"] = "HomeObject"
+        self.cpp_info.names["cmake_find_package_multi"] = "HomeObject"
