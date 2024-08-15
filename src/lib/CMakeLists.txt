@@ -13,7 +13,8 @@ target_link_libraries(${PROJECT_NAME}_core
     ${COMMON_DEPS}
 )
 
-include(${sisl_INCLUDE_DIRS}/../cmake/settings_gen.cmake)
+list(GET sisl_INCLUDE_DIRS 0 SISL_TOP_INCLUDE)
+include ("${SISL_TOP_INCLUDE}/../cmake/settings_gen.cmake")
 
 add_subdirectory(homestore_backend)
 add_subdirectory(memory_backend)
