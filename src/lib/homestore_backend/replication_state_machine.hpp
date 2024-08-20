@@ -182,13 +182,6 @@ public:
                                      std::shared_ptr< homestore::snapshot_data > snp_data) override;
     virtual void free_user_snp_ctx(void*& user_snp_ctx) override;
 
-    /// @brief Called when the snapshot is being created.
-    /// @param snapshot - The snapshot object which contains the lsn and term;
-    homestore::AsyncReplResult<> create_snapshot(homestore::repl_snapshot&) override {
-        // To be implemented;
-        return folly::makeSemiFuture< homestore::ReplResult< folly::Unit > >(folly::Unit{});
-    }
-
 private:
     HSHomeObject* home_object_{nullptr};
 };

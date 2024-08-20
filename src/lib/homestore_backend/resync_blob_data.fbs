@@ -11,6 +11,7 @@ table BlobData {
 
 table ResyncBlobDataBatch {
     data_array : [BlobData];
+    end_of_batch: ubyte;
 }
 
 root_type ResyncBlobDataBatch;
