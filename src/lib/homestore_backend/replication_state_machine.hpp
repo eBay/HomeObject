@@ -139,6 +139,11 @@ public:
     void on_rollback(int64_t lsn, const sisl::blob& header, const sisl::blob& key,
                      cintrusive< homestore::repl_req_ctx >& ctx) override;
 
+    /// @brief Called when the raft service is created after restart.
+    ///
+    /// homeobject should recover all the necessary components to serve log replay/commit requests.
+    void on_restart() override;
+
     /// @brief Called when the async_alloc_write call failed to initiate replication
     ///
     /// Called only on the node which called async_alloc_write
@@ -163,8 +168,19 @@ public:
     homestore::ReplResult< homestore::blk_alloc_hints > get_blk_alloc_hints(sisl::blob const& header,
                                                                             uint32_t data_size) override;
 
-    /// @brief Called when the replica set is being stopped
-    void on_replica_stop() override;
+    /// @brief Called when the replica is being destroyed by nuraft;
+    void on_destroy() override;
+
+    /// Not Implemented
+    /// @brief Called when the snapshot is being created by nuraft;
+    homestore::AsyncReplResult<> create_snapshot(std::shared_ptr< homestore::snapshot_context > context) override;
+    virtual bool apply_snapshot(std::shared_ptr< homestore::snapshot_context > context) override;
+    virtual std::shared_ptr< homestore::snapshot_context > last_snapshot() override;
+    virtual int read_snapshot_data(std::shared_ptr< homestore::snapshot_context > context,
+                                   std::shared_ptr< homestore::snapshot_data > snp_data) override;
+    virtual void write_snapshot_data(std::shared_ptr< homestore::snapshot_context > context,
+                                     std::shared_ptr< homestore::snapshot_data > snp_data) override;
+    virtual void free_user_snp_ctx(void*& user_snp_ctx) override;
 
     /// @brief Called when the snapshot is being created.
     /// @param snapshot - The snapshot object which contains the lsn and term;

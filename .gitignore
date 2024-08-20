@@ -21,5 +21,6 @@ test_package/build*
 
 # Visual Studio
 CMakeSettings.json
+CMakeUserPresets.json
 .vs/**
 compile_commands.json

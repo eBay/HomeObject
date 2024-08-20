@@ -13,7 +13,6 @@
 #include "lib/homestore_backend/hs_homeobject.hpp"
 #include "lib/homestore_backend/replication_message.hpp"
 #include "lib/homestore_backend/replication_state_machine.hpp"
-
 #include "lib/tests/fixture_app.hpp"
 
 using homeobject::shard_id_t;
@@ -72,10 +71,10 @@ TEST_F(TestFixture, CreateMultiShardsOnMultiPG) {
     }
 }
 
-#if 0
 TEST_F(TestFixture, MockSealShard) {
     ShardInfo shard_info = _shard_1;
     shard_info.state = ShardInfo::State::SEALED;
+    using shard_info_superblk = homeobject::HSHomeObject::shard_info_superblk;
 
     nlohmann::json j;
     j["shard_info"]["shard_id_t"] = shard_info.id;
@@ -91,25 +90,27 @@ TEST_F(TestFixture, MockSealShard) {
     homeobject::HSHomeObject* ho = dynamic_cast< homeobject::HSHomeObject* >(homeobj_.get());
     auto* pg = s_cast< homeobject::HSHomeObject::HS_PG* >(ho->_pg_map[_pg_id].get());
     auto repl_dev = pg->repl_dev_;
-    const auto msg_size = sisl::round_up(seal_shard_msg.size(), repl_dev->get_blk_size());
-    auto req = homeobject::repl_result_ctx< ShardManager::Result< ShardInfo > >::make(msg_size, 512 /*alignment*/);
-    auto buf_ptr = req->hdr_buf_.bytes();
-    std::memset(buf_ptr, 0, msg_size);
-    std::memcpy(buf_ptr, seal_shard_msg.c_str(), seal_shard_msg.size());
 
-    req->header_.msg_type = homeobject::ReplicationMessageType::SEAL_SHARD_MSG;
-    req->header_.pg_id = _pg_id;
-    req->header_.shard_id = shard_info.id;
-    req->header_.payload_size = msg_size;
-    req->header_.payload_crc = crc32_ieee(homeobject::init_crc32, buf_ptr, msg_size);
-    req->header_.seal();
-    sisl::blob header;
-    header.set_bytes(r_cast< uint8_t* >(&req->header_));
-    header.set_size(sizeof(req->header_));
-    sisl::sg_list value;
-    value.size = msg_size;
-    value.iovs.push_back(iovec(buf_ptr, msg_size));
-    repl_dev->async_alloc_write(header, sisl::blob{buf_ptr, (uint32_t)msg_size}, value, req);
+    sisl::io_blob_safe sb_blob(sisl::round_up(sizeof(shard_info_superblk), repl_dev->get_blk_size()),
+                               homeobject::io_align);
+    shard_info_superblk* sb = new (sb_blob.bytes()) shard_info_superblk();
+    sb->type = homeobject::HSHomeObject::DataHeader::data_type_t::SHARD_INFO;
+    sb->info = shard_info;
+    sb->chunk_id = 0;
+
+    auto req = homeobject::repl_result_ctx< ShardManager::Result< ShardInfo > >::make(sizeof(shard_info_superblk), 0u);
+
+    req->header()->msg_type = homeobject::ReplicationMessageType::SEAL_SHARD_MSG;
+    req->header()->pg_id = _pg_id;
+    req->header()->shard_id = shard_info.id;
+    req->header()->payload_size = sizeof(shard_info_superblk);
+    req->header()->payload_crc = crc32_ieee(homeobject::init_crc32, sb_blob.cbytes(), sizeof(shard_info_superblk));
+    req->header()->seal();
+
+    std::memcpy(req->header_extn(), sb_blob.cbytes(), sizeof(shard_info_superblk));
+    req->add_data_sg(std::move(sb_blob));
+
+    repl_dev->async_alloc_write(req->cheader_buf(), sisl::blob{}, req->data_sgs(), req);
     auto info = req->result().get();
     EXPECT_TRUE(info);
     EXPECT_TRUE(info.value().id == shard_info.id);
@@ -123,12 +124,24 @@ TEST_F(TestFixture, MockSealShard) {
     auto& check_shard = pg_result->shards_.front();
     EXPECT_EQ(ShardInfo::State::SEALED, check_shard->info.state);
 }
-#endif
 
 class ShardManagerTestingRecovery : public ::testing::Test {
 public:
     void SetUp() override { app = std::make_shared< FixtureApp >(); }
     void TearDown() override { app->clean(); }
+
+    void verify_hs_shard(const ShardInfo& lhs, const ShardInfo& rhs) {
+        // operator == is already overloaded , so we need to compare each field
+        EXPECT_EQ(lhs.id, rhs.id);
+        EXPECT_EQ(lhs.placement_group, rhs.placement_group);
+        EXPECT_EQ(lhs.state, rhs.state);
+        EXPECT_EQ(lhs.created_time, rhs.created_time);
+        EXPECT_EQ(lhs.last_modified_time, rhs.last_modified_time);
+        EXPECT_EQ(lhs.available_capacity_bytes, rhs.available_capacity_bytes);
+        EXPECT_EQ(lhs.total_capacity_bytes, rhs.total_capacity_bytes);
+        EXPECT_EQ(lhs.deleted_capacity_bytes, rhs.deleted_capacity_bytes);
+        EXPECT_EQ(lhs.current_leader, rhs.current_leader);
+    }
 
 protected:
     std::shared_ptr< FixtureApp > app;
@@ -178,14 +191,7 @@ TEST_F(ShardManagerTestingRecovery, ShardManagerRecovery) {
 
     auto hs_shard = d_cast< homeobject::HSHomeObject::HS_Shard* >(check_shard);
     auto& recovered_shard_info = hs_shard->info;
-    EXPECT_TRUE(recovered_shard_info == shard_info);
-    EXPECT_TRUE(recovered_shard_info.placement_group == shard_info.placement_group);
-    EXPECT_TRUE(recovered_shard_info.state == shard_info.state);
-    EXPECT_TRUE(recovered_shard_info.created_time == shard_info.created_time);
-    EXPECT_TRUE(recovered_shard_info.last_modified_time == shard_info.last_modified_time);
-    EXPECT_TRUE(recovered_shard_info.available_capacity_bytes == shard_info.available_capacity_bytes);
-    EXPECT_TRUE(recovered_shard_info.total_capacity_bytes == shard_info.total_capacity_bytes);
-    EXPECT_TRUE(recovered_shard_info.deleted_capacity_bytes == shard_info.deleted_capacity_bytes);
+    verify_hs_shard(recovered_shard_info, shard_info);
 
     // seal the shard when shard is recovery
     e = _home_object->shard_manager()->seal_shard(shard_id).get();
@@ -261,14 +267,7 @@ TEST_F(ShardManagerTestingRecovery, SealedShardRecovery) {
     EXPECT_EQ(1, pg_iter->second->shards_.size());
     auto hs_shard = d_cast< homeobject::HSHomeObject::HS_Shard* >(pg_iter->second->shards_.front().get());
     auto& recovered_shard_info = hs_shard->info;
-    EXPECT_TRUE(recovered_shard_info == shard_info);
-    EXPECT_TRUE(recovered_shard_info.placement_group == shard_info.placement_group);
-    EXPECT_TRUE(recovered_shard_info.state == shard_info.state);
-    EXPECT_TRUE(recovered_shard_info.created_time == shard_info.created_time);
-    EXPECT_TRUE(recovered_shard_info.last_modified_time == shard_info.last_modified_time);
-    EXPECT_TRUE(recovered_shard_info.available_capacity_bytes == shard_info.available_capacity_bytes);
-    EXPECT_TRUE(recovered_shard_info.total_capacity_bytes == shard_info.total_capacity_bytes);
-    EXPECT_TRUE(recovered_shard_info.deleted_capacity_bytes == shard_info.deleted_capacity_bytes);
+    verify_hs_shard(recovered_shard_info, shard_info);
     // finally close the homeobject and homestore.
     _home_object.reset();
 }

@@ -199,7 +199,7 @@ ShardManager::AsyncResult< ShardInfo > HSHomeObject::_seal_shard(ShardInfo const
 bool HSHomeObject::on_shard_message_pre_commit(int64_t lsn, sisl::blob const& header, sisl::blob const& key,
                                                cintrusive< homestore::repl_req_ctx >& hs_ctx) {
     repl_result_ctx< ShardManager::Result< ShardInfo > >* ctx{nullptr};
-    if (hs_ctx && hs_ctx->is_proposer) {
+    if (hs_ctx && hs_ctx->is_proposer()) {
         ctx = boost::static_pointer_cast< repl_result_ctx< ShardManager::Result< ShardInfo > > >(hs_ctx).get();
     }
     const ReplicationMessageHeader* msg_header = r_cast< const ReplicationMessageHeader* >(header.cbytes());
@@ -238,7 +238,7 @@ bool HSHomeObject::on_shard_message_pre_commit(int64_t lsn, sisl::blob const& he
 void HSHomeObject::on_shard_message_rollback(int64_t lsn, sisl::blob const& header, sisl::blob const& key,
                                              cintrusive< homestore::repl_req_ctx >& hs_ctx) {
     repl_result_ctx< ShardManager::Result< ShardInfo > >* ctx{nullptr};
-    if (hs_ctx && hs_ctx->is_proposer) {
+    if (hs_ctx && hs_ctx->is_proposer()) {
         ctx = boost::static_pointer_cast< repl_result_ctx< ShardManager::Result< ShardInfo > > >(hs_ctx).get();
     }
     const ReplicationMessageHeader* msg_header = r_cast< const ReplicationMessageHeader* >(header.cbytes());
@@ -277,7 +277,7 @@ void HSHomeObject::on_shard_message_commit(int64_t lsn, sisl::blob const& h, hom
                                            shared< homestore::ReplDev > repl_dev,
                                            cintrusive< homestore::repl_req_ctx >& hs_ctx) {
     repl_result_ctx< ShardManager::Result< ShardInfo > >* ctx{nullptr};
-    if (hs_ctx && hs_ctx->is_proposer) {
+    if (hs_ctx && hs_ctx->is_proposer()) {
         ctx = boost::static_pointer_cast< repl_result_ctx< ShardManager::Result< ShardInfo > > >(hs_ctx).get();
     }
 
@@ -328,6 +328,19 @@ void HSHomeObject::on_shard_message_commit(int64_t lsn, sisl::blob const& h, hom
             chunk_selector_->select_specific_chunk(blkids.chunk_num());
         }
         if (ctx) { ctx->promise_.setValue(ShardManager::Result< ShardInfo >(shard_info)); }
+
+        // update pg's total_occupied_blk_count
+        HS_PG* hs_pg{nullptr};
+        {
+            std::shared_lock lock_guard(_pg_lock);
+            auto iter = _pg_map.find(shard_info.placement_group);
+            RELEASE_ASSERT(iter != _pg_map.end(), "PG not found");
+            hs_pg = static_cast< HS_PG* >(iter->second.get());
+        }
+        hs_pg->durable_entities_update([&blkids](auto& de) {
+            de.total_occupied_blk_count.fetch_add(blkids.blk_count(), std::memory_order_relaxed);
+        });
+
         break;
     }
 

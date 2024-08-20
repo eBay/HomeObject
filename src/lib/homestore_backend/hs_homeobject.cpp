@@ -198,28 +198,13 @@ void HSHomeObject::init_homestore() {
         svc_sb.create(sizeof(svc_info_superblk_t));
         svc_sb->svc_id_ = _our_id;
         svc_sb.write();
+        on_replica_restart();
     } else {
         RELEASE_ASSERT(!_our_id.is_nil(), "No SvcId read after HomeStore recovery!");
         auto const new_id = app->discover_svcid(_our_id);
         RELEASE_ASSERT(new_id == _our_id, "Received new SvcId [{}] AFTER recovery of [{}]?!", to_string(new_id),
                        to_string(_our_id));
     }
-
-    // recover PG
-    HomeStore::instance()->meta_service().register_handler(
-        _pg_meta_name,
-        [this](homestore::meta_blk* mblk, sisl::byte_view buf, size_t size) {
-            on_pg_meta_blk_found(std::move(buf), voidptr_cast(mblk));
-        },
-        nullptr, true);
-    HomeStore::instance()->meta_service().read_sub_sb(_pg_meta_name);
-
-    // recover shard
-    HomeStore::instance()->meta_service().register_handler(
-        _shard_meta_name,
-        [this](homestore::meta_blk* mblk, sisl::byte_view buf, size_t size) { on_shard_meta_blk_found(mblk, buf); },
-        [this](bool success) { on_shard_meta_blk_recover_completed(success); }, true);
-    HomeStore::instance()->meta_service().read_sub_sb(_shard_meta_name);
 
     recovery_done_ = true;
     LOGI("Initialize and start HomeStore is successfully");
@@ -230,6 +215,28 @@ void HSHomeObject::init_homestore() {
         zpad_bufs_[i] = std::move(sisl::io_blob_safe(uint32_cast(size), io_align));
         std::memset(zpad_bufs_[i].bytes(), 0, size);
     }
+}
+
+void HSHomeObject::on_replica_restart() {
+    std::call_once(replica_restart_flag_, [this]() {
+        LOGI("Register PG and shard meta blk handlers");
+        using namespace homestore;
+        // recover PG
+        HomeStore::instance()->meta_service().register_handler(
+            _pg_meta_name,
+            [this](homestore::meta_blk* mblk, sisl::byte_view buf, size_t size) {
+                on_pg_meta_blk_found(std::move(buf), voidptr_cast(mblk));
+            },
+            nullptr, true);
+        HomeStore::instance()->meta_service().read_sub_sb(_pg_meta_name);
+
+        // recover shard
+        HomeStore::instance()->meta_service().register_handler(
+            _shard_meta_name,
+            [this](homestore::meta_blk* mblk, sisl::byte_view buf, size_t size) { on_shard_meta_blk_found(mblk, buf); },
+            [this](bool success) { on_shard_meta_blk_recover_completed(success); }, true);
+        HomeStore::instance()->meta_service().read_sub_sb(_shard_meta_name);
+    });
 }
 
 #if 0
