@@ -111,4 +111,41 @@ void HSHomeObject::print_btree_index(pg_id_t pg_id) {
     index_table->dump_tree_to_file();
 }
 
+shared< BlobIndexTable > HSHomeObject::get_index_table(pg_id_t pg_id) {
+    std::shared_lock lock_guard(_pg_lock);
+    auto iter = _pg_map.find(pg_id);
+    RELEASE_ASSERT(iter != _pg_map.end(), "PG not found");
+    auto hs_pg = static_cast< HSHomeObject::HS_PG* >(iter->second.get());
+    RELEASE_ASSERT(hs_pg->index_table_ != nullptr, "Index table not found for PG");
+    return hs_pg->index_table_;
+}
+
+BlobManager::Result< std::vector< HSHomeObject::BlobInfo > >
+HSHomeObject::query_blobs_in_shard(pg_id_t pg_id, uint64_t cur_shard_seq_num, blob_id_t start_blob_id,
+                                   uint64_t max_num_in_batch) {
+    // Query all blobs from start_blob_id to the maximum blob_id value.
+    std::vector< std::pair< BlobRouteKey, BlobRouteValue > > out_vector;
+    auto shard_id = make_new_shard_id(pg_id, cur_shard_seq_num);
+    auto start_key = BlobRouteKey{BlobRoute{shard_id, start_blob_id}};
+    auto end_key = BlobRouteKey{BlobRoute{shard_id, std::numeric_limits< uint64_t >::max()}};
+    homestore::BtreeQueryRequest< BlobRouteKey > query_req{
+        homestore::BtreeKeyRange< BlobRouteKey >{std::move(start_key), true /* inclusive */, std::move(end_key),
+                                                 true /* inclusive */},
+        homestore::BtreeQueryType::SWEEP_NON_INTRUSIVE_PAGINATION_QUERY, static_cast< uint32_t >(max_num_in_batch)};
+    auto index_table = get_index_table(pg_id);
+    auto const ret = index_table->query(query_req, out_vector);
+    if (ret != homestore::btree_status_t::success && ret != homestore::btree_status_t::has_more) {
+        LOGE("Failed to query blobs in index table for ret={} shard={} start_blob_id={}", ret, shard_id, start_blob_id);
+        return folly::makeUnexpected(BlobErrorCode::INDEX_ERROR);
+    }
+
+    std::vector< BlobInfo > blob_info_vec;
+    blob_info_vec.reserve(out_vector.size());
+    for (auto& [r, v] : out_vector) {
+        blob_info_vec.push_back(BlobInfo{r.key().shard, r.key().blob, v.pbas()});
+    }
+
+    return blob_info_vec;
+}
+
 } // namespace homeobject

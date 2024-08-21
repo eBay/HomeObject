@@ -8,7 +8,7 @@ uint64_t ShardManager::max_shard_size() { return Gi; }
 
 ShardManager::AsyncResult< ShardInfo > MemoryHomeObject::_create_shard(pg_id_t pg_owner, uint64_t size_bytes) {
     auto const now = get_current_timestamp();
-    auto info = ShardInfo(0ull, pg_owner, ShardInfo::State::OPEN, now, now, size_bytes, size_bytes, 0);
+    auto info = ShardInfo(0ull, pg_owner, ShardInfo::State::OPEN, 0, now, now, size_bytes, size_bytes, 0);
     {
         auto lg = std::scoped_lock(_pg_lock, _shard_lock);
         auto pg_it = _pg_map.find(pg_owner);

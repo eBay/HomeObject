@@ -22,6 +22,7 @@ struct ShardInfo {
     shard_id_t id;
     pg_id_t placement_group;
     State state;
+    uint64_t lsn;
     uint64_t created_time;
     uint64_t last_modified_time;
     uint64_t available_capacity_bytes;
