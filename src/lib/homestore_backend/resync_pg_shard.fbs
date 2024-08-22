@@ -1,3 +1,5 @@
+native_include "sisl/utility/non_null_ptr.hpp";
+
 namespace homeobject;
 
 table Member {
@@ -19,6 +21,7 @@ table ShardInfoEntry {
     shard_size : uint64;                // shard size;
     created_time : uint64;              // shard creation time
     last_modified_time : uint64;        // shard last modify time
+    created_lsn : int64;                // lsn on shard creation;
 }
 
 table ResyncPGShardInfo {

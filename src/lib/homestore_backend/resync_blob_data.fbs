@@ -1,3 +1,5 @@
+native_include "sisl/utility/non_null_ptr.hpp";
+
 namespace homeobject;
 
 table BlobData {
