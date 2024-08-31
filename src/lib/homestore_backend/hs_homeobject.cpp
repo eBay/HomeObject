@@ -109,12 +109,8 @@ void HSHomeObject::init_homestore() {
     RELEASE_ASSERT(app, "HomeObjectApplication lifetime unexpected!");
 
     LOGI("Starting iomgr with {} threads, spdk: {}", app->threads(), false);
-    ioenvironment.with_iomgr(iomgr::iomgr_params{.num_threads = app->threads(), .is_spdk = app->spdk_mode()})
-        .with_http_server();
+    ioenvironment.with_iomgr(iomgr::iomgr_params{.num_threads = app->threads(), .is_spdk = app->spdk_mode()});
 
-    // TODO: Fixme. This is a hack to restart http server. We should remove this once IOEnvironment has an api
-    // called stop_iomgr, stop_http_server. Until that this restart call allows us to cleanup previous instances
-    ioenvironment.restart_http_server();
     http_mgr_ = std::make_unique< HttpManager >(*this);
 
     /// TODO Where should this come from?
