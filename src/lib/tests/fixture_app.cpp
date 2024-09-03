@@ -60,7 +60,7 @@ void TestFixture::SetUp() {
     LOGDEBUG("Get on empty Shard: {}", _shard_1.id);
     auto g_e = homeobj_->blob_manager()->get(_shard_1.id, 0).get();
     ASSERT_FALSE(g_e);
-    EXPECT_EQ(homeobject::BlobError::UNKNOWN_BLOB, g_e.error());
+    EXPECT_EQ(homeobject::BlobErrorCode::UNKNOWN_BLOB, g_e.error().getCode());
 
     LOGDEBUG("Insert Blob to: {}", _shard_1.id);
     auto o_e = homeobj_->blob_manager()

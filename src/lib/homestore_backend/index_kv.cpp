@@ -67,12 +67,12 @@ HSHomeObject::get_blob_from_index_table(shared< BlobIndexTable > index_table, sh
 
     if (homestore::btree_status_t::success != index_table->get(get_req)) {
         LOGDEBUG("Failed to get from index table [route={}]", index_key);
-        return folly::makeUnexpected(BlobError::UNKNOWN_BLOB);
+        return folly::makeUnexpected(BlobError(BlobErrorCode::UNKNOWN_BLOB));
     }
 
     // blob get API
     if (const auto& pbas = index_value.pbas(); pbas != tombstone_pbas) return pbas;
-    return folly::makeUnexpected(BlobError::UNKNOWN_BLOB);
+    return folly::makeUnexpected(BlobError(BlobErrorCode::UNKNOWN_BLOB));
 }
 
 BlobManager::Result< homestore::MultiBlkId > HSHomeObject::move_to_tombstone(shared< BlobIndexTable > index_table,
@@ -83,7 +83,7 @@ BlobManager::Result< homestore::MultiBlkId > HSHomeObject::move_to_tombstone(sha
     auto status = index_table->get(get_req);
     if (status != homestore::btree_status_t::success) {
         LOGE("Failed to get from index table [route={}]", index_key);
-        return folly::makeUnexpected(BlobError::UNKNOWN_BLOB);
+        return folly::makeUnexpected(BlobError(BlobErrorCode::UNKNOWN_BLOB));
     }
 
     BlobRouteValue index_value_put{tombstone_pbas};
@@ -91,7 +91,7 @@ BlobManager::Result< homestore::MultiBlkId > HSHomeObject::move_to_tombstone(sha
     status = index_table->put(put_req);
     if (status != homestore::btree_status_t::success) {
         LOGDEBUG("Failed to move blob to tombstone in index table [route={}]", index_key);
-        return folly::makeUnexpected(BlobError::INDEX_ERROR);
+        return folly::makeUnexpected(BlobError(BlobErrorCode::INDEX_ERROR));
     }
 
     return index_value_get.pbas();

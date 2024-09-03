@@ -41,7 +41,7 @@ BlobManager::AsyncResult< Blob > MemoryHomeObject::_get_blob(ShardInfo const& _s
     WITH_SHARD
     WITH_ROUTE(_blob)
     IF_BLOB_ALIVE { return blob_it->second.blob_->clone(); }
-    return folly::makeUnexpected(BlobError::UNKNOWN_BLOB);
+    return folly::makeUnexpected(BlobError(BlobErrorCode::UNKNOWN_BLOB));
 }
 
 // Tombstone BlobExt entry

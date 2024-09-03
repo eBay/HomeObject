@@ -6,6 +6,7 @@
 
 using homeobject::Blob;
 using homeobject::BlobError;
+using homeobject::BlobErrorCode;
 
 TEST_F(TestFixture, BasicBlobTests) {
     auto const batch_sz = 4;
@@ -33,7 +34,7 @@ TEST_F(TestFixture, BasicBlobTests) {
                 our_calls.push_back(
                     homeobj_->blob_manager()
                         ->put(i, Blob{sisl::io_blob_safe(512u, 512u), "test_blob", 0ul})
-                        .deferValue([](auto const& e) { EXPECT_EQ(BlobError::UNKNOWN_SHARD, e.error()); }));
+                        .deferValue([](auto const& e) { EXPECT_EQ(BlobErrorCode::UNKNOWN_SHARD, e.error().code); }));
                 LOGINFO("Calling to put blob, shard {}", _shard_1.id);
                 our_calls.push_back(homeobj_->blob_manager()
                                         ->put(_shard_1.id, Blob{sisl::io_blob_safe(4 * Ki, 512u), "test_blob", 4 * Mi})
@@ -50,7 +51,7 @@ TEST_F(TestFixture, BasicBlobTests) {
                         .deferValue([](auto const& e) { EXPECT_TRUE(!!e); }));
                 our_calls.push_back(homeobj_->blob_manager()->del(i, _blob_id).deferValue([](auto const& e) {
                     EXPECT_FALSE(!!e);
-                    EXPECT_EQ(BlobError::UNKNOWN_SHARD, e.error());
+                    EXPECT_EQ(BlobErrorCode::UNKNOWN_SHARD, e.error().getCode());
                 }));
                 LOGINFO("Calling to Deleting blob, shard {}, blobID {}", _shard_1.id, (i - _shard_2.id));
                 our_calls.push_back(
@@ -62,7 +63,7 @@ TEST_F(TestFixture, BasicBlobTests) {
                             return;
                         } else {
                             EXPECT_FALSE(!!e);
-                            EXPECT_EQ(BlobError::UNKNOWN_BLOB, e.error());
+                            EXPECT_EQ(BlobErrorCode::UNKNOWN_BLOB, e.error().getCode());
                         }
                     }));
             }
@@ -78,7 +79,7 @@ TEST_F(TestFixture, BasicBlobTests) {
     auto p_e =
         homeobj_->blob_manager()->put(_shard_1.id, Blob{sisl::io_blob_safe(4 * Ki, 512u), "test_blob", 4 * Mi}).get();
     ASSERT_FALSE(!!p_e);
-    EXPECT_EQ(BlobError::SEALED_SHARD, p_e.error());
+    EXPECT_EQ(BlobErrorCode::SEALED_SHARD, p_e.error().getCode());
 
     // BLOB exists
     EXPECT_TRUE(homeobj_->blob_manager()->get(_shard_1.id, _blob_id).get());
@@ -89,7 +90,7 @@ TEST_F(TestFixture, BasicBlobTests) {
     // BLOB is now unknown
     auto g_e = homeobj_->blob_manager()->get(_shard_1.id, _blob_id).get();
     ASSERT_FALSE(!!g_e);
-    EXPECT_EQ(BlobError::UNKNOWN_BLOB, g_e.error());
+    EXPECT_EQ(BlobErrorCode::UNKNOWN_BLOB, g_e.error().getCode());
 
     // Delete is Idempotent
     EXPECT_TRUE(homeobj_->blob_manager()->del(_shard_1.id, _blob_id).get());

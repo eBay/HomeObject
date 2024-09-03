@@ -108,7 +108,7 @@ TEST_F(HomeObjectFixture, BasicPutGetDelBlobWRestart) {
 
         auto g = hs_homeobject->get_blob_from_index_table(index_table, shard_id, blob_id);
         ASSERT_FALSE(!!g);
-        EXPECT_EQ(BlobError::UNKNOWN_BLOB, g.error());
+        EXPECT_EQ(BlobErrorCode::UNKNOWN_BLOB, g.error().getCode());
     }
 
     LOGINFO("Flushing CP.");
@@ -160,7 +160,7 @@ TEST_F(HomeObjectFixture, SealShardWithRestart) {
 
     b = _obj_inst->blob_manager()->put(shard_id, Blob{sisl::io_blob_safe(512u, 512u), "test_blob", 0ul}).get();
     ASSERT_TRUE(!b);
-    ASSERT_EQ(b.error(), BlobError::SEALED_SHARD);
+    ASSERT_EQ(b.error().getCode(), BlobErrorCode::SEALED_SHARD);
     LOGINFO("Put blob {}", b.error());
 
     // Restart homeobject
@@ -178,6 +178,6 @@ TEST_F(HomeObjectFixture, SealShardWithRestart) {
 
     b = _obj_inst->blob_manager()->put(shard_id, Blob{sisl::io_blob_safe(512u, 512u), "test_blob", 0ul}).get();
     ASSERT_TRUE(!b);
-    ASSERT_EQ(b.error(), BlobError::SEALED_SHARD);
+    ASSERT_EQ(b.error().getCode(), BlobErrorCode::SEALED_SHARD);
     LOGINFO("Put blob {}", b.error());
 }

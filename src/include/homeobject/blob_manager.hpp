@@ -9,12 +9,25 @@
 
 namespace homeobject {
 
-ENUM(BlobError, uint16_t, UNKNOWN = 1, TIMEOUT, INVALID_ARG, UNSUPPORTED_OP, NOT_LEADER, REPLICATION_ERROR,
+ENUM(BlobErrorCode, uint16_t, UNKNOWN = 1, TIMEOUT, INVALID_ARG, UNSUPPORTED_OP, NOT_LEADER, REPLICATION_ERROR,
      UNKNOWN_SHARD, UNKNOWN_BLOB, CHECKSUM_MISMATCH, READ_FAILED, INDEX_ERROR, SEALED_SHARD);
+struct BlobError {
+    BlobErrorCode code;
+    // set when we are not the current leader of the PG.
+    std::optional< peer_id_t > current_leader{std::nullopt};
+    BlobError(BlobErrorCode _code) { code = _code; }
+
+    BlobError(BlobErrorCode _code, peer_id_t _leader) {
+        code = _code;
+        current_leader = _leader;
+    }
+    BlobErrorCode getCode() const { return code; }
+};
 
 struct Blob {
     Blob() = default;
     Blob(sisl::io_blob_safe b, std::string const& u, uint64_t o) : body(std::move(b)), user_key(u), object_off(o) {}
+    Blob(sisl::io_blob_safe b, std::string const& u, uint64_t o, peer_id_t l) : body(std::move(b)), user_key(u), object_off(o), current_leader(l) {}
 
     Blob clone() const;
 
@@ -33,3 +46,23 @@ public:
 };
 
 } // namespace homeobject
+
+namespace fmt {
+template <>
+struct formatter< homeobject::BlobError > {
+    template < typename ParseContext >
+    constexpr auto parse(ParseContext& ctx) {
+        return ctx.begin();
+    }
+    template < typename FormatContext >
+    auto format(homeobject::BlobError const& err, FormatContext& ctx) {
+        if (err.current_leader.has_value()) {
+            return fmt::format_to(ctx.out(), "Code: {}, Leader: {}", err.code, err.current_leader.value());
+        } else {
+            return fmt::format_to(ctx.out(), "Code: {}", err.code);
+        }
+    }
+};
+template <>
+struct formatter< boost::uuids::uuid > : ostream_formatter {};
+} // namespace fmt
