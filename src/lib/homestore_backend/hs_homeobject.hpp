@@ -41,10 +41,10 @@ class HSHomeObject : public HomeObjectImpl {
     ShardManager::AsyncResult< ShardInfo > _create_shard(pg_id_t, uint64_t size_bytes) override;
     ShardManager::AsyncResult< ShardInfo > _seal_shard(ShardInfo const&) override;
 
-    BlobManager::AsyncResult< blob_id_t > _put_blob(ShardInfo const&, Blob&&) override;
+    BlobManager::AsyncResult< PutBlobRes > _put_blob(ShardInfo const&, Blob&&) override;
     BlobManager::AsyncResult< Blob > _get_blob(ShardInfo const&, blob_id_t, uint64_t off = 0,
                                                uint64_t len = 0) const override;
-    BlobManager::NullAsyncResult _del_blob(ShardInfo const&, blob_id_t) override;
+    BlobManager::AsyncResult< DelBlobRes > _del_blob(ShardInfo const&, blob_id_t) override;
 
     PGManager::NullAsyncResult _create_pg(PGInfo&& pg_info, std::set< peer_id_t > const& peers) override;
     PGManager::NullAsyncResult _replace_member(pg_id_t id, peer_id_t const& old_member,

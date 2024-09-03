@@ -17,7 +17,7 @@ namespace homeobject {
     } else
 
 // Write (move) Blob to new BlobExt on heap and Insert BlobExt to Index
-BlobManager::AsyncResult< blob_id_t > MemoryHomeObject::_put_blob(ShardInfo const& _shard, Blob&& _blob) {
+BlobManager::AsyncResult< PutBlobRes > MemoryHomeObject::_put_blob(ShardInfo const& _shard, Blob&& _blob) {
     WITH_SHARD
     blob_id_t new_blob_id;
     {
@@ -32,7 +32,10 @@ BlobManager::AsyncResult< blob_id_t > MemoryHomeObject::_put_blob(ShardInfo cons
     auto [_, happened] =
         shard.btree_.try_emplace(route, BlobExt{.state_ = BlobState::ALIVE, .blob_ = new Blob(std::move(_blob))});
     RELEASE_ASSERT(happened, "Generated duplicate BlobRoute!");
-    return route.blob;
+
+    PutBlobRes res;
+    res.blob_id = new_blob_id;
+    return res;
 }
 
 // Lookup BlobExt and duplicate underyling Blob for user; only *safe* because we defer GC.
@@ -45,14 +48,14 @@ BlobManager::AsyncResult< Blob > MemoryHomeObject::_get_blob(ShardInfo const& _s
 }
 
 // Tombstone BlobExt entry
-BlobManager::NullAsyncResult MemoryHomeObject::_del_blob(ShardInfo const& _shard, blob_id_t _blob) {
+BlobManager::AsyncResult< DelBlobRes > MemoryHomeObject::_del_blob(ShardInfo const& _shard, blob_id_t _blob) {
     WITH_SHARD
     WITH_ROUTE(_blob)
     IF_BLOB_ALIVE {
         shard.btree_.assign_if_equal(route, blob_it->second,
                                      BlobExt{.state_ = BlobState::DELETED, .blob_ = blob_it->second.blob_});
     }
-    return folly::Unit();
+    return DelBlobRes{};
 }
 
 } // namespace homeobject

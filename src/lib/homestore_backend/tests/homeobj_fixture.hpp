@@ -108,11 +108,11 @@ public:
                     ASSERT_TRUE(false);
                     continue;
                 }
-                auto blob_id = b.value();
+                auto putBlobRes = b.value();
 
-                LOGINFO("Put blob pg {} shard {} blob {} data {}", pg_id, shard_id, blob_id,
+                LOGINFO("Put blob pg {} shard {} blob {} data {}", pg_id, shard_id, putBlobRes.blob_id,
                         hex_bytes(clone.body.cbytes(), std::min(10u, clone.body.size())));
-                blob_map.insert({{pg_id, shard_id, blob_id}, std::move(clone)});
+                blob_map.insert({{pg_id, shard_id, putBlobRes.blob_id}, std::move(clone)});
             }
         }
     }

@@ -90,10 +90,10 @@ class HomeObjectImpl : public HomeObject,
     virtual ShardManager::AsyncResult< ShardInfo > _create_shard(pg_id_t, uint64_t size_bytes) = 0;
     virtual ShardManager::AsyncResult< ShardInfo > _seal_shard(ShardInfo const&) = 0;
 
-    virtual BlobManager::AsyncResult< blob_id_t > _put_blob(ShardInfo const&, Blob&&) = 0;
+    virtual BlobManager::AsyncResult< PutBlobRes > _put_blob(ShardInfo const&, Blob&&) = 0;
     virtual BlobManager::AsyncResult< Blob > _get_blob(ShardInfo const&, blob_id_t, uint64_t off = 0,
                                                        uint64_t len = 0) const = 0;
-    virtual BlobManager::NullAsyncResult _del_blob(ShardInfo const&, blob_id_t) = 0;
+    virtual BlobManager::AsyncResult< DelBlobRes > _del_blob(ShardInfo const&, blob_id_t) = 0;
     ///
 
     virtual PGManager::NullAsyncResult _create_pg(PGInfo&& pg_info, std::set< peer_id_t > const& peers) = 0;
@@ -158,10 +158,10 @@ public:
     uint64_t get_current_timestamp();
 
     /// BlobManager
-    BlobManager::AsyncResult< blob_id_t > put(shard_id_t shard, Blob&&) final;
+    BlobManager::AsyncResult< PutBlobRes > put(shard_id_t shard, Blob&&) final;
     BlobManager::AsyncResult< Blob > get(shard_id_t shard, blob_id_t const& blob, uint64_t off,
                                          uint64_t len) const final;
-    BlobManager::NullAsyncResult del(shard_id_t shard, blob_id_t const& blob) final;
+    BlobManager::AsyncResult< DelBlobRes > del(shard_id_t shard, blob_id_t const& blob) final;
 };
 
 } // namespace homeobject

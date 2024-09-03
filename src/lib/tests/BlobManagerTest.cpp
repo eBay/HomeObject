@@ -39,9 +39,9 @@ TEST_F(TestFixture, BasicBlobTests) {
                                         ->put(_shard_1.id, Blob{sisl::io_blob_safe(4 * Ki, 512u), "test_blob", 4 * Mi})
                                         .deferValue([this](auto const& e) {
                                             EXPECT_TRUE(!!e);
-                                            e.then([this](auto const& blob_id) {
+                                            e.then([this](auto const& put_blob_res) {
                                                 LOGINFO("Successfully put blob, shard {}, blobID {}", _shard_1.id,
-                                                        blob_id);
+                                                        put_blob_res.blob_id);
                                             });
                                         }));
                 our_calls.push_back(

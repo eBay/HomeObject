@@ -12,9 +12,9 @@ BlobManager::AsyncResult< Blob > HomeObjectImpl::get(shard_id_t shard, blob_id_t
     });
 }
 
-BlobManager::AsyncResult< blob_id_t > HomeObjectImpl::put(shard_id_t shard, Blob&& blob) {
+BlobManager::AsyncResult< PutBlobRes > HomeObjectImpl::put(shard_id_t shard, Blob&& blob) {
     return _get_shard(shard).thenValue(
-        [this, blob = std::move(blob)](auto const e) mutable -> BlobManager::AsyncResult< blob_id_t > {
+        [this, blob = std::move(blob)](auto const e) mutable -> BlobManager::AsyncResult< PutBlobRes > {
             if (!e) return folly::makeUnexpected(BlobError::UNKNOWN_SHARD);
             if (ShardInfo::State::SEALED == e.value().state) return folly::makeUnexpected(BlobError::SEALED_SHARD);
             if (blob.body.size() == 0) return folly::makeUnexpected(BlobError::INVALID_ARG);
@@ -22,8 +22,8 @@ BlobManager::AsyncResult< blob_id_t > HomeObjectImpl::put(shard_id_t shard, Blob
         });
 }
 
-BlobManager::NullAsyncResult HomeObjectImpl::del(shard_id_t shard, blob_id_t const& blob) {
-    return _get_shard(shard).thenValue([this, blob](auto const e) mutable -> BlobManager::NullAsyncResult {
+BlobManager::AsyncResult< DelBlobRes > HomeObjectImpl::del(shard_id_t shard, blob_id_t const& blob) {
+    return _get_shard(shard).thenValue([this, blob](auto const e) mutable -> BlobManager::AsyncResult< DelBlobRes > {
         if (!e) return folly::makeUnexpected(BlobError::UNKNOWN_SHARD);
         return _del_blob(e.value(), blob);
     });

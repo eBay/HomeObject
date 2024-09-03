@@ -67,7 +67,7 @@ void TestFixture::SetUp() {
                    ->put(_shard_1.id, homeobject::Blob{sisl::io_blob_safe(4 * Ki, 512u), "test_blob", 4 * Mi})
                    .get();
     EXPECT_TRUE(!!o_e);
-    o_e.then([this](auto&& b) mutable { _blob_id = std::move(b); });
+    o_e.then([this](auto&& b) mutable { _blob_id = std::move(b.blob_id); });
 
     g_e = homeobj_->blob_manager()->get(_shard_1.id, _blob_id).get();
     EXPECT_TRUE(!!g_e);

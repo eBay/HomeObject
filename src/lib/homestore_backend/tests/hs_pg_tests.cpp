@@ -19,7 +19,7 @@ TEST_F(HomeObjectFixture, PGStatsTest) {
     EXPECT_EQ(shard_info.state, ShardInfo::State::OPEN);
     auto b = _obj_inst->blob_manager()->put(shard_id, Blob{sisl::io_blob_safe(512u, 512u), "test_blob", 0ul}).get();
     ASSERT_TRUE(!!b);
-    LOGINFO("Put blob {}", b.value());
+    LOGINFO("Put blob {}", b.value().blob_id);
 
     // create a shard
     s = _obj_inst->shard_manager()->seal_shard(shard_id).get();

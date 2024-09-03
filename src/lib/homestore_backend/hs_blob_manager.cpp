@@ -78,7 +78,7 @@ struct put_blob_req_ctx : public repl_result_ctx< BlobManager::Result< HSHomeObj
     sisl::io_blob_safe& blob_header_buf() { return data_bufs_[blob_header_idx_]; }
 };
 
-BlobManager::AsyncResult< blob_id_t > HSHomeObject::_put_blob(ShardInfo const& shard, Blob&& blob) {
+BlobManager::AsyncResult< PutBlobRes > HSHomeObject::_put_blob(ShardInfo const& shard, Blob&& blob) {
     auto& pg_id = shard.placement_group;
     shared< homestore::ReplDev > repl_dev;
     blob_id_t new_blob_id;
@@ -159,11 +159,13 @@ BlobManager::AsyncResult< blob_id_t > HSHomeObject::_put_blob(ShardInfo const& s
           req->blob_header()->to_string(), req->data_sgs_string());
 
     repl_dev->async_alloc_write(req->cheader_buf(), req->ckey_buf(), req->data_sgs(), req);
-    return req->result().deferValue([this, req](const auto& result) -> BlobManager::AsyncResult< blob_id_t > {
+    return req->result().deferValue([this, req](const auto& result) -> BlobManager::AsyncResult< PutBlobRes > {
+        PutBlobRes res;
         if (result.hasError()) { return folly::makeUnexpected(result.error()); }
         auto blob_info = result.value();
         BLOGT(blob_info.shard_id, blob_info.blob_id, "Put blob success blkid=[{}]", blob_info.pbas.to_string());
-        return blob_info.blob_id;
+        res.blob_id = blob_info.blob_id;
+        return res;
     });
 }
 
@@ -340,7 +342,7 @@ HSHomeObject::blob_put_get_blk_alloc_hints(sisl::blob const& header, cintrusive<
     return hints;
 }
 
-BlobManager::NullAsyncResult HSHomeObject::_del_blob(ShardInfo const& shard, blob_id_t blob_id) {
+BlobManager::AsyncResult< DelBlobRes > HSHomeObject::_del_blob(ShardInfo const& shard, blob_id_t blob_id) {
     BLOGT(shard.id, blob_id, "deleting blob");
     auto& pg_id = shard.placement_group;
     shared< homestore::ReplDev > repl_dev;
@@ -367,11 +369,12 @@ BlobManager::NullAsyncResult HSHomeObject::_del_blob(ShardInfo const& shard, blo
     std::memcpy(req->key_buf().bytes(), &blob_id, sizeof(blob_id_t));
 
     repl_dev->async_alloc_write(req->cheader_buf(), req->ckey_buf(), sisl::sg_list{}, req);
-    return req->result().deferValue([](const auto& result) -> folly::Expected< folly::Unit, BlobError > {
+    return req->result().deferValue([](const auto& result) -> folly::Expected< DelBlobRes, BlobError > {
+        DelBlobRes res;
         if (result.hasError()) { return folly::makeUnexpected(result.error()); }
         auto blob_info = result.value();
         BLOGT(blob_info.shard_id, blob_info.blob_id, "Delete blob successful");
-        return folly::Unit();
+        return res;
     });
 }
 
