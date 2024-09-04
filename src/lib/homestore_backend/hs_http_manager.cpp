@@ -40,6 +40,10 @@ HttpManager::HttpManager(HSHomeObject& ho) : ho_(ho) {
     };
 
     auto http_server = ioenvironment.get_http_server();
+    if (!http_server) {
+        LOGERROR("http server not available");
+        return;
+    }
     try {
          http_server->setup_routes(routes);
     } catch (std::runtime_error const& e) { LOGERROR("setup routes failed, {}", e.what()) }

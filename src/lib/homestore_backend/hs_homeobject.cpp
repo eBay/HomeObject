@@ -109,7 +109,8 @@ void HSHomeObject::init_homestore() {
     RELEASE_ASSERT(app, "HomeObjectApplication lifetime unexpected!");
 
     LOGI("Starting iomgr with {} threads, spdk: {}", app->threads(), false);
-    ioenvironment.with_iomgr(iomgr::iomgr_params{.num_threads = app->threads(), .is_spdk = app->spdk_mode()});
+    ioenvironment.with_iomgr(iomgr::iomgr_params{.num_threads = app->threads(), .is_spdk = app->spdk_mode()})
+        .with_http_server();
 
     http_mgr_ = std::make_unique< HttpManager >(*this);
 
