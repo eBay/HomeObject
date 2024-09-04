@@ -172,6 +172,12 @@ jobs:
     - name: Build Cache
       run: |
         pre=$([[ "${{ inputs.build-type }}" != "Debug" ]] && echo "-o sisl:prerelease=${{ inputs.prerelease }}" || echo "")
+        echo "Disk space usage"
+        sudo df -h
+        sudo ls -l /tmp
+        sudo rm -rf $ANDROID_HOME
+        echo "Disk space usage after cleanup"
+        sudo df -h
         conan install \
             -c tools.build:skip_test=True \
             ${pre} \
@@ -227,6 +233,13 @@ jobs:
         key_prefix: HomestoreDeps-${{ inputs.platform }}-${{ inputs.build-type }}-${{ inputs.malloc-impl }}-${{ inputs.prerelease }}
         fail_on_cache_miss: true
       if: ${{ inputs.testing == 'True' && github.event_name != 'pull_request' && steps.restore-cache.outputs.cache-hit != 'true' }}
+
+    - name: Setup tmate session
+      uses: mxschmitt/action-tmate@v3
+      with:
+        limit-access-to-actor: true
+        detached: true
+      if: ${{ inputs.testing == 'True' }}
 
     - name: Create and Test Package
       run: |
