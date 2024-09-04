@@ -27,14 +27,8 @@ HttpManager::HttpManager(HSHomeObject& ho) : ho_(ho) {
     using namespace Pistache::Rest;
 
     LOGINFO("Setting up HomeObject HTTP routes");
-    struct http_route {
-        Pistache::Http::Method method;
-        std::string resource;
-        Pistache::Rest::Route::Handler handler;
-        iomgr::url_type type{iomgr::url_type::regular};
-    };
 
-    std::vector< http_route > routes = {
+    std::vector< iomgr::http_route > routes = {
         {Pistache::Http::Method::Get, "/api/v1/getObjLife",
          Pistache::Rest::Routes::bind(&HttpManager::get_obj_life, this)},
         {Pistache::Http::Method::Get, "/api/v1/mallocStats",
@@ -46,11 +40,13 @@ HttpManager::HttpManager(HSHomeObject& ho) : ho_(ho) {
     };
 
     auto http_server = ioenvironment.get_http_server();
-    for (auto& route : routes) {
-        try {
-            http_server->setup_route(std::move(route.method), route.resource, std::move(route.handler), route.type);
-        } catch (std::runtime_error const& e) { LOGERROR("setup route {} failed, {}", route.resource, e.what()) }
+    if (!http_server) {
+        LOGERROR("http server not available");
+        return;
     }
+    try {
+         http_server->setup_routes(routes);
+    } catch (std::runtime_error const& e) { LOGERROR("setup routes failed, {}", e.what()) }
 }
 
 void HttpManager::get_obj_life(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response) {
