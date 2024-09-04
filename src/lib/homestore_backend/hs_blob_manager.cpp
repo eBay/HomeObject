@@ -37,20 +37,20 @@ BlobError toBlobError(ReplServiceError const& e) {
     case ReplServiceError::RESULT_NOT_EXIST_YET:
         [[fallthrough]];
     case ReplServiceError::TERM_MISMATCH:
-        return BlobError::REPLICATION_ERROR;
+        return BlobError(BlobErrorCode::REPLICATION_ERROR);
     case ReplServiceError::NOT_LEADER:
-        return BlobError::NOT_LEADER;
+        return BlobError(BlobErrorCode::NOT_LEADER);
     case ReplServiceError::TIMEOUT:
-        return BlobError::TIMEOUT;
+        return BlobError(BlobErrorCode::TIMEOUT);
     case ReplServiceError::NOT_IMPLEMENTED:
-        return BlobError::UNSUPPORTED_OP;
+        return BlobError(BlobErrorCode::UNSUPPORTED_OP);
     case ReplServiceError::OK:
         DEBUG_ASSERT(false, "Should not process OK!");
         [[fallthrough]];
     case ReplServiceError::FAILED:
-        return BlobError::UNKNOWN;
+        return BlobError(BlobErrorCode::UNKNOWN);
     default:
-        return BlobError::UNKNOWN;
+        return BlobError(BlobErrorCode::UNKNOWN);
     }
 }
 
@@ -159,8 +159,14 @@ BlobManager::AsyncResult< blob_id_t > HSHomeObject::_put_blob(ShardInfo const& s
           req->blob_header()->to_string(), req->data_sgs_string());
 
     repl_dev->async_alloc_write(req->cheader_buf(), req->ckey_buf(), req->data_sgs(), req);
-    return req->result().deferValue([this, req](const auto& result) -> BlobManager::AsyncResult< blob_id_t > {
-        if (result.hasError()) { return folly::makeUnexpected(result.error()); }
+    return req->result().deferValue([this, req, repl_dev](const auto& result) -> BlobManager::AsyncResult< blob_id_t > {
+        if (result.hasError()) {
+            auto err = result.error();
+            if (err.getCode() == BlobErrorCode::NOT_LEADER) {
+                err.current_leader = repl_dev->get_leader_id();
+            }
+            return folly::makeUnexpected(err);
+        }
         auto blob_info = result.value();
         BLOGT(blob_info.shard_id, blob_info.blob_id, "Put blob success blkid=[{}]", blob_info.pbas.to_string());
         return blob_info.blob_id;
@@ -178,7 +184,7 @@ void HSHomeObject::on_blob_put_commit(int64_t lsn, sisl::blob const& header, sis
     auto msg_header = r_cast< ReplicationMessageHeader const* >(header.cbytes());
     if (msg_header->corrupted()) {
         LOGE("replication message header is corrupted with crc error, lsn:{}", lsn);
-        if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(BlobError::CHECKSUM_MISMATCH)); }
+        if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(BlobError(BlobErrorCode::CHECKSUM_MISMATCH))); }
         return;
     }
 
@@ -205,7 +211,7 @@ void HSHomeObject::on_blob_put_commit(int64_t lsn, sisl::blob const& header, sis
     if (!exist_already) {
         if (status != homestore::btree_status_t::success) {
             LOGE("Failed to insert into index table for blob {} err {}", lsn, enum_name(status));
-            if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(BlobError::INDEX_ERROR)); }
+            if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(BlobError(BlobErrorCode::INDEX_ERROR))); }
             return;
         } else {
             // The PG superblock (durable entities) will be persisted as part of HS_CLIENT Checkpoint, which is always
@@ -261,21 +267,21 @@ BlobManager::AsyncResult< Blob > HSHomeObject::_get_blob(ShardInfo const& shard,
     BLOGT(shard.id, blob_id, "Blob get request: blkid={}, buf={}", blkid.to_string(), (void*)read_buf.bytes());
     return repl_dev->async_read(blkid, sgs, total_size)
         .thenValue([this, blob_id, shard_id = shard.id, req_len, req_offset, blkid,
-                    read_buf = std::move(read_buf)](auto&& result) mutable -> BlobManager::AsyncResult< Blob > {
+                    read_buf = std::move(read_buf), repl_dev](auto&& result) mutable -> BlobManager::AsyncResult< Blob > {
             if (result) {
                 BLOGE(shard_id, blob_id, "Failed to get blob: err={}", blob_id, shard_id, result.value());
-                return folly::makeUnexpected(BlobError::READ_FAILED);
+                return folly::makeUnexpected(BlobError(BlobErrorCode::READ_FAILED));
             }
 
             BlobHeader const* header = r_cast< BlobHeader const* >(read_buf.cbytes());
             if (!header->valid()) {
                 BLOGE(shard_id, blob_id, "Invalid header found: [header={}]", header->to_string());
-                return folly::makeUnexpected(BlobError::READ_FAILED);
+                return folly::makeUnexpected(BlobError(BlobErrorCode::READ_FAILED));
             }
 
             if (header->shard_id != shard_id) {
                 BLOGE(shard_id, blob_id, "Invalid shard_id in header: [header={}]", header->to_string());
-                return folly::makeUnexpected(BlobError::READ_FAILED);
+                return folly::makeUnexpected(BlobError(BlobErrorCode::READ_FAILED));
             }
 
             // Metadata start offset is just after blob header
@@ -291,13 +297,13 @@ BlobManager::AsyncResult< Blob > HSHomeObject::_get_blob(ShardInfo const& shard,
             if (std::memcmp(computed_hash, header->hash, BlobHeader::blob_max_hash_len) != 0) {
                 BLOGE(shard_id, blob_id, "Hash mismatch header [{}] [computed={:np}]", header->to_string(),
                       spdlog::to_hex(computed_hash, computed_hash + BlobHeader::blob_max_hash_len));
-                return folly::makeUnexpected(BlobError::CHECKSUM_MISMATCH);
+                return folly::makeUnexpected(BlobError(BlobErrorCode::CHECKSUM_MISMATCH));
             }
 
             if (req_offset + req_len > header->blob_size) {
                 BLOGE(shard_id, blob_id, "Invalid offset length requested in get blob offset={} len={} size={}",
                       req_offset, req_len, header->blob_size);
-                return folly::makeUnexpected(BlobError::INVALID_ARG);
+                return folly::makeUnexpected(BlobError(BlobErrorCode::INVALID_ARG));
             }
 
             // Copy the blob bytes from the offset. If request len is 0, take the
@@ -307,7 +313,7 @@ BlobManager::AsyncResult< Blob > HSHomeObject::_get_blob(ShardInfo const& shard,
             std::memcpy(body.bytes(), blob_bytes + req_offset, res_len);
 
             BLOGT(blob_id, shard_id, "Blob get success: blkid={}", blkid.to_string());
-            return Blob(std::move(body), std::move(user_key), header->object_offset);
+            return Blob(std::move(body), std::move(user_key), header->object_offset, repl_dev->get_leader_id());
         });
 }
 
@@ -321,7 +327,7 @@ HSHomeObject::blob_put_get_blk_alloc_hints(sisl::blob const& header, cintrusive<
     auto msg_header = r_cast< ReplicationMessageHeader* >(const_cast< uint8_t* >(header.cbytes()));
     if (msg_header->corrupted()) {
         LOGE("replication message header is corrupted with crc error shard:{}", msg_header->shard_id);
-        if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(BlobError::CHECKSUM_MISMATCH)); }
+        if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(BlobError(BlobErrorCode::CHECKSUM_MISMATCH))); }
         return folly::makeUnexpected(homestore::ReplServiceError::FAILED);
     }
 
@@ -367,8 +373,14 @@ BlobManager::NullAsyncResult HSHomeObject::_del_blob(ShardInfo const& shard, blo
     std::memcpy(req->key_buf().bytes(), &blob_id, sizeof(blob_id_t));
 
     repl_dev->async_alloc_write(req->cheader_buf(), req->ckey_buf(), sisl::sg_list{}, req);
-    return req->result().deferValue([](const auto& result) -> folly::Expected< folly::Unit, BlobError > {
-        if (result.hasError()) { return folly::makeUnexpected(result.error()); }
+    return req->result().deferValue([repl_dev](const auto& result) -> folly::Expected< folly::Unit, BlobError > {
+        if (result.hasError()) {
+            auto err = result.error();
+            if (err.getCode() == BlobErrorCode::NOT_LEADER) {
+                err.current_leader = repl_dev->get_leader_id();
+            }
+            return folly::makeUnexpected(err);
+        }
         auto blob_info = result.value();
         BLOGT(blob_info.shard_id, blob_info.blob_id, "Delete blob successful");
         return folly::Unit();
@@ -387,7 +399,7 @@ void HSHomeObject::on_blob_del_commit(int64_t lsn, sisl::blob const& header, sis
         BLOGE(msg_header->shard_id, *r_cast< blob_id_t const* >(key.cbytes()),
               "replication message header is corrupted with crc error, lsn={} header=[{}]", lsn,
               msg_header->to_string());
-        if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(BlobError::CHECKSUM_MISMATCH)); }
+        if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(BlobError(BlobErrorCode::CHECKSUM_MISMATCH))); }
         return;
     }
 
