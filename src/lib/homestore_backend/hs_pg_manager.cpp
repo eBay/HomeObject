@@ -102,7 +102,7 @@ void HSHomeObject::on_create_pg_message_commit(int64_t lsn, sisl::blob const& he
     auto const* msg_header = r_cast< ReplicationMessageHeader const* >(header.cbytes());
 
     if (msg_header->corrupted()) {
-        LOGE("create PG message header is corrupted , lsn:{}", lsn);
+        LOGE("create PG message header is corrupted , lsn:{}; header: {}", lsn, msg_header->to_string());
         if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(PGError::CRC_MISMATCH)); }
         return;
     }

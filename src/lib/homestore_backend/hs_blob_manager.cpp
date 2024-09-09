@@ -176,6 +176,7 @@ BlobManager::AsyncResult< blob_id_t > HSHomeObject::_put_blob(ShardInfo const& s
 void HSHomeObject::on_blob_put_commit(int64_t lsn, sisl::blob const& header, sisl::blob const& key,
                                       homestore::MultiBlkId const& pbas,
                                       cintrusive< homestore::repl_req_ctx >& hs_ctx) {
+    LOGTRACEMOD(blobmgr, "blob put commit lsn:{}, pbas:{}", lsn, pbas.to_string());
     repl_result_ctx< BlobManager::Result< BlobInfo > >* ctx{nullptr};
     if (hs_ctx && hs_ctx->is_proposer()) {
         ctx = boost::static_pointer_cast< repl_result_ctx< BlobManager::Result< BlobInfo > > >(hs_ctx).get();
@@ -208,6 +209,8 @@ void HSHomeObject::on_blob_put_commit(int64_t lsn, sisl::blob const& header, sis
 
     // Write to index table with key {shard id, blob id } and value {pba}.
     auto const [exist_already, status] = add_to_index_table(index_table, blob_info);
+    LOGTRACEMOD(blobmgr, "blob put commit blob_id: {}, lsn:{}, exist_already:{}, status:{}, pbas: {}", blob_id, lsn,
+                exist_already, status, pbas.to_string());
     if (!exist_already) {
         if (status != homestore::btree_status_t::success) {
             LOGE("Failed to insert into index table for blob {} err {}", lsn, enum_name(status));

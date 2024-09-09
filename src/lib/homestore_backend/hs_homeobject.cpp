@@ -67,7 +67,8 @@ public:
         if (auto app = _ho_application.lock(); app) {
             endpoint = fmt::format("{}{}", uri_prefix, app->lookup_peer(uuid));
         } else {
-            RELEASE_ASSERT(false, "HomeObjectApplication lifetime unexpected!");
+            LOGW("HomeObjectApplication lifetime unexpected! Shutdown in progress?");
+            return {};
         }
 
         std::pair< std::string, uint16_t > host_port;
