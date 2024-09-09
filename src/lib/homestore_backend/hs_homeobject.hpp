@@ -11,6 +11,8 @@
 #include "heap_chunk_selector.h"
 #include "lib/homeobject_impl.hpp"
 #include "replication_message.hpp"
+#include "homeobject/common.hpp"
+#include "index_kv.hpp"
 
 namespace homestore {
 struct meta_blk;
@@ -267,6 +269,10 @@ public:
         homestore::MultiBlkId pbas;
     };
 
+    struct BlobInfoData : public BlobInfo {
+        Blob blob;
+    };
+
     enum class BlobState : uint8_t {
         ALIVE = 0,
         TOMBSTONE = 1,
@@ -274,6 +280,26 @@ public:
     };
 
     inline const static homestore::MultiBlkId tombstone_pbas{0, 0, 0};
+
+    struct PGBlobIterator {
+        PGBlobIterator(HSHomeObject& home_obj, homestore::group_id_t group_id, uint64_t upto_lsn = 0);
+        PG* get_pg_metadata();
+        int64_t get_next_blobs(uint64_t max_num_blobs_in_batch, uint64_t max_batch_size_bytes,
+                               std::vector< HSHomeObject::BlobInfoData >& blob_vec, bool& end_of_shard);
+        void create_pg_shard_snapshot_data(sisl::io_blob_safe& meta_blob);
+        void create_blobs_snapshot_data(std::vector< HSHomeObject::BlobInfoData >& blob_vec,
+                                        sisl::io_blob_safe& data_blob, bool end_of_shard);
+        bool end_of_scan() const;
+
+        uint64_t cur_shard_seq_num_{1};
+        int64_t cur_blob_id_{-1};
+        uint64_t max_shard_seq_num_{0};
+        uint64_t cur_snapshot_batch_num{0};
+        HSHomeObject& home_obj_;
+        homestore::group_id_t group_id_;
+        pg_id_t pg_id_;
+        shared< homestore::ReplDev > repl_dev_;
+    };
 
 private:
     shared< HeapChunkSelector > chunk_selector_;
@@ -285,6 +311,11 @@ private:
 
 private:
     static homestore::ReplicationService& hs_repl_service() { return homestore::hs()->repl_service(); }
+
+    // blob related
+    BlobManager::AsyncResult< Blob > _get_blob_data(const shared< homestore::ReplDev >& repl_dev, shard_id_t shard_id,
+                                                    blob_id_t blob_id, uint64_t req_offset, uint64_t req_len,
+                                                    const homestore::MultiBlkId& blkid) const;
 
     // create pg related
     PGManager::NullAsyncResult do_create_pg(cshared< homestore::ReplDev > repl_dev, PGInfo&& pg_info);
@@ -413,6 +444,11 @@ private:
     BlobManager::Result< homestore::MultiBlkId > move_to_tombstone(shared< BlobIndexTable > index_table,
                                                                    const BlobInfo& blob_info);
     void print_btree_index(pg_id_t pg_id);
+
+    shared< BlobIndexTable > get_index_table(pg_id_t pg_id);
+
+    BlobManager::Result< std::vector< BlobInfo > >
+    query_blobs_in_shard(pg_id_t pg_id, uint64_t cur_shard_seq_num, blob_id_t start_blob_id, uint64_t max_num_in_batch);
 
     // Zero padding buffer related.
     size_t max_pad_size() const;

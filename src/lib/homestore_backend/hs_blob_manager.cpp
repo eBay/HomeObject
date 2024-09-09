@@ -4,6 +4,7 @@
 #include "lib/homeobject_impl.hpp"
 #include "lib/blob_route.hpp"
 #include <homestore/homestore.hpp>
+#include <homestore/blkdata_service.hpp>
 
 SISL_LOGGING_DECL(blobmgr)
 
@@ -162,9 +163,7 @@ BlobManager::AsyncResult< blob_id_t > HSHomeObject::_put_blob(ShardInfo const& s
     return req->result().deferValue([this, req, repl_dev](const auto& result) -> BlobManager::AsyncResult< blob_id_t > {
         if (result.hasError()) {
             auto err = result.error();
-            if (err.getCode() == BlobErrorCode::NOT_LEADER) {
-                err.current_leader = repl_dev->get_leader_id();
-            }
+            if (err.getCode() == BlobErrorCode::NOT_LEADER) { err.current_leader = repl_dev->get_leader_id(); }
             return folly::makeUnexpected(err);
         }
         auto blob_info = result.value();
@@ -259,7 +258,13 @@ BlobManager::AsyncResult< Blob > HSHomeObject::_get_blob(ShardInfo const& shard,
         return folly::makeUnexpected(r.error());
     }
 
-    auto const blkid = r.value();
+    return _get_blob_data(repl_dev, shard.id, blob_id, req_offset, req_len, r.value() /* blkid*/);
+}
+
+BlobManager::AsyncResult< Blob > HSHomeObject::_get_blob_data(const shared< homestore::ReplDev >& repl_dev,
+                                                              shard_id_t shard_id, blob_id_t blob_id,
+                                                              uint64_t req_offset, uint64_t req_len,
+                                                              const homestore::MultiBlkId& blkid) const {
     auto const total_size = blkid.blk_count() * repl_dev->get_blk_size();
     sisl::io_blob_safe read_buf{total_size, io_align};
 
@@ -267,10 +272,10 @@ BlobManager::AsyncResult< Blob > HSHomeObject::_get_blob(ShardInfo const& shard,
     sgs.size = total_size;
     sgs.iovs.emplace_back(iovec{.iov_base = read_buf.bytes(), .iov_len = read_buf.size()});
 
-    BLOGT(shard.id, blob_id, "Blob get request: blkid={}, buf={}", blkid.to_string(), (void*)read_buf.bytes());
+    BLOGT(shard_id, blob_id, "Blob get request: blkid={}, buf={}", blkid.to_string(), (void*)read_buf.bytes());
     return repl_dev->async_read(blkid, sgs, total_size)
-        .thenValue([this, blob_id, shard_id = shard.id, req_len, req_offset, blkid,
-                    read_buf = std::move(read_buf), repl_dev](auto&& result) mutable -> BlobManager::AsyncResult< Blob > {
+        .thenValue([this, blob_id, shard_id, req_len, req_offset, blkid, repl_dev,
+                    read_buf = std::move(read_buf)](auto&& result) mutable -> BlobManager::AsyncResult< Blob > {
             if (result) {
                 BLOGE(shard_id, blob_id, "Failed to get blob: err={}", blob_id, shard_id, result.value());
                 return folly::makeUnexpected(BlobError(BlobErrorCode::READ_FAILED));
@@ -379,9 +384,7 @@ BlobManager::NullAsyncResult HSHomeObject::_del_blob(ShardInfo const& shard, blo
     return req->result().deferValue([repl_dev](const auto& result) -> folly::Expected< folly::Unit, BlobError > {
         if (result.hasError()) {
             auto err = result.error();
-            if (err.getCode() == BlobErrorCode::NOT_LEADER) {
-                err.current_leader = repl_dev->get_leader_id();
-            }
+            if (err.getCode() == BlobErrorCode::NOT_LEADER) { err.current_leader = repl_dev->get_leader_id(); }
             return folly::makeUnexpected(err);
         }
         auto blob_info = result.value();

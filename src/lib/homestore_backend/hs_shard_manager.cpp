@@ -67,6 +67,7 @@ std::string HSHomeObject::serialize_shard_info(const ShardInfo& info) {
     j["shard_info"]["shard_id_t"] = info.id;
     j["shard_info"]["pg_id_t"] = info.placement_group;
     j["shard_info"]["state"] = info.state;
+    j["shard_info"]["lsn"] = info.lsn;
     j["shard_info"]["created_time"] = info.created_time;
     j["shard_info"]["modified_time"] = info.last_modified_time;
     j["shard_info"]["total_capacity"] = info.total_capacity_bytes;
@@ -81,6 +82,7 @@ ShardInfo HSHomeObject::deserialize_shard_info(const char* json_str, size_t str_
     shard_info.id = shard_json["shard_info"]["shard_id_t"].get< shard_id_t >();
     shard_info.placement_group = shard_json["shard_info"]["pg_id_t"].get< pg_id_t >();
     shard_info.state = static_cast< ShardInfo::State >(shard_json["shard_info"]["state"].get< int >());
+    shard_info.lsn = shard_json["shard_info"]["lsn"].get< uint64_t >();
     shard_info.created_time = shard_json["shard_info"]["created_time"].get< uint64_t >();
     shard_info.last_modified_time = shard_json["shard_info"]["modified_time"].get< uint64_t >();
     shard_info.available_capacity_bytes = shard_json["shard_info"]["available_capacity"].get< uint64_t >();
@@ -116,6 +118,7 @@ ShardManager::AsyncResult< ShardInfo > HSHomeObject::_create_shard(pg_id_t pg_ow
     sb->info = ShardInfo{.id = new_shard_id,
                          .placement_group = pg_owner,
                          .state = ShardInfo::State::OPEN,
+                         .lsn = 0,
                          .created_time = create_time,
                          .last_modified_time = create_time,
                          .available_capacity_bytes = size_bytes,
@@ -313,7 +316,8 @@ void HSHomeObject::on_shard_message_commit(int64_t lsn, sisl::blob const& h, hom
     switch (header->msg_type) {
     case ReplicationMessageType::CREATE_SHARD_MSG: {
         auto sb = r_cast< shard_info_superblk const* >(h.cbytes() + sizeof(ReplicationMessageHeader));
-        auto const shard_info = sb->info;
+        auto shard_info = sb->info;
+        shard_info.lsn = lsn;
 
         bool shard_exist = false;
         {

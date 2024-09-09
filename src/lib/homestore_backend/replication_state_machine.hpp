@@ -184,6 +184,8 @@ public:
 
 private:
     HSHomeObject* home_object_{nullptr};
+    std::shared_ptr< homestore::snapshot_context > m_snapshot_context;
+    std::mutex m_snapshot_lock;
 };
 
 } // namespace homeobject

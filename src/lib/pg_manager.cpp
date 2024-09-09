@@ -16,7 +16,7 @@ PGManager::NullAsyncResult HomeObjectImpl::create_pg(PGInfo&& pg_info) {
         if (member.priority > 0) saw_leader = true;
         peers.insert(member.id);
     }
-    if (!saw_ourself || !saw_leader) return folly::makeUnexpected(PGError::INVALID_ARG);
+    if (!saw_ourself || !saw_leader) { return folly::makeUnexpected(PGError::INVALID_ARG); }
     return _create_pg(std::move(pg_info), peers);
 }
 

@@ -22,6 +22,7 @@ target_sources("${PROJECT_NAME}_homestore" PRIVATE
     hs_blob_manager.cpp
     hs_shard_manager.cpp
     hs_pg_manager.cpp
+    pg_blob_iterator.cpp
     index_kv.cpp
     heap_chunk_selector.cpp
     replication_state_machine.cpp
