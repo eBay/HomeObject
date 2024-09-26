@@ -168,6 +168,11 @@ public:
     homestore::ReplResult< homestore::blk_alloc_hints > get_blk_alloc_hints(sisl::blob const& header,
                                                                             uint32_t data_size) override;
 
+    /// @brief Called when replication module is replacing an existing member with a new member
+    void replace_member(homestore::replica_id_t member_out, homestore::replica_id_t member_in) override {
+        // TODO
+    }
+
     /// @brief Called when the replica is being destroyed by nuraft;
     void on_destroy() override;
 
