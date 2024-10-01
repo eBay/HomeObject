@@ -9,7 +9,12 @@ PGManager::NullAsyncResult MemoryHomeObject::_create_pg(PGInfo&& pg_info, std::s
 }
 
 PGManager::NullAsyncResult MemoryHomeObject::_replace_member(pg_id_t id, peer_id_t const& old_member,
-                                                             PGMember const& new_member) {
+                                                             PGMember const& new_member, uint32_t commit_quorum) {
+    auto lg = std::shared_lock(_pg_lock);
+    auto it = _pg_map.find(id);
+    if (_pg_map.end() == it) {
+        return folly::makeSemiFuture< PGManager::NullResult >(folly::makeUnexpected(PGError::UNKNOWN_PG));
+    }
     return folly::makeSemiFuture< PGManager::NullResult >(folly::makeUnexpected(PGError::UNSUPPORTED_OP));
 }
 
@@ -25,7 +30,8 @@ bool MemoryHomeObject::_get_stats(pg_id_t id, PGStats& stats) const {
     stats.open_shards =
         std::count_if(pg->shards_.begin(), pg->shards_.end(), [](auto const& s) { return s->is_open(); });
     for (auto const& m : pg->pg_info_.members) {
-        stats.members.emplace_back(std::make_tuple(m.id, m.name, 0 /* last commit lsn */, 0 /* last succ response us */));
+        stats.members.emplace_back(
+            std::make_tuple(m.id, m.name, 0 /* last commit lsn */, 0 /* last succ response us */));
     }
 
     return true;

@@ -326,7 +326,7 @@ void HSHomeObject::on_shard_message_commit(int64_t lsn, sisl::blob const& h, hom
         }
 
         if (!shard_exist) {
-            add_new_shard_to_map(std::make_unique< HS_Shard >(std::move(shard_info), blkids.chunk_num()));
+            add_new_shard_to_map(std::make_unique< HS_Shard >(shard_info, blkids.chunk_num()));
             // select_specific_chunk() will do something only when we are relaying journal after restart, during the
             // runtime flow chunk is already been be mark busy when we write the shard info to the repldev.
             chunk_selector_->select_specific_chunk(blkids.chunk_num());
@@ -344,6 +344,7 @@ void HSHomeObject::on_shard_message_commit(int64_t lsn, sisl::blob const& h, hom
         hs_pg->durable_entities_update([&blkids](auto& de) {
             de.total_occupied_blk_count.fetch_add(blkids.blk_count(), std::memory_order_relaxed);
         });
+        LOGI("Commit done for CREATE_SHARD_MSG for shard {}", shard_info.id);
 
         break;
     }
@@ -368,6 +369,7 @@ void HSHomeObject::on_shard_message_commit(int64_t lsn, sisl::blob const& h, hom
         } else
             LOGW("try to commit SEAL_SHARD_MSG but shard state is not sealed, shard_id: {}", shard_info.id);
         if (ctx) { ctx->promise_.setValue(ShardManager::Result< ShardInfo >(shard_info)); }
+        LOGI("Commit done for SEAL_SHARD_MSG for shard {}", shard_info.id);
         break;
     }
     default:

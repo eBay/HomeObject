@@ -98,7 +98,7 @@ class HomeObjectImpl : public HomeObject,
 
     virtual PGManager::NullAsyncResult _create_pg(PGInfo&& pg_info, std::set< peer_id_t > const& peers) = 0;
     virtual PGManager::NullAsyncResult _replace_member(pg_id_t id, peer_id_t const& old_member,
-                                                       PGMember const& new_member) = 0;
+                                                       PGMember const& new_member, uint32_t commit_quorum) = 0;
     virtual bool _get_stats(pg_id_t id, PGStats& stats) const = 0;
     virtual void _get_pg_ids(std::vector< pg_id_t >& pg_ids) const = 0;
 
@@ -144,8 +144,8 @@ public:
 
     /// PgManager
     PGManager::NullAsyncResult create_pg(PGInfo&& pg_info) final;
-    PGManager::NullAsyncResult replace_member(pg_id_t id, peer_id_t const& old_member,
-                                              PGMember const& new_member, u_int32_t commit_quorum) final;
+    PGManager::NullAsyncResult replace_member(pg_id_t id, peer_id_t const& old_member, PGMember const& new_member,
+                                              u_int32_t commit_quorum) final;
     // see api comments in base class;
     bool get_stats(pg_id_t id, PGStats& stats) const final;
     void get_pg_ids(std::vector< pg_id_t >& pg_ids) const final;

@@ -49,6 +49,7 @@ folly::Future< ShardManager::Result< ShardInfo > > HomeObjectImpl::_get_shard(sh
     return _defer().thenValue([this, id](auto) -> ShardManager::Result< ShardInfo > {
         auto lg = std::shared_lock(_shard_lock);
         if (auto it = _shard_map.find(id); _shard_map.end() != it) return (*it->second)->info;
+        LOGE("Couldnt find shard id in shard map {}", id);
         return folly::makeUnexpected(ShardError::UNKNOWN_SHARD);
     });
 }

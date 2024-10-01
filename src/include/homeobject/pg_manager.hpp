@@ -5,6 +5,7 @@
 
 #include <boost/uuid/uuid_io.hpp>
 #include <sisl/utility/enum.hpp>
+#include <sisl/logging/logging.h>
 
 #include "common.hpp"
 
@@ -14,9 +15,15 @@ ENUM(PGError, uint16_t, UNKNOWN = 1, INVALID_ARG, TIMEOUT, UNKNOWN_PG, NOT_LEADE
      CRC_MISMATCH, NO_SPACE_LEFT, DRIVE_WRITE_ERROR, RETRY_REQUEST);
 
 struct PGMember {
+    // Max length is based on homestore::replica_member_info::max_name_len - 1. Last byte is null terminated.
+    static constexpr uint64_t max_name_len = 127;
     explicit PGMember(peer_id_t _id) : id(_id) {}
-    PGMember(peer_id_t _id, std::string const& _name) : id(_id), name(_name) {}
-    PGMember(peer_id_t _id, std::string const& _name, int32_t _priority) : id(_id), name(_name), priority(_priority) {}
+    PGMember(peer_id_t _id, std::string const& _name) : id(_id), name(_name) {
+        RELEASE_ASSERT(name.size() <= max_name_len, "Name exceeds max length");
+    }
+    PGMember(peer_id_t _id, std::string const& _name, int32_t _priority) : id(_id), name(_name), priority(_priority) {
+        RELEASE_ASSERT(name.size() <= max_name_len, "Name exceeds max length");
+    }
     peer_id_t id;
     std::string name;
     int32_t priority{0}; // <0 (Arbiter), ==0 (Follower), >0 (F|Leader)
@@ -78,7 +85,8 @@ struct PGStats {
 class PGManager : public Manager< PGError > {
 public:
     virtual NullAsyncResult create_pg(PGInfo&& pg_info) = 0;
-    virtual NullAsyncResult replace_member(pg_id_t id, peer_id_t const& old_member, PGMember const& new_member, u_int32_t commit_quorum) = 0;
+    virtual NullAsyncResult replace_member(pg_id_t id, peer_id_t const& old_member, PGMember const& new_member,
+                                           u_int32_t commit_quorum = 0) = 0;
 
     /**
      * Retrieves the statistics for a specific PG (Placement Group) identified by its ID.

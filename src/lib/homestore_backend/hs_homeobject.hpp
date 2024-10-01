@@ -49,8 +49,8 @@ class HSHomeObject : public HomeObjectImpl {
     BlobManager::NullAsyncResult _del_blob(ShardInfo const&, blob_id_t) override;
 
     PGManager::NullAsyncResult _create_pg(PGInfo&& pg_info, std::set< peer_id_t > const& peers) override;
-    PGManager::NullAsyncResult _replace_member(pg_id_t id, peer_id_t const& old_member,
-                                               PGMember const& new_member) override;
+    PGManager::NullAsyncResult _replace_member(pg_id_t id, peer_id_t const& old_member, PGMember const& new_member,
+                                               uint32_t commit_quorum) override;
 
     bool _get_stats(pg_id_t id, PGStats& stats) const override;
     void _get_pg_ids(std::vector< pg_id_t >& pg_ids) const override;
@@ -377,6 +377,16 @@ public:
      */
     void on_create_pg_message_commit(int64_t lsn, sisl::blob const& header, shared< homestore::ReplDev > repl_dev,
                                      cintrusive< homestore::repl_req_ctx >& hs_ctx);
+
+    /**
+     * @brief Function invoked when a member is replaced by a new member
+     *
+     * @param group_id The group id of replication device.
+     * @param member_out Member which is removed from group
+     * @param member_in Member which is added to group
+     * */
+    void on_pg_replace_member(homestore::group_id_t group_id, const homestore::replica_member_info& member_out,
+                              const homestore::replica_member_info& member_in);
 
     /**
      * @brief Callback function invoked when a message is committed on a shard.
