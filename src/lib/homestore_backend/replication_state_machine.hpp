@@ -169,9 +169,7 @@ public:
                                                                             uint32_t data_size) override;
 
     /// @brief Called when replication module is replacing an existing member with a new member
-    void replace_member(homestore::replica_id_t member_out, homestore::replica_id_t member_in) override {
-        // TODO
-    }
+    void replace_member(homestore::replica_id_t member_out, homestore::replica_id_t member_in) override {};
 
     /// @brief Called when the replica is being destroyed by nuraft;
     void on_destroy() override;
