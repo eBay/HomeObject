@@ -36,17 +36,11 @@ TEST_F(TestFixture, Migrate) {
                                    PGMember{boost::uuids::random_generator()()})
                   .get()
                   .error(),
-              PGError::UNSUPPORTED_OP);
-    EXPECT_EQ(
-        homeobj_->pg_manager()
-            ->replace_member(_pg_id, boost::uuids::random_generator()(), PGMember{boost::uuids::random_generator()()})
-            .get()
-            .error(),
-        PGError::UNSUPPORTED_OP);
+              PGError::UNKNOWN_PG);
     EXPECT_EQ(homeobj_->pg_manager()->replace_member(_pg_id, _peer1, PGMember{_peer1}).get().error(),
               PGError::INVALID_ARG);
-    EXPECT_EQ(homeobj_->pg_manager()->replace_member(_pg_id, _peer1, PGMember{_peer2}).get().error(),
-              PGError::INVALID_ARG);
+    // TODO enable after HO test framework is enabled
+#if 0
     EXPECT_EQ(homeobj_->pg_manager()
                   ->replace_member(_pg_id, _peer1, PGMember{boost::uuids::random_generator()()})
                   .get()
@@ -54,4 +48,5 @@ TEST_F(TestFixture, Migrate) {
               PGError::INVALID_ARG);
     EXPECT_FALSE(
         homeobj_->pg_manager()->replace_member(_pg_id, _peer2, PGMember{boost::uuids::random_generator()()}).get());
+#endif
 }

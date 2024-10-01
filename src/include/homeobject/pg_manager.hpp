@@ -76,7 +76,8 @@ struct PGStats {
 class PGManager : public Manager< PGError > {
 public:
     virtual NullAsyncResult create_pg(PGInfo&& pg_info) = 0;
-    virtual NullAsyncResult replace_member(pg_id_t id, peer_id_t const& old_member, PGMember const& new_member) = 0;
+    virtual NullAsyncResult replace_member(pg_id_t id, peer_id_t const& old_member, PGMember const& new_member,
+                                           uint32_t commit_quorum = 0) = 0;
 
     /**
      * Retrieves the statistics for a specific PG (Placement Group) identified by its ID.
