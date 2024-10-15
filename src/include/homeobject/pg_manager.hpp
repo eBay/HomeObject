@@ -34,6 +34,7 @@ struct PGInfo {
     pg_id_t id;
     mutable MemberSet members;
     peer_id_t replica_set_uuid;
+    u_int64_t size;
 
     auto operator<=>(PGInfo const& rhs) const { return id <=> rhs.id; }
     auto operator==(PGInfo const& rhs) const { return id == rhs.id; }
@@ -51,6 +52,7 @@ struct PGStats {
     uint64_t avail_bytes;           // total number of bytes available on this PG;
     uint64_t num_active_objects;    // total number of active objects on this PG;
     uint64_t num_tombstone_objects; // total number of tombstone objects on this PG;
+    uint64_t pg_state;              // PG state;
     std::vector<
         std::tuple< peer_id_t, std::string, uint64_t /* last_commit_lsn */, uint64_t /* last_succ_resp_us_ */ > >
         members;
@@ -76,7 +78,7 @@ struct PGStats {
 class PGManager : public Manager< PGError > {
 public:
     virtual NullAsyncResult create_pg(PGInfo&& pg_info) = 0;
-    virtual NullAsyncResult replace_member(pg_id_t id, peer_id_t const& old_member, PGMember const& new_member) = 0;
+    virtual NullAsyncResult replace_member(pg_id_t id, peer_id_t const& old_member, PGMember const& new_member, u_int32_t commit_quorum) = 0;
 
     /**
      * Retrieves the statistics for a specific PG (Placement Group) identified by its ID.
