@@ -57,9 +57,10 @@ struct HomeObjectStats {
     uint64_t used_capacity_bytes{0};
     uint32_t num_open_shards{0};
     uint32_t avail_open_shards{0};
+    uint32_t num_disks{0};
     std::string to_string() const {
-        return fmt::format("total_capacity_bytes={}, used_capacity_bytes={}, num_open_shards={}, avail_open_shards={}",
-                           total_capacity_bytes, used_capacity_bytes, num_open_shards, avail_open_shards);
+        return fmt::format("total_capacity_bytes={}, used_capacity_bytes={}, num_open_shards={}, avail_open_shards={}, num_disks={}",
+                           total_capacity_bytes, used_capacity_bytes, num_open_shards, avail_open_shards, num_disks);
     }
 };
 

@@ -21,7 +21,7 @@ PGManager::NullAsyncResult HomeObjectImpl::create_pg(PGInfo&& pg_info) {
 }
 
 PGManager::NullAsyncResult HomeObjectImpl::replace_member(pg_id_t id, peer_id_t const& old_member,
-                                                          PGMember const& new_member) {
+                                                          PGMember const& new_member, u_int32_t commit_quorum) {
     LOGI("[pg={}] replace member [{}] with [{}]", id, to_string(old_member), to_string(new_member.id));
     if (old_member == new_member.id) {
         LOGW("rejecting identical replacement SvcId [{}]!", to_string(old_member));

@@ -145,7 +145,7 @@ public:
     /// PgManager
     PGManager::NullAsyncResult create_pg(PGInfo&& pg_info) final;
     PGManager::NullAsyncResult replace_member(pg_id_t id, peer_id_t const& old_member,
-                                              PGMember const& new_member) final;
+                                              PGMember const& new_member, u_int32_t commit_quorum) final;
     // see api comments in base class;
     bool get_stats(pg_id_t id, PGStats& stats) const final;
     void get_pg_ids(std::vector< pg_id_t >& pg_ids) const final;
