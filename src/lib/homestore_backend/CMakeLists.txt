@@ -50,7 +50,6 @@ add_subdirectory(tests)
 add_executable (homestore_test)
 target_sources(homestore_test PRIVATE
     $<TARGET_OBJECTS:homestore_tests>
-    $<TARGET_OBJECTS:test_fixture>
 )
 target_link_libraries(homestore_test PUBLIC
     homeobject_homestore

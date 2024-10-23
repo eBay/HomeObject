@@ -1,220 +1,180 @@
 #include "homeobj_fixture.hpp"
+
 #include "lib/homestore_backend/index_kv.hpp"
 #include "generated/resync_pg_shard_generated.h"
 #include "generated/resync_blob_data_generated.h"
 
-TEST(HomeObject, BasicEquivalence) {
-    auto app = std::make_shared< FixtureApp >();
-    auto obj_inst = homeobject::init_homeobject(std::weak_ptr< homeobject::HomeObjectApplication >(app));
-    ASSERT_TRUE(!!obj_inst);
-    auto shard_mgr = obj_inst->shard_manager();
-    auto pg_mgr = obj_inst->pg_manager();
-    auto blob_mgr = obj_inst->blob_manager();
-    EXPECT_EQ(obj_inst.get(), dynamic_cast< homeobject::HomeObject* >(shard_mgr.get()));
-    EXPECT_EQ(obj_inst.get(), dynamic_cast< homeobject::HomeObject* >(pg_mgr.get()));
-    EXPECT_EQ(obj_inst.get(), dynamic_cast< homeobject::HomeObject* >(blob_mgr.get()));
+TEST_F(HomeObjectFixture, BasicEquivalence) {
+    auto shard_mgr = _obj_inst->shard_manager();
+    auto pg_mgr = _obj_inst->pg_manager();
+    auto blob_mgr = _obj_inst->blob_manager();
+    EXPECT_EQ(_obj_inst.get(), dynamic_cast< homeobject::HomeObject* >(shard_mgr.get()));
+    EXPECT_EQ(_obj_inst.get(), dynamic_cast< homeobject::HomeObject* >(pg_mgr.get()));
+    EXPECT_EQ(_obj_inst.get(), dynamic_cast< homeobject::HomeObject* >(blob_mgr.get()));
 }
 
 TEST_F(HomeObjectFixture, BasicPutGetDelBlobWRestart) {
     auto num_pgs = SISL_OPTIONS["num_pgs"].as< uint64_t >();
     auto num_shards_per_pg = SISL_OPTIONS["num_shards"].as< uint64_t >() / num_pgs;
-    auto num_blobs_per_shard = SISL_OPTIONS["num_blobs"].as< uint64_t >() / num_shards_per_pg;
-    std::vector< std::pair< pg_id_t, shard_id_t > > pg_shard_id_vec;
-    blob_map_t blob_map;
 
-    // Create blob size in range (1, 16kb) and user key in range (1, 1kb)
-    const uint32_t max_blob_size = 16 * 1024;
+    auto num_blobs_per_shard = SISL_OPTIONS["num_blobs"].as< uint64_t >() / num_shards_per_pg;
+    std::map< pg_id_t, std::vector< shard_id_t > > pg_shard_id_vec;
+
+    // pg -> next blob_id in this pg
+    std::map< pg_id_t, blob_id_t > pg_blob_id;
 
     for (uint64_t i = 1; i <= num_pgs; i++) {
-        create_pg(i /* pg_id */);
+        create_pg(i);
+        pg_blob_id[i] = 0;
         for (uint64_t j = 0; j < num_shards_per_pg; j++) {
-            auto shard = _obj_inst->shard_manager()->create_shard(i /* pg_id */, 64 * Mi).get();
-            ASSERT_TRUE(!!shard);
-            pg_shard_id_vec.emplace_back(i, shard->id);
-            LOGINFO("pg {} shard {}", i, shard->id);
+            auto shard = create_shard(i, 64 * Mi);
+            pg_shard_id_vec[i].emplace_back(shard.id);
+            LOGINFO("pg {} shard {}", i, shard.id);
         }
     }
 
     // Put blob for all shards in all pg's.
-    put_blob(blob_map, pg_shard_id_vec, num_blobs_per_shard, max_blob_size);
+    put_blobs(pg_shard_id_vec, num_blobs_per_shard, pg_blob_id);
 
     // Verify all get blobs
-    verify_get_blob(blob_map);
+    verify_get_blob(pg_shard_id_vec, num_blobs_per_shard);
 
     // Verify the stats
     verify_obj_count(num_pgs, num_blobs_per_shard, num_shards_per_pg, false /* deleted */);
-
-    // for (uint64_t i = 1; i <= num_pgs; i++) {
-    //     r_cast< HSHomeObject* >(_obj_inst.get())->print_btree_index(i);
-    // }
-
-    LOGINFO("Flushing CP.");
-    trigger_cp(true /* wait */);
 
     // Restart homeobject
     restart();
 
     // Verify all get blobs after restart
-    verify_get_blob(blob_map);
+    verify_get_blob(pg_shard_id_vec, num_blobs_per_shard);
 
     // Verify the stats after restart
     verify_obj_count(num_pgs, num_blobs_per_shard, num_shards_per_pg, false /* deleted */);
 
-    // Put blob after restart to test the persistance of blob sequence number
-    put_blob(blob_map, pg_shard_id_vec, num_blobs_per_shard, max_blob_size);
+    // we need to sync here. if not then the leader deletion op will bring impact to follower`s verification if the
+    // follower is very slow. for example, the follower is still verifying blob abd obj_count , but the leader has
+    // already start deletion. so the follower will fail the verification.
+    g_helper->sync_for_test_start();
+    //  Put blob after restart to test the persistance of blob sequence number
+    put_blobs(pg_shard_id_vec, num_blobs_per_shard, pg_blob_id);
 
     // Verify all get blobs with random offset and length.
-    verify_get_blob(blob_map, true /* use_random_offset */);
+    verify_get_blob(pg_shard_id_vec, num_blobs_per_shard, true /* use_random_offset */);
 
     // Verify the stats after put blobs after restart
     verify_obj_count(num_pgs, num_blobs_per_shard * 2, num_shards_per_pg, false /* deleted */);
 
+    // we need to sync here, same reason as above.we can not use sync_for_test_start() twice without a new type of sync,
+    // so use sync_for_verify_start() here
+    g_helper->sync_for_verify_start();
     // Delete all blobs
-    for (const auto& [id, blob] : blob_map) {
-        int64_t shard_id = std::get< 1 >(id), blob_id = std::get< 2 >(id);
-        auto g = _obj_inst->blob_manager()->del(shard_id, blob_id).get();
-        ASSERT_TRUE(g);
-        LOGINFO("delete blob shard {} blob {}", shard_id, blob_id);
-    }
+    del_all_blobs(pg_shard_id_vec, num_blobs_per_shard, pg_blob_id);
 
     // Verify the stats after restart
     verify_obj_count(num_pgs, num_blobs_per_shard * 2, num_shards_per_pg, true /* deleted */);
 
     // Delete again should have no errors.
-    for (const auto& [id, blob] : blob_map) {
-        int64_t shard_id = std::get< 1 >(id), blob_id = std::get< 2 >(id);
-        auto g = _obj_inst->blob_manager()->del(shard_id, blob_id).get();
-        ASSERT_TRUE(g);
-        LOGINFO("delete blob shard {} blob {}", shard_id, blob_id);
-    }
+    for (const auto& [pg_id, shard_vec] : pg_shard_id_vec) {
+        // for each pg, blob_id start for 0
+        blob_id_t blob_id{0};
 
+        run_on_pg_leader(pg_id, [&]() {
+            for (const auto& shard_id : shard_vec) {
+                for (uint64_t k = 0; k < num_blobs_per_shard; k++) {
+                    auto g = _obj_inst->blob_manager()->del(shard_id, blob_id).get();
+                    ASSERT_TRUE(g);
+                    LOGINFO("delete blob shard {} blob {}", shard_id, blob_id);
+                    blob_id++;
+                }
+            }
+        });
+    }
     verify_obj_count(num_pgs, num_blobs_per_shard * 2, num_shards_per_pg, true /* deleted */);
 
     // After delete all blobs, get should fail
-    for (const auto& [id, blob] : blob_map) {
-        int64_t shard_id = std::get< 1 >(id), blob_id = std::get< 2 >(id);
-        auto g = _obj_inst->blob_manager()->get(shard_id, blob_id).get();
-        ASSERT_TRUE(!g);
+    for (const auto& [pg_id, shard_vec] : pg_shard_id_vec) {
+        blob_id_t blob_id{0};
+        for (; blob_id != pg_blob_id[pg_id];) {
+            for (const auto& shard_id : shard_vec) {
+                for (uint64_t k = 0; k < num_blobs_per_shard; k++) {
+                    auto g = _obj_inst->blob_manager()->get(shard_id, blob_id).get();
+                    ASSERT_TRUE(!g);
+                    blob_id++;
+                }
+            }
+        }
     }
 
     // all the deleted blobs should be tombstone in index table
-    auto hs_homeobject = dynamic_cast< HSHomeObject* >(_obj_inst.get());
-    for (const auto& [id, blob] : blob_map) {
-        int64_t pg_id = std::get< 0 >(id), shard_id = std::get< 1 >(id), blob_id = std::get< 2 >(id);
+    for (const auto& [pg_id, shard_vec] : pg_shard_id_vec) {
         shared< BlobIndexTable > index_table;
         {
-            std::shared_lock lock_guard(hs_homeobject->_pg_lock);
-            auto iter = hs_homeobject->_pg_map.find(pg_id);
-            ASSERT_TRUE(iter != hs_homeobject->_pg_map.end());
+            std::shared_lock lock_guard(_obj_inst->_pg_lock);
+            auto iter = _obj_inst->_pg_map.find(pg_id);
+            ASSERT_TRUE(iter != _obj_inst->_pg_map.end());
             index_table = static_cast< HSHomeObject::HS_PG* >(iter->second.get())->index_table_;
         }
-
-        auto g = hs_homeobject->get_blob_from_index_table(index_table, shard_id, blob_id);
-        ASSERT_FALSE(!!g);
-        EXPECT_EQ(BlobErrorCode::UNKNOWN_BLOB, g.error().getCode());
+        blob_id_t blob_id{0};
+        for (; blob_id != pg_blob_id[pg_id];) {
+            for (const auto& shard_id : shard_vec) {
+                auto g = _obj_inst->get_blob_from_index_table(index_table, shard_id, blob_id);
+                ASSERT_FALSE(!!g);
+                EXPECT_EQ(BlobErrorCode::UNKNOWN_BLOB, g.error().getCode());
+                blob_id++;
+            }
+        }
     }
-
-    LOGINFO("Flushing CP.");
-    trigger_cp(true /* wait */);
 
     // Restart homeobject
     restart();
 
     // After restart, for all deleted blobs, get should fail
-    for (const auto& [id, blob] : blob_map) {
-        int64_t shard_id = std::get< 1 >(id), blob_id = std::get< 2 >(id);
-        auto g = _obj_inst->blob_manager()->get(shard_id, blob_id).get();
-        ASSERT_TRUE(!g);
+    for (const auto& [pg_id, shard_vec] : pg_shard_id_vec) {
+        blob_id_t blob_id{0};
+        for (; blob_id != pg_blob_id[pg_id];) {
+            for (const auto& shard_id : shard_vec) {
+                for (uint64_t k = 0; k < num_blobs_per_shard; k++) {
+                    auto g = _obj_inst->blob_manager()->get(shard_id, blob_id).get();
+                    ASSERT_TRUE(!g);
+                    blob_id++;
+                }
+            }
+        }
     }
 
     // Verify the stats after restart
     verify_obj_count(num_pgs, num_blobs_per_shard * 2, num_shards_per_pg, true /* deleted */);
 }
 
-TEST_F(HomeObjectFixture, SealShardWithRestart) {
-    // Create a pg, shard, put blob should succeed, seal and put blob again should fail.
-    // Recover and put blob again should fail.
-    pg_id_t pg_id{1};
-    create_pg(pg_id);
-
-    auto s = _obj_inst->shard_manager()->create_shard(pg_id, 64 * Mi).get();
-    ASSERT_TRUE(!!s);
-    auto shard_info = s.value();
-    auto shard_id = shard_info.id;
-    s = _obj_inst->shard_manager()->get_shard(shard_id).get();
-    ASSERT_TRUE(!!s);
-
-    LOGINFO("Got shard {}", shard_id);
-    shard_info = s.value();
-    EXPECT_EQ(shard_info.id, shard_id);
-    EXPECT_EQ(shard_info.placement_group, pg_id);
-    EXPECT_EQ(shard_info.state, ShardInfo::State::OPEN);
-    auto b = _obj_inst->blob_manager()->put(shard_id, Blob{sisl::io_blob_safe(512u, 512u), "test_blob", 0ul}).get();
-    ASSERT_TRUE(!!b);
-    LOGINFO("Put blob {}", b.value());
-
-    s = _obj_inst->shard_manager()->seal_shard(shard_id).get();
-    ASSERT_TRUE(!!s);
-    shard_info = s.value();
-    EXPECT_EQ(shard_info.id, shard_id);
-    EXPECT_EQ(shard_info.placement_group, pg_id);
-    EXPECT_EQ(shard_info.state, ShardInfo::State::SEALED);
-    LOGINFO("Sealed shard {}", shard_id);
-
-    b = _obj_inst->blob_manager()->put(shard_id, Blob{sisl::io_blob_safe(512u, 512u), "test_blob", 0ul}).get();
-    ASSERT_TRUE(!b);
-    ASSERT_EQ(b.error().getCode(), BlobErrorCode::SEALED_SHARD);
-    LOGINFO("Put blob {}", b.error());
-
-    // Restart homeobject
-    restart();
-
-    // Verify shard is sealed.
-    s = _obj_inst->shard_manager()->get_shard(shard_id).get();
-    ASSERT_TRUE(!!s);
-
-    LOGINFO("After restart shard {}", shard_id);
-    shard_info = s.value();
-    EXPECT_EQ(shard_info.id, shard_id);
-    EXPECT_EQ(shard_info.placement_group, pg_id);
-    EXPECT_EQ(shard_info.state, ShardInfo::State::SEALED);
-
-    b = _obj_inst->blob_manager()->put(shard_id, Blob{sisl::io_blob_safe(512u, 512u), "test_blob", 0ul}).get();
-    ASSERT_TRUE(!b);
-    ASSERT_EQ(b.error().getCode(), BlobErrorCode::SEALED_SHARD);
-    LOGINFO("Put blob {}", b.error());
-}
-
 TEST_F(HomeObjectFixture, PGBlobIterator) {
     uint64_t num_shards_per_pg = 3;
     uint64_t num_blobs_per_shard = 5;
-    std::vector< std::pair< pg_id_t, shard_id_t > > pg_shard_id_vec;
-    blob_map_t blob_map;
+    std::map< pg_id_t, std::vector< shard_id_t > > pg_shard_id_vec;
+    // pg -> next blob_id in this pg
+    std::map< pg_id_t, blob_id_t > pg_blob_id;
 
-    // Create blob size in range (1, 16kb) and user key in range (1, 1kb)
-    const uint32_t max_blob_size = 16 * 1024;
-
-    create_pg(1 /* pg_id */);
-    for (uint64_t j = 0; j < num_shards_per_pg; j++) {
-        auto shard = _obj_inst->shard_manager()->create_shard(1 /* pg_id */, 64 * Mi).get();
-        ASSERT_TRUE(!!shard);
-        pg_shard_id_vec.emplace_back(1, shard->id);
-        LOGINFO("pg {} shard {}", 1, shard->id);
+    pg_id_t pg_id{1};
+    create_pg(pg_id);
+    for (uint64_t i = 0; i < num_shards_per_pg; i++) {
+        auto shard = create_shard(1, 64 * Mi);
+        pg_shard_id_vec[1].emplace_back(shard.id);
+        pg_blob_id[i] = 0;
+        LOGINFO("pg {} shard {}", pg_id, shard.id);
     }
 
     // Put blob for all shards in all pg's.
-    put_blob(blob_map, pg_shard_id_vec, num_blobs_per_shard, max_blob_size);
+    put_blobs(pg_shard_id_vec, num_blobs_per_shard, pg_blob_id);
 
-    auto ho = dynamic_cast< homeobject::HSHomeObject* >(_obj_inst.get());
     PG* pg1;
     {
-        auto lg = std::shared_lock(ho->_pg_lock);
-        auto iter = ho->_pg_map.find(1);
-        ASSERT_TRUE(iter != ho->_pg_map.end());
+        auto lg = std::shared_lock(_obj_inst->_pg_lock);
+        auto iter = _obj_inst->_pg_map.find(pg_id);
+        ASSERT_TRUE(iter != _obj_inst->_pg_map.end());
         pg1 = iter->second.get();
     }
 
-    auto pg1_iter = std::make_shared< homeobject::HSHomeObject::PGBlobIterator >(*ho, pg1->pg_info_.replica_set_uuid);
+    auto pg1_iter =
+        std::make_shared< homeobject::HSHomeObject::PGBlobIterator >(*_obj_inst, pg1->pg_info_.replica_set_uuid);
     ASSERT_EQ(pg1_iter->end_of_scan(), false);
 
     // Verify PG shard meta data.

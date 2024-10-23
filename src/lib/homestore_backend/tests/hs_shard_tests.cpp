@@ -1,275 +1,197 @@
-#include <string>
+#include "homeobj_fixture.hpp"
 
-#include <boost/uuid/random_generator.hpp>
+TEST_F(HomeObjectFixture, CreateMultiShards) {
+    pg_id_t pg_id{1};
+    create_pg(pg_id);
+    auto _shard_1 = create_shard(pg_id, 64 * Mi);
+    auto _shard_2 = create_shard(pg_id, 64 * Mi);
 
-#include <homestore/blkdata_service.hpp>
-#include <homestore/logstore_service.hpp>
-
-#include <gtest/gtest.h>
-
-// will allow unit tests to access object private/protected for validation;
-#define protected public
-
-#include "lib/homestore_backend/hs_homeobject.hpp"
-#include "lib/homestore_backend/replication_message.hpp"
-#include "lib/homestore_backend/replication_state_machine.hpp"
-#include "lib/tests/fixture_app.hpp"
-
-using homeobject::shard_id_t;
-using homeobject::ShardError;
-using homeobject::ShardInfo;
-using homeobject::ShardManager;
-
-TEST_F(TestFixture, CreateMultiShards) {
-    homeobject::HSHomeObject* ho = dynamic_cast< homeobject::HSHomeObject* >(homeobj_.get());
-    auto chunk_num_1 = ho->get_shard_chunk(_shard_1.id);
+    auto chunk_num_1 = _obj_inst->get_shard_chunk(_shard_1.id);
     ASSERT_TRUE(chunk_num_1.has_value());
 
-    auto chunk_num_2 = ho->get_shard_chunk(_shard_2.id);
+    auto chunk_num_2 = _obj_inst->get_shard_chunk(_shard_2.id);
     ASSERT_TRUE(chunk_num_2.has_value());
 
     // check if both chunk is on the same pdev;
-    auto alloc_hint1 = ho->chunk_selector()->chunk_to_hints(chunk_num_1.value());
-    auto alloc_hint2 = ho->chunk_selector()->chunk_to_hints(chunk_num_2.value());
+    auto alloc_hint1 = _obj_inst->chunk_selector()->chunk_to_hints(chunk_num_1.value());
+    auto alloc_hint2 = _obj_inst->chunk_selector()->chunk_to_hints(chunk_num_2.value());
     ASSERT_TRUE(alloc_hint1.pdev_id_hint.has_value());
     ASSERT_TRUE(alloc_hint2.pdev_id_hint.has_value());
     ASSERT_TRUE(alloc_hint1.pdev_id_hint.value() == alloc_hint2.pdev_id_hint.value());
 }
 
-TEST_F(TestFixture, CreateMultiShardsOnMultiPG) {
-    // create another PG;
-    auto peer1 = homeobj_->our_uuid();
-    // auto peer2 = boost::uuids::random_generator()();
+TEST_F(HomeObjectFixture, CreateMultiShardsOnMultiPG) {
+    std::vector< homeobject::pg_id_t > pgs;
 
-    auto new_pg_id = static_cast< homeobject::pg_id_t >(_pg_id + 1);
-    auto info = homeobject::PGInfo(_pg_id + 1);
-    info.members.insert(homeobject::PGMember{peer1, "peer1", 1});
-    // info.members.insert(homeobject::PGMember{peer2, "peer2", 0});
-    EXPECT_TRUE(homeobj_->pg_manager()->create_pg(std::move(info)).get());
-
-    std::vector< homeobject::pg_id_t > pgs{_pg_id, new_pg_id};
+    for (pg_id_t pg{1}; pg < 4; pg++) {
+        create_pg(pg);
+        pgs.push_back(pg);
+    }
 
     for (const auto pg : pgs) {
-        auto e = homeobj_->shard_manager()->create_shard(pg, Mi).get();
-        ASSERT_TRUE(!!e);
-        homeobject::HSHomeObject* ho = dynamic_cast< homeobject::HSHomeObject* >(homeobj_.get());
-        auto chunk_num_1 = ho->get_shard_chunk(e.value().id);
+        auto shard_info = create_shard(pg, Mi);
+        auto chunk_num_1 = _obj_inst->get_shard_chunk(shard_info.id);
         ASSERT_TRUE(chunk_num_1.has_value());
 
         // create another shard again.
-        e = homeobj_->shard_manager()->create_shard(_pg_id, Mi).get();
-        ASSERT_TRUE(!!e);
-        auto chunk_num_2 = ho->get_shard_chunk(e.value().id);
+        shard_info = create_shard(pg, Mi);
+        auto chunk_num_2 = _obj_inst->get_shard_chunk(shard_info.id);
         ASSERT_TRUE(chunk_num_2.has_value());
 
         // check if both chunk is on the same pdev;
-        auto alloc_hint1 = ho->chunk_selector()->chunk_to_hints(chunk_num_1.value());
-        auto alloc_hint2 = ho->chunk_selector()->chunk_to_hints(chunk_num_2.value());
+        auto alloc_hint1 = _obj_inst->chunk_selector()->chunk_to_hints(chunk_num_1.value());
+        auto alloc_hint2 = _obj_inst->chunk_selector()->chunk_to_hints(chunk_num_2.value());
         ASSERT_TRUE(alloc_hint1.pdev_id_hint.has_value());
         ASSERT_TRUE(alloc_hint2.pdev_id_hint.has_value());
         ASSERT_TRUE(alloc_hint1.pdev_id_hint.value() == alloc_hint2.pdev_id_hint.value());
     }
 }
 
-TEST_F(TestFixture, MockSealShard) {
-    ShardInfo shard_info = _shard_1;
-    shard_info.state = ShardInfo::State::SEALED;
-    using shard_info_superblk = homeobject::HSHomeObject::shard_info_superblk;
+TEST_F(HomeObjectFixture, SealShard) {
+    pg_id_t pg_id{1};
+    create_pg(pg_id);
+    auto shard_info = create_shard(pg_id, 64 * Mi);
+    ASSERT_EQ(ShardInfo::State::OPEN, shard_info.state);
 
-    nlohmann::json j;
-    j["shard_info"]["shard_id_t"] = shard_info.id;
-    j["shard_info"]["pg_id_t"] = shard_info.placement_group;
-    j["shard_info"]["state"] = shard_info.state;
-    j["shard_info"]["lsn"] = shard_info.lsn;
-    j["shard_info"]["created_time"] = shard_info.created_time;
-    j["shard_info"]["modified_time"] = shard_info.last_modified_time;
-    j["shard_info"]["total_capacity"] = shard_info.total_capacity_bytes;
-    j["shard_info"]["available_capacity"] = shard_info.available_capacity_bytes;
-    j["shard_info"]["deleted_capacity"] = shard_info.deleted_capacity_bytes;
-    auto seal_shard_msg = j.dump();
-
-    homeobject::HSHomeObject* ho = dynamic_cast< homeobject::HSHomeObject* >(homeobj_.get());
-    auto* pg = s_cast< homeobject::HSHomeObject::HS_PG* >(ho->_pg_map[_pg_id].get());
-    auto repl_dev = pg->repl_dev_;
-
-    sisl::io_blob_safe sb_blob(sisl::round_up(sizeof(shard_info_superblk), repl_dev->get_blk_size()),
-                               homeobject::io_align);
-    shard_info_superblk* sb = new (sb_blob.bytes()) shard_info_superblk();
-    sb->type = homeobject::HSHomeObject::DataHeader::data_type_t::SHARD_INFO;
-    sb->info = shard_info;
-    sb->chunk_id = 0;
-
-    auto req = homeobject::repl_result_ctx< ShardManager::Result< ShardInfo > >::make(sizeof(shard_info_superblk), 0u);
-
-    req->header()->msg_type = homeobject::ReplicationMessageType::SEAL_SHARD_MSG;
-    req->header()->pg_id = _pg_id;
-    req->header()->shard_id = shard_info.id;
-    req->header()->payload_size = sizeof(shard_info_superblk);
-    req->header()->payload_crc = crc32_ieee(homeobject::init_crc32, sb_blob.cbytes(), sizeof(shard_info_superblk));
-    req->header()->seal();
-
-    std::memcpy(req->header_extn(), sb_blob.cbytes(), sizeof(shard_info_superblk));
-    req->add_data_sg(std::move(sb_blob));
-
-    repl_dev->async_alloc_write(req->cheader_buf(), sisl::blob{}, req->data_sgs(), req);
-    auto info = req->result().get();
-    EXPECT_TRUE(info);
-    EXPECT_TRUE(info.value().id == shard_info.id);
-    EXPECT_TRUE(info.value().placement_group == _pg_id);
-    EXPECT_EQ(info.value().state, ShardInfo::State::SEALED);
-
-    auto pg_iter = ho->_pg_map.find(_pg_id);
-    EXPECT_TRUE(pg_iter != ho->_pg_map.end());
-    auto& pg_result = pg_iter->second;
-    EXPECT_EQ(2, pg_result->shards_.size());
-    auto& check_shard = pg_result->shards_.front();
-    EXPECT_EQ(ShardInfo::State::SEALED, check_shard->info.state);
+    // seal the shard
+    shard_info = seal_shard(shard_info.id);
+    ASSERT_EQ(ShardInfo::State::SEALED, shard_info.state);
 }
 
-class ShardManagerTestingRecovery : public ::testing::Test {
-public:
-    void SetUp() override { app = std::make_shared< FixtureApp >(); }
-    void TearDown() override { app->clean(); }
+TEST_F(HomeObjectFixture, ShardManagerRecovery) {
+    pg_id_t pg_id{1};
+    create_pg(pg_id);
 
-    void verify_hs_shard(const ShardInfo& lhs, const ShardInfo& rhs) {
-        // operator == is already overloaded , so we need to compare each field
-        EXPECT_EQ(lhs.id, rhs.id);
-        EXPECT_EQ(lhs.placement_group, rhs.placement_group);
-        EXPECT_EQ(lhs.state, rhs.state);
-        EXPECT_EQ(lhs.lsn, rhs.lsn);
-        EXPECT_EQ(lhs.created_time, rhs.created_time);
-        EXPECT_EQ(lhs.last_modified_time, rhs.last_modified_time);
-        EXPECT_EQ(lhs.available_capacity_bytes, rhs.available_capacity_bytes);
-        EXPECT_EQ(lhs.total_capacity_bytes, rhs.total_capacity_bytes);
-        EXPECT_EQ(lhs.deleted_capacity_bytes, rhs.deleted_capacity_bytes);
-        EXPECT_EQ(lhs.current_leader, rhs.current_leader);
-    }
-
-protected:
-    std::shared_ptr< FixtureApp > app;
-};
-
-TEST_F(ShardManagerTestingRecovery, ShardManagerRecovery) {
-    homeobject::pg_id_t _pg_id{1u};
-    homeobject::peer_id_t _peer1;
-    homeobject::peer_id_t _peer2;
-    std::shared_ptr< homeobject::HomeObject > _home_object;
-    _home_object = homeobject::init_homeobject(std::weak_ptr< homeobject::HomeObjectApplication >(app));
-    _peer1 = _home_object->our_uuid();
-    _peer2 = boost::uuids::random_generator()();
-
-    auto info = homeobject::PGInfo(_pg_id);
-    info.members.insert(homeobject::PGMember{_peer1, "peer1", 1});
-    // info.members.insert(homeobject::PGMember{_peer2, "peer2", 0});
-    EXPECT_TRUE(_home_object->pg_manager()->create_pg(std::move(info)).get());
     // create one shard;
-    auto e = _home_object->shard_manager()->create_shard(_pg_id, Mi).get();
-    ASSERT_TRUE(!!e);
-    ShardInfo shard_info = e.value();
+    auto shard_info = create_shard(pg_id, Mi);
     auto shard_id = shard_info.id;
     EXPECT_EQ(ShardInfo::State::OPEN, shard_info.state);
     EXPECT_EQ(Mi, shard_info.total_capacity_bytes);
     EXPECT_EQ(Mi, shard_info.available_capacity_bytes);
     EXPECT_EQ(0ul, shard_info.deleted_capacity_bytes);
-    EXPECT_EQ(_pg_id, shard_info.placement_group);
+    EXPECT_EQ(pg_id, shard_info.placement_group);
 
     // restart homeobject and check if pg/shard info will be recovered.
-    _home_object.reset();
-    LOGI("restart home_object");
-    _home_object = homeobject::init_homeobject(std::weak_ptr< homeobject::HomeObjectApplication >(app));
-    std::this_thread::sleep_for(std::chrono::seconds{5});
-    homeobject::HSHomeObject* ho = dynamic_cast< homeobject::HSHomeObject* >(_home_object.get());
+    restart();
+
     // check PG after recovery.
-    EXPECT_TRUE(ho->_pg_map.size() == 1);
-    auto pg_iter = ho->_pg_map.find(_pg_id);
-    EXPECT_TRUE(pg_iter != ho->_pg_map.end());
+    EXPECT_TRUE(_obj_inst->_pg_map.size() == 1);
+    auto pg_iter = _obj_inst->_pg_map.find(pg_id);
+    EXPECT_TRUE(pg_iter != _obj_inst->_pg_map.end());
     auto& pg_result = pg_iter->second;
     EXPECT_EQ(1, pg_result->shards_.size());
     // verify the sequence number is correct after recovery.
     EXPECT_EQ(1, pg_result->shard_sequence_num_);
     // check recovered shard state.
-    auto check_shard = pg_result->shards_.front().get();
-    EXPECT_EQ(ShardInfo::State::OPEN, check_shard->info.state);
-
-    auto hs_shard = d_cast< homeobject::HSHomeObject::HS_Shard* >(check_shard);
+    auto hs_shard = d_cast< homeobject::HSHomeObject::HS_Shard* >(pg_result->shards_.front().get());
     auto& recovered_shard_info = hs_shard->info;
     verify_hs_shard(recovered_shard_info, shard_info);
 
     // seal the shard when shard is recovery
-    e = _home_object->shard_manager()->seal_shard(shard_id).get();
-    ASSERT_TRUE(!!e);
-    EXPECT_EQ(ShardInfo::State::SEALED, e.value().state);
+    shard_info = seal_shard(shard_id);
+    EXPECT_EQ(ShardInfo::State::SEALED, shard_info.state);
 
     // restart again to verify the shards has expected states.
-    _home_object.reset();
-    LOGI("restart home_object again");
-    // re-create the homeobject and pg infos and shard infos will be recover automatically.
-    _home_object = homeobject::init_homeobject(std::weak_ptr< homeobject::HomeObjectApplication >(app));
-    std::this_thread::sleep_for(std::chrono::seconds{5});
-    auto s = _home_object->shard_manager()->get_shard(shard_id).get();
+    restart();
+
+    auto s = _obj_inst->shard_manager()->get_shard(shard_id).get();
     ASSERT_TRUE(!!s);
+
     EXPECT_EQ(ShardInfo::State::SEALED, s.value().state);
-    ho = dynamic_cast< homeobject::HSHomeObject* >(_home_object.get());
-    pg_iter = ho->_pg_map.find(_pg_id);
+    pg_iter = _obj_inst->_pg_map.find(pg_id);
     // verify the sequence number is correct after recovery.
+
     EXPECT_EQ(1, pg_iter->second->shard_sequence_num_);
 
     // re-create new shards on this pg works too even homeobject is restarted twice.
-    e = _home_object->shard_manager()->create_shard(_pg_id, Mi).get();
-    ASSERT_TRUE(!!e);
-    EXPECT_NE(shard_id, e.value().id);
-    EXPECT_EQ(ShardInfo::State::OPEN, e.value().state);
+    auto new_shard_info = create_shard(pg_id, Mi);
+    EXPECT_NE(shard_id, new_shard_info.id);
+
+    EXPECT_EQ(ShardInfo::State::OPEN, new_shard_info.state);
     EXPECT_EQ(2, pg_iter->second->shard_sequence_num_);
-    // finally close the homeobject and homestore.
-    _home_object.reset();
 }
 
-TEST_F(ShardManagerTestingRecovery, SealedShardRecovery) {
-    homeobject::pg_id_t _pg_id{1u};
-    homeobject::peer_id_t _peer1;
-    homeobject::peer_id_t _peer2;
-    std::shared_ptr< homeobject::HomeObject > _home_object;
-    _home_object = homeobject::init_homeobject(std::weak_ptr< homeobject::HomeObjectApplication >(app));
-    _peer1 = _home_object->our_uuid();
-    _peer2 = boost::uuids::random_generator()();
+TEST_F(HomeObjectFixture, SealedShardRecovery) {
+    pg_id_t pg_id{1};
+    create_pg(pg_id);
 
-    auto info = homeobject::PGInfo(_pg_id);
-    info.members.insert(homeobject::PGMember{_peer1, "peer1", 1});
-    // info.members.insert(homeobject::PGMember{_peer2, "peer2", 0});
-    EXPECT_TRUE(_home_object->pg_manager()->create_pg(std::move(info)).get());
-    // create one shard;
-    auto e = _home_object->shard_manager()->create_shard(_pg_id, Mi).get();
-    ASSERT_TRUE(!!e);
-    auto shard_id = e.value().id;
-    e = _home_object->shard_manager()->seal_shard(shard_id).get();
-    ASSERT_TRUE(!!e);
-    auto shard_info = e.value();
+    // create one shard and seal it.
+    auto shard_info = create_shard(pg_id, Mi);
+    auto shard_id = shard_info.id;
+    shard_info = seal_shard(shard_id);
     EXPECT_EQ(ShardInfo::State::SEALED, shard_info.state);
 
     // check the shard info from ShardManager to make sure on_commit() is successfully.
-    homeobject::HSHomeObject* ho = dynamic_cast< homeobject::HSHomeObject* >(_home_object.get());
-    auto pg_iter = ho->_pg_map.find(_pg_id);
-    EXPECT_TRUE(pg_iter != ho->_pg_map.end());
+    auto pg_iter = _obj_inst->_pg_map.find(pg_id);
+    EXPECT_TRUE(pg_iter != _obj_inst->_pg_map.end());
     auto& pg_result = pg_iter->second;
     EXPECT_EQ(1, pg_result->shards_.size());
-    auto check_shard = pg_result->shards_.front().get();
-    EXPECT_EQ(ShardInfo::State::SEALED, check_shard->info.state);
-    // release the homeobject and homestore will be shutdown automatically.
-    _home_object.reset();
+    auto hs_shard = d_cast< homeobject::HSHomeObject::HS_Shard* >(pg_result->shards_.front().get());
+    EXPECT_EQ(ShardInfo::State::SEALED, hs_shard->info.state);
 
+    // release the homeobject and homestore will be shutdown automatically.
     LOGI("restart home_object");
+    restart();
+
     // re-create the homeobject and pg infos and shard infos will be recover automatically.
-    _home_object = homeobject::init_homeobject(std::weak_ptr< homeobject::HomeObjectApplication >(app));
-    std::this_thread::sleep_for(std::chrono::seconds{5});
-    ho = dynamic_cast< homeobject::HSHomeObject* >(_home_object.get());
-    EXPECT_TRUE(ho->_pg_map.size() == 1);
+    EXPECT_TRUE(_obj_inst->_pg_map.size() == 1);
     // check shard internal state;
-    pg_iter = ho->_pg_map.find(_pg_id);
-    EXPECT_TRUE(pg_iter != ho->_pg_map.end());
+    pg_iter = _obj_inst->_pg_map.find(pg_id);
+    EXPECT_TRUE(pg_iter != _obj_inst->_pg_map.end());
     EXPECT_EQ(1, pg_iter->second->shards_.size());
-    auto hs_shard = d_cast< homeobject::HSHomeObject::HS_Shard* >(pg_iter->second->shards_.front().get());
+    hs_shard = d_cast< homeobject::HSHomeObject::HS_Shard* >(pg_iter->second->shards_.front().get());
     auto& recovered_shard_info = hs_shard->info;
     verify_hs_shard(recovered_shard_info, shard_info);
-    // finally close the homeobject and homestore.
-    _home_object.reset();
+}
+
+TEST_F(HomeObjectFixture, SealShardWithRestart) {
+    // Create a pg, shard, put blob should succeed, seal and put blob again should fail.
+    // Recover and put blob again should fail.
+    pg_id_t pg_id{1};
+    create_pg(pg_id);
+
+    auto shard_info = create_shard(pg_id, 64 * Mi);
+    auto shard_id = shard_info.id;
+    auto s = _obj_inst->shard_manager()->get_shard(shard_id).get();
+    ASSERT_TRUE(!!s);
+
+    LOGINFO("Got shard {}", shard_id);
+    shard_info = s.value();
+    EXPECT_EQ(shard_info.id, shard_id);
+    EXPECT_EQ(shard_info.placement_group, pg_id);
+    EXPECT_EQ(shard_info.state, ShardInfo::State::OPEN);
+    put_blob(shard_id, Blob{sisl::io_blob_safe(512u, 512u), "test_blob", 0ul});
+
+    shard_info = seal_shard(shard_id);
+    EXPECT_EQ(shard_info.id, shard_id);
+    EXPECT_EQ(shard_info.placement_group, pg_id);
+    EXPECT_EQ(shard_info.state, ShardInfo::State::SEALED);
+    LOGINFO("Sealed shard {}", shard_id);
+
+    run_on_pg_leader(pg_id, [this, shard_id]() {
+        auto b = _obj_inst->blob_manager()->put(shard_id, Blob{sisl::io_blob_safe(512u, 512u), "test_blob", 0ul}).get();
+        ASSERT_TRUE(!b);
+        ASSERT_EQ(b.error().getCode(), BlobErrorCode::SEALED_SHARD);
+        LOGINFO("Put blob {}", b.error());
+    });
+
+    // Restart homeobject
+    restart();
+
+    // Verify shard is sealed.
+    s = _obj_inst->shard_manager()->get_shard(shard_id).get();
+    ASSERT_TRUE(!!s);
+
+    LOGINFO("After restart shard {}", shard_id);
+    shard_info = s.value();
+    EXPECT_EQ(shard_info.id, shard_id);
+    EXPECT_EQ(shard_info.placement_group, pg_id);
+    EXPECT_EQ(shard_info.state, ShardInfo::State::SEALED);
+
+    run_on_pg_leader(pg_id, [this, shard_id]() {
+        auto b = _obj_inst->blob_manager()->put(shard_id, Blob{sisl::io_blob_safe(512u, 512u), "test_blob", 0ul}).get();
+        ASSERT_TRUE(!b);
+        ASSERT_EQ(b.error().getCode(), BlobErrorCode::SEALED_SHARD);
+        LOGINFO("Put blob {}", b.error());
+    });
 }

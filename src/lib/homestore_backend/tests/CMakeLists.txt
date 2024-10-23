@@ -7,6 +7,7 @@ list(APPEND TEST_SOURCES
     hs_blob_tests.cpp
     hs_pg_tests.cpp
     homeobj_cp_tests.cpp
+    test_homestore_backend.cpp
     )
 
 add_library(homestore_tests OBJECT)

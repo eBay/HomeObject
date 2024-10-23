@@ -45,8 +45,8 @@ HttpManager::HttpManager(HSHomeObject& ho) : ho_(ho) {
         return;
     }
     try {
-         http_server->setup_routes(routes);
-    } catch (std::runtime_error const& e) { LOGERROR("setup routes failed, {}", e.what()) }
+        http_server->setup_routes(routes);
+    } catch (std::runtime_error const& e) { LOGINFO("setup routes failed, {}", e.what()); }
 }
 
 void HttpManager::get_obj_life(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response) {
