@@ -145,9 +145,72 @@ void HSHomeObject::on_create_pg_message_commit(int64_t lsn, sisl::blob const& he
     if (ctx) ctx->promise_.setValue(folly::Unit());
 }
 
-PGManager::NullAsyncResult HSHomeObject::_replace_member(pg_id_t id, peer_id_t const& old_member,
-                                                         PGMember const& new_member) {
-    return folly::makeSemiFuture< PGManager::NullResult >(folly::makeUnexpected(PGError::UNSUPPORTED_OP));
+PGManager::NullAsyncResult HSHomeObject::_replace_member(pg_id_t pg_id, peer_id_t const& old_member_id,
+                                                         PGMember const& new_member, uint32_t commit_quorum) {
+
+    group_id_t group_id;
+    {
+        auto lg = std::shared_lock(_pg_lock);
+        auto iter = _pg_map.find(pg_id);
+        if (iter == _pg_map.end()) return folly::makeUnexpected(PGError::UNKNOWN_PG);
+        auto& repl_dev = pg_repl_dev(*iter->second);
+
+        if (!repl_dev.is_leader() && commit_quorum == 0) {
+            // Only leader can replace a member
+            return folly::makeUnexpected(PGError::NOT_LEADER);
+        }
+        group_id = repl_dev.group_id();
+    }
+
+    LOGI("PG replace member initated member_out={} member_in={}", boost::uuids::to_string(old_member_id),
+         boost::uuids::to_string(new_member.id));
+
+    homestore::replica_member_info in_replica, out_replica;
+    out_replica.id = old_member_id;
+    in_replica.id = new_member.id;
+    in_replica.priority = new_member.priority;
+    std::strncpy(in_replica.name, new_member.name.data(), new_member.name.size());
+    in_replica.name[new_member.name.size()] = '\0';
+
+    return hs_repl_service()
+        .replace_member(group_id, out_replica, in_replica, commit_quorum)
+        .via(executor_)
+        .thenValue([this](auto&& v) mutable -> PGManager::NullAsyncResult {
+            if (v.hasError()) { return folly::makeUnexpected(toPgError(v.error())); }
+            return folly::Unit();
+        });
+}
+
+void HSHomeObject::on_pg_replace_member(homestore::group_id_t group_id, const replica_member_info& member_out,
+                                        const replica_member_info& member_in) {
+    auto lg = std::shared_lock(_pg_lock);
+    for (const auto& iter : _pg_map) {
+        auto& pg = iter.second;
+        if (pg_repl_dev(*pg).group_id() == group_id) {
+            // Remove the old member and add the new member
+            auto hs_pg = static_cast< HSHomeObject::HS_PG* >(pg.get());
+            pg->pg_info_.members.erase(PGMember(member_out.id));
+            pg->pg_info_.members.emplace(PGMember(member_in.id, member_in.name, member_in.priority));
+
+            uint32_t i{0};
+            for (auto const& m : pg->pg_info_.members) {
+                hs_pg->pg_sb_->members[i].id = m.id;
+                std::strncpy(hs_pg->pg_sb_->members[i].name, m.name.c_str(),
+                             std::min(m.name.size(), pg_members::max_name_len));
+                hs_pg->pg_sb_->members[i].priority = m.priority;
+                ++i;
+            }
+
+            // Update the latest membership info to pg superblk.
+            hs_pg->pg_sb_.write();
+            LOGI("PG replace member done member_out={} member_in={}", boost::uuids::to_string(member_out.id),
+                 boost::uuids::to_string(member_in.id));
+            return;
+        }
+    }
+
+    LOGE("PG replace member failed member_out={} member_in={}", boost::uuids::to_string(member_out.id),
+         boost::uuids::to_string(member_in.id));
 }
 
 void HSHomeObject::add_pg_to_map(unique< HS_PG > hs_pg) {

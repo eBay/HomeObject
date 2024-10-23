@@ -21,19 +21,15 @@ PGManager::NullAsyncResult HomeObjectImpl::create_pg(PGInfo&& pg_info) {
 }
 
 PGManager::NullAsyncResult HomeObjectImpl::replace_member(pg_id_t id, peer_id_t const& old_member,
-                                                          PGMember const& new_member, u_int32_t commit_quorum) {
-    LOGI("[pg={}] replace member [{}] with [{}]", id, to_string(old_member), to_string(new_member.id));
+                                                          PGMember const& new_member, uint32_t commit_quorum) {
+    LOGI("[pg={}] replace member [{}] with [{}] quorum [{}]", id, to_string(old_member), to_string(new_member.id),
+         commit_quorum);
     if (old_member == new_member.id) {
         LOGW("rejecting identical replacement SvcId [{}]!", to_string(old_member));
         return folly::makeUnexpected(PGError::INVALID_ARG);
     }
 
-    if (old_member == our_uuid()) {
-        LOGW("refusing to remove ourself {}!", to_string(old_member));
-        return folly::makeUnexpected(PGError::INVALID_ARG);
-    }
-
-    return _replace_member(id, old_member, new_member);
+    return _replace_member(id, old_member, new_member, commit_quorum);
 }
 
 bool HomeObjectImpl::get_stats(pg_id_t id, PGStats& stats) const { return _get_stats(id, stats); }

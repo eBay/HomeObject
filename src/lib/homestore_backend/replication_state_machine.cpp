@@ -153,6 +153,11 @@ ReplicationStateMachine::get_blk_alloc_hints(sisl::blob const& header, uint32_t 
     return homestore::blk_alloc_hints();
 }
 
+void ReplicationStateMachine::on_replace_member(const homestore::replica_member_info& member_out,
+                                                const homestore::replica_member_info& member_in) {
+    home_object_->on_pg_replace_member(repl_dev()->group_id(), member_out, member_in);
+}
+
 void ReplicationStateMachine::on_destroy() {
     // TODO:: add the logic to handle destroy
     LOGI("replica destroyed");

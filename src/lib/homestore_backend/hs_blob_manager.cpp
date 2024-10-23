@@ -208,8 +208,8 @@ void HSHomeObject::on_blob_put_commit(int64_t lsn, sisl::blob const& header, sis
 
     // Write to index table with key {shard id, blob id } and value {pba}.
     auto const [exist_already, status] = add_to_index_table(index_table, blob_info);
-    LOGTRACEMOD(blobmgr, "blob put commit blob_id: {}, lsn:{}, exist_already:{}, status:{}, pbas: {}", blob_id, lsn,
-                exist_already, status, pbas.to_string());
+    LOGTRACEMOD(blobmgr, "blob put commit shard_id: {} blob_id: {}, lsn:{}, exist_already:{}, status:{}, pbas: {}",
+                msg_header->shard_id, blob_id, lsn, exist_already, status, pbas.to_string());
     if (!exist_already) {
         if (status != homestore::btree_status_t::success) {
             LOGE("Failed to insert into index table for blob {} err {}", lsn, enum_name(status));
@@ -254,7 +254,7 @@ BlobManager::AsyncResult< Blob > HSHomeObject::_get_blob(ShardInfo const& shard,
 
     auto r = get_blob_from_index_table(index_table, shard.id, blob_id);
     if (!r) {
-        BLOGW(shard.id, blob_id, "Blob not found in index");
+        BLOGE(shard.id, blob_id, "Blob not found in index during get blob");
         return folly::makeUnexpected(r.error());
     }
 
@@ -342,7 +342,8 @@ HSHomeObject::blob_put_get_blk_alloc_hints(sisl::blob const& header, cintrusive<
     std::scoped_lock lock_guard(_shard_lock);
     auto shard_iter = _shard_map.find(msg_header->shard_id);
     if (shard_iter == _shard_map.end()) {
-        LOGW("Received a blob_put on an unknown shard, underlying engine will retry this later");
+        LOGW("Received a blob_put on an unknown shard:{}, underlying engine will retry this later",
+             msg_header->shard_id);
         return folly::makeUnexpected(homestore::ReplServiceError::RESULT_NOT_EXIST_YET);
     }
 
