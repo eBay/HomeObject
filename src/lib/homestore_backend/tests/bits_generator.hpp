@@ -20,7 +20,7 @@
 #include <type_traits>
 #include <cstdint>
 #include <random>
-#include <iostream>
+#include <limits>
 
 namespace homeobject {
 
@@ -37,6 +37,19 @@ public:
     }
 
     static void gen_random_bits(sisl::blob& b) { gen_random_bits(b.size(), b.bytes()); }
+
+    // this function guarantees that the generated bits will be identical for the identical input of shard_id, blob_id
+    // and size.
+    static void gen_blob_bits(size_t size, uint8_t* buf, blob_id_t blob_id) {
+        std::mt19937_64 rng(blob_id);
+        std::uniform_int_distribution< unsigned long long > dist(std::numeric_limits< std::uint8_t >::min(),
+                                                                 std::numeric_limits< std::uint8_t >::max());
+
+        for (size_t i = 0; i < size;)
+            buf[i++] = dist(rng);
+    }
+
+    static void gen_blob_bits(sisl::blob& b, blob_id_t blob_id) { gen_blob_bits(b.size(), b.bytes(), blob_id); }
 };
 
 }; // namespace homeobject

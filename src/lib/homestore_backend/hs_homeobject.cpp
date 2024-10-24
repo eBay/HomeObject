@@ -177,7 +177,8 @@ void HSHomeObject::init_homestore() {
             auto run_on_type = has_fast_dev ? homestore::HSDevType::Fast : homestore::HSDevType::Data;
             LOGD("Running with Single mode, all service on {}", run_on_type);
             HomeStore::instance()->format_and_start({
-	        // FIXME:  this is to work around the issue in HS that varsize allocator doesnt work with small chunk size.
+                // FIXME:  this is to work around the issue in HS that varsize allocator doesnt work with small chunk
+                // size.
                 {HS_SERVICE::META, hs_format_params{.dev_type = run_on_type, .size_pct = 5.0, .num_chunks = 1}},
                 {HS_SERVICE::LOG, hs_format_params{.dev_type = run_on_type, .size_pct = 10.0, .chunk_size = 32 * Mi}},
                 {HS_SERVICE::INDEX, hs_format_params{.dev_type = run_on_type, .size_pct = 5.0, .num_chunks = 1}},
@@ -280,6 +281,7 @@ void HSHomeObject::register_homestore_metablk_callback() {
 }
 
 HSHomeObject::~HSHomeObject() {
+    LOGI("HomeObject start destructing");
 #if 0
     if (ho_timer_thread_handle_.first) {
         iomanager.cancel_timer(ho_timer_thread_handle_, true);
