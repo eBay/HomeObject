@@ -26,8 +26,7 @@ SISL_OPTION_GROUP(
      "true or false"),
     (init_device, "", "init_device", "init real device", ::cxxopts::value< bool >()->default_value("false"),
      "true or false"),
-    (replicas, "", "replicas", "Total number of replicas", ::cxxopts::value< uint32_t >()->default_value("3"),
-     "number"),
+    (replicas, "", "replicas", "Total number of replicas", ::cxxopts::value< uint8_t >()->default_value("3"), "number"),
     (spare_replicas, "", "spare_replicas", "Additional number of spare replicas not part of repldev",
      ::cxxopts::value< uint32_t >()->default_value("1"), "number"),
     (base_port, "", "base_port", "Port number of first replica", ::cxxopts::value< uint16_t >()->default_value("4000"),
@@ -60,7 +59,7 @@ int main(int argc, char* argv[]) {
     SISL_OPTIONS_LOAD(parsed_argc, argv, test_options);
 
     g_helper = std::make_unique< test_common::HSReplTestHelper >("test_homeobject", args, orig_argv);
-    g_helper->setup(SISL_OPTIONS["replicas"].as< uint32_t >());
+    g_helper->setup(SISL_OPTIONS["replicas"].as< uint8_t >());
     auto ret = RUN_ALL_TESTS();
     g_helper->teardown();
     return ret;

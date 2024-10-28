@@ -37,17 +37,17 @@ public:
 
     void SetUp() override {
         _obj_inst = std::dynamic_pointer_cast< HSHomeObject >(g_helper->build_new_homeobject());
-        g_helper->sync_for_test_start();
+        g_helper->sync();
     }
 
     void TearDown() override {
-        g_helper->sync_for_cleanup_start();
+        g_helper->sync();
         _obj_inst.reset();
         g_helper->delete_homeobject();
     }
 
     void restart() {
-        g_helper->sync_for_cleanup_start();
+        g_helper->sync();
         trigger_cp(true);
         _obj_inst.reset();
         _obj_inst = std::dynamic_pointer_cast< HSHomeObject >(g_helper->restart());
@@ -82,9 +82,7 @@ public:
     }
 
     ShardInfo create_shard(pg_id_t pg_id, uint64_t size_bytes) {
-        g_helper->sync_for_uint64_id();
-        RELEASE_ASSERT(pg_exist(pg_id), "PG {} does not exist", pg_id);
-
+        g_helper->sync();
         // schedule create_shard only on leader
         run_on_pg_leader(pg_id, [&]() {
             auto s = _obj_inst->shard_manager()->create_shard(pg_id, size_bytes).get();
@@ -93,13 +91,15 @@ public:
             g_helper->set_uint64_id(ret.id);
         });
 
-        // all the members need to wait for shard creation to complete locally
+        // wait for create_shard finished on leader and shard_id set to the uint64_id in IPC.
         while (g_helper->get_uint64_id() == INVALID_UINT64_ID) {
             std::this_thread::sleep_for(std::chrono::milliseconds(1000));
         }
 
+        // get shard_id from IPC
         auto shard_id = g_helper->get_uint64_id();
 
+        // all the members need to wait for shard creation to complete locally
         while (!shard_exist(shard_id)) {
             // for leader, shard creation is done locally and will nor reach here. but for follower, we need to wait for
             // shard creation to complete locally
@@ -113,7 +113,7 @@ public:
 
     ShardInfo seal_shard(shard_id_t shard_id) {
         // before seal shard, we need to wait all the memebers to complete shard state verification
-        g_helper->sync_for_verify_start();
+        g_helper->sync();
         auto r = _obj_inst->shard_manager()->get_shard(shard_id).get();
         RELEASE_ASSERT(!!r, "failed to get shard {}", shard_id);
         auto pg_id = r.value().placement_group;
@@ -135,7 +135,7 @@ public:
     }
 
     void put_blob(shard_id_t shard_id, Blob&& blob) {
-        g_helper->sync_for_uint64_id();
+        g_helper->sync();
         auto r = _obj_inst->shard_manager()->get_shard(shard_id).get();
         RELEASE_ASSERT(!!r, "failed to get shard {}", shard_id);
         auto pg_id = r.value().placement_group;
@@ -157,8 +157,10 @@ public:
         }
     }
 
+    // TODO:make this run in parallel
     void put_blobs(std::map< pg_id_t, std::vector< shard_id_t > > const& pg_shard_id_vec,
                    uint64_t const num_blobs_per_shard, std::map< pg_id_t, blob_id_t >& pg_blob_id) {
+        g_helper->sync();
         for (const auto& [pg_id, shard_vec] : pg_shard_id_vec) {
             // the blob_id of a pg is a continuous number starting from 0 and increasing by 1
             blob_id_t current_blob_id{pg_blob_id[pg_id]};
@@ -199,8 +201,10 @@ public:
         }
     }
 
+    // TODO:make this run in parallel
     void del_all_blobs(std::map< pg_id_t, std::vector< shard_id_t > > const& pg_shard_id_vec,
                        uint64_t const num_blobs_per_shard, std::map< pg_id_t, blob_id_t >& pg_blob_id) {
+        g_helper->sync();
         for (const auto& [pg_id, shard_vec] : pg_shard_id_vec) {
             run_on_pg_leader(pg_id, [&]() {
                 blob_id_t current_blob_id{0};
@@ -224,6 +228,7 @@ public:
         }
     }
 
+    // TODO:make this run in parallel
     void verify_get_blob(std::map< pg_id_t, std::vector< shard_id_t > > const& pg_shard_id_vec,
                          uint64_t const num_blobs_per_shard, bool const use_random_offset = false) {
         uint32_t off = 0, len = 0;
