@@ -55,12 +55,12 @@ protected:
             ++homeobject_replica_count_;
             if (homeobject_replica_count_ == max_count) {
                 sync_point_num_ = sync_point;
+                homeobject_replica_count_ = 0;
                 uint64_id_ = INVALID_UINT64_ID;
                 cv_.notify_all();
             } else {
                 cv_.wait(lg, [this, sync_point]() { return sync_point_num_ == sync_point; });
             }
-            homeobject_replica_count_ = 0;
         }
 
         void set_uint64_id(uint64_t input_uint64_id) {
