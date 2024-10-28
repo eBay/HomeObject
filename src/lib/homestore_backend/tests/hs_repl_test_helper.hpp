@@ -46,50 +46,21 @@ using namespace homeobject;
 
 namespace test_common {
 
-ENUM(repl_test_phase_t, uint32_t, REGISTER, TEST_RUN, VALIDATE, CLEANUP);
-
 class HSReplTestHelper {
 protected:
     struct IPCData {
-        bip::interprocess_mutex mtx_;
-        bip::interprocess_condition cv_;
-        bip::interprocess_mutex exec_mtx_;
-
-        repl_test_phase_t phase_{repl_test_phase_t::REGISTER};
-        uint32_t test_start_count_{0};
-        uint32_t verify_start_count_{0};
-        uint32_t cleanup_start_count_{0};
-
-        // the following variables are used to sync for shard and blob
-        uint64_t uint64_id_{0};
-        uint8_t homeobject_replica_count_{0};
-
-        // TODO:: now, we can not call the same syc type twice continuously, this will make the second sync ineffective.
-        // this will bring a little complexity to the UT writter to make sure the sync type is different between
-        // continuous syncs. will use another PR to remove this limitation and make the sync more flexible.
-
-        void sync_for_test_start(uint32_t num_members = 0) {
-            sync_for(test_start_count_, repl_test_phase_t::TEST_RUN, num_members);
-        }
-        void sync_for_verify_start(uint32_t num_members = 0) {
-            sync_for(verify_start_count_, repl_test_phase_t::VALIDATE, num_members);
-        }
-        void sync_for_cleanup_start(uint32_t num_members = 0) {
-            sync_for(cleanup_start_count_, repl_test_phase_t::CLEANUP, num_members);
-        }
-
-        // this is used for sync blob_id or shard_id among different replicas
-        void sync_for_uint64_id(uint32_t max_count = 0) {
-            if (max_count == 0) { max_count = SISL_OPTIONS["replicas"].as< uint32_t >(); }
+        void sync(uint64_t sync_point, uint32_t max_count = 0) {
+            if (max_count == 0) { max_count = SISL_OPTIONS["replicas"].as< uint8_t >(); }
             std::unique_lock< bip::interprocess_mutex > lg(mtx_);
             ++homeobject_replica_count_;
             if (homeobject_replica_count_ == max_count) {
+                sync_point_num_ = sync_point;
                 uint64_id_ = INVALID_UINT64_ID;
-                homeobject_replica_count_ = 0;
                 cv_.notify_all();
             } else {
-                cv_.wait(lg, [this]() { return uint64_id_ == INVALID_UINT64_ID; });
+                cv_.wait(lg, [this, sync_point]() { return sync_point_num_ == sync_point; });
             }
+            homeobject_replica_count_ = 0;
         }
 
         void set_uint64_id(uint64_t input_uint64_id) {
@@ -103,19 +74,15 @@ protected:
         }
 
     private:
-        void sync_for(uint32_t& count, repl_test_phase_t new_phase, uint32_t max_count = 0) {
-            if (max_count == 0) { max_count = SISL_OPTIONS["replicas"].as< uint32_t >(); }
-            std::unique_lock< bip::interprocess_mutex > lg(mtx_);
-            ++count;
-            if (count == max_count) {
-                phase_ = new_phase;
-                cv_.notify_all();
-            } else {
-                cv_.wait(lg, [this, new_phase]() { return (phase_ == new_phase); });
-            }
+        bip::interprocess_mutex mtx_;
+        bip::interprocess_condition cv_;
+        uint8_t homeobject_replica_count_{0};
 
-            count = 0;
-        }
+        // the following variables are used to share shard_id and blob_id among different replicas
+        uint64_t uint64_id_{0};
+
+        // the nth synchronization point, that is how many times different replicas have synced
+        uint64_t sync_point_num_{UINT64_MAX};
     };
 
 public:
@@ -265,7 +232,7 @@ public:
         return homeobj_;
     }
 
-    uint16_t replica_num() const { return replica_num_; }
+    uint8_t replica_num() const { return replica_num_; }
 
     peer_id_t my_replica_id() const { return my_replica_id_; }
 
@@ -288,11 +255,7 @@ public:
 
     void teardown() { sisl::GrpcAsyncClientWorker::shutdown_all(); }
 
-    void sync_for_test_start(uint32_t num_members = 0) { ipc_data_->sync_for_test_start(num_members); }
-    void sync_for_verify_start(uint32_t num_members = 0) { ipc_data_->sync_for_verify_start(num_members); }
-    void sync_for_cleanup_start(uint32_t num_members = 0) { ipc_data_->sync_for_cleanup_start(num_members); }
-
-    void sync_for_uint64_id(uint32_t num_members = 0) { ipc_data_->sync_for_uint64_id(num_members); }
+    void sync(uint32_t num_members = 0) { ipc_data_->sync(sync_point_num++, num_members); }
     void set_uint64_id(uint64_t uint64_id) { ipc_data_->set_uint64_id(uint64_id); }
     uint64_t get_uint64_id() { return ipc_data_->get_uint64_id(); }
 
@@ -365,7 +328,8 @@ private:
     }
 
 private:
-    uint16_t replica_num_;
+    uint8_t replica_num_;
+    uint64_t sync_point_num{0};
     std::string name_;
     std::vector< std::string > args_;
     char** argv_;

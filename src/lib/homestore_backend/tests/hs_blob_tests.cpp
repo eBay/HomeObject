@@ -51,10 +51,6 @@ TEST_F(HomeObjectFixture, BasicPutGetDelBlobWRestart) {
     // Verify the stats after restart
     verify_obj_count(num_pgs, num_blobs_per_shard, num_shards_per_pg, false /* deleted */);
 
-    // we need to sync here. if not then the leader deletion op will bring impact to follower`s verification if the
-    // follower is very slow. for example, the follower is still verifying blob abd obj_count , but the leader has
-    // already start deletion. so the follower will fail the verification.
-    g_helper->sync_for_test_start();
     //  Put blob after restart to test the persistance of blob sequence number
     put_blobs(pg_shard_id_vec, num_blobs_per_shard, pg_blob_id);
 
@@ -64,9 +60,6 @@ TEST_F(HomeObjectFixture, BasicPutGetDelBlobWRestart) {
     // Verify the stats after put blobs after restart
     verify_obj_count(num_pgs, num_blobs_per_shard * 2, num_shards_per_pg, false /* deleted */);
 
-    // we need to sync here, same reason as above.we can not use sync_for_test_start() twice without a new type of sync,
-    // so use sync_for_verify_start() here
-    g_helper->sync_for_verify_start();
     // Delete all blobs
     del_all_blobs(pg_shard_id_vec, num_blobs_per_shard, pg_blob_id);
 
