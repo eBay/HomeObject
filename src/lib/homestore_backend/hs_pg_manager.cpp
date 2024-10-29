@@ -60,6 +60,15 @@ PGManager::NullAsyncResult HSHomeObject::_create_pg(PGInfo&& pg_info, std::set< 
     auto pg_id = pg_info.id;
     if (auto lg = std::shared_lock(_pg_lock); _pg_map.end() != _pg_map.find(pg_id)) return folly::Unit();
 
+    const auto most_avail_num_chunks = chunk_selector()->most_avail_num_chunks();
+    const auto chunk_size = chunk_selector()->get_chunk_size();
+    const auto needed_num_chunks = sisl::round_down(pg_info.size, chunk_size) / chunk_size;
+    if (needed_num_chunks > most_avail_num_chunks) {
+        LOGW("No enough space to create pg, pg_id {}, needed_num_chunks {}, most_avail_num_chunks {}", pg_id,
+             needed_num_chunks, most_avail_num_chunks);
+        return folly::makeUnexpected(PGError::NO_SPACE_LEFT);
+    }
+
     pg_info.replica_set_uuid = boost::uuids::random_generator()();
     return hs_repl_service()
         .create_repl_dev(pg_info.replica_set_uuid, peers)
@@ -127,12 +136,21 @@ void HSHomeObject::on_create_pg_message_commit(int64_t lsn, sisl::blob const& he
         return;
     }
 
+    // select chunks for pg
+    auto const num_chunk = chunk_selector()->select_chunks_for_pg(pg_id, pg_info.size);
+    if (!num_chunk.has_value()) {
+        LOGW("select chunks for pg failed, pg_id {}", pg_id);
+        if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(PGError::NO_SPACE_LEFT)); }
+        return;
+    }
+    auto chunk_ids = chunk_selector()->get_pg_chunks(pg_id);
+
     // create index table and pg
     // TODO create index table during create shard.
     auto index_table = create_index_table();
     auto uuid_str = boost::uuids::to_string(index_table->uuid());
 
-    auto hs_pg = std::make_unique< HS_PG >(std::move(pg_info), std::move(repl_dev), index_table);
+    auto hs_pg = std::make_unique< HS_PG >(std::move(pg_info), std::move(repl_dev), index_table, chunk_ids);
     std::scoped_lock lock_guard(index_lock_);
     RELEASE_ASSERT(index_table_pg_map_.count(uuid_str) == 0, "duplicate index table found");
     index_table_pg_map_[uuid_str] = PgIndexTable{pg_id, index_table};
@@ -193,11 +211,11 @@ void HSHomeObject::on_pg_replace_member(homestore::group_id_t group_id, const re
             pg->pg_info_.members.emplace(PGMember(member_in.id, member_in.name, member_in.priority));
 
             uint32_t i{0};
+            pg_members* sb_members = hs_pg->pg_sb_->get_pg_members_mutable();
             for (auto const& m : pg->pg_info_.members) {
-                hs_pg->pg_sb_->members[i].id = m.id;
-                std::strncpy(hs_pg->pg_sb_->members[i].name, m.name.c_str(),
-                             std::min(m.name.size(), pg_members::max_name_len));
-                hs_pg->pg_sb_->members[i].priority = m.priority;
+                sb_members[i].id = m.id;
+                std::strncpy(sb_members[i].name, m.name.c_str(), std::min(m.name.size(), pg_members::max_name_len));
+                sb_members[i].priority = m.priority;
                 ++i;
             }
 
@@ -226,6 +244,7 @@ void HSHomeObject::add_pg_to_map(unique< HS_PG > hs_pg) {
 std::string HSHomeObject::serialize_pg_info(const PGInfo& pginfo) {
     nlohmann::json j;
     j["pg_info"]["pg_id_t"] = pginfo.id;
+    j["pg_info"]["pg_size"] = pginfo.size;
     j["pg_info"]["repl_uuid"] = boost::uuids::to_string(pginfo.replica_set_uuid);
 
     nlohmann::json members_j{};
@@ -244,6 +263,7 @@ PGInfo HSHomeObject::deserialize_pg_info(const unsigned char* json_str, size_t s
     auto pg_json = nlohmann::json::parse(json_str, json_str + size);
 
     PGInfo pg_info(pg_json["pg_info"]["pg_id_t"].get< pg_id_t >());
+    pg_info.size = pg_json["pg_info"]["pg_size"].get< u_int64_t >();
     pg_info.replica_set_uuid = boost::uuids::string_generator()(pg_json["pg_info"]["repl_uuid"].get< std::string >());
 
     for (auto const& m : pg_json["pg_info"]["members"]) {
@@ -267,6 +287,8 @@ void HSHomeObject::on_pg_meta_blk_found(sisl::byte_view const& buf, void* meta_c
         return;
     }
     auto pg_id = pg_sb->id;
+    std::vector<chunk_num_t> chunk_ids(pg_sb->get_chunk_ids(), pg_sb->get_chunk_ids() + pg_sb->num_chunks);
+    chunk_selector_->set_pg_chunks(pg_id, std::move(chunk_ids));
     auto uuid_str = boost::uuids::to_string(pg_sb->index_table_uuid);
     auto hs_pg = std::make_unique< HS_PG >(std::move(pg_sb), std::move(v.value()));
     // During PG recovery check if index is already recoverd else
@@ -280,36 +302,50 @@ void HSHomeObject::on_pg_meta_blk_found(sisl::byte_view const& buf, void* meta_c
     add_pg_to_map(std::move(hs_pg));
 }
 
+void HSHomeObject::on_pg_meta_blk_recover_completed(bool success) {
+    chunk_selector_->recover_per_dev_chunk_heap();
+}
+
 PGInfo HSHomeObject::HS_PG::pg_info_from_sb(homestore::superblk< pg_info_superblk > const& sb) {
     PGInfo pginfo{sb->id};
+    const pg_members* sb_members = sb->get_pg_members();
     for (uint32_t i{0}; i < sb->num_members; ++i) {
-        pginfo.members.emplace(sb->members[i].id, std::string(sb->members[i].name), sb->members[i].priority);
+        pginfo.members.emplace(sb_members[i].id, std::string(sb_members[i].name), sb_members[i].priority);
     }
+    pginfo.size = sb->pg_size;
     pginfo.replica_set_uuid = sb->replica_set_uuid;
     return pginfo;
 }
 
-HSHomeObject::HS_PG::HS_PG(PGInfo info, shared< homestore::ReplDev > rdev, shared< BlobIndexTable > index_table) :
+HSHomeObject::HS_PG::HS_PG(PGInfo info, shared< homestore::ReplDev > rdev, shared< BlobIndexTable > index_table, std::shared_ptr< const std::vector <chunk_num_t> > pg_chunk_ids) :
         PG{std::move(info)},
         pg_sb_{_pg_meta_name},
         repl_dev_{std::move(rdev)},
         index_table_{std::move(index_table)},
         metrics_{*this} {
-    pg_sb_.create(sizeof(pg_info_superblk) + ((pg_info_.members.size() - 1) * sizeof(pg_members)));
+    RELEASE_ASSERT(pg_chunk_ids != nullptr, "PG chunks null");
+    const uint32_t num_chunks = pg_chunk_ids->size();
+    pg_sb_.create(sizeof(pg_info_superblk) - sizeof(char) + pg_info_.members.size() * sizeof(pg_members)+ num_chunks * sizeof(homestore::chunk_num_t));
     pg_sb_->id = pg_info_.id;
     pg_sb_->num_members = pg_info_.members.size();
+    pg_sb_->num_chunks = num_chunks;
+    pg_sb_->pg_size = pg_info_.size;
     pg_sb_->replica_set_uuid = repl_dev_->group_id();
     pg_sb_->index_table_uuid = index_table_->uuid();
     pg_sb_->active_blob_count = 0;
     pg_sb_->tombstone_blob_count = 0;
     pg_sb_->total_occupied_blk_count = 0;
-
     uint32_t i{0};
+    pg_members* pg_sb_members = pg_sb_->get_pg_members_mutable();
     for (auto const& m : pg_info_.members) {
-        pg_sb_->members[i].id = m.id;
-        std::strncpy(pg_sb_->members[i].name, m.name.c_str(), std::min(m.name.size(), pg_members::max_name_len));
-        pg_sb_->members[i].priority = m.priority;
+        pg_sb_members[i].id = m.id;
+        std::strncpy(pg_sb_members[i].name, m.name.c_str(), std::min(m.name.size(), pg_members::max_name_len));
+        pg_sb_members[i].priority = m.priority;
         ++i;
+    }
+    chunk_num_t* pg_sb_chunk_ids = pg_sb_->get_chunk_ids_mutable();
+    for (i = 0; i < num_chunks; ++i) {
+        pg_sb_chunk_ids[i] = pg_chunk_ids->at(i);
     }
     pg_sb_.write();
 }

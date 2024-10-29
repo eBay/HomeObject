@@ -324,12 +324,12 @@ void HSHomeObject::on_shard_message_commit(int64_t lsn, sisl::blob const& h, hom
             std::scoped_lock lock_guard(_shard_lock);
             shard_exist = (_shard_map.find(shard_info.id) != _shard_map.end());
         }
-
         if (!shard_exist) {
             add_new_shard_to_map(std::make_unique< HS_Shard >(shard_info, blkids.chunk_num()));
             // select_specific_chunk() will do something only when we are relaying journal after restart, during the
             // runtime flow chunk is already been be mark busy when we write the shard info to the repldev.
-            chunk_selector_->select_specific_chunk(blkids.chunk_num());
+            auto pg_id = shard_info.placement_group;
+            chunk_selector_->select_specific_chunk(pg_id, blkids.chunk_num());
         }
         if (ctx) { ctx->promise_.setValue(ShardManager::Result< ShardInfo >(shard_info)); }
 
@@ -362,9 +362,10 @@ void HSHomeObject::on_shard_message_commit(int64_t lsn, sisl::blob const& h, hom
         }
 
         if (state == ShardInfo::State::SEALED) {
+            auto pg_id = shard_info.placement_group;
             auto chunk_id = get_shard_chunk(shard_info.id);
             RELEASE_ASSERT(chunk_id.has_value(), "Chunk id not found");
-            chunk_selector()->release_chunk(chunk_id.value());
+            chunk_selector()->release_chunk(pg_id, chunk_id.value());
             update_shard_in_map(shard_info);
         } else
             LOGW("try to commit SEAL_SHARD_MSG but shard state is not sealed, shard_id: {}", shard_info.id);
@@ -387,13 +388,15 @@ void HSHomeObject::on_shard_meta_blk_recover_completed(bool success) {
     std::unordered_set< homestore::chunk_num_t > excluding_chunks;
     std::scoped_lock lock_guard(_pg_lock);
     for (auto& pair : _pg_map) {
+        excluding_chunks.clear();
+        excluding_chunks.reserve(pair.second->shards_.size());
         for (auto& shard : pair.second->shards_) {
             if (shard->info.state == ShardInfo::State::OPEN) {
                 excluding_chunks.emplace(d_cast< HS_Shard* >(shard.get())->sb_->chunk_id);
             }
         }
+        chunk_selector_->recover_pg_chunk_heap(pair.first, excluding_chunks);
     }
-    chunk_selector_->build_per_dev_chunk_heap(excluding_chunks);
 }
 
 void HSHomeObject::add_new_shard_to_map(ShardPtr&& shard) {

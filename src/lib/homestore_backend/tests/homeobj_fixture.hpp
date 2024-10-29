@@ -61,6 +61,7 @@ public:
             auto memebers = g_helper->members();
             auto name = g_helper->name();
             auto info = homeobject::PGInfo(pg_id);
+            info.size = 50 * Mi;
             for (const auto& member : memebers) {
                 if (replica_num == member.second) {
                     // by default, leader is the first member
@@ -293,6 +294,8 @@ public:
 
         EXPECT_EQ(lhs->id, rhs->id);
         EXPECT_EQ(lhs->num_members, rhs->num_members);
+        EXPECT_EQ(lhs->num_chunks, rhs->num_chunks);
+        EXPECT_EQ(lhs->pg_size, rhs->pg_size);
         EXPECT_EQ(lhs->replica_set_uuid, rhs->replica_set_uuid);
         EXPECT_EQ(lhs->index_table_uuid, rhs->index_table_uuid);
         EXPECT_EQ(lhs->blob_sequence_num, rhs->blob_sequence_num);
@@ -301,9 +304,12 @@ public:
         EXPECT_EQ(lhs->total_occupied_blk_count, rhs->total_occupied_blk_count);
         EXPECT_EQ(lhs->tombstone_blob_count, rhs->tombstone_blob_count);
         for (uint32_t i = 0; i < lhs->num_members; i++) {
-            EXPECT_EQ(lhs->members[i].id, rhs->members[i].id);
-            EXPECT_EQ(lhs->members[i].priority, rhs->members[i].priority);
-            EXPECT_EQ(0, std::strcmp(lhs->members[i].name, rhs->members[i].name));
+            EXPECT_EQ(lhs->get_pg_members()[i].id, rhs->get_pg_members()[i].id);
+            EXPECT_EQ(lhs->get_pg_members()[i].priority, rhs->get_pg_members()[i].priority);
+            EXPECT_EQ(0, std::strcmp(lhs->get_pg_members()[i].name, rhs->get_pg_members()[i].name));
+        }
+        for (homestore::chunk_num_t i = 0; i < lhs->num_chunks; ++i) {
+            EXPECT_EQ(lhs->get_chunk_ids()[i], rhs->get_chunk_ids()[i]);
         }
     }
 
