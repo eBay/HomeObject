@@ -3,7 +3,6 @@
 #include "hs_backend_config.hpp"
 #include "lib/blob_route.hpp"
 
-#include "generated/resync_pg_shard_generated.h"
 #include "generated/resync_blob_data_generated.h"
 
 namespace homeobject {
@@ -307,13 +306,13 @@ void ReplicationStateMachine::write_snapshot_data(std::shared_ptr< homestore::sn
     auto snp = GetSizePrefixedResyncBlobDataBatch(snp_data->blob.bytes());
     // TODO Add blob puts
 
-    if (snp->end_of_batch()) {
-        snp_data->offset = (shard_seq_num + 1) << 16;
-    } else {
-        snp_data->offset = (shard_seq_num << 16) | (batch_number + 1);
-    }
-
-    LOGT("Read snapshot num_blobs={} end_of_batch={} {}", snp->data_array()->size(), snp->end_of_batch(), log_str);
+    // if (snp->end_of_batch()) {
+    //     snp_data->offset = (shard_seq_num + 1) << 16;
+    // } else {
+    //     snp_data->offset = (shard_seq_num << 16) | (batch_number + 1);
+    // }
+    //
+    // LOGT("Read snapshot num_blobs={} end_of_batch={} {}", snp->data_array()->size(), snp->end_of_batch(), log_str);
 }
 
 void ReplicationStateMachine::free_user_snp_ctx(void*& user_snp_ctx) {

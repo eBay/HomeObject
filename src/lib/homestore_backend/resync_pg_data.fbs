@@ -1,0 +1,21 @@
+native_include "sisl/utility/non_null_ptr.hpp";
+
+namespace homeobject;
+
+table Member {
+   uuid : [ubyte];
+   name : [ubyte];
+   priority: int;
+}
+
+table ResyncPGMetaData {
+    pg_id : uint16;                               // only low 16 bit is used for pg_id;
+    replica_set_uuid : [ubyte];           // uuid of replica set
+    blob_seq_num : uint64;               // blob sequence number, used to assign next blob id;
+    shard_seq_num: uint64;              // shard sequence number, used to assign next shard id;
+    members : [Member];                 // peers;
+    shard_ids : [uint64];                    // shard ids to transmit;
+}
+
+// ResyncPGMetaData schema is the first message(ObjID=0) in the resync data stream
+root_type ResyncPGMetaData;

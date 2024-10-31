@@ -2,11 +2,9 @@
 #include <sisl/logging/logging.h>
 #include <sisl/options/options.h>
 #include <sisl/settings/settings.hpp>
-#include "generated/resync_pg_shard_generated.h"
 #include "generated/resync_blob_data_generated.h"
 
 namespace homeobject {
-
 HSHomeObject::PGBlobIterator::PGBlobIterator(HSHomeObject& home_obj, homestore::group_id_t group_id,
                                              uint64_t upto_lsn) :
         home_obj_(home_obj), group_id_(group_id) {
@@ -37,26 +35,26 @@ PG* HSHomeObject::PGBlobIterator::get_pg_metadata() {
 }
 
 void HSHomeObject::PGBlobIterator::create_pg_shard_snapshot_data(sisl::io_blob_safe& meta_blob) {
-    auto pg = get_pg_metadata();
-    auto& pg_info = pg->pg_info_;
-    auto& pg_shards = pg->shards_;
-
-    flatbuffers::FlatBufferBuilder builder;
-    std::vector< std::uint8_t > uuid(pg_info.replica_set_uuid.size());
-    std::copy(pg_info.replica_set_uuid.begin(), pg_info.replica_set_uuid.end(), uuid.begin());
-    auto pg_entry = CreatePGInfoEntry(builder, pg_info.id, 0 /* priority*/, builder.CreateVector(uuid));
-
-    std::vector< ::flatbuffers::Offset< ShardInfoEntry > > shard_entries;
-    for (auto& shard : pg_shards) {
-        auto& shard_info = shard->info;
-        // TODO add lsn.
-        shard_entries.push_back(CreateShardInfoEntry(
-            builder, static_cast< uint8_t >(shard_info.state), shard_info.placement_group, shard_info.id,
-            shard_info.total_capacity_bytes, shard_info.created_time, shard_info.last_modified_time));
-    }
-    builder.FinishSizePrefixed(CreateResyncPGShardInfo(builder, pg_entry, builder.CreateVector(shard_entries)));
-    meta_blob = sisl::io_blob_safe{builder.GetSize()};
-    std::memcpy(meta_blob.bytes(), builder.GetBufferPointer(), builder.GetSize());
+    // auto pg = get_pg_metadata();
+    // auto& pg_info = pg->pg_info_;
+    // auto& pg_shards = pg->shards_;
+    //
+    // flatbuffers::FlatBufferBuilder builder;
+    // std::vector< std::uint8_t > uuid(pg_info.replica_set_uuid.size());
+    // std::copy(pg_info.replica_set_uuid.begin(), pg_info.replica_set_uuid.end(), uuid.begin());
+    // auto pg_entry = CreatePGInfoEntry(builder, pg_info.id, 0 /* priority*/, builder.CreateVector(uuid));
+    //
+    // std::vector< ::flatbuffers::Offset< ShardInfoEntry > > shard_entries;
+    // for (auto& shard : pg_shards) {
+    //     auto& shard_info = shard->info;
+    //     // TODO add lsn.
+    //     shard_entries.push_back(CreateShardInfoEntry(
+    //         builder, static_cast< uint8_t >(shard_info.state), shard_info.placement_group, shard_info.id,
+    //         shard_info.total_capacity_bytes, shard_info.created_time, shard_info.last_modified_time));
+    // }
+    // builder.FinishSizePrefixed(CreateResyncPGShardInfo(builder, pg_entry, builder.CreateVector(shard_entries)));
+    // meta_blob = sisl::io_blob_safe{builder.GetSize()};
+    // std::memcpy(meta_blob.bytes(), builder.GetBufferPointer(), builder.GetSize());
 }
 
 int64_t HSHomeObject::PGBlobIterator::get_next_blobs(uint64_t max_num_blobs_in_batch, uint64_t max_batch_size_bytes,
@@ -107,19 +105,19 @@ int64_t HSHomeObject::PGBlobIterator::get_next_blobs(uint64_t max_num_blobs_in_b
 
 void HSHomeObject::PGBlobIterator::create_blobs_snapshot_data(std::vector< BlobInfoData >& blob_data_vec,
                                                               sisl::io_blob_safe& data_blob, bool end_of_shard) {
-    std::vector< ::flatbuffers::Offset< BlobData > > blob_entries;
-    flatbuffers::FlatBufferBuilder builder;
-    for (auto& b : blob_data_vec) {
-        blob_entries.push_back(
-            CreateBlobData(builder, b.shard_id, b.blob_id, b.blob.user_key.size(), b.blob.body.size(),
-                           builder.CreateVector(r_cast< uint8_t* >(const_cast< char* >(b.blob.user_key.data())),
-                                                b.blob.user_key.size()),
-                           builder.CreateVector(b.blob.body.bytes(), b.blob.body.size())));
-    }
-    builder.FinishSizePrefixed(
-        CreateResyncBlobDataBatch(builder, builder.CreateVector(blob_entries), end_of_shard /* end_of_batch */));
-    data_blob = sisl::io_blob_safe{builder.GetSize()};
-    std::memcpy(data_blob.bytes(), builder.GetBufferPointer(), builder.GetSize());
+    // std::vector< ::flatbuffers::Offset< BlobData > > blob_entries;
+    // flatbuffers::FlatBufferBuilder builder;
+    // for (auto& b : blob_data_vec) {
+    //     blob_entries.push_back(
+    //         CreateBlobData(builder, b.shard_id, b.blob_id, b.blob.user_key.size(), b.blob.body.size(),
+    //                        builder.CreateVector(r_cast< uint8_t* >(const_cast< char* >(b.blob.user_key.data())),
+    //                                             b.blob.user_key.size()),
+    //                        builder.CreateVector(b.blob.body.bytes(), b.blob.body.size())));
+    // }
+    // builder.FinishSizePrefixed(
+    //     CreateResyncBlobDataBatch(builder, builder.CreateVector(blob_entries), end_of_shard /* end_of_batch */));
+    // data_blob = sisl::io_blob_safe{builder.GetSize()};
+    // std::memcpy(data_blob.bytes(), builder.GetBufferPointer(), builder.GetSize());
 }
 
 bool HSHomeObject::PGBlobIterator::end_of_scan() const {
