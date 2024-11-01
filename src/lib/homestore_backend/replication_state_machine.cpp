@@ -4,6 +4,8 @@
 #include "lib/blob_route.hpp"
 
 #include "generated/resync_blob_data_generated.h"
+#include "generated/resync_pg_data_generated.h"
+#include "generated/resync_shard_data_generated.h"
 
 namespace homeobject {
 void ReplicationStateMachine::on_commit(int64_t lsn, const sisl::blob& header, const sisl::blob& key,
@@ -196,115 +198,114 @@ std::shared_ptr< homestore::snapshot_context > ReplicationStateMachine::last_sna
 
 int ReplicationStateMachine::read_snapshot_data(std::shared_ptr< homestore::snapshot_context > context,
                                                 std::shared_ptr< homestore::snapshot_data > snp_data) {
-    HSHomeObject::PGBlobIterator* pg_iter = nullptr;
-    auto s = dynamic_pointer_cast< homestore::nuraft_snapshot_context >(context)->nuraft_snapshot();
-
-    if (snp_data->user_ctx == nullptr) {
-        // Create the pg blob iterator for the first time.
-        pg_iter = new HSHomeObject::PGBlobIterator(*home_object_, repl_dev()->group_id());
-        snp_data->user_ctx = (void*)pg_iter;
-    } else {
-        pg_iter = r_cast< HSHomeObject::PGBlobIterator* >(snp_data->user_ctx);
-    }
-
-    // Nuraft uses obj_id as a way to track the state of the snapshot read and write.
-    // Nuraft starts with obj_id == 0 as first message always, leader send all the shards and
-    // PG metadata as response. Follower responds with next obj_id it expects. obj_id's are
-    // encoded in the form of obj_id = shard_seq_num(6 bytes) | batch_number(2 bytes)
-    // Leader starts with shard sequence number 1 and read upto maximum size of data
-    // and send to follower in a batch. Once all blob's are send in a shard,
-    // leader notifies the follower by setting end_of_batch in the payload. Follower
-    // moves to the next shard by incrementing shard_seq_num and reset batch number to 0.
-    // Batch number is used to identify which batch in the current shard sequence number.
-    // We use pg blob iterator to go over all the blobs in all the shards in that PG.
-    // Once all the blobs are finished sending, end_of_scan will be true.
-    int64_t obj_id = snp_data->offset;
-    uint64_t shard_seq_num = obj_id >> 16;
-    uint64_t batch_number = obj_id & 0xFFFF;
-    auto log_str = fmt::format("group={} term={} lsn={} shard_seq={} batch_num={} size={}",
-                               boost::uuids::to_string(repl_dev()->group_id()), s->get_last_log_term(),
-                               s->get_last_log_idx(), shard_seq_num, batch_number, snp_data->blob.size());
-    if (obj_id == 0) {
-        // obj_id = 0 means its the first message and we send the pg and its shards metadata.
-        pg_iter->cur_snapshot_batch_num = 0;
-        pg_iter->create_pg_shard_snapshot_data(snp_data->blob);
-        RELEASE_ASSERT(snp_data->blob.size() > 0, "Empty metadata snapshot data");
-        LOGD("Read snapshot data first message {}", log_str);
-        return 0;
-    }
-
-    if (shard_seq_num != pg_iter->cur_shard_seq_num_ || batch_number != pg_iter->cur_snapshot_batch_num) {
-        // Follower can request for the old shard again. This may be due to error in writing or
-        // it crashed and want to continue from where it left.
-        LOGW("Shard or batch number not same as in iterator shard={}/{} batch_num={}/{}", shard_seq_num,
-             pg_iter->cur_shard_seq_num_, batch_number, pg_iter->cur_snapshot_batch_num);
-        if (shard_seq_num > pg_iter->cur_shard_seq_num_ || batch_number > pg_iter->cur_snapshot_batch_num) {
-            // If we retrieve some invalid values, return error.
-            return -1;
-        }
-
-        // Use the shard sequence number provided by the follower and we restart the batch.
-        pg_iter->cur_shard_seq_num_ = shard_seq_num;
-        pg_iter->cur_blob_id_ = -1;
-        pg_iter->cur_snapshot_batch_num = 0;
-    }
-
-    if (pg_iter->end_of_scan()) {
-        // No more shards to read, baseline resync is finished after this.
-        snp_data->is_last_obj = true;
-        LOGD("Read snapshot reached is_last_obj true {}", log_str);
-        return 0;
-    }
-
-    // Get next set of blobs in the batch.
-    std::vector< HSHomeObject::BlobInfoData > blob_data_vec;
-    bool end_of_shard;
-    auto result = pg_iter->get_next_blobs(HS_BACKEND_DYNAMIC_CONFIG(max_num_blobs_in_snapshot_batch),
-                                          HS_BACKEND_DYNAMIC_CONFIG(max_snapshot_batch_size_mb) * 1024 * 1024,
-                                          blob_data_vec, end_of_shard);
-    if (result != 0) {
-        LOGE("Failed to get next blobs in snapshot read result={} {}", result, log_str);
-        return -1;
-    }
-
-    // Create snapshot flatbuffer data.
-    pg_iter->create_blobs_snapshot_data(blob_data_vec, snp_data->blob, end_of_shard);
-    if (end_of_shard) {
-        pg_iter->cur_snapshot_batch_num = 0;
-    } else {
-        pg_iter->cur_snapshot_batch_num++;
-    }
-
-    LOGT("Read snapshot num_blobs={} end_of_shard={} {}", blob_data_vec.size(), end_of_shard, log_str);
-    return 0;
+    // HSHomeObject::PGBlobIterator* pg_iter = nullptr;
+    // auto s = dynamic_pointer_cast< homestore::nuraft_snapshot_context >(context)->nuraft_snapshot();
+    //
+    // if (snp_data->user_ctx == nullptr) {
+    //     // Create the pg blob iterator for the first time.
+    //     pg_iter = new HSHomeObject::PGBlobIterator(*home_object_, repl_dev()->group_id());
+    //     snp_data->user_ctx = (void*)pg_iter;
+    // } else {
+    //     pg_iter = r_cast< HSHomeObject::PGBlobIterator* >(snp_data->user_ctx);
+    // }
+    //
+    // // Nuraft uses obj_id as a way to track the state of the snapshot read and write.
+    // // Nuraft starts with obj_id == 0 as first message always, leader send all the shards and
+    // // PG metadata as response. Follower responds with next obj_id it expects. obj_id's are
+    // // encoded in the form of obj_id = shard_seq_num(6 bytes) | batch_number(2 bytes)
+    // // Leader starts with shard sequence number 1 and read upto maximum size of data
+    // // and send to follower in a batch. Once all blob's are send in a shard,
+    // // leader notifies the follower by setting end_of_batch in the payload. Follower
+    // // moves to the next shard by incrementing shard_seq_num and reset batch number to 0.
+    // // Batch number is used to identify which batch in the current shard sequence number.
+    // // We use pg blob iterator to go over all the blobs in all the shards in that PG.
+    // // Once all the blobs are finished sending, end_of_scan will be true.
+    // int64_t obj_id = snp_data->offset;
+    // uint64_t shard_seq_num = obj_id >> 16;
+    // uint64_t batch_number = obj_id & 0xFFFF;
+    // auto log_str = fmt::format("group={} term={} lsn={} shard_seq={} batch_num={} size={}",
+    //                            boost::uuids::to_string(repl_dev()->group_id()), s->get_last_log_term(),
+    //                            s->get_last_log_idx(), shard_seq_num, batch_number, snp_data->blob.size());
+    // if (obj_id == 0) {
+    //     // obj_id = 0 means its the first message and we send the pg and its shards metadata.
+    //     pg_iter->cur_snapshot_batch_num = 0;
+    //     pg_iter->create_pg_shard_snapshot_data(snp_data->blob);
+    //     RELEASE_ASSERT(snp_data->blob.size() > 0, "Empty metadata snapshot data");
+    //     LOGD("Read snapshot data first message {}", log_str);
+    //     return 0;
+    // }
+    //
+    // if (shard_seq_num != pg_iter->cur_shard_seq_num_ || batch_number != pg_iter->cur_snapshot_batch_num) {
+    //     // Follower can request for the old shard again. This may be due to error in writing or
+    //     // it crashed and want to continue from where it left.
+    //     LOGW("Shard or batch number not same as in iterator shard={}/{} batch_num={}/{}", shard_seq_num,
+    //          pg_iter->cur_shard_seq_num_, batch_number, pg_iter->cur_snapshot_batch_num);
+    //     if (shard_seq_num > pg_iter->cur_shard_seq_num_ || batch_number > pg_iter->cur_snapshot_batch_num) {
+    //         // If we retrieve some invalid values, return error.
+    //         return -1;
+    //     }
+    //
+    //     // Use the shard sequence number provided by the follower and we restart the batch.
+    //     pg_iter->cur_shard_seq_num_ = shard_seq_num;
+    //     pg_iter->cur_snapshot_batch_num = 0;
+    // }
+    //
+    // if (pg_iter->end_of_scan()) {
+    //     // No more shards to read, baseline resync is finished after this.
+    //     snp_data->is_last_obj = true;
+    //     LOGD("Read snapshot reached is_last_obj true {}", log_str);
+    //     return 0;
+    // }
+    //
+    // // Get next set of blobs in the batch.
+    // std::vector< HSHomeObject::BlobInfoData > blob_data_vec;
+    // bool end_of_shard;
+    // auto result = pg_iter->get_next_blobs(HS_BACKEND_DYNAMIC_CONFIG(max_num_blobs_in_snapshot_batch),
+    //                                       HS_BACKEND_DYNAMIC_CONFIG(max_snapshot_batch_size_mb) * 1024 * 1024,
+    //                                       blob_data_vec, end_of_shard);
+    // if (result != 0) {
+    //     LOGE("Failed to get next blobs in snapshot read result={} {}", result, log_str);
+    //     return -1;
+    // }
+    //
+    // // Create snapshot flatbuffer data.
+    // pg_iter->create_blobs_snapshot_data(blob_data_vec, snp_data->blob, end_of_shard);
+    // if (end_of_shard) {
+    //     pg_iter->cur_snapshot_batch_num = 0;
+    // } else {
+    //     pg_iter->cur_snapshot_batch_num++;
+    // }
+    //
+    // LOGT("Read snapshot num_blobs={} end_of_shard={} {}", blob_data_vec.size(), end_of_shard, log_str);
+     return 0;
 }
 
 void ReplicationStateMachine::write_snapshot_data(std::shared_ptr< homestore::snapshot_context > context,
                                                   std::shared_ptr< homestore::snapshot_data > snp_data) {
-    RELEASE_ASSERT(context != nullptr, "Context null");
-    RELEASE_ASSERT(snp_data != nullptr, "Snapshot data null");
-    auto s = dynamic_pointer_cast< homestore::nuraft_snapshot_context >(context)->nuraft_snapshot();
-    int64_t obj_id = snp_data->offset;
-    uint64_t shard_seq_num = obj_id >> 16;
-    uint64_t batch_number = obj_id & 0xFFFF;
-
-    auto log_str = fmt::format("group={} term={} lsn={} shard_seq={} batch_num={} size={}",
-                               boost::uuids::to_string(repl_dev()->group_id()), s->get_last_log_term(),
-                               s->get_last_log_idx(), shard_seq_num, batch_number, snp_data->blob.size());
-
-    if (snp_data->is_last_obj) {
-        LOGD("Write snapshot reached is_last_obj true {}", log_str);
-        return;
-    }
-
-    if (obj_id == 0) {
-        snp_data->offset = 1 << 16;
-        // TODO add metadata.
-        return;
-    }
-
-    auto snp = GetSizePrefixedResyncBlobDataBatch(snp_data->blob.bytes());
-    // TODO Add blob puts
+    // RELEASE_ASSERT(context != nullptr, "Context null");
+    // RELEASE_ASSERT(snp_data != nullptr, "Snapshot data null");
+    // auto s = dynamic_pointer_cast< homestore::nuraft_snapshot_context >(context)->nuraft_snapshot();
+    // int64_t obj_id = snp_data->offset;
+    // uint64_t shard_seq_num = obj_id >> 16;
+    // uint64_t batch_number = obj_id & 0xFFFF;
+    //
+    // auto log_str = fmt::format("group={} term={} lsn={} shard_seq={} batch_num={} size={}",
+    //                            boost::uuids::to_string(repl_dev()->group_id()), s->get_last_log_term(),
+    //                            s->get_last_log_idx(), shard_seq_num, batch_number, snp_data->blob.size());
+    //
+    // if (snp_data->is_last_obj) {
+    //     LOGD("Write snapshot reached is_last_obj true {}", log_str);
+    //     return;
+    // }
+    //
+    // if (obj_id == 0) {
+    //     snp_data->offset = 1 << 16;
+    //     // TODO add metadata.
+    //     return;
+    // }
+    //
+    // auto snp = GetSizePrefixedResyncBlobDataBatch(snp_data->blob.bytes());
+    // // TODO Add blob puts
 
     // if (snp->end_of_batch()) {
     //     snp_data->offset = (shard_seq_num + 1) << 16;
