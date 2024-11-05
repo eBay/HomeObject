@@ -127,7 +127,7 @@ public:
         ShardInfo info;
         homestore::chunk_num_t chunk_id;
     };
-
+    //TODO this blk is used to store snapshot metadata/status for recovery
     struct snapshot_info_superblk {};
 #pragma pack()
 
@@ -319,6 +319,8 @@ public:
         void process_shard_snapshot_data(ResyncShardMetaData const& shard_meta, snp_obj_id_t& obj_id);
         void process_blobs_snapshot_data(ResyncBlobDataBatch const& data_blob, snp_obj_id_t& obj_id);
 
+        //snapshot start lsn
+        int64_t snp_lsn{0};
         shard_id_t shard_cursor{0};
         blob_id_t blob_cursor{0};
         snp_batch_id_t cur_batch_num{0};

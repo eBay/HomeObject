@@ -15,21 +15,21 @@ VENUM(SyncMessageType, uint16_t, PG_META = 0, SHARD_META = 1, SHARD_BATCH = 2,  
 
 // magic num comes from the first 8 bytes of 'echo homeobject_replication | md5sum'
 static constexpr uint64_t HOMEOBJECT_REPLICATION_MAGIC = 0x11153ca24efc8d34;
+// magic num comes from the first 8 bytes of 'echo homeobject_resync | md5sum'
+static constexpr uint64_t HOMEOBJECT_RESYNC_MAGIC = 0xbb6813cb4a339f30;
 static constexpr uint32_t HOMEOBJECT_REPLICATION_PROTOCOL_VERSION_V1 = 0x01;
 static constexpr uint32_t HOMEOBJECT_RESYNC_PROTOCOL_VERSION_V1 = 0x01;
 static constexpr uint32_t init_crc32 = 0;
 static constexpr uint64_t LAST_OBJ_ID =ULLONG_MAX;
 
 #pragma pack(1)
+template<typename Header>
 struct BaseMessageHeader {
     uint64_t magic_num{HOMEOBJECT_REPLICATION_MAGIC};
     uint32_t protocol_version;
     uint32_t payload_size;
     uint32_t payload_crc;
     mutable uint32_t header_crc;
-    uint8_t reserved_pad[4]{};
-
-    virtual uint32_t expected_protocol_version() const = 0;
 
     void seal() {
         header_crc = 0;
@@ -37,14 +37,11 @@ struct BaseMessageHeader {
     }
 
     uint32_t calculate_crc() const {
-        return crc32_ieee(init_crc32, reinterpret_cast<const unsigned char*>(this), sizeof(*this));
+        const auto* hdr=static_cast<const Header*>(this);
+        return crc32_ieee(init_crc32, reinterpret_cast<const unsigned char*>(hdr), sizeof(*hdr));
     }
 
     bool corrupted() const {
-        if (magic_num != HOMEOBJECT_REPLICATION_MAGIC || protocol_version != expected_protocol_version()) {
-            return true;
-        }
-
         auto saved_crc = header_crc;
         header_crc = 0;
         bool is_corrupted = (saved_crc != calculate_crc());
@@ -59,14 +56,21 @@ struct BaseMessageHeader {
     }
 };
 
-struct ReplicationMessageHeader : public BaseMessageHeader{
-    uint32_t protocol_version{HOMEOBJECT_REPLICATION_PROTOCOL_VERSION_V1};
-    ReplicationMessageType msg_type; // message type
+struct ReplicationMessageHeader : public BaseMessageHeader<ReplicationMessageHeader>{
+    ReplicationMessageHeader(): BaseMessageHeader() {
+        magic_num = HOMEOBJECT_REPLICATION_MAGIC;
+        protocol_version = HOMEOBJECT_REPLICATION_PROTOCOL_VERSION_V1;
+    }
+    ReplicationMessageType msg_type;
     pg_id_t pg_id{0};
+    uint8_t reserved_pad[4]{};
     shard_id_t shard_id{0};
 
-    uint32_t expected_protocol_version() const override {
-        return HOMEOBJECT_REPLICATION_PROTOCOL_VERSION_V1;  // Specific version for sync messages
+    bool corrupted() const{
+        if (magic_num != HOMEOBJECT_REPLICATION_MAGIC || protocol_version != HOMEOBJECT_REPLICATION_PROTOCOL_VERSION_V1) {
+            return true;
+        }
+        return BaseMessageHeader::corrupted();
     }
 
     std::string to_string() const {
@@ -76,12 +80,19 @@ struct ReplicationMessageHeader : public BaseMessageHeader{
     }
 };
 
-struct SyncMessageHeader : public BaseMessageHeader {
-    uint32_t protocol_version{HOMEOBJECT_RESYNC_PROTOCOL_VERSION_V1};
-    SyncMessageType msg_type; // message type
+struct SyncMessageHeader : public BaseMessageHeader<SyncMessageHeader> {
+    SyncMessageHeader() : BaseMessageHeader() {
+        magic_num = HOMEOBJECT_RESYNC_MAGIC;
+        protocol_version = HOMEOBJECT_RESYNC_PROTOCOL_VERSION_V1;
+    }
+    SyncMessageType msg_type;
+    uint8_t reserved_pad[6]{};
 
-    uint32_t expected_protocol_version() const override {
-        return HOMEOBJECT_RESYNC_PROTOCOL_VERSION_V1;  // Specific version for sync messages
+    bool corrupted() const{
+        if (magic_num != HOMEOBJECT_RESYNC_MAGIC || protocol_version != HOMEOBJECT_RESYNC_PROTOCOL_VERSION_V1) {
+            return true;
+        }
+        return BaseMessageHeader::corrupted();
     }
 
     std::string to_string() const {

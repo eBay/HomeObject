@@ -5,12 +5,12 @@ namespace homeobject;
 table ResyncBlobData {
     blob_id : uint64;
     is_deleted: bool;
-    data : [ubyte]; // Raw blob data loaded from drive, include BlobHeader, user_key and payload
+    data : [ubyte];    // Raw blob data loaded from drive, include BlobHeader, user_key and payload
 }
 
 table ResyncBlobDataBatch {
-    blob_list : [ResyncBlobData];   // List of blobs in the batch
-    is_last_batch: bool;                       // Is the last batch of the shard?
+    blob_list : [ResyncBlobData];    // List of blobs in the batch
+    is_last_batch: bool;                    // Is the last batch of the shard
 }
 
 // ResyncBlobData schema is the batch message in data resync
