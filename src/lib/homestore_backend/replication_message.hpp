@@ -112,6 +112,12 @@ struct objId {
     snp_batch_id_t batchId;
 
     objId(shard_id_t shard_id, snp_batch_id_t batch_id) : shardId(shard_id), batchId(batch_id) {
+        if (shard_id != (shard_id & 0xFFFFFFFFFFFF)) {
+            throw std::invalid_argument("shard_id is too large");
+        }
+        if (batch_id != (batch_id & 0x7FFF)){
+            throw std::invalid_argument("batch_id is too large");
+        }
         //type_bit (1 bit) | shard_id (48 bits) | batch_id (15 bits)
         value= static_cast<uint64_t>(1) << 63 | (shard_id) << 15 | batch_id;
     }
