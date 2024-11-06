@@ -1,6 +1,7 @@
 #include <boost/uuid/random_generator.hpp>
 #include <boost/uuid/string_generator.hpp>
 #include <homestore/replication_service.hpp>
+#include <utility>
 #include "hs_homeobject.hpp"
 #include "replication_state_machine.hpp"
 
@@ -93,6 +94,37 @@ PGManager::NullAsyncResult HSHomeObject::do_create_pg(cshared< homestore::ReplDe
     });
 }
 
+HSHomeObject::HS_PG* HSHomeObject::local_create_pg(shared< ReplDev > repl_dev, PGInfo pg_info) {
+    auto pg_id = pg_info.id;
+    {
+        auto lg = shared_lock(_pg_lock);
+        if (auto it = _pg_map.find(pg_id); it != _pg_map.end()) {
+            LOGW("PG already exists, pg_id {}", pg_id);
+            return dynamic_cast< HS_PG* >(it->second.get());
+        }
+    }
+
+    // create index table and pg
+    // TODO create index table during create shard.
+    auto index_table = create_index_table();
+    auto uuid_str = boost::uuids::to_string(index_table->uuid());
+
+    auto hs_pg = std::make_unique< HS_PG >(std::move(pg_info), std::move(repl_dev), index_table);
+    auto ret = hs_pg.get();
+    {
+        scoped_lock lck(index_lock_);
+        RELEASE_ASSERT(index_table_pg_map_.count(uuid_str) == 0, "duplicate index table found");
+        index_table_pg_map_[uuid_str] = PgIndexTable{pg_id, index_table};
+
+        LOGI("Index table created for pg {} uuid {}", pg_id, uuid_str);
+        hs_pg->index_table_ = index_table;
+        // Add to index service, so that it gets cleaned up when index service is shutdown.
+        hs()->index_service().add_index_table(index_table);
+        add_pg_to_map(std::move(hs_pg));
+    }
+    return ret;
+}
+
 void HSHomeObject::on_create_pg_message_commit(int64_t lsn, sisl::blob const& header,
                                                shared< homestore::ReplDev > repl_dev,
                                                cintrusive< homestore::repl_req_ctx >& hs_ctx) {
@@ -120,28 +152,7 @@ void HSHomeObject::on_create_pg_message_commit(int64_t lsn, sisl::blob const& he
     }
 
     auto pg_info = deserialize_pg_info(serailized_pg_info_buf, serailized_pg_info_size);
-    auto pg_id = pg_info.id;
-    if (auto lg = std::shared_lock(_pg_lock); _pg_map.end() != _pg_map.find(pg_id)) {
-        LOGW("PG already exists, lsn:{}, pg_id {}", lsn, pg_id);
-        if (ctx) { ctx->promise_.setValue(folly::Unit()); }
-        return;
-    }
-
-    // create index table and pg
-    // TODO create index table during create shard.
-    auto index_table = create_index_table();
-    auto uuid_str = boost::uuids::to_string(index_table->uuid());
-
-    auto hs_pg = std::make_unique< HS_PG >(std::move(pg_info), std::move(repl_dev), index_table);
-    std::scoped_lock lock_guard(index_lock_);
-    RELEASE_ASSERT(index_table_pg_map_.count(uuid_str) == 0, "duplicate index table found");
-    index_table_pg_map_[uuid_str] = PgIndexTable{pg_id, index_table};
-
-    LOGI("Index table created for pg {} uuid {}", pg_id, uuid_str);
-    hs_pg->index_table_ = index_table;
-    // Add to index service, so that it gets cleaned up when index service is shutdown.
-    homestore::hs()->index_service().add_index_table(index_table);
-    add_pg_to_map(std::move(hs_pg));
+    local_create_pg(std::move(repl_dev), pg_info);
     if (ctx) ctx->promise_.setValue(folly::Unit());
 }
 

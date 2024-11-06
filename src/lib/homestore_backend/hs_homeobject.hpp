@@ -318,22 +318,34 @@ public:
 
     // SnapshotReceiverContext is the context used in follower side snapshot receiving. [drafting] The functions is not the final version.
     struct SnapshotReceiveHandler {
-        SnapshotReceiveHandler(HSHomeObject& home_obj, pg_id_t pg_id_, homestore::group_id_t group_id);
+        enum ErrorCode {
+            ALLOC_BLK_ERR = 1,
+            WRITE_DATA_ERR,
+            INVALID_BLOB_HEADER,
+            BLOB_DATA_CORRUPTED,
+            ADD_BLOB_INDEX_ERR,
+        };
+
+        constexpr static shard_id_t invalid_shard_id = 0;
+        constexpr static shard_id_t shard_list_end_marker = ULLONG_MAX;
+
+        SnapshotReceiveHandler(HSHomeObject& home_obj, pg_id_t pg_id_, homestore::group_id_t group_id, int64_t lsn,
+                               shared< homestore::ReplDev > repl_dev);
         void process_pg_snapshot_data(ResyncPGMetaData const& pg_meta);
-        void process_shard_snapshot_data(ResyncShardMetaData const& shard_meta, snp_obj_id_t& obj_id);
-        void process_blobs_snapshot_data(ResyncBlobDataBatch const& data_blob, snp_obj_id_t& obj_id);
+        int process_shard_snapshot_data(ResyncShardMetaData const& shard_meta);
+        int process_blobs_snapshot_data(ResyncBlobDataBatch const& data_blobs, snp_batch_id_t batch_num);
+        shard_id_t get_next_shard() const;
 
-        //snapshot start lsn
-        int64_t snp_lsn{0};
-        shard_id_t shard_cursor{0};
-        blob_id_t blob_cursor{0};
-        snp_batch_id_t cur_batch_num{0};
-        std::vector<shard_id_t> shard_list;
+        shard_id_t shard_cursor_{invalid_shard_id};
+        blob_id_t blob_cursor_{0};
+        snp_batch_id_t cur_batch_num_{0};
+        std::vector< shard_id_t > shard_list_;
 
+        const int64_t snp_lsn_{0};
         HSHomeObject& home_obj_;
-        homestore::group_id_t group_id_;
-        pg_id_t pg_id_;
-        shared< homestore::ReplDev > repl_dev_;
+        const homestore::group_id_t group_id_;
+        const pg_id_t pg_id_;
+        const shared< homestore::ReplDev > repl_dev_;
 
         //snapshot info, can be used as a checkpoint for recovery
         snapshot_info_superblk snp_info_;
@@ -357,17 +369,18 @@ private:
                                                     const homestore::MultiBlkId& blkid) const;
 
     // create pg related
-    PGManager::NullAsyncResult do_create_pg(cshared< homestore::ReplDev > repl_dev, PGInfo&& pg_info);
+    static PGManager::NullAsyncResult do_create_pg(cshared< homestore::ReplDev > repl_dev, PGInfo&& pg_info);
+    HS_PG* local_create_pg(shared< homestore::ReplDev > repl_dev, PGInfo pg_info);
     static std::string serialize_pg_info(const PGInfo& info);
     static PGInfo deserialize_pg_info(const unsigned char* pg_info_str, size_t size);
     void add_pg_to_map(unique< HS_PG > hs_pg);
 
     // create shard related
     shard_id_t generate_new_shard_id(pg_id_t pg);
-    uint64_t get_sequence_num_from_shard_id(uint64_t shard_id_t) const;
 
     static ShardInfo deserialize_shard_info(const char* shard_info_str, size_t size);
     static std::string serialize_shard_info(const ShardInfo& info);
+    void local_create_shard(ShardInfo shard_info, homestore::chunk_num_t chunk_num, homestore::blk_count_t blk_count);
     void add_new_shard_to_map(ShardPtr&& shard);
     void update_shard_in_map(const ShardInfo& shard_info);
 
@@ -453,6 +466,14 @@ public:
     std::optional< homestore::chunk_num_t > get_shard_chunk(shard_id_t id) const;
 
     /**
+     * @brief Get the sequence number of the shard from the shard id.
+     *
+     * @param shard_id The ID of the shard.
+     * @return The sequence number of the shard.
+     */
+    static uint64_t get_sequence_num_from_shard_id(uint64_t shard_id);
+
+    /**
      * @brief recover PG and shard from the superblock.
      *
      */
@@ -473,6 +494,7 @@ public:
                             const homestore::MultiBlkId& pbas, cintrusive< homestore::repl_req_ctx >& hs_ctx);
     void on_blob_del_commit(int64_t lsn, sisl::blob const& header, sisl::blob const& key,
                             cintrusive< homestore::repl_req_ctx >& hs_ctx);
+    bool local_add_blob_info(pg_id_t pg_id, BlobInfo const &blob_info);
     homestore::ReplResult< homestore::blk_alloc_hints >
     blob_put_get_blk_alloc_hints(sisl::blob const& header, cintrusive< homestore::repl_req_ctx >& ctx);
     void compute_blob_payload_hash(BlobHeader::HashAlgorithm algorithm, const uint8_t* blob_bytes, size_t blob_size,
