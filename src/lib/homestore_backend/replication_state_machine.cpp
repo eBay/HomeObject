@@ -121,17 +121,10 @@ ReplicationStateMachine::get_blk_alloc_hints(sisl::blob const& header, uint32_t 
     const ReplicationMessageHeader* msg_header = r_cast< const ReplicationMessageHeader* >(header.cbytes());
     switch (msg_header->msg_type) {
     case ReplicationMessageType::CREATE_SHARD_MSG: {
-        auto const [pg_found, shards_found, chunk_id] = home_object_->get_any_chunk_id(msg_header->pg_id);
-        if (!pg_found) {
-            LOGW("Requesting a chunk for an unknown pg={}, letting the caller retry after sometime", msg_header->pg_id);
-            return folly::makeUnexpected(homestore::ReplServiceError::RESULT_NOT_EXIST_YET);
-        } else if (!shards_found) {
-            // pg is empty without any shards, we leave the decision the HeapChunkSelector to select a pdev
-            // with most available space and then select one chunk based on that pdev
-        } else {
-            return home_object_->chunk_selector()->chunk_to_hints(chunk_id);
-        }
-        break;
+        // Since chunks are selected when a pg is created, the chunkselector selects one of the chunks owned by the pg
+        homestore::blk_alloc_hints hints;
+        hints.pdev_id_hint = msg_header->pg_id; // FIXME @Hooper: Temporary bypass using pdev_id_hint to represent pg_id_hint, "identical layout" will change it
+        return hints;
     }
 
     case ReplicationMessageType::SEAL_SHARD_MSG: {

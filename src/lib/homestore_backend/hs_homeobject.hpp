@@ -78,15 +78,24 @@ public:
     struct pg_info_superblk {
         pg_id_t id;
         uint32_t num_members;
+        uint32_t num_chunks;
         peer_id_t replica_set_uuid;
+        uint64_t pg_size;
         homestore::uuid_t index_table_uuid;
         blob_id_t blob_sequence_num;
         uint64_t active_blob_count;        // Total number of active blobs
         uint64_t tombstone_blob_count;     // Total number of tombstones
         uint64_t total_occupied_blk_count; // Total number of occupied blocks
-        pg_members members[1];             // ISO C++ forbids zero-size array
+        char data[1];                      // ISO C++ forbids zero-size array
+        // Data layout inside 'data':
+        // First, an array of 'pg_members' structures:
+        // | pg_members[0] | pg_members[1] | ... | pg_members[num_members-1] |
+        // Immediately followed by an array of 'chunk_num_t' values (representing r_chunk_ids):
+        // | chunk_num_t[0] | chunk_num_t[1] | ... | chunk_num_t[num_chunks-1] |
+        // Here, 'chunk_num_t[i]' represents the r_chunk_id for the v_chunk_id 'i', where v_chunk_id starts from 0 and increases sequentially.
 
-        uint32_t size() const { return sizeof(pg_info_superblk) + ((num_members - 1) * sizeof(pg_members)); }
+
+        uint32_t size() const { return sizeof(pg_info_superblk)  - sizeof(char) + num_members * sizeof(pg_members) + num_chunks * sizeof(homestore::chunk_num_t); }
         static std::string name() { return _pg_meta_name; }
 
         pg_info_superblk() = default;
@@ -95,14 +104,24 @@ public:
         pg_info_superblk& operator=(pg_info_superblk const& rhs) {
             id = rhs.id;
             num_members = rhs.num_members;
+            num_chunks = rhs.num_chunks;
+            pg_size = rhs.pg_size;
             replica_set_uuid = rhs.replica_set_uuid;
             index_table_uuid = rhs.index_table_uuid;
             blob_sequence_num = rhs.blob_sequence_num;
-            memcpy(members, rhs.members, sizeof(pg_members) * num_members);
+
+            memcpy(get_pg_members_mutable(), rhs.get_pg_members(), sizeof(pg_members) * num_members);
+            memcpy(get_chunk_ids_mutable(), rhs.get_chunk_ids(), sizeof(homestore::chunk_num_t) * num_chunks);
             return *this;
         }
 
         void copy(pg_info_superblk const& rhs) { *this = rhs; }
+
+        pg_members* get_pg_members_mutable() { return reinterpret_cast<pg_members*>(data); }
+        const pg_members* get_pg_members() const { return reinterpret_cast<const pg_members*>(data); }
+
+        homestore::chunk_num_t* get_chunk_ids_mutable() { return reinterpret_cast<homestore::chunk_num_t*>(data + num_members * sizeof(pg_members)); }
+        const homestore::chunk_num_t* get_chunk_ids() const { return reinterpret_cast<const homestore::chunk_num_t*>(data + num_members * sizeof(pg_members)); }
     };
 
     struct DataHeader {
@@ -195,7 +214,7 @@ public:
         std::shared_ptr< BlobIndexTable > index_table_;
         PGMetrics metrics_;
 
-        HS_PG(PGInfo info, shared< homestore::ReplDev > rdev, shared< BlobIndexTable > index_table);
+        HS_PG(PGInfo info, shared< homestore::ReplDev > rdev, shared< BlobIndexTable > index_table, std::shared_ptr< const std::vector <homestore::chunk_num_t> > pg_chunk_ids);
         HS_PG(homestore::superblk< pg_info_superblk >&& sb, shared< homestore::ReplDev > rdev);
         ~HS_PG() override = default;
 
@@ -335,6 +354,7 @@ private:
     // recover part
     void register_homestore_metablk_callback();
     void on_pg_meta_blk_found(sisl::byte_view const& buf, void* meta_cookie);
+    void on_pg_meta_blk_recover_completed(bool success);
     void on_shard_meta_blk_found(homestore::meta_blk* mblk, sisl::byte_view buf);
     void on_shard_meta_blk_recover_completed(bool success);
 
