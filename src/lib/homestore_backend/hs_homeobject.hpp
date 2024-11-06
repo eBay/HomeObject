@@ -13,6 +13,9 @@
 #include "replication_message.hpp"
 #include "homeobject/common.hpp"
 #include "index_kv.hpp"
+#include "generated/resync_pg_data_generated.h"
+#include "generated/resync_shard_data_generated.h"
+#include "generated/resync_blob_data_generated.h"
 
 namespace homestore {
 struct meta_blk;
@@ -124,6 +127,8 @@ public:
         ShardInfo info;
         homestore::chunk_num_t chunk_id;
     };
+    //TODO this blk is used to store snapshot metadata/status for recovery
+    struct snapshot_info_superblk {};
 #pragma pack()
 
 public:
@@ -287,18 +292,48 @@ public:
         int64_t get_next_blobs(uint64_t max_num_blobs_in_batch, uint64_t max_batch_size_bytes,
                                std::vector< HSHomeObject::BlobInfoData >& blob_vec, bool& end_of_shard);
         void create_pg_shard_snapshot_data(sisl::io_blob_safe& meta_blob);
+        void create_pg_snapshot_data(sisl::io_blob_safe& meta_blob);
+        void create_shard_snapshot_data(sisl::io_blob_safe& meta_blob);
         void create_blobs_snapshot_data(std::vector< HSHomeObject::BlobInfoData >& blob_vec,
                                         sisl::io_blob_safe& data_blob, bool end_of_shard);
         bool end_of_scan() const;
 
-        uint64_t cur_shard_seq_num_{1};
-        int64_t cur_blob_id_{-1};
+        uint64_t snp_start_lsn{0};
+        std::vector<ShardInfo> shard_list{0};
+        shard_id_t cur_shard_seq_num_{1};
+        std::vector<BlobInfo> cur_blob_list{0};
+        int64_t last_end_blob_idx{-1};
+        int64_t last_batch_size{0};
         uint64_t max_shard_seq_num_{0};
         uint64_t cur_snapshot_batch_num{0};
         HSHomeObject& home_obj_;
         homestore::group_id_t group_id_;
         pg_id_t pg_id_;
         shared< homestore::ReplDev > repl_dev_;
+    };
+
+    // SnapshotReceiverContext is the context used in follower side snapshot receiving. [drafting] The functions is not the final version.
+    struct SnapshotReceiveHandler {
+        SnapshotReceiveHandler(HSHomeObject& home_obj, pg_id_t pg_id_, homestore::group_id_t group_id);
+        void process_pg_snapshot_data(ResyncPGMetaData const& pg_meta);
+        void process_shard_snapshot_data(ResyncShardMetaData const& shard_meta, snp_obj_id_t& obj_id);
+        void process_blobs_snapshot_data(ResyncBlobDataBatch const& data_blob, snp_obj_id_t& obj_id);
+
+        //snapshot start lsn
+        int64_t snp_lsn{0};
+        shard_id_t shard_cursor{0};
+        blob_id_t blob_cursor{0};
+        snp_batch_id_t cur_batch_num{0};
+        std::vector<shard_id_t> shard_list;
+
+        HSHomeObject& home_obj_;
+        homestore::group_id_t group_id_;
+        pg_id_t pg_id_;
+        shared< homestore::ReplDev > repl_dev_;
+
+        //snapshot info, can be used as a checkpoint for recovery
+        snapshot_info_superblk snp_info_;
+        // other stats for snapshot transmission progress
     };
 
 private:

@@ -41,8 +41,10 @@ settings_gen_cpp(
     ${CMAKE_CURRENT_BINARY_DIR}/generated/
     "${PROJECT_NAME}_homestore"
     hs_backend_config.fbs
-    resync_pg_shard.fbs
+    resync_pg_data.fbs
+    resync_shard_data.fbs
     resync_blob_data.fbs
+    resync_payload.fbs
   )
 
 add_subdirectory(tests)

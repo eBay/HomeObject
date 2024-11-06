@@ -2,18 +2,16 @@ native_include "sisl/utility/non_null_ptr.hpp";
 
 namespace homeobject;
 
-table BlobData {
-    shard_id : uint64;
+table ResyncBlobData {
     blob_id : uint64;
-    user_key_size : uint32;
-    data_size : uint32;
-    user_key : [ubyte];
-    data : [ubyte];
+    is_deleted: bool;
+    data : [ubyte];    // Raw blob data loaded from drive, include BlobHeader, user_key and payload
 }
 
 table ResyncBlobDataBatch {
-    data_array : [BlobData];
-    end_of_batch: ubyte;
+    blob_list : [ResyncBlobData];    // List of blobs in the batch
+    is_last_batch: bool;                    // Is the last batch of the shard
 }
 
+// ResyncBlobData schema is the batch message in data resync
 root_type ResyncBlobDataBatch;
