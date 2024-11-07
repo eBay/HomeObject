@@ -4,7 +4,7 @@ namespace homeobject;
 
 table ResyncBlobData {
     blob_id : uint64;
-    is_deleted: bool;
+    state: uint8;    //normal, deleted, corrupted
     data : [ubyte];    // Raw blob data loaded from drive, include BlobHeader, user_key and payload
 }
 
