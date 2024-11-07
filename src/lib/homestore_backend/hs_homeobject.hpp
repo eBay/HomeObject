@@ -90,9 +90,9 @@ public:
         // Data layout inside 'data':
         // First, an array of 'pg_members' structures:
         // | pg_members[0] | pg_members[1] | ... | pg_members[num_members-1] |
-        // Immediately followed by an array of 'chunk_num_t' values (representing r_chunk_ids):
+        // Immediately followed by an array of 'chunk_num_t' values (representing physical chunkID):
         // | chunk_num_t[0] | chunk_num_t[1] | ... | chunk_num_t[num_chunks-1] |
-        // Here, 'chunk_num_t[i]' represents the r_chunk_id for the v_chunk_id 'i', where v_chunk_id starts from 0 and
+        // Here, 'chunk_num_t[i]' represents the p_chunk_id for the v_chunk_id 'i', where v_chunk_id starts from 0 and
         // increases sequentially.
 
         uint32_t size() const {
@@ -148,7 +148,8 @@ public:
 
     struct shard_info_superblk : public DataHeader {
         ShardInfo info;
-        homestore::chunk_num_t chunk_id;
+        homestore::chunk_num_t p_chunk_id;
+        homestore::chunk_num_t v_chunk_id;
     };
 #pragma pack()
 
@@ -217,7 +218,6 @@ public:
     public:
         homestore::superblk< pg_info_superblk > pg_sb_;
         shared< homestore::ReplDev > repl_dev_;
-        std::optional< homestore::chunk_num_t > any_allocated_chunk_id_{};
         std::shared_ptr< BlobIndexTable > index_table_;
         PGMetrics metrics_;
 
@@ -240,24 +240,16 @@ public:
          * Returns the number of open shards on this PG.
          */
         uint32_t open_shards() const;
-
-        /**
-         * Retrieves the device hint associated with this PG(if any shard is created).
-         *
-         * @param selector The HeapChunkSelector object.
-         * @return An optional uint32_t value representing the device hint, or std::nullopt if no hint is available.
-         */
-        std::optional< uint32_t > dev_hint(cshared< HeapChunkSelector >) const;
     };
 
     struct HS_Shard : public Shard {
         homestore::superblk< shard_info_superblk > sb_;
-        HS_Shard(ShardInfo info, homestore::chunk_num_t chunk_id);
+        HS_Shard(ShardInfo info, homestore::chunk_num_t p_chunk_id);
         HS_Shard(homestore::superblk< shard_info_superblk >&& sb);
         ~HS_Shard() override = default;
 
         void update_info(const ShardInfo& info);
-        auto chunk_id() const { return sb_->chunk_id; }
+        auto p_chunk_id() const { return sb_->p_chunk_id; }
     };
 
 #pragma pack(1)
@@ -437,9 +429,17 @@ public:
      * @brief Retrieves the chunk number associated with the given shard ID.
      *
      * @param id The ID of the shard to retrieve the chunk number for.
-     * @return An optional chunk number if the shard ID is valid, otherwise an empty optional.
+     * @return An optional chunk number values shard p_chunk_id if the shard ID is valid, otherwise an empty optional.
      */
-    std::optional< homestore::chunk_num_t > get_shard_chunk(shard_id_t id) const;
+    std::optional< homestore::chunk_num_t > get_shard_p_chunk_id(shard_id_t id) const;
+
+    /**
+     * @brief Retrieves the chunk number associated with the given shard ID.
+     *
+     * @param id The ID of the shard to retrieve the chunk number for.
+     * @return An optional chunk number values shard v_chunk_id if the shard ID is valid, otherwise an empty optional.
+     */
+    std::optional< homestore::chunk_num_t > get_shard_v_chunk_id(shard_id_t id) const;
 
     /**
      * @brief recover PG and shard from the superblock.
@@ -448,13 +448,27 @@ public:
     void on_replica_restart();
 
     /**
-     * @brief Returns any chunk number for the given pg ID.
+     * @brief Extracts the physical chunk ID for create shard from the message.
      *
-     * @param pg The pg ID to get the chunk number for.
-     * @return A tuple of <if pg exist, if shard exist, chunk number if both exist>.
+     * @param header The message header that includes the shard_info_superblk, which contains the data necessary for
+     * extracting and mapping the chunk ID.
+     * @return An optional virtual chunk id if the extraction and mapping process is successful, otherwise an empty
+     * optional.
      */
-    std::tuple< bool, bool, homestore::chunk_num_t > get_any_chunk_id(pg_id_t pg);
+    std::optional< homestore::chunk_num_t > resolve_v_chunk_id_from_msg(sisl::blob const& header);
 
+    /**
+     * @brief Releases a chunk based on the information provided in a CREATE_SHARD message.
+     *
+     * This function is invoked during log rollback or when the proposer encounters an error.
+     * Its primary purpose is to ensure that the state of pg_chunks is reverted to the correct state.
+     *
+     * @param header The message header that includes the shard_info_superblk, which contains the data necessary for
+     * extracting and mapping the chunk ID.
+     * @return Returns true if the chunk was successfully released, false otherwise.
+     */
+
+    bool release_chunk_based_on_create_shard_message(sisl::blob const& header);
     bool pg_exists(pg_id_t pg_id) const;
 
     cshared< HeapChunkSelector > chunk_selector() const { return chunk_selector_; }

@@ -351,10 +351,10 @@ HSHomeObject::blob_put_get_blk_alloc_hints(sisl::blob const& header, cintrusive<
     }
 
     auto hs_shard = d_cast< HS_Shard* >((*shard_iter->second).get());
-    BLOGD(msg_header->shard_id, "n/a", "Picked chunk_id={}", hs_shard->sb_->chunk_id);
+    BLOGD(msg_header->shard_id, "n/a", "Picked p_chunk_id={}", hs_shard->sb_->p_chunk_id);
 
     homestore::blk_alloc_hints hints;
-    hints.chunk_id_hint = hs_shard->sb_->chunk_id;
+    hints.chunk_id_hint = hs_shard->sb_->p_chunk_id;
     return hints;
 }
 

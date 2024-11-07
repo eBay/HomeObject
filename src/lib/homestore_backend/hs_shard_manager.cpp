@@ -111,6 +111,13 @@ ShardManager::AsyncResult< ShardInfo > HSHomeObject::_create_shard(pg_id_t pg_ow
     auto new_shard_id = generate_new_shard_id(pg_owner);
     auto create_time = get_current_timestamp();
 
+    // select chunk for shard.
+    const auto v_chunkID = chunk_selector()->get_most_available_blk_chunk(pg_owner);
+    if (!v_chunkID.has_value()) {
+        LOGW("no availble chunk left to create shard for pg [{}]", pg_owner);
+        return folly::makeUnexpected(ShardError::NO_SPACE_LEFT);
+    }
+
     // Prepare the shard info block
     sisl::io_blob_safe sb_blob(sisl::round_up(sizeof(shard_info_superblk), repl_dev->get_blk_size()), io_align);
     shard_info_superblk* sb = new (sb_blob.bytes()) shard_info_superblk();
@@ -124,7 +131,8 @@ ShardManager::AsyncResult< ShardInfo > HSHomeObject::_create_shard(pg_id_t pg_ow
                          .available_capacity_bytes = size_bytes,
                          .total_capacity_bytes = size_bytes,
                          .deleted_capacity_bytes = 0};
-    sb->chunk_id = 0;
+    sb->p_chunk_id = 0;
+    sb->v_chunk_id = v_chunkID.value();
 
     auto req = repl_result_ctx< ShardManager::Result< ShardInfo > >::make(
         sizeof(shard_info_superblk) /* header_extn_size */, 0u /* key_size */);
@@ -172,7 +180,9 @@ ShardManager::AsyncResult< ShardInfo > HSHomeObject::_seal_shard(ShardInfo const
     shard_info_superblk* sb = new (sb_blob.bytes()) shard_info_superblk();
     sb->type = DataHeader::data_type_t::SHARD_INFO;
     sb->info = tmp_info;
-    sb->chunk_id = 0;
+    // p_chunk_id and v_chunk_id will never be used in seal shard workflow.
+    sb->p_chunk_id = 0;
+    sb->v_chunk_id = 0;
 
     auto req = repl_result_ctx< ShardManager::Result< ShardInfo > >::make(
         sizeof(shard_info_superblk) /* header_extn_size */, 0u /* key_size */);
@@ -252,6 +262,11 @@ void HSHomeObject::on_shard_message_rollback(int64_t lsn, sisl::blob const& head
     }
 
     switch (msg_header->msg_type) {
+    case ReplicationMessageType::CREATE_SHARD_MSG: {
+        bool res = release_chunk_based_on_create_shard_message(header);
+        if (!res) { LOGW("failed to release chunk based on create shard msg"); }
+        break;
+    }
     case ReplicationMessageType::SEAL_SHARD_MSG: {
         auto sb = r_cast< shard_info_superblk const* >(header.cbytes() + sizeof(ReplicationMessageHeader));
         auto const shard_info = sb->info;
@@ -269,6 +284,7 @@ void HSHomeObject::on_shard_message_rollback(int64_t lsn, sisl::blob const& head
                      shard_info.id);
             }
         }
+        break;
     }
     default: {
         break;
@@ -363,9 +379,10 @@ void HSHomeObject::on_shard_message_commit(int64_t lsn, sisl::blob const& h, hom
 
         if (state == ShardInfo::State::SEALED) {
             auto pg_id = shard_info.placement_group;
-            auto chunk_id = get_shard_chunk(shard_info.id);
-            RELEASE_ASSERT(chunk_id.has_value(), "Chunk id not found");
-            chunk_selector()->release_chunk(pg_id, chunk_id.value());
+            auto v_chunkID = get_shard_v_chunk_id(shard_info.id);
+            RELEASE_ASSERT(v_chunkID.has_value(), "v_chunk id not found");
+            bool res = chunk_selector()->release_chunk(pg_id, v_chunkID.value());
+            RELEASE_ASSERT(res, "Failed to release chunk {}, pg_id {}", v_chunkID.value(), pg_id);
             update_shard_in_map(shard_info);
         } else
             LOGW("try to commit SEAL_SHARD_MSG but shard state is not sealed, shard_id: {}", shard_info.id);
@@ -392,10 +409,11 @@ void HSHomeObject::on_shard_meta_blk_recover_completed(bool success) {
         excluding_chunks.reserve(pair.second->shards_.size());
         for (auto& shard : pair.second->shards_) {
             if (shard->info.state == ShardInfo::State::OPEN) {
-                excluding_chunks.emplace(d_cast< HS_Shard* >(shard.get())->sb_->chunk_id);
+                excluding_chunks.emplace(d_cast< HS_Shard* >(shard.get())->sb_->v_chunk_id);
             }
         }
-        chunk_selector_->recover_pg_chunk_heap(pair.first, excluding_chunks);
+        bool res = chunk_selector_->recover_pg_chunks_states(pair.first, excluding_chunks);
+        RELEASE_ASSERT(res, "Failed to recover pg chunk heap, pg={}", pair.first);
     }
 }
 
@@ -424,37 +442,83 @@ void HSHomeObject::update_shard_in_map(const ShardInfo& shard_info) {
     hs_shard->update_info(shard_info);
 }
 
-std::optional< homestore::chunk_num_t > HSHomeObject::get_shard_chunk(shard_id_t id) const {
+std::optional< homestore::chunk_num_t > HSHomeObject::get_shard_p_chunk_id(shard_id_t id) const {
     std::scoped_lock lock_guard(_shard_lock);
     auto shard_iter = _shard_map.find(id);
     if (shard_iter == _shard_map.end()) { return std::nullopt; }
     auto hs_shard = d_cast< HS_Shard* >((*shard_iter->second).get());
-    return std::make_optional< homestore::chunk_num_t >(hs_shard->sb_->chunk_id);
+    return std::make_optional< homestore::chunk_num_t >(hs_shard->sb_->p_chunk_id);
 }
 
-std::tuple< bool, bool, homestore::chunk_num_t > HSHomeObject::get_any_chunk_id(pg_id_t pg_id) {
-    std::scoped_lock lock_guard(_pg_lock);
-    auto pg_iter = _pg_map.find(pg_id);
-    if (pg_iter == _pg_map.end()) { return {false /* pg_found */, false /* shards_found */, 0 /* chunk_id */}; }
+std::optional< homestore::chunk_num_t > HSHomeObject::get_shard_v_chunk_id(shard_id_t id) const {
+    std::scoped_lock lock_guard(_shard_lock);
+    auto shard_iter = _shard_map.find(id);
+    if (shard_iter == _shard_map.end()) { return std::nullopt; }
+    auto hs_shard = d_cast< HS_Shard* >((*shard_iter->second).get());
+    return std::make_optional< homestore::chunk_num_t >(hs_shard->sb_->v_chunk_id);
+}
 
-    HS_PG* pg = static_cast< HS_PG* >(pg_iter->second.get());
-    if (pg->any_allocated_chunk_id_.has_value()) { // it is already cached and use it;
-        return {true /* pg_found */, true /* shards_found */, *pg->any_allocated_chunk_id_};
+std::optional< homestore::chunk_num_t > HSHomeObject::resolve_v_chunk_id_from_msg(sisl::blob const& header) {
+    const ReplicationMessageHeader* msg_header = r_cast< const ReplicationMessageHeader* >(header.cbytes());
+    if (msg_header->corrupted()) {
+        LOGW("replication message header is corrupted with crc error");
+        return std::nullopt;
     }
 
-    auto& shards = pg->shards_;
-    if (shards.empty()) { return {true /* pg_found */, false /* shards_found */, 0 /* chunk_id */}; }
-
-    auto hs_shard = d_cast< HS_Shard* >(shards.front().get());
-    pg->any_allocated_chunk_id_ = hs_shard->sb_->chunk_id; // cache it;
-    return {true /* pg_found */, true /* shards_found */, *pg->any_allocated_chunk_id_};
+    switch (msg_header->msg_type) {
+    case ReplicationMessageType::CREATE_SHARD_MSG: {
+        const pg_id_t pg_id = msg_header->pg_id;
+        std::scoped_lock lock_guard(_pg_lock);
+        auto pg_iter = _pg_map.find(pg_id);
+        if (pg_iter == _pg_map.end()) {
+            LOGW("Requesting a chunk for an unknown pg={}", pg_id);
+            return std::nullopt;
+        }
+        auto sb = r_cast< shard_info_superblk const* >(header.cbytes() + sizeof(ReplicationMessageHeader));
+        return sb->v_chunk_id;
+    }
+    default: {
+        LOGW("Unexpected message type encountered: {}. This function should only be called with 'CREATE_SHARD_MSG'.",
+             msg_header->msg_type);
+        return std::nullopt;
+    }
+    }
 }
 
-HSHomeObject::HS_Shard::HS_Shard(ShardInfo shard_info, homestore::chunk_num_t chunk_id) :
+bool HSHomeObject::release_chunk_based_on_create_shard_message(sisl::blob const& header) {
+    const ReplicationMessageHeader* msg_header = r_cast< const ReplicationMessageHeader* >(header.cbytes());
+    if (msg_header->corrupted()) {
+        LOGW("replication message header is corrupted with crc error");
+        return false;
+    }
+
+    switch (msg_header->msg_type) {
+    case ReplicationMessageType::CREATE_SHARD_MSG: {
+        const pg_id_t pg_id = msg_header->pg_id;
+        std::scoped_lock lock_guard(_pg_lock);
+        auto pg_iter = _pg_map.find(pg_id);
+        if (pg_iter == _pg_map.end()) {
+            LOGW("Requesting a chunk for an unknown pg={}", pg_id);
+            return false;
+        }
+        auto sb = r_cast< shard_info_superblk const* >(header.cbytes() + sizeof(ReplicationMessageHeader));
+        bool res = chunk_selector_->release_chunk(sb->info.placement_group, sb->v_chunk_id);
+        if (!res) { LOGW("Failed to release chunk {} to pg {}", sb->v_chunk_id, sb->info.placement_group); }
+        return res;
+    }
+    default: {
+        LOGW("Unexpected message type encountered: {}. This function should only be called with 'CREATE_SHARD_MSG'.",
+             msg_header->msg_type);
+        return false;
+    }
+    }
+}
+
+HSHomeObject::HS_Shard::HS_Shard(ShardInfo shard_info, homestore::chunk_num_t p_chunk_id) :
         Shard(std::move(shard_info)), sb_(_shard_meta_name) {
     sb_.create(sizeof(shard_info_superblk));
     sb_->info = info;
-    sb_->chunk_id = chunk_id;
+    sb_->p_chunk_id = p_chunk_id;
     sb_.write();
 }
 
