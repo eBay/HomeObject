@@ -44,7 +44,6 @@ settings_gen_cpp(
     resync_pg_data.fbs
     resync_shard_data.fbs
     resync_blob_data.fbs
-    resync_payload.fbs
   )
 
 add_subdirectory(tests)
