@@ -69,6 +69,7 @@ PGManager::NullAsyncResult HSHomeObject::_create_pg(PGInfo&& pg_info, std::set< 
         return folly::makeUnexpected(PGError::NO_SPACE_LEFT);
     }
 
+    pg_info.chunk_size = chunk_size;
     pg_info.replica_set_uuid = boost::uuids::random_generator()();
     return hs_repl_service()
         .create_repl_dev(pg_info.replica_set_uuid, peers)
@@ -136,15 +137,27 @@ void HSHomeObject::on_create_pg_message_commit(int64_t lsn, sisl::blob const& he
         return;
     }
 
+    auto local_chunk_size = chunk_selector()->get_chunk_size();
+    if (pg_info.chunk_size != local_chunk_size) {
+        LOGE("Chunk sizes are inconsistent, leader_chunk_size={}, local_chunk_size={}", pg_info.chunk_size,
+             local_chunk_size);
+        if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(PGError::UNKNOWN)); }
+        return;
+    }
+
     // select chunks for pg
     auto const num_chunk = chunk_selector()->select_chunks_for_pg(pg_id, pg_info.size);
     if (!num_chunk.has_value()) {
-        LOGW("select chunks for pg failed, pg_id {}", pg_id);
+        LOGW("Failed to select chunks for pg {}", pg_id);
         if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(PGError::NO_SPACE_LEFT)); }
         return;
     }
     auto chunk_ids = chunk_selector()->get_pg_chunks(pg_id);
-
+    if (chunk_ids == nullptr) {
+        LOGW("Failed to get pg chunks, pg_id {}", pg_id);
+        if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(PGError::NO_SPACE_LEFT)); }
+        return;
+    }
     // create index table and pg
     // TODO create index table during create shard.
     auto index_table = create_index_table();
@@ -245,6 +258,7 @@ std::string HSHomeObject::serialize_pg_info(const PGInfo& pginfo) {
     nlohmann::json j;
     j["pg_info"]["pg_id_t"] = pginfo.id;
     j["pg_info"]["pg_size"] = pginfo.size;
+    j["pg_info"]["chunk_size"] = pginfo.chunk_size;
     j["pg_info"]["repl_uuid"] = boost::uuids::to_string(pginfo.replica_set_uuid);
 
     nlohmann::json members_j{};
@@ -263,7 +277,8 @@ PGInfo HSHomeObject::deserialize_pg_info(const unsigned char* json_str, size_t s
     auto pg_json = nlohmann::json::parse(json_str, json_str + size);
 
     PGInfo pg_info(pg_json["pg_info"]["pg_id_t"].get< pg_id_t >());
-    pg_info.size = pg_json["pg_info"]["pg_size"].get< u_int64_t >();
+    pg_info.size = pg_json["pg_info"]["pg_size"].get< uint64_t >();
+    pg_info.chunk_size = pg_json["pg_info"]["chunk_size"].get< uint64_t >();
     pg_info.replica_set_uuid = boost::uuids::string_generator()(pg_json["pg_info"]["repl_uuid"].get< std::string >());
 
     for (auto const& m : pg_json["pg_info"]["members"]) {
@@ -287,8 +302,9 @@ void HSHomeObject::on_pg_meta_blk_found(sisl::byte_view const& buf, void* meta_c
         return;
     }
     auto pg_id = pg_sb->id;
-    std::vector< chunk_num_t > chunk_ids(pg_sb->get_chunk_ids(), pg_sb->get_chunk_ids() + pg_sb->num_chunks);
-    chunk_selector_->set_pg_chunks(pg_id, std::move(chunk_ids));
+    std::vector< chunk_num_t > p_chunk_ids(pg_sb->get_chunk_ids(), pg_sb->get_chunk_ids() + pg_sb->num_chunks);
+    bool set_pg_chunks_res = chunk_selector_->recover_pg_chunks(pg_id, std::move(p_chunk_ids));
+    RELEASE_ASSERT(set_pg_chunks_res, "Failed to set pg={} chunks", pg_id);
     auto uuid_str = boost::uuids::to_string(pg_sb->index_table_uuid);
     auto hs_pg = std::make_unique< HS_PG >(std::move(pg_sb), std::move(v.value()));
     // During PG recovery check if index is already recoverd else
@@ -365,13 +381,6 @@ uint32_t HSHomeObject::HS_PG::open_shards() const {
     return std::count_if(shards_.begin(), shards_.end(), [](auto const& s) { return s->is_open(); });
 }
 
-std::optional< uint32_t > HSHomeObject::HS_PG::dev_hint(cshared< HeapChunkSelector > chunk_sel) const {
-    if (shards_.empty()) { return std::nullopt; }
-    auto const hs_shard = d_cast< HS_Shard* >(shards_.front().get());
-    auto const hint = chunk_sel->chunk_to_hints(hs_shard->chunk_id());
-    return hint.pdev_id_hint;
-}
-
 bool HSHomeObject::_get_stats(pg_id_t id, PGStats& stats) const {
     auto lg = std::shared_lock(_pg_lock);
     auto it = _pg_map.find(id);
@@ -404,24 +413,9 @@ bool HSHomeObject::_get_stats(pg_id_t id, PGStats& stats) const {
         stats.members.emplace_back(std::make_tuple(m.id, m.name, last_commit_lsn, last_succ_resp_us));
     }
 
-    auto const pdev_id_hint = hs_pg->dev_hint(chunk_selector());
-    if (pdev_id_hint.has_value()) {
-        stats.avail_open_shards = chunk_selector()->avail_num_chunks(pdev_id_hint.value());
-        stats.avail_bytes = chunk_selector()->avail_blks(pdev_id_hint) * blk_size;
-        stats.used_bytes =
-            hs_pg->durable_entities().total_occupied_blk_count.load(std::memory_order_relaxed) * blk_size;
-    } else {
-        // if no shard has been created on this PG yet, it means this PG could arrive on any drive that has the most
-        // available open shards;
-        stats.avail_open_shards = chunk_selector()->most_avail_num_chunks();
-
-        // if no shards is created yet on this PG, set used bytes to zero;
-        stats.used_bytes = 0ul;
-
-        // if no shard has been created on this PG yet, it means this PG could arrive on any drive that has the most
-        // available space;
-        stats.avail_bytes = chunk_selector()->avail_blks(std::nullopt) * blk_size;
-    }
+    stats.avail_open_shards = chunk_selector()->avail_num_chunks(hs_pg->pg_info_.id);
+    stats.avail_bytes = chunk_selector()->avail_blks(hs_pg->pg_info_.id) * blk_size;
+    stats.used_bytes = hs_pg->durable_entities().total_occupied_blk_count.load(std::memory_order_relaxed) * blk_size;
 
     return true;
 }

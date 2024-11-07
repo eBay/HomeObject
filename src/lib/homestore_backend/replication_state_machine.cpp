@@ -78,6 +78,10 @@ void ReplicationStateMachine::on_rollback(int64_t lsn, sisl::blob const& header,
         return;
     }
     switch (msg_header->msg_type) {
+    case ReplicationMessageType::CREATE_SHARD_MSG: {
+        home_object_->on_shard_message_rollback(lsn, header, key, ctx);
+        break;
+    }
     case ReplicationMessageType::SEAL_SHARD_MSG: {
         home_object_->on_shard_message_rollback(lsn, header, key, ctx);
         break;
@@ -102,7 +106,13 @@ void ReplicationStateMachine::on_error(ReplServiceError error, const sisl::blob&
         result_ctx->promise_.setValue(folly::makeUnexpected(homeobject::toPgError(error)));
         break;
     }
-    case ReplicationMessageType::CREATE_SHARD_MSG:
+    case ReplicationMessageType::CREATE_SHARD_MSG: {
+        bool res = home_object_->release_chunk_based_on_create_shard_message(header);
+        if (!res) { LOGW("failed to release chunk based on create shard msg"); }
+        auto result_ctx = boost::static_pointer_cast< repl_result_ctx< ShardManager::Result< ShardInfo > > >(ctx).get();
+        result_ctx->promise_.setValue(folly::makeUnexpected(toShardError(error)));
+        break;
+    }
     case ReplicationMessageType::SEAL_SHARD_MSG: {
         auto result_ctx = boost::static_pointer_cast< repl_result_ctx< ShardManager::Result< ShardInfo > > >(ctx).get();
         result_ctx->promise_.setValue(folly::makeUnexpected(toShardError(error)));
@@ -133,25 +143,33 @@ ReplicationStateMachine::get_blk_alloc_hints(sisl::blob const& header, uint32_t 
     const ReplicationMessageHeader* msg_header = r_cast< const ReplicationMessageHeader* >(header.cbytes());
     switch (msg_header->msg_type) {
     case ReplicationMessageType::CREATE_SHARD_MSG: {
-        auto& pg_id = msg_header->pg_id;
+        pg_id_t pg_id = msg_header->pg_id;
         // check whether the pg exists
         if (!home_object_->pg_exists(pg_id)) {
             LOGI("can not find pg {} when getting blk_alloc_hint", pg_id);
             // TODO:: add error code to indicate the pg not found in homestore side
             return folly::makeUnexpected(homestore::ReplServiceError::NO_SPACE_LEFT);
         }
-        // Since chunks are selected when a pg is created, the chunkselector selects one of the chunks owned by the pg
+
+        auto v_chunkID = home_object_->resolve_v_chunk_id_from_msg(header);
+        if (!v_chunkID.has_value()) {
+            LOGW("can not resolve v_chunk_id from msg");
+            return folly::makeUnexpected(homestore::ReplServiceError::FAILED);
+        }
         homestore::blk_alloc_hints hints;
-        hints.pdev_id_hint = pg_id; // FIXME @Hooper: Temporary bypass using pdev_id_hint to represent
-                                    // pg_id_hint, "identical layout" will change it
+        // Both chunk_num_t and pg_id_t are of type uint16_t.
+        static_assert(std::is_same< pg_id_t, uint16_t >::value, "pg_id_t is not uint16_t");
+        static_assert(std::is_same< homestore::chunk_num_t, uint16_t >::value, "chunk_num_t is not uint16_t");
+        homestore::chunk_num_t v_chunk_id = v_chunkID.value();
+        hints.application_hint = ((uint64_t)pg_id << 16) | v_chunk_id;
         return hints;
     }
 
     case ReplicationMessageType::SEAL_SHARD_MSG: {
-        auto chunk_id = home_object_->get_shard_chunk(msg_header->shard_id);
-        RELEASE_ASSERT(chunk_id.has_value(), "unknown shard id to get binded chunk");
+        auto p_chunkID = home_object_->get_shard_p_chunk_id(msg_header->shard_id);
+        RELEASE_ASSERT(p_chunkID.has_value(), "unknown shard id to get binded chunk");
         homestore::blk_alloc_hints hints;
-        hints.chunk_id_hint = chunk_id.value();
+        hints.chunk_id_hint = p_chunkID.value();
         return hints;
     }
 
