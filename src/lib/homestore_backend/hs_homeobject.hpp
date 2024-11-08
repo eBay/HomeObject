@@ -289,27 +289,30 @@ public:
     struct PGBlobIterator {
         PGBlobIterator(HSHomeObject& home_obj, homestore::group_id_t group_id, uint64_t upto_lsn = 0);
         PG* get_pg_metadata();
-        int64_t get_next_blobs(uint64_t max_num_blobs_in_batch, uint64_t max_batch_size_bytes,
-                               std::vector< HSHomeObject::BlobInfoData >& blob_vec, bool& end_of_shard);
-        void create_pg_shard_snapshot_data(sisl::io_blob_safe& meta_blob);
-        void create_pg_snapshot_data(sisl::io_blob_safe& meta_blob);
-        void create_shard_snapshot_data(sisl::io_blob_safe& meta_blob);
-        void create_blobs_snapshot_data(std::vector< HSHomeObject::BlobInfoData >& blob_vec,
-                                        sisl::io_blob_safe& data_blob, bool end_of_shard);
+        bool updateCursor(objId id);
+        bool generate_shard_blob_list();
+        BlobManager::AsyncResult< sisl::io_blob_safe > load_blob_data(const BlobInfo& blob_info, ResyncBlobState& state);
+        bool create_pg_snapshot_data(sisl::io_blob_safe& meta_blob);
+        bool create_shard_snapshot_data(sisl::io_blob_safe& meta_blob);
+        bool create_blobs_snapshot_data(sisl::io_blob_safe& data_blob);
+        void pack_resync_message(sisl::io_blob_safe& meta_blob, SyncMessageType type, sisl::io_blob_safe& payload);
         bool end_of_scan() const;
 
-        uint64_t snp_start_lsn{0};
         std::vector<ShardInfo> shard_list{0};
-        shard_id_t cur_shard_seq_num_{1};
+
+        shard_id_t cur_shard_seq_num{1};
+        uint64_t cur_shard_idx{0};
         std::vector<BlobInfo> cur_blob_list{0};
         int64_t last_end_blob_idx{-1};
-        int64_t last_batch_size{0};
-        uint64_t max_shard_seq_num_{0};
-        uint64_t cur_snapshot_batch_num{0};
+        uint64_t cur_batch_num{0};
+        uint64_t cur_batch_blob_count{0};
+
         HSHomeObject& home_obj_;
         homestore::group_id_t group_id_;
+        uint64_t snp_start_lsn;
         pg_id_t pg_id_;
         shared< homestore::ReplDev > repl_dev_;
+        uint64_t max_batch_size;
     };
 
     // SnapshotReceiverContext is the context used in follower side snapshot receiving. [drafting] The functions is not the final version.
