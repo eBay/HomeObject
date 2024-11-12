@@ -57,9 +57,7 @@ int main(int argc, char* argv[]) {
     SISL_OPTIONS_LOAD(parsed_argc, argv, test_options);
 
     g_helper = std::make_unique< test_common::HSReplTestHelper >("test_homeobject", args, orig_argv);
-    // We spawn spare replica's, which is used for testing baseline resync
-    auto total_replicas = SISL_OPTIONS["replicas"].as< uint8_t >();
-    g_helper->setup(total_replicas);
+    g_helper->setup(SISL_OPTIONS["replicas"].as< uint8_t >());
     auto ret = RUN_ALL_TESTS();
     g_helper->teardown();
     return ret;

@@ -67,12 +67,8 @@ public:
                    std::optional< std::unordered_set< uint8_t > > excluding_replicas_in_pg = std::nullopt) {
         std::unordered_set< uint8_t > excluding_pg_replicas;
         if (excluding_replicas_in_pg.has_value()) excluding_pg_replicas = excluding_replicas_in_pg.value();
-
-        /*
-                RELEASE_ASSERT(!excluding_pg_replicas.contains(leader_replica_num),
-                               "leader_replica_num {} is excluded in the pg, excluding replicas {}", leader_replica_num,
-                               excluding_pg_replicas);
-        */
+        if (excluding_pg_replicas.contains(leader_replica_num))
+            RELEASE_ASSERT(false, "fail to create pg, leader_replica_num {} is excluded in the pg", leader_replica_num);
 
         auto my_replica_num = g_helper->replica_num();
         if (excluding_pg_replicas.contains(my_replica_num)) return;
@@ -359,7 +355,6 @@ public:
         PGStats pg_stats;
         auto res = _obj_inst->pg_manager()->get_stats(pg_id, pg_stats);
         if (!res) return;
-        RELEASE_ASSERT(res, "can not get pg {} stats", pg_id);
         if (g_helper->my_replica_id() == pg_stats.leader_id) { lambda(); }
         // TODO: add logic for check and retry of leader change if necessary
     }
@@ -373,7 +368,7 @@ public:
         auto res = _obj_inst->pg_manager()->get_stats(pg_id, pg_stats);
         if (!res) return false;
         for (const auto& member : pg_stats.members) {
-            if (std::get< 1 >(member) == g_helper->name()) return true;
+            if (std::get< 0 >(member) == g_helper->my_replica_id()) return true;
         }
         return false;
     }
