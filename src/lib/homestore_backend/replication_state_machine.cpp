@@ -6,6 +6,7 @@
 #include "generated/resync_pg_shard_generated.h"
 #include "generated/resync_blob_data_generated.h"
 #include <homestore/replication/repl_dev.h>
+#include <homestore/replication/repl_decls.h>
 
 namespace homeobject {
 void ReplicationStateMachine::on_commit(int64_t lsn, const sisl::blob& header, const sisl::blob& key,
@@ -132,10 +133,17 @@ ReplicationStateMachine::get_blk_alloc_hints(sisl::blob const& header, uint32_t 
     const ReplicationMessageHeader* msg_header = r_cast< const ReplicationMessageHeader* >(header.cbytes());
     switch (msg_header->msg_type) {
     case ReplicationMessageType::CREATE_SHARD_MSG: {
+        auto& pg_id = msg_header->pg_id;
+        // check whether the pg exists
+        if (!home_object_->pg_exists(pg_id)) {
+            LOGI("can not find pg {} when getting blk_alloc_hint", pg_id);
+            // TODO:: add error code to indicate the pg not found in homestore side
+            return folly::makeUnexpected(homestore::ReplServiceError::NO_SPACE_LEFT);
+        }
         // Since chunks are selected when a pg is created, the chunkselector selects one of the chunks owned by the pg
         homestore::blk_alloc_hints hints;
-        hints.pdev_id_hint = msg_header->pg_id; // FIXME @Hooper: Temporary bypass using pdev_id_hint to represent
-                                                // pg_id_hint, "identical layout" will change it
+        hints.pdev_id_hint = pg_id; // FIXME @Hooper: Temporary bypass using pdev_id_hint to represent
+                                    // pg_id_hint, "identical layout" will change it
         return hints;
     }
 

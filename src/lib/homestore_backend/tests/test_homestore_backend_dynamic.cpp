@@ -60,38 +60,35 @@ TEST_F(HomeObjectFixture, ReplaceMember) {
     // all the replicas , including the spare ones, sync at this point
     g_helper->sync();
 
-    // TODO::fix replication message curroption for replace member
     /*
         // step 3: replace a member
         auto out_member_id = g_helper->replica_id(num_replicas - 1);
         auto in_member_id = g_helper->replica_id(num_replicas);
 
-            run_on_pg_leader(pg_id, [&]() {
-                // replace the 3rd member with the 4th member, by default
-                auto r = _obj_inst->pg_manager()
-                             ->replace_member(pg_id, out_member_id, PGMember{in_member_id, "new_member", 0})
-                             .get();
-                ASSERT_TRUE(r);
-            });
+        run_on_pg_leader(pg_id, [&]() {
+            // replace the 3rd member with the 4th member, by default
+            auto r = _obj_inst->pg_manager()
+                         ->replace_member(pg_id, out_member_id, PGMember{in_member_id, "new_member", 0})
+                         .get();
+            ASSERT_TRUE(r);
+        });
 
+        // the new member should wait until it joins the pg
+        if (in_member_id == g_helper->my_replica_id()) {
+            while (am_i_in_pg(pg_id)) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+            }
+        }
 
-                // the new member should wait until it joins the pg
-                if (in_member_id == g_helper->my_replica_id()) {
-                    while (am_i_in_pg(pg_id)) {
-                        std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-                    }
-                }
+        g_helper->sync();
 
-                g_helper->sync();
-
-                       // step 4: verify the blob on all the members of this pg, which has completed replace member
-                       run_if_in_pg(pg_id, [&]() {
-                           LOGINFO("ggg 4 , replica {}", g_helper->replica_num());
-                           verify_get_blob(pg_shard_id_vec, num_blobs_per_shard);
-                           verify_obj_count(1, num_blobs_per_shard, num_shards_per_pg, false );
-                       });
-
-    */
+        // step 4: verify the blob on all the members of this pg, which has completed replace member
+        run_if_in_pg(pg_id, [&]() {
+            LOGINFO("ggg 4 , replica {}", g_helper->replica_num());
+            verify_get_blob(pg_shard_id_vec, num_blobs_per_shard);
+            verify_obj_count(1, num_blobs_per_shard, num_shards_per_pg, false);
+        });
+        */
 }
 
 SISL_OPTION_GROUP(

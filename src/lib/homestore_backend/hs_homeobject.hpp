@@ -92,10 +92,13 @@ public:
         // | pg_members[0] | pg_members[1] | ... | pg_members[num_members-1] |
         // Immediately followed by an array of 'chunk_num_t' values (representing r_chunk_ids):
         // | chunk_num_t[0] | chunk_num_t[1] | ... | chunk_num_t[num_chunks-1] |
-        // Here, 'chunk_num_t[i]' represents the r_chunk_id for the v_chunk_id 'i', where v_chunk_id starts from 0 and increases sequentially.
+        // Here, 'chunk_num_t[i]' represents the r_chunk_id for the v_chunk_id 'i', where v_chunk_id starts from 0 and
+        // increases sequentially.
 
-
-        uint32_t size() const { return sizeof(pg_info_superblk)  - sizeof(char) + num_members * sizeof(pg_members) + num_chunks * sizeof(homestore::chunk_num_t); }
+        uint32_t size() const {
+            return sizeof(pg_info_superblk) - sizeof(char) + num_members * sizeof(pg_members) +
+                num_chunks * sizeof(homestore::chunk_num_t);
+        }
         static std::string name() { return _pg_meta_name; }
 
         pg_info_superblk() = default;
@@ -117,11 +120,15 @@ public:
 
         void copy(pg_info_superblk const& rhs) { *this = rhs; }
 
-        pg_members* get_pg_members_mutable() { return reinterpret_cast<pg_members*>(data); }
-        const pg_members* get_pg_members() const { return reinterpret_cast<const pg_members*>(data); }
+        pg_members* get_pg_members_mutable() { return reinterpret_cast< pg_members* >(data); }
+        const pg_members* get_pg_members() const { return reinterpret_cast< const pg_members* >(data); }
 
-        homestore::chunk_num_t* get_chunk_ids_mutable() { return reinterpret_cast<homestore::chunk_num_t*>(data + num_members * sizeof(pg_members)); }
-        const homestore::chunk_num_t* get_chunk_ids() const { return reinterpret_cast<const homestore::chunk_num_t*>(data + num_members * sizeof(pg_members)); }
+        homestore::chunk_num_t* get_chunk_ids_mutable() {
+            return reinterpret_cast< homestore::chunk_num_t* >(data + num_members * sizeof(pg_members));
+        }
+        const homestore::chunk_num_t* get_chunk_ids() const {
+            return reinterpret_cast< const homestore::chunk_num_t* >(data + num_members * sizeof(pg_members));
+        }
     };
 
     struct DataHeader {
@@ -214,7 +221,8 @@ public:
         std::shared_ptr< BlobIndexTable > index_table_;
         PGMetrics metrics_;
 
-        HS_PG(PGInfo info, shared< homestore::ReplDev > rdev, shared< BlobIndexTable > index_table, std::shared_ptr< const std::vector <homestore::chunk_num_t> > pg_chunk_ids);
+        HS_PG(PGInfo info, shared< homestore::ReplDev > rdev, shared< BlobIndexTable > index_table,
+              std::shared_ptr< const std::vector< homestore::chunk_num_t > > pg_chunk_ids);
         HS_PG(homestore::superblk< pg_info_superblk >&& sb, shared< homestore::ReplDev > rdev);
         ~HS_PG() override = default;
 
@@ -446,6 +454,8 @@ public:
      * @return A tuple of <if pg exist, if shard exist, chunk number if both exist>.
      */
     std::tuple< bool, bool, homestore::chunk_num_t > get_any_chunk_id(pg_id_t pg);
+
+    bool pg_exists(pg_id_t pg_id) const;
 
     cshared< HeapChunkSelector > chunk_selector() const { return chunk_selector_; }
 

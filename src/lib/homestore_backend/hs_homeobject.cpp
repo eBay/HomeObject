@@ -323,4 +323,9 @@ sisl::io_blob_safe& HSHomeObject::get_pad_buf(uint32_t pad_len) {
     return zpad_bufs_[idx];
 }
 
+bool HSHomeObject::pg_exists(pg_id_t pg_id) const {
+    std::shared_lock lock_guard(_pg_lock);
+    return _pg_map.contains(pg_id);
+}
+
 } // namespace homeobject
