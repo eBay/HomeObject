@@ -373,6 +373,14 @@ public:
         return false;
     }
 
+    // wait for the last blob to be created locally, which means all the blob before this blob are created
+    void wait_for_all(shard_id_t shard_id, blob_id_t blob_id) {
+        while (true) {
+            if (blob_exist(shard_id, blob_id)) return;
+            std::this_thread::sleep_for(1s);
+        }
+    }
+
 private:
     bool pg_exist(pg_id_t pg_id) {
         std::vector< pg_id_t > pg_ids;

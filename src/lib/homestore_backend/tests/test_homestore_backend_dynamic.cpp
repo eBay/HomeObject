@@ -46,7 +46,7 @@ TEST_F(HomeObjectFixture, ReplaceMember) {
     std::map< pg_id_t, blob_id_t > pg_blob_id;
     for (shard_id_t shard_id = 1; shard_id <= num_shards_per_pg; shard_id++) {
         auto derived_shard_id = make_new_shard_id(pg_id, shard_id);
-        pg_shard_id_vec[1].emplace_back(derived_shard_id);
+        pg_shard_id_vec[pg_id].emplace_back(derived_shard_id);
     }
 
     // TODO:: if we add delete blobs case in baseline resync, we need also derive the last blob_id in this pg for spare
@@ -73,12 +73,15 @@ TEST_F(HomeObjectFixture, ReplaceMember) {
         ASSERT_TRUE(r);
     });
 
-    // the new member should wait until it joins the pg
+    // the new member should wait until it joins the pg and all the blobs are replicated to it
     if (in_member_id == g_helper->my_replica_id()) {
         while (!am_i_in_pg(pg_id)) {
             std::this_thread::sleep_for(std::chrono::milliseconds(1000));
             LOGINFO("new member is waiting to become a member of pg {}", pg_id);
         }
+
+        wait_for_all(pg_shard_id_vec[pg_id].back() /*the last shard id in this pg*/,
+                     num_shards_per_pg * num_blobs_per_shard - 1 /*the last blob id in this pg*/);
     }
 
     // step 4: after completing replace member, verify the blob on all the members of this pg including the newly added
