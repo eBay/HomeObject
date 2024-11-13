@@ -40,7 +40,8 @@ TEST_F(HomeObjectFixture, ReplaceMember) {
 
     // we can not share all the shard_id and blob_id among all the replicas including the spare ones, so we need to
     // derive them by calculating.
-    // since shard_id = pg_id + shard_sequence_num, so we can derive shard_ids for all the shards in this pg
+    // since shard_id = pg_id + shard_sequence_num, so we can derive shard_ids for all the shards in this pg, and these
+    // derived info is used by all replicas(including the newly added member) to verify the blobs.
     std::map< pg_id_t, std::vector< shard_id_t > > pg_shard_id_vec;
     std::map< pg_id_t, blob_id_t > pg_blob_id;
     for (shard_id_t shard_id = 1; shard_id <= num_shards_per_pg; shard_id++) {
@@ -52,6 +53,7 @@ TEST_F(HomeObjectFixture, ReplaceMember) {
     // replicas
     pg_blob_id[pg_id] = 0;
 
+    // put and verify blobs in the pg, excluding the spare replicas
     put_blobs(pg_shard_id_vec, num_blobs_per_shard, pg_blob_id);
 
     verify_get_blob(pg_shard_id_vec, num_blobs_per_shard);
@@ -60,35 +62,31 @@ TEST_F(HomeObjectFixture, ReplaceMember) {
     // all the replicas , including the spare ones, sync at this point
     g_helper->sync();
 
-    /*
-        // step 3: replace a member
-        auto out_member_id = g_helper->replica_id(num_replicas - 1);
-        auto in_member_id = g_helper->replica_id(num_replicas);
+    // step 3: replace a member
+    auto out_member_id = g_helper->replica_id(num_replicas - 1);
+    auto in_member_id = g_helper->replica_id(num_replicas); /*spare replica*/
 
-        run_on_pg_leader(pg_id, [&]() {
-            // replace the 3rd member with the 4th member, by default
-            auto r = _obj_inst->pg_manager()
-                         ->replace_member(pg_id, out_member_id, PGMember{in_member_id, "new_member", 0})
-                         .get();
-            ASSERT_TRUE(r);
-        });
+    run_on_pg_leader(pg_id, [&]() {
+        auto r = _obj_inst->pg_manager()
+                     ->replace_member(pg_id, out_member_id, PGMember{in_member_id, "new_member", 0})
+                     .get();
+        ASSERT_TRUE(r);
+    });
 
-        // the new member should wait until it joins the pg
-        if (in_member_id == g_helper->my_replica_id()) {
-            while (am_i_in_pg(pg_id)) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-            }
+    // the new member should wait until it joins the pg
+    if (in_member_id == g_helper->my_replica_id()) {
+        while (!am_i_in_pg(pg_id)) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+            LOGINFO("new member is waiting to become a member of pg {}", pg_id);
         }
+    }
 
-        g_helper->sync();
-
-        // step 4: verify the blob on all the members of this pg, which has completed replace member
-        run_if_in_pg(pg_id, [&]() {
-            LOGINFO("ggg 4 , replica {}", g_helper->replica_num());
-            verify_get_blob(pg_shard_id_vec, num_blobs_per_shard);
-            verify_obj_count(1, num_blobs_per_shard, num_shards_per_pg, false);
-        });
-        */
+    // step 4: after completing replace member, verify the blob on all the members of this pg including the newly added
+    // spare replica,
+    run_if_in_pg(pg_id, [&]() {
+        verify_get_blob(pg_shard_id_vec, num_blobs_per_shard);
+        verify_obj_count(1, num_blobs_per_shard, num_shards_per_pg, false);
+    });
 }
 
 SISL_OPTION_GROUP(
