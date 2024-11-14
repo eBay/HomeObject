@@ -12,6 +12,9 @@ table HSBackendSettings {
 
     // Maximum size of a snapshot batch
     max_snapshot_batch_size_mb: uint64 = 128 (hotswap);
+
+    //Snapshot blob load retry count
+    snapshot_blob_load_retry: uint8 = 3 (hotswap);
 }
 
 root_type HSBackendSettings;

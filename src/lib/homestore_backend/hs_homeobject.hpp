@@ -290,29 +290,30 @@ public:
         PGBlobIterator(HSHomeObject& home_obj, homestore::group_id_t group_id, uint64_t upto_lsn = 0);
         PG* get_pg_metadata();
         bool updateCursor(objId id);
+        objId expected_next_obj_id();
         bool generate_shard_blob_list();
         BlobManager::AsyncResult< sisl::io_blob_safe > load_blob_data(const BlobInfo& blob_info, ResyncBlobState& state);
         bool create_pg_snapshot_data(sisl::io_blob_safe& meta_blob);
         bool create_shard_snapshot_data(sisl::io_blob_safe& meta_blob);
         bool create_blobs_snapshot_data(sisl::io_blob_safe& data_blob);
-        void pack_resync_message(sisl::io_blob_safe& meta_blob, SyncMessageType type, sisl::io_blob_safe& payload);
+        void pack_resync_message(sisl::io_blob_safe& dest_blob, SyncMessageType type);
         bool end_of_scan() const;
 
-        std::vector<ShardInfo> shard_list{0};
+        std::vector<ShardInfo> shard_list_{0};
 
-        shard_id_t cur_shard_seq_num{1};
-        uint64_t cur_shard_idx{0};
-        std::vector<BlobInfo> cur_blob_list{0};
-        int64_t last_end_blob_idx{-1};
-        uint64_t cur_batch_num{0};
-        uint64_t cur_batch_blob_count{0};
+        objId cur_obj_id_{1, 0};
+        uint64_t cur_shard_idx_{0};
+        std::vector<BlobInfo> cur_blob_list_{0};
+        int64_t last_end_blob_idx_{-1};
+        uint64_t cur_batch_blob_count_{0};
+        flatbuffers::FlatBufferBuilder builder_;
 
         HSHomeObject& home_obj_;
         homestore::group_id_t group_id_;
-        uint64_t snp_start_lsn;
+        uint64_t snp_start_lsn_;
         pg_id_t pg_id_;
         shared< homestore::ReplDev > repl_dev_;
-        uint64_t max_batch_size;
+        uint64_t max_batch_size_;
     };
 
     // SnapshotReceiverContext is the context used in follower side snapshot receiving. [drafting] The functions is not the final version.

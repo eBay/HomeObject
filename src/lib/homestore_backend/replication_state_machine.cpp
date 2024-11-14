@@ -231,7 +231,7 @@ int ReplicationStateMachine::read_snapshot_data(std::shared_ptr< homestore::snap
     //invalid Id
     if (!pg_iter->updateCursor(obj_id)) {
         LOGW("Invalid objId in snapshot read, {}, current shard_seq_num={}, current batch_num={}",
-             log_str, pg_iter->cur_shard_seq_num, pg_iter->cur_batch_num);
+             log_str, pg_iter->cur_obj_id_.shard_seq_num, pg_iter->cur_obj_id_.batch_id);
         return -1;
     }
 
