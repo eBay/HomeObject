@@ -41,7 +41,7 @@ struct PGInfo {
     pg_id_t id;
     mutable MemberSet members;
     peer_id_t replica_set_uuid;
-    u_int64_t size;
+    uint64_t size;
 
     auto operator<=>(PGInfo const& rhs) const { return id <=> rhs.id; }
     auto operator==(PGInfo const& rhs) const { return id == rhs.id; }

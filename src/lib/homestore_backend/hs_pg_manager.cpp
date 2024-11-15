@@ -287,7 +287,7 @@ void HSHomeObject::on_pg_meta_blk_found(sisl::byte_view const& buf, void* meta_c
         return;
     }
     auto pg_id = pg_sb->id;
-    std::vector<chunk_num_t> chunk_ids(pg_sb->get_chunk_ids(), pg_sb->get_chunk_ids() + pg_sb->num_chunks);
+    std::vector< chunk_num_t > chunk_ids(pg_sb->get_chunk_ids(), pg_sb->get_chunk_ids() + pg_sb->num_chunks);
     chunk_selector_->set_pg_chunks(pg_id, std::move(chunk_ids));
     auto uuid_str = boost::uuids::to_string(pg_sb->index_table_uuid);
     auto hs_pg = std::make_unique< HS_PG >(std::move(pg_sb), std::move(v.value()));
@@ -302,9 +302,7 @@ void HSHomeObject::on_pg_meta_blk_found(sisl::byte_view const& buf, void* meta_c
     add_pg_to_map(std::move(hs_pg));
 }
 
-void HSHomeObject::on_pg_meta_blk_recover_completed(bool success) {
-    chunk_selector_->recover_per_dev_chunk_heap();
-}
+void HSHomeObject::on_pg_meta_blk_recover_completed(bool success) { chunk_selector_->recover_per_dev_chunk_heap(); }
 
 PGInfo HSHomeObject::HS_PG::pg_info_from_sb(homestore::superblk< pg_info_superblk > const& sb) {
     PGInfo pginfo{sb->id};
@@ -317,7 +315,8 @@ PGInfo HSHomeObject::HS_PG::pg_info_from_sb(homestore::superblk< pg_info_superbl
     return pginfo;
 }
 
-HSHomeObject::HS_PG::HS_PG(PGInfo info, shared< homestore::ReplDev > rdev, shared< BlobIndexTable > index_table, std::shared_ptr< const std::vector <chunk_num_t> > pg_chunk_ids) :
+HSHomeObject::HS_PG::HS_PG(PGInfo info, shared< homestore::ReplDev > rdev, shared< BlobIndexTable > index_table,
+                           std::shared_ptr< const std::vector< chunk_num_t > > pg_chunk_ids) :
         PG{std::move(info)},
         pg_sb_{_pg_meta_name},
         repl_dev_{std::move(rdev)},
@@ -325,7 +324,8 @@ HSHomeObject::HS_PG::HS_PG(PGInfo info, shared< homestore::ReplDev > rdev, share
         metrics_{*this} {
     RELEASE_ASSERT(pg_chunk_ids != nullptr, "PG chunks null");
     const uint32_t num_chunks = pg_chunk_ids->size();
-    pg_sb_.create(sizeof(pg_info_superblk) - sizeof(char) + pg_info_.members.size() * sizeof(pg_members)+ num_chunks * sizeof(homestore::chunk_num_t));
+    pg_sb_.create(sizeof(pg_info_superblk) - sizeof(char) + pg_info_.members.size() * sizeof(pg_members) +
+                  num_chunks * sizeof(homestore::chunk_num_t));
     pg_sb_->id = pg_info_.id;
     pg_sb_->num_members = pg_info_.members.size();
     pg_sb_->num_chunks = num_chunks;
