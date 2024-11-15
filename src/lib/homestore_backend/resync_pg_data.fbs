@@ -4,7 +4,7 @@ namespace homeobject;
 
 table Member {
     uuid : [ubyte];
-    name : [ubyte];
+    name : string;
     priority: int;
 }
 
