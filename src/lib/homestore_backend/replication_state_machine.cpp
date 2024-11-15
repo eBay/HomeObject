@@ -229,7 +229,7 @@ int ReplicationStateMachine::read_snapshot_data(std::shared_ptr< homestore::snap
     log_str = fmt::format("{} shard_seq_num={} batch_num={}", log_str, obj_id.shard_seq_num, obj_id.batch_id);
 
     //invalid Id
-    if (!pg_iter->updateCursor(obj_id)) {
+    if (!pg_iter->update_cursor(obj_id)) {
         LOGW("Invalid objId in snapshot read, {}, current shard_seq_num={}, current batch_num={}",
              log_str, pg_iter->cur_obj_id_.shard_seq_num, pg_iter->cur_obj_id_.batch_id);
         return -1;
@@ -238,7 +238,10 @@ int ReplicationStateMachine::read_snapshot_data(std::shared_ptr< homestore::snap
     //pg metadata message
     //shardId starts from 1
     if (obj_id.shard_seq_num == 0) {
-        pg_iter->create_pg_snapshot_data(snp_data->blob);
+        if (!pg_iter->create_pg_snapshot_data(snp_data->blob)) {
+            LOGE("Failed to create pg snapshot data for snapshot read, {}", log_str);
+            return -1;
+        }
         return 0;
     }
     //shard metadata message
@@ -246,12 +249,18 @@ int ReplicationStateMachine::read_snapshot_data(std::shared_ptr< homestore::snap
         if (!pg_iter->generate_shard_blob_list()) {
             LOGE("Failed to generate shard blob list for snapshot read, {}", log_str);
             return -1;
-        };
-        pg_iter->create_shard_snapshot_data(snp_data->blob);
+        }
+        if (!pg_iter->create_shard_snapshot_data(snp_data->blob)) {
+            LOGE("Failed to create shard meta data for snapshot read, {}", log_str);
+            return -1;
+        }
         return 0;
     }
     //general blob message
-    pg_iter->create_blobs_snapshot_data(snp_data->blob);
+    if (!pg_iter->create_blobs_snapshot_data(snp_data->blob)) {
+        LOGE("Failed to create blob batch data for snapshot read, {}", log_str);
+        return -1;
+    }
     return 0;
 }
 

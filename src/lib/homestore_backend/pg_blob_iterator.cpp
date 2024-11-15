@@ -33,7 +33,7 @@ HSHomeObject::PGBlobIterator::PGBlobIterator(HSHomeObject& home_obj, homestore::
 }
 
 //result represents if the objId is valid and the cursors are updated
-bool HSHomeObject::PGBlobIterator::updateCursor(objId id) {
+bool HSHomeObject::PGBlobIterator::update_cursor(objId id) {
     if (id.value == LAST_OBJ_ID) { return true; }
     //resend batch
     if (id.value == cur_obj_id_.value) { return true; }
