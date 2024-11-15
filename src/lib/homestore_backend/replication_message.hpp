@@ -12,6 +12,7 @@ namespace homeobject {
 VENUM(ReplicationMessageType, uint16_t, CREATE_PG_MSG = 0, CREATE_SHARD_MSG = 1, SEAL_SHARD_MSG = 2, PUT_BLOB_MSG = 3,
       DEL_BLOB_MSG = 4, UNKNOWN_MSG = 5);
 VENUM(SyncMessageType, uint16_t, PG_META = 0, SHARD_META = 1, SHARD_BATCH = 2,  LAST_MSG = 3);
+VENUM(ResyncBlobState, uint8_t, NORMAL = 0, DELETED = 1, CORRUPTED = 2);
 
 // magic num comes from the first 8 bytes of 'echo homeobject_replication | md5sum'
 static constexpr uint64_t HOMEOBJECT_REPLICATION_MAGIC = 0x11153ca24efc8d34;
@@ -21,6 +22,7 @@ static constexpr uint32_t HOMEOBJECT_REPLICATION_PROTOCOL_VERSION_V1 = 0x01;
 static constexpr uint32_t HOMEOBJECT_RESYNC_PROTOCOL_VERSION_V1 = 0x01;
 static constexpr uint32_t init_crc32 = 0;
 static constexpr uint64_t LAST_OBJ_ID =ULLONG_MAX;
+static constexpr uint64_t DEFAULT_MAX_BATCH_SIZE_MB =128;
 
 #pragma pack(1)
 template<typename Header>
@@ -108,26 +110,26 @@ struct SyncMessageHeader : public BaseMessageHeader<SyncMessageHeader> {
 // type_bit = 0 for HomeStore, 1 for HomeObject
 struct objId {
     snp_obj_id_t value;
-    shard_id_t shardId;
-    snp_batch_id_t batchId;
+    shard_id_t shard_seq_num;
+    snp_batch_id_t batch_id;
 
-    objId(shard_id_t shard_id, snp_batch_id_t batch_id) : shardId(shard_id), batchId(batch_id) {
-        if (shard_id != (shard_id & 0xFFFFFFFFFFFF)) {
+    objId(shard_id_t shard_seq_num, snp_batch_id_t batch_id) : shard_seq_num(shard_seq_num), batch_id(batch_id) {
+        if (shard_seq_num != (shard_seq_num & 0xFFFFFFFFFFFF)) {
             throw std::invalid_argument("shard_id is too large");
         }
         if (batch_id != (batch_id & 0x7FFF)){
             throw std::invalid_argument("batch_id is too large");
         }
         //type_bit (1 bit) | shard_id (48 bits) | batch_id (15 bits)
-        value= static_cast<uint64_t>(1) << 63 | (shard_id) << 15 | batch_id;
+        value= static_cast<uint64_t>(1) << 63 | (shard_seq_num) << 15 | batch_id;
     }
     explicit objId(snp_obj_id_t value) : value(value) {
-        shardId = (value >> 15) & 0xFFFFFFFFFFFF;
-        batchId = value & 0x7FFF;
+        shard_seq_num = (value >> 15) & 0xFFFFFFFFFFFF;
+        batch_id = value & 0x7FFF;
     }
 
     std::string to_string() const {
-        return fmt::format("{}[shardId={}, batchId={} ]", value, shardId, batchId);
+        return fmt::format("{}[shardId={}, batchId={} ]", value, shard_seq_num, batch_id);
     }
 };
 
