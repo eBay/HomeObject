@@ -337,7 +337,6 @@ public:
         shard_id_t get_next_shard() const;
 
         shard_id_t shard_cursor_{invalid_shard_id};
-        blob_id_t blob_cursor_{0};
         snp_batch_id_t cur_batch_num_{0};
         std::vector< shard_id_t > shard_list_;
 

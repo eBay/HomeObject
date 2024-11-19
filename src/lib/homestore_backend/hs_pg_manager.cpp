@@ -105,7 +105,6 @@ HSHomeObject::HS_PG* HSHomeObject::local_create_pg(shared< ReplDev > repl_dev, P
     }
 
     // create index table and pg
-    // TODO create index table during create shard.
     auto index_table = create_index_table();
     auto uuid_str = boost::uuids::to_string(index_table->uuid());
 

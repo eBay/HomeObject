@@ -23,7 +23,6 @@ void HSHomeObject::SnapshotReceiveHandler::process_pg_snapshot_data(ResyncPGMeta
     // Create local PG
     PGInfo pg_info(pg_meta.pg_id());
     std::copy_n(pg_meta.replica_set_uuid()->data(), 16, pg_info.replica_set_uuid.begin());
-    pg_info.size = pg_meta.members()->size();
     for (unsigned int i = 0; i < pg_meta.members()->size(); i++) {
         const auto member = pg_meta.members()->Get(i);
         uuids::uuid id{};
@@ -88,7 +87,6 @@ int HSHomeObject::SnapshotReceiveHandler::process_shard_snapshot_data(ResyncShar
     // Now let's create local shard
     home_obj_.local_create_shard(shard_sb.info, chunk_id, blk_id.blk_count());
     shard_cursor_ = shard_meta.shard_id();
-    blob_cursor_ = 0;
     cur_batch_num_ = 0;
     return 0;
 }
@@ -120,17 +118,18 @@ int HSHomeObject::SnapshotReceiveHandler::process_blobs_snapshot_data(ResyncBlob
         }
 
         auto blob_data = blob->data()->Data();
-        auto header = r_cast< BlobHeader const* >(blob_data);
-        if (header->valid()) {
-            LOGE("Invalid header found for blob_id {}: [header={}]", blob->blob_id(), header->to_string());
-            return INVALID_BLOB_HEADER;
-        }
-        std::string user_key = header->user_key_size
-            ? std::string(r_cast< const char* >(blob_data + sizeof(BlobHeader)), header->user_key_size)
-            : std::string{};
 
         // Check integrity of normal blobs
         if (blob->state() != static_cast< uint8_t >(ResyncBlobState::CORRUPTED)) {
+            auto header = r_cast< BlobHeader const* >(blob_data);
+            if (!header->valid()) {
+                LOGE("Invalid header found for blob_id {}: [header={}]", blob->blob_id(), header->to_string());
+                return INVALID_BLOB_HEADER;
+            }
+            std::string user_key = header->user_key_size
+                ? std::string(r_cast< const char* >(blob_data + sizeof(BlobHeader)), header->user_key_size)
+                : std::string{};
+
             uint8_t computed_hash[BlobHeader::blob_max_hash_len]{};
             home_obj_.compute_blob_payload_hash(header->hash_algorithm, blob_data + header->data_offset,
                                                 header->blob_size, uintptr_cast(user_key.data()), header->user_key_size,
@@ -189,8 +188,6 @@ int HSHomeObject::SnapshotReceiveHandler::process_blobs_snapshot_data(ResyncBlob
             free_allocated_blks();
             return ADD_BLOB_INDEX_ERR;
         }
-
-        blob_cursor_ = blob->blob_id();
     }
 
     return 0;
