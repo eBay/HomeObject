@@ -201,6 +201,20 @@ public:
         }
     }
 
+    void del_blob(pg_id_t pg_id, shard_id_t shard_id, blob_id_t blob_id) {
+        g_helper->sync();
+        run_on_pg_leader(pg_id, [&]()
+        {
+            auto g = _obj_inst->blob_manager()->del(shard_id, blob_id).get();
+            ASSERT_TRUE(g);
+            LOGINFO("delete blob, pg {} shard {} blob {}", pg_id, shard_id, blob_id);
+        });
+        while (blob_exist(shard_id, blob_id)) {
+            LOGINFO("waiting for shard {} blob {} to be deleted locally", shard_id, blob_id);
+            std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+        }
+    }
+
     // TODO:make this run in parallel
     void del_all_blobs(std::map< pg_id_t, std::vector< shard_id_t > > const& pg_shard_id_vec,
                        uint64_t const num_blobs_per_shard, std::map< pg_id_t, blob_id_t >& pg_blob_id) {

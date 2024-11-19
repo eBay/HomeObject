@@ -38,15 +38,18 @@ bool HSHomeObject::PGBlobIterator::update_cursor(objId id) {
     //resend batch
     if (id.value == cur_obj_id_.value) { return true; }
     auto next_obj_id = expected_next_obj_id();
-    if (id.value != next_obj_id.value) { return false; }
+    if (id.value != next_obj_id.value) {
+        LOGE("invalid objId, expected={}, actual={}", next_obj_id.to_string(), id.to_string());
+        return false;
+    }
     //next shard
     if (cur_obj_id_.shard_seq_num != next_obj_id.shard_seq_num) {
         cur_shard_idx_++;
-        last_end_blob_idx_ = -1;
+        cur_start_blob_idx_ = 0;
         cur_batch_blob_count_ = 0;
     } else {
         //next batch
-        last_end_blob_idx_ = last_end_blob_idx_ + cur_batch_blob_count_;
+        cur_start_blob_idx_ = cur_start_blob_idx_ + cur_batch_blob_count_;
         cur_batch_blob_count_ = 0;
     }
     cur_obj_id_ = id;
@@ -55,12 +58,12 @@ bool HSHomeObject::PGBlobIterator::update_cursor(objId id) {
 
 objId HSHomeObject::PGBlobIterator::expected_next_obj_id() {
     //next batch
-    if (last_end_blob_idx_ + cur_batch_blob_count_ < cur_blob_list_.size() - 1) {
+    if (cur_start_blob_idx_ + cur_batch_blob_count_ < cur_blob_list_.size()) {
         return objId(cur_obj_id_.shard_seq_num, cur_obj_id_.batch_id + 1);
     }
     //next shard
     if (cur_shard_idx_ < shard_list_.size() - 1) {
-        auto next_shard_seq_num = shard_list_[cur_shard_idx_++].id & 0xFFFFFFFFFFFF;
+        auto next_shard_seq_num = shard_list_[cur_shard_idx_+1].id & 0xFFFFFFFFFFFF;
         return objId(next_shard_seq_num, 0);
     }
     return objId(LAST_OBJ_ID);
@@ -194,10 +197,10 @@ bool HSHomeObject::PGBlobIterator::create_blobs_snapshot_data(sisl::io_blob_safe
 
     bool end_of_shard = false;
     uint64_t total_bytes = 0;
-    auto idx = (uint64_t)(last_end_blob_idx_ + 1);
+    auto idx = cur_start_blob_idx_;
 
     while (total_bytes < max_batch_size_ && idx < cur_blob_list_.size()) {
-        auto info = cur_blob_list_[idx];
+        auto info = cur_blob_list_[idx++];
         ResyncBlobState state = ResyncBlobState::NORMAL;
         //handle deleted object
         if (info.pbas == tombstone_pbas) {
@@ -231,10 +234,9 @@ bool HSHomeObject::PGBlobIterator::create_blobs_snapshot_data(sisl::io_blob_safe
         blob_entries.push_back(CreateResyncBlobDataDirect(builder_, info.blob_id, (uint8_t)state, &data));
         total_bytes += blob.size();
     }
-    idx++;
-
+    //should include the deleted blobs
+    cur_batch_blob_count_ = idx - cur_start_blob_idx_;
     if (idx == cur_blob_list_.size()) { end_of_shard = true; }
-    cur_batch_blob_count_ = blob_entries.size();
     builder_.FinishSizePrefixed(
         CreateResyncBlobDataBatchDirect(builder_, &blob_entries, end_of_shard));
 
