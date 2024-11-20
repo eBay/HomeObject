@@ -129,6 +129,10 @@ std::optional< uint32_t > HeapChunkSelector::select_chunks_for_pg(pg_id_t pg_id,
         LOGWARNMOD(homeobject, "PG had already created, pg_id {}", pg_id);
         return std::nullopt;
     }
+    if (pg_size == 0) {
+        LOGWARNMOD(homeobject, "Not supported to create empty PG, pg_id {}, pg_size {}", pg_id, pg_size);
+        return std::nullopt;
+    }
 
     const auto chunk_size = get_chunk_size();
     const uint32_t num_chunk = sisl::round_down(pg_size, chunk_size) / chunk_size;
@@ -176,6 +180,10 @@ bool HeapChunkSelector::recover_pg_chunks(pg_id_t pg_id, std::vector< chunk_num_
     // check pg exist
     if (m_per_pg_chunks.find(pg_id) != m_per_pg_chunks.end()) {
         LOGWARNMOD(homeobject, "PG {} had been recovered", pg_id);
+        return false;
+    }
+    if (p_chunk_ids.size() == 0) {
+        LOGWARNMOD(homeobject, "Unexpected empty PG {}", pg_id);
         return false;
     }
 
@@ -277,23 +285,18 @@ std::optional< homestore::chunk_num_t > HeapChunkSelector::get_most_available_bl
         LOGWARNMOD(homeobject, "No pg found for pg_id {}", pg_id);
         return std::nullopt;
     }
-    if (pg_it->second->available_num_chunks == 0) {
-        LOGWARNMOD(homeobject, "No available chunk for pg {}", pg_id);
-        return std::nullopt;
-    }
-
     std::scoped_lock lock(pg_it->second->mtx);
     auto pg_chunk_collection = pg_it->second;
     auto& pg_chunks = pg_chunk_collection->m_pg_chunks;
     auto max_it =
         std::max_element(pg_chunks.begin(), pg_chunks.end(),
                          [](const std::shared_ptr< ExtendedVChunk >& a, const std::shared_ptr< ExtendedVChunk >& b) {
-                             if (a->available() && b->available()) { return a->available_blks() < b->available_blks(); }
-                             if (!a->available() && b->available()) { return true; }
-                             if (a->available() && !b->available()) { return false; }
-                             return false;
+                             return !a->available() || (b->available() && a->available_blks() < b->available_blks());
                          });
-
+    if (!(*max_it)->available()) {
+        LOGWARNMOD(homeobject, "No available chunk for PG {}", pg_id);
+        return std::nullopt;
+    }
     auto v_chunk_id = std::distance(pg_chunks.begin(), max_it);
     pg_chunks[v_chunk_id]->m_state = ChunkState::INUSE;
     --pg_chunk_collection->available_num_chunks;

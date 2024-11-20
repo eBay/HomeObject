@@ -60,6 +60,11 @@ PGManager::NullAsyncResult HSHomeObject::_create_pg(PGInfo&& pg_info, std::set< 
     auto pg_id = pg_info.id;
     if (auto lg = std::shared_lock(_pg_lock); _pg_map.end() != _pg_map.find(pg_id)) return folly::Unit();
 
+    if (pg_info.size == 0) {
+        LOGW("Not supported to create empty PG, pg_id {}, pg_size {}", pg_id, pg_info.size);
+        return folly::makeUnexpected(PGError::INVALID_ARG);
+    }
+
     const auto most_avail_num_chunks = chunk_selector()->most_avail_num_chunks();
     const auto chunk_size = chunk_selector()->get_chunk_size();
     const auto needed_num_chunks = sisl::round_down(pg_info.size, chunk_size) / chunk_size;

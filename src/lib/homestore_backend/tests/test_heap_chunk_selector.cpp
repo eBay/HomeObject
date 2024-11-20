@@ -108,7 +108,9 @@ protected:
         const uint32_t chunk_size = HCS.get_chunk_size();
         const u_int64_t pg_size = chunk_size * 3;
         for (uint16_t pg_id = 1; pg_id < 4; ++pg_id) {
-            ASSERT_EQ(HCS.select_chunks_for_pg(pg_id, pg_size), 3);
+            // not supported to create empty pg
+            ASSERT_FALSE(HCS.select_chunks_for_pg(pg_id, 0).has_value());
+            ASSERT_EQ(HCS.select_chunks_for_pg(pg_id, pg_size).value(), 3);
             uint32_t last_pdev_id = 0;
             // test pg heap
             auto pg_it = HCS.m_per_pg_chunks.find(pg_id);
@@ -287,6 +289,7 @@ TEST_F(HeapChunkSelectorTest, test_recovery) {
     // on_pg_meta_blk_found
     for (uint16_t pg_id = 1; pg_id < 4; ++pg_id) {
         std::vector< chunk_num_t > chunk_ids{1, 2};
+        std::vector< chunk_num_t > empty_chunk_ids{};
         std::vector< chunk_num_t > chunk_ids_for_twice{1, 2};
         std::vector< chunk_num_t > chunk_ids_not_valid{1, 20};
         std::vector< chunk_num_t > chunk_ids_not_same_pdev{1, 6};
@@ -298,6 +301,7 @@ TEST_F(HeapChunkSelectorTest, test_recovery) {
         }
 
         // test recover chunk map
+        ASSERT_FALSE(HCS_recovery.recover_pg_chunks(pg_id, std::move(empty_chunk_ids)));
         ASSERT_FALSE(HCS_recovery.recover_pg_chunks(pg_id, std::move(chunk_ids_not_valid)));
         ASSERT_FALSE(HCS_recovery.recover_pg_chunks(pg_id, std::move(chunk_ids_not_same_pdev)));
 
