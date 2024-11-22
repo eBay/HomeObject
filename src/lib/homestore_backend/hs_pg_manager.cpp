@@ -104,6 +104,8 @@ HSHomeObject::HS_PG* HSHomeObject::local_create_pg(shared< ReplDev > repl_dev, P
         }
     }
 
+    // TODO: select chunks for this pg
+
     // create index table and pg
     auto index_table = create_index_table();
     auto uuid_str = boost::uuids::to_string(index_table->uuid());

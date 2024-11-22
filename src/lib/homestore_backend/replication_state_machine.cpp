@@ -286,6 +286,7 @@ void ReplicationStateMachine::write_snapshot_data(std::shared_ptr< homestore::sn
     if (m_snp_rcv_handler && m_snp_rcv_handler->snp_lsn_ != context->get_lsn()) { m_snp_rcv_handler.reset(nullptr); }
 
     // Check message integrity
+    // TODO: add a flip here to simulate corrupted message
     auto header = r_cast< const SyncMessageHeader* >(snp_data->blob.cbytes());
     if (header->corrupted()) {
         LOGE("corrupted message in write_snapshot_data, lsn:{}, obj_id {} shard {} batch {}", s->get_last_log_idx(),
@@ -336,6 +337,7 @@ void ReplicationStateMachine::write_snapshot_data(std::shared_ptr< homestore::sn
     }
 
     // Blob data message
+    // TODO: enhance error handling for wrong shard id - what may cause this?
     RELEASE_ASSERT(obj_id.shard_seq_num ==
                        HSHomeObject::get_sequence_num_from_shard_id(m_snp_rcv_handler->shard_cursor_),
                    "Shard id not matching with the current shard cursor");
