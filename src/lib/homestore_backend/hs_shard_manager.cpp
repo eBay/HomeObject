@@ -108,6 +108,11 @@ ShardManager::AsyncResult< ShardInfo > HSHomeObject::_create_shard(pg_id_t pg_ow
         return folly::makeUnexpected(ShardError::PG_NOT_READY);
     }
 
+    if (!repl_dev->is_leader()) {
+        LOGW("failed to create shard for pg [{}], not leader", pg_owner);
+        return folly::makeUnexpected(ShardError::NOT_LEADER);
+    }
+
     auto new_shard_id = generate_new_shard_id(pg_owner);
     auto create_time = get_current_timestamp();
 
@@ -170,6 +175,11 @@ ShardManager::AsyncResult< ShardInfo > HSHomeObject::_seal_shard(ShardInfo const
         RELEASE_ASSERT(iter != _pg_map.end(), "PG not found");
         repl_dev = static_cast< HS_PG* >(iter->second.get())->repl_dev_;
         RELEASE_ASSERT(repl_dev != nullptr, "Repl dev null");
+    }
+
+    if (!repl_dev->is_leader()) {
+        LOGW("failed to seal shard for shard [{}], not leader", shard_id);
+        return folly::makeUnexpected(ShardError::NOT_LEADER);
     }
 
     ShardInfo tmp_info = info;
