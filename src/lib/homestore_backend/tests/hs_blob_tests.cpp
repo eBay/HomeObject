@@ -207,3 +207,5 @@ TEST_F(HomeObjectFixture, PGBlobIterator) {
     //     EXPECT_EQ(result.object_off, b.blob.object_off);
     // }
 }
+
+TEST_F(HomeObjectFixture, SnapshotReceiveHandler) {}
