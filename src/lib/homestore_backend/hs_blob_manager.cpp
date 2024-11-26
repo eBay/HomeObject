@@ -99,6 +99,11 @@ BlobManager::AsyncResult< blob_id_t > HSHomeObject::_put_blob(ShardInfo const& s
 
     RELEASE_ASSERT(repl_dev != nullptr, "Repl dev instance null");
 
+    if (!repl_dev->is_leader()) {
+        LOGW("failed to put blob for pg [{}], shard [{}], not leader", pg_id, shard.id);
+        return folly::makeUnexpected(BlobErrorCode::NOT_LEADER);
+    }
+
     // Create a put_blob request which allocates for header, key and blob_header, user_key. Data sgs are added later
     auto req = put_blob_req_ctx::make(sizeof(BlobHeader) + blob.user_key.size());
     req->header()->msg_type = ReplicationMessageType::PUT_BLOB_MSG;
@@ -370,6 +375,11 @@ BlobManager::NullAsyncResult HSHomeObject::_del_blob(ShardInfo const& shard, blo
     }
 
     RELEASE_ASSERT(repl_dev != nullptr, "Repl dev instance null");
+
+    if (!repl_dev->is_leader()) {
+        LOGW("failed to del blob for pg [{}], shard [{}], blob_id [{}], not leader", pg_id, shard.id, blob_id);
+        return folly::makeUnexpected(BlobErrorCode::NOT_LEADER);
+    }
 
     // Create an unaligned header request unaligned
     auto req = repl_result_ctx< BlobManager::Result< BlobInfo > >::make(0u /* header_extn */,

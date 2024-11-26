@@ -173,7 +173,7 @@ public:
                            const homestore::replica_member_info& member_in) override;
 
     /// @brief Called when the replica is being destroyed by nuraft;
-    void on_destroy() override;
+    void on_destroy(const homestore::group_id_t& group_id) override;
 
     /// Not Implemented
     /// @brief Called when the snapshot is being created by nuraft;

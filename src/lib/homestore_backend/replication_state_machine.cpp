@@ -189,7 +189,7 @@ void ReplicationStateMachine::on_replace_member(const homestore::replica_member_
     home_object_->on_pg_replace_member(repl_dev()->group_id(), member_out, member_in);
 }
 
-void ReplicationStateMachine::on_destroy() {
+void ReplicationStateMachine::on_destroy(const homestore::group_id_t& group_id) {
     // TODO:: add the logic to handle destroy
     LOGI("replica destroyed");
 }
