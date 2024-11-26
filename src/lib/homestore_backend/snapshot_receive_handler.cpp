@@ -5,19 +5,18 @@
 #include <homestore/blkdata_service.hpp>
 
 namespace homeobject {
-HSHomeObject::SnapshotReceiveHandler::SnapshotReceiveHandler(HSHomeObject& home_obj, pg_id_t pg_id_,
-                                                             homestore::group_id_t group_id, int64_t lsn,
+HSHomeObject::SnapshotReceiveHandler::SnapshotReceiveHandler(HSHomeObject& home_obj, homestore::group_id_t group_id,
                                                              shared< homestore::ReplDev > repl_dev) :
-        snp_lsn_(lsn), home_obj_(home_obj), group_id_(group_id), pg_id_(pg_id_), repl_dev_(std::move(repl_dev)) {}
+        home_obj_(home_obj), group_id_(group_id), repl_dev_(std::move(repl_dev)) {}
 
 void HSHomeObject::SnapshotReceiveHandler::process_pg_snapshot_data(ResyncPGMetaData const& pg_meta) {
     LOGI("process_pg_snapshot_data pg_id:{}", pg_meta.pg_id());
 
     // Init shard list
-    shard_list_.clear();
+    ctx_->shard_list.clear();
     const auto ids = pg_meta.shard_ids();
     for (unsigned int i = 0; i < ids->size(); i++) {
-        shard_list_.push_back(ids->Get(i));
+        ctx_->shard_list.push_back(ids->Get(i));
     }
 
     // Create local PG
@@ -86,14 +85,14 @@ int HSHomeObject::SnapshotReceiveHandler::process_shard_snapshot_data(ResyncShar
 
     // Now let's create local shard
     home_obj_.local_create_shard(shard_sb.info, chunk_id, blk_id.blk_count());
-    shard_cursor_ = shard_meta.shard_id();
-    cur_batch_num_ = 0;
+    ctx_->shard_cursor = shard_meta.shard_id();
+    ctx_->cur_batch_num = 0;
     return 0;
 }
 
 int HSHomeObject::SnapshotReceiveHandler::process_blobs_snapshot_data(ResyncBlobDataBatch const& data_blobs,
                                                                       const snp_batch_id_t batch_num) {
-    cur_batch_num_ = batch_num;
+    ctx_->cur_batch_num = batch_num;
     for (unsigned int i = 0; i < data_blobs.blob_list()->size(); i++) {
         const auto blob = data_blobs.blob_list()->Get(i);
 
@@ -107,12 +106,12 @@ int HSHomeObject::SnapshotReceiveHandler::process_blobs_snapshot_data(ResyncBlob
         shared< BlobIndexTable > index_table;
         {
             std::shared_lock lock_guard(home_obj_._pg_lock);
-            auto iter = home_obj_._pg_map.find(pg_id_);
+            auto iter = home_obj_._pg_map.find(ctx_->pg_id);
             RELEASE_ASSERT(iter != home_obj_._pg_map.end(), "PG not found");
             index_table = dynamic_cast< HS_PG* >(iter->second.get())->index_table_;
         }
         RELEASE_ASSERT(index_table != nullptr, "Index table instance null");
-        if (home_obj_.get_blob_from_index_table(index_table, shard_cursor_, blob->blob_id())) {
+        if (home_obj_.get_blob_from_index_table(index_table, ctx_->shard_cursor, blob->blob_id())) {
             LOGD("Skip already persisted blob_id:{}", blob->blob_id());
             continue;
         }
@@ -142,8 +141,8 @@ int HSHomeObject::SnapshotReceiveHandler::process_blobs_snapshot_data(ResyncBlob
         }
 
         // Alloc & persist blob data
-        auto chunk_id = home_obj_.get_shard_chunk(shard_cursor_);
-        RELEASE_ASSERT(chunk_id.has_value(), "Failed to load chunk of current shard_cursor:{}", shard_cursor_);
+        auto chunk_id = home_obj_.get_shard_chunk(ctx_->shard_cursor);
+        RELEASE_ASSERT(chunk_id.has_value(), "Failed to load chunk of current shard_cursor:{}", ctx_->shard_cursor);
         homestore::blk_alloc_hints hints;
         hints.chunk_id_hint = *chunk_id;
 
@@ -152,7 +151,7 @@ int HSHomeObject::SnapshotReceiveHandler::process_blobs_snapshot_data(ResyncBlob
         auto status = homestore::data_service().alloc_blks(
             sisl::round_up(data_size, homestore::data_service().get_blk_size()), hints, blk_id);
         if (status != homestore::BlkAllocStatus::SUCCESS) {
-            LOGE("Failed to allocate blocks for shard {} blob {}", shard_cursor_, blob->blob_id());
+            LOGE("Failed to allocate blocks for shard {} blob {}", ctx_->shard_cursor, blob->blob_id());
             return ALLOC_BLK_ERR;
         }
 
@@ -182,7 +181,8 @@ int HSHomeObject::SnapshotReceiveHandler::process_blobs_snapshot_data(ResyncBlob
         }
 
         // Add local blob info to index & PG
-        bool success = home_obj_.local_add_blob_info(pg_id_, BlobInfo{shard_cursor_, blob->blob_id(), {0, 0, 0}});
+        bool success =
+            home_obj_.local_add_blob_info(ctx_->pg_id, BlobInfo{ctx_->shard_cursor, blob->blob_id(), {0, 0, 0}});
         if (!success) {
             LOGE("Failed to add blob info for blob_id:{}", blob->blob_id());
             free_allocated_blks();
@@ -193,14 +193,22 @@ int HSHomeObject::SnapshotReceiveHandler::process_blobs_snapshot_data(ResyncBlob
     return 0;
 }
 
+int64_t HSHomeObject::SnapshotReceiveHandler::get_context_lsn() const { return ctx_ ? ctx_->snp_lsn : -1; }
+
+void HSHomeObject::SnapshotReceiveHandler::reset_context(int64_t lsn, pg_id_t pg_id) {
+    ctx_ = std::make_unique< SnapshotContext >(lsn, pg_id);
+}
+
+shard_id_t HSHomeObject::SnapshotReceiveHandler::get_shard_cursor() const { return ctx_->shard_cursor; }
+
 shard_id_t HSHomeObject::SnapshotReceiveHandler::get_next_shard() const {
-    if (shard_list_.empty()) { return shard_list_end_marker; }
+    if (ctx_->shard_list.empty()) { return shard_list_end_marker; }
 
-    if (shard_cursor_ == 0) { return shard_list_[0]; }
+    if (ctx_->shard_cursor == 0) { return ctx_->shard_list[0]; }
 
-    for (size_t i = 0; i < shard_list_.size(); ++i) {
-        if (shard_list_[i] == shard_cursor_) {
-            return (i + 1 < shard_list_.size()) ? shard_list_[i + 1] : shard_list_end_marker;
+    for (size_t i = 0; i < ctx_->shard_list.size(); ++i) {
+        if (ctx_->shard_list[i] == ctx_->shard_cursor) {
+            return (i + 1 < ctx_->shard_list.size()) ? ctx_->shard_list[i + 1] : shard_list_end_marker;
         }
     }
 
