@@ -139,17 +139,18 @@ TEST_F(HomeObjectFixture, BasicPutGetDelBlobWRestart) {
 }
 
 TEST_F(HomeObjectFixture, PGBlobIterator) {
+    constexpr pg_id_t pg_id{1};
     // Generate test data
     uint64_t num_shards_per_pg = 3;
     uint64_t num_blobs_per_shard = 5;
     std::map< pg_id_t, std::vector< shard_id_t > > pg_shard_id_vec;
     std::map< pg_id_t, blob_id_t > pg_blob_id;
 
-    pg_id_t pg_id{1};
+    auto& shard_list = pg_shard_id_vec[pg_id];
     create_pg(pg_id);
     for (uint64_t i = 0; i < num_shards_per_pg; i++) {
-        auto shard = create_shard(1, 64 * Mi);
-        pg_shard_id_vec[1].emplace_back(shard.id);
+        auto shard = create_shard(pg_id, 64 * Mi);
+        shard_list.emplace_back(shard.id);
         pg_blob_id[i] = 0;
         LOGINFO("pg {} shard {}", pg_id, shard.id);
     }
@@ -215,10 +216,9 @@ TEST_F(HomeObjectFixture, PGBlobIterator) {
     }
 
     //Verify shard meta data
-    auto shard_list = pg_shard_id_vec[1];
     current_blob_id = 0;
     for (auto& shard : pg->shards_) {
-        auto shard_seq_num = shard->info.id & 0xFFFFFFFFFFFF;
+        auto shard_seq_num = HSHomeObject::get_sequence_num_from_shard_id(shard->info.id);
         auto batch_id = 0;
         objId oid(shard_seq_num, batch_id++);
         if (shard->info.lsn > snp_lsn) {
