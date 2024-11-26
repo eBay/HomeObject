@@ -129,7 +129,7 @@ struct objId {
     }
 
     std::string to_string() const {
-        return fmt::format("{}[shardId={}, batchId={} ]", value, shard_seq_num, batch_id);
+        return fmt::format("{}[shardSeqNum={}, batchId={} ]", value, shard_seq_num, batch_id);
     }
 };
 

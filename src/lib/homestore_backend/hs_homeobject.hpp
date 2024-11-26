@@ -304,7 +304,7 @@ public:
         objId cur_obj_id_{1, 0};
         uint64_t cur_shard_idx_{0};
         std::vector<BlobInfo> cur_blob_list_{0};
-        int64_t last_end_blob_idx_{-1};
+        uint64_t cur_start_blob_idx_{0};
         uint64_t cur_batch_blob_count_{0};
         flatbuffers::FlatBufferBuilder builder_;
 
