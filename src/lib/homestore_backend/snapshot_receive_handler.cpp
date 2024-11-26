@@ -58,13 +58,14 @@ int HSHomeObject::SnapshotReceiveHandler::process_shard_snapshot_data(ResyncShar
     shard_sb.chunk_id = chunk_id;
 
     homestore::MultiBlkId blk_id;
-    const auto hints = home_obj_.chunk_selector()->chunk_to_hints(chunk_id);
+    const auto hints = home_obj_.chunk_selector()->chunk_to_hints(shard_sb.chunk_id);
     auto status = homestore::data_service().alloc_blks(
         sisl::round_up(sizeof(shard_sb), homestore::data_service().get_blk_size()), hints, blk_id);
     if (status != homestore::BlkAllocStatus::SUCCESS) {
         LOGE("Failed to allocate blocks for shard {}", shard_meta.shard_id());
         return ALLOC_BLK_ERR;
     }
+    shard_sb.chunk_id = blk_id.to_single_blkid().chunk_num(); // FIXME: remove this after intergating vchunk
 
     const auto ret = homestore::data_service()
                          .async_write(r_cast< char const* >(&shard_sb), sizeof(shard_sb), blk_id)
@@ -78,13 +79,13 @@ int HSHomeObject::SnapshotReceiveHandler::process_shard_snapshot_data(ResyncShar
                              return 0;
                          })
                          .get();
-    if (ret) {
+    if (ret.hasError()) {
         LOGE("Failed to write shard info of shard_id {} to blk_id:{}", shard_meta.shard_id(), blk_id.to_string());
         return WRITE_DATA_ERR;
     }
 
     // Now let's create local shard
-    home_obj_.local_create_shard(shard_sb.info, chunk_id, blk_id.blk_count());
+    home_obj_.local_create_shard(shard_sb.info, shard_sb.chunk_id, blk_id.blk_count());
     ctx_->shard_cursor = shard_meta.shard_id();
     ctx_->cur_batch_num = 0;
     return 0;
@@ -174,7 +175,7 @@ int HSHomeObject::SnapshotReceiveHandler::process_blobs_snapshot_data(ResyncBlob
                                  return 0;
                              })
                              .get();
-        if (ret) {
+        if (ret.hasError()) {
             LOGE("Failed to write shard info of blob_id {} to blk_id:{}", blob->blob_id(), blk_id.to_string());
             free_allocated_blks();
             return WRITE_DATA_ERR;
@@ -182,7 +183,7 @@ int HSHomeObject::SnapshotReceiveHandler::process_blobs_snapshot_data(ResyncBlob
 
         // Add local blob info to index & PG
         bool success =
-            home_obj_.local_add_blob_info(ctx_->pg_id, BlobInfo{ctx_->shard_cursor, blob->blob_id(), {0, 0, 0}});
+            home_obj_.local_add_blob_info(ctx_->pg_id, BlobInfo{ctx_->shard_cursor, blob->blob_id(), blk_id});
         if (!success) {
             LOGE("Failed to add blob info for blob_id:{}", blob->blob_id());
             free_allocated_blks();
