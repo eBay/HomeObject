@@ -5,9 +5,9 @@
 #include <homestore/blkdata_service.hpp>
 
 namespace homeobject {
-HSHomeObject::SnapshotReceiveHandler::SnapshotReceiveHandler(HSHomeObject& home_obj, homestore::group_id_t group_id,
+HSHomeObject::SnapshotReceiveHandler::SnapshotReceiveHandler(HSHomeObject& home_obj,
                                                              shared< homestore::ReplDev > repl_dev) :
-        home_obj_(home_obj), group_id_(group_id), repl_dev_(std::move(repl_dev)) {}
+        home_obj_(home_obj), repl_dev_(std::move(repl_dev)) {}
 
 void HSHomeObject::SnapshotReceiveHandler::process_pg_snapshot_data(ResyncPGMetaData const& pg_meta) {
     LOGI("process_pg_snapshot_data pg_id:{}", pg_meta.pg_id());
@@ -103,16 +103,15 @@ int HSHomeObject::SnapshotReceiveHandler::process_blobs_snapshot_data(ResyncBlob
             continue;
         }
 
-        // Check duplication to avoid reprocessing
-        shared< BlobIndexTable > index_table;
-        {
+        // Check duplication to avoid reprocessing. This may happen on resent blob batches.
+        if (!ctx_->index_table) {
             std::shared_lock lock_guard(home_obj_._pg_lock);
             auto iter = home_obj_._pg_map.find(ctx_->pg_id);
             RELEASE_ASSERT(iter != home_obj_._pg_map.end(), "PG not found");
-            index_table = dynamic_cast< HS_PG* >(iter->second.get())->index_table_;
+            ctx_->index_table = dynamic_cast< HS_PG* >(iter->second.get())->index_table_;
         }
-        RELEASE_ASSERT(index_table != nullptr, "Index table instance null");
-        if (home_obj_.get_blob_from_index_table(index_table, ctx_->shard_cursor, blob->blob_id())) {
+        RELEASE_ASSERT(ctx_->index_table != nullptr, "Index table instance null");
+        if (home_obj_.get_blob_from_index_table(ctx_->index_table, ctx_->shard_cursor, blob->blob_id())) {
             LOGD("Skip already persisted blob_id:{}", blob->blob_id());
             continue;
         }

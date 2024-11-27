@@ -270,7 +270,7 @@ void ReplicationStateMachine::write_snapshot_data(std::shared_ptr< homestore::sn
     RELEASE_ASSERT(snp_data != nullptr, "Snapshot data null");
     auto r_dev = repl_dev();
     if (!m_snp_rcv_handler) {
-        std::make_unique< HSHomeObject::SnapshotReceiveHandler >(*home_object_, r_dev->group_id(), r_dev);
+        m_snp_rcv_handler = std::make_unique< HSHomeObject::SnapshotReceiveHandler >(*home_object_, r_dev);
     }
 
     auto s = dynamic_pointer_cast< homestore::nuraft_snapshot_context >(context)->nuraft_snapshot();

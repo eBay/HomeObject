@@ -329,8 +329,7 @@ public:
         constexpr static shard_id_t invalid_shard_id = 0;
         constexpr static shard_id_t shard_list_end_marker = ULLONG_MAX;
 
-        SnapshotReceiveHandler(HSHomeObject& home_obj, homestore::group_id_t group_id,
-                               shared< homestore::ReplDev > repl_dev);
+        SnapshotReceiveHandler(HSHomeObject& home_obj, shared< homestore::ReplDev > repl_dev);
 
         void process_pg_snapshot_data(ResyncPGMetaData const& pg_meta);
         int process_shard_snapshot_data(ResyncShardMetaData const& shard_meta);
@@ -349,12 +348,12 @@ public:
             std::vector< shard_id_t > shard_list;
             const int64_t snp_lsn;
             const pg_id_t pg_id;
+            shared< BlobIndexTable > index_table;
 
             SnapshotContext(int64_t lsn, pg_id_t pg_id) : snp_lsn{lsn}, pg_id{pg_id} {}
         };
 
         HSHomeObject& home_obj_;
-        const homestore::group_id_t group_id_;
         const shared< homestore::ReplDev > repl_dev_;
 
         std::unique_ptr< SnapshotContext > ctx_;

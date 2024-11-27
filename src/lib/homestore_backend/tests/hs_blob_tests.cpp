@@ -288,6 +288,7 @@ TEST_F(HomeObjectFixture, PGBlobIterator) {
 }
 
 TEST_F(HomeObjectFixture, SnapshotReceiveHandler) {
+    // TODO: add filps to test corrupted data
     // MUST TEST WITH replica=1
     constexpr uint64_t snp_lsn = 1;
     constexpr uint64_t num_shards_per_pg = 3;
@@ -302,8 +303,7 @@ TEST_F(HomeObjectFixture, SnapshotReceiveHandler) {
     auto r_dev = homestore::HomeStore::instance()->repl_service().get_repl_dev(stats.replica_set_uuid);
     ASSERT_TRUE(r_dev.hasValue());
 
-    auto handler = std::make_unique< homeobject::HSHomeObject::SnapshotReceiveHandler >(
-        *_obj_inst, stats.replica_set_uuid, r_dev.value());
+    auto handler = std::make_unique< homeobject::HSHomeObject::SnapshotReceiveHandler >(*_obj_inst, r_dev.value());
     handler->reset_context(snp_lsn, pg_id);
 
     // Step 1: Test write pg meta - cannot test full logic since the PG already exists
@@ -345,8 +345,8 @@ TEST_F(HomeObjectFixture, SnapshotReceiveHandler) {
         shard.lsn = snp_lsn;
 
         auto shard_entry =
-            CreateResyncShardMetaData(builder, shard.id, pg_id, uint8_t(shard.state), shard.lsn, shard.created_time,
-                                      shard.last_modified_time, shard.total_capacity_bytes, 0);
+            CreateResyncShardMetaData(builder, shard.id, pg_id, static_cast< uint8_t >(shard.state), shard.lsn,
+                                      shard.created_time, shard.last_modified_time, shard.total_capacity_bytes, 0);
         builder.Finish(shard_entry);
         auto shard_meta = GetResyncShardMetaData(builder.GetBufferPointer());
         builder.Reset();
