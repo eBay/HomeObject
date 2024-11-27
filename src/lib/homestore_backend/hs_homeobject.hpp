@@ -333,7 +333,8 @@ public:
 
         void process_pg_snapshot_data(ResyncPGMetaData const& pg_meta);
         int process_shard_snapshot_data(ResyncShardMetaData const& shard_meta);
-        int process_blobs_snapshot_data(ResyncBlobDataBatch const& data_blobs, snp_batch_id_t batch_num);
+        int process_blobs_snapshot_data(ResyncBlobDataBatch const& data_blobs, snp_batch_id_t batch_num,
+                                        bool is_last_batch);
 
         int64_t get_context_lsn() const;
         void reset_context(int64_t lsn, pg_id_t pg_id);

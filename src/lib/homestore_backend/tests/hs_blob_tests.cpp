@@ -292,8 +292,10 @@ TEST_F(HomeObjectFixture, SnapshotReceiveHandler) {
     // MUST TEST WITH replica=1
     constexpr uint64_t snp_lsn = 1;
     constexpr uint64_t num_shards_per_pg = 3;
+    constexpr uint64_t num_open_shards_per_pg = 2; // Should be less than num_shards_per_pg
     constexpr uint64_t num_batches_per_shard = 3;
     constexpr uint64_t num_blobs_per_batch = 5;
+    constexpr int corrupted_blob_percentage = 10;
 
     // We have to create a PG first to init repl_dev
     constexpr pg_id_t pg_id = 1;
@@ -330,6 +332,11 @@ TEST_F(HomeObjectFixture, SnapshotReceiveHandler) {
     handler->process_pg_snapshot_data(*pg_meta);
 
     // Step 2: Test shard and blob batches
+    std::random_device rd; // Random generators for blob corruption
+    std::mt19937 gen(rd());
+    std::uniform_int_distribution<> corrupt_dis(1, 100);
+    std::uniform_int_distribution<> random_bytes_dis(1, 16 * 1024);
+
     blob_id_t cur_blob_id{0};
     for (uint64_t i = 1; i <= num_shards_per_pg; i++) {
         LOGINFO("TESTING: applying meta for shard {}", i);
@@ -338,7 +345,8 @@ TEST_F(HomeObjectFixture, SnapshotReceiveHandler) {
         // Generate ResyncShardMetaData message
         ShardInfo shard;
         shard.id = i;
-        shard.state = ShardInfo::State::OPEN;
+        shard.state =
+            i <= num_shards_per_pg - num_open_shards_per_pg ? ShardInfo::State::SEALED : ShardInfo::State::OPEN;
         shard.created_time = get_time_since_epoch_ms();
         shard.last_modified_time = shard.created_time;
         shard.total_capacity_bytes = 1024 * Mi;
@@ -367,11 +375,14 @@ TEST_F(HomeObjectFixture, SnapshotReceiveHandler) {
 
         // Step 2-2: Test write blob batch data
         // Generate ResyncBlobDataBatch message
-        std::map< blob_id_t, Blob > blob_map;
+        std::map< blob_id_t, std::tuple< Blob, bool > > blob_map;
         for (uint64_t j = 1; j <= num_batches_per_shard; j++) {
             LOGINFO("TESTING: applying blobs for shard {} batch {}", shard.id, j);
             std::vector< ::flatbuffers::Offset< ResyncBlobData > > blob_entries;
             for (uint64_t k = 0; k < num_blobs_per_batch; k++) {
+                auto blob_state = corrupt_dis(gen) <= corrupted_blob_percentage ? ResyncBlobState::CORRUPTED
+                                                                                : ResyncBlobState::NORMAL;
+
                 // Construct raw blob buffer
                 auto blob = build_blob(cur_blob_id);
                 const auto aligned_hdr_size =
@@ -398,24 +409,47 @@ TEST_F(HomeObjectFixture, SnapshotReceiveHandler) {
                 }
                 std::memcpy(blob_raw.bytes() + aligned_hdr_size, blob.body.cbytes(), blob.body.size());
 
+                // Simulate blob data corruption - tamper with random bytes
+                if (blob_state == ResyncBlobState::CORRUPTED) {
+                    constexpr int corrupted_bytes = 5;
+                    for (auto i = 0; i < corrupted_bytes; i++) {
+                        auto offset = random_bytes_dis(gen) % blob_raw.size();
+                        auto byte = random_bytes_dis(gen) % 256;
+                        blob_raw.bytes()[offset] = byte;
+                        LOGINFO("Changing byte at offset {} to simulate data corruption", offset, byte);
+                    }
+                }
+
                 std::vector data(blob_raw.bytes(), blob_raw.bytes() + blob_raw.size());
-                blob_entries.push_back(CreateResyncBlobDataDirect(
-                    builder, cur_blob_id, static_cast< uint8_t >(ResyncBlobState::NORMAL), &data));
-                blob_map[cur_blob_id++] = std::move(blob);
+                blob_entries.push_back(
+                    CreateResyncBlobDataDirect(builder, cur_blob_id, static_cast< uint8_t >(blob_state), &data));
+                blob_map[cur_blob_id++] =
+                    std::make_tuple< Blob, bool >(std::move(blob), blob_state == ResyncBlobState::CORRUPTED);
             }
             builder.Finish(CreateResyncBlobDataBatchDirect(builder, &blob_entries, true));
             auto blob_batch = GetResyncBlobDataBatch(builder.GetBufferPointer());
             builder.Reset();
 
-            ret = handler->process_blobs_snapshot_data(*blob_batch, j);
+            ret = handler->process_blobs_snapshot_data(*blob_batch, j, j == num_batches_per_shard);
             ASSERT_EQ(ret, 0);
         }
-        for (const auto& [blob_id, blob] : blob_map) {
+        for (const auto& b : blob_map) {
+            auto blob_id = b.first;
+            auto& blob = std::get< 0 >(b.second);
+            auto is_corrupted = std::get< 1 >(b.second);
+
             auto res = _obj_inst->blob_manager()->get(shard.id, blob_id, 0, blob.body.size()).get();
-            ASSERT_TRUE(!!res);
-            auto blob_res = std::move(res.value());
-            ASSERT_EQ(blob_res.body.size(), blob.body.size());
-            ASSERT_EQ(std::memcmp(blob_res.body.bytes(), blob.body.cbytes(), blob_res.body.size()), 0);
+            if (is_corrupted) {
+                ASSERT_FALSE(!!res);
+            } else {
+                ASSERT_TRUE(!!res);
+                auto blob_res = std::move(res.value());
+                ASSERT_EQ(blob_res.body.size(), blob.body.size());
+                ASSERT_EQ(std::memcmp(blob_res.body.bytes(), blob.body.cbytes(), blob_res.body.size()), 0);
+            }
+        }
+        if (shard.state == ShardInfo::State::SEALED) {
+            // TODO: Verify chunk is released. Currently we don't have chunk_id, so let's do this after rebasing
         }
     }
 }

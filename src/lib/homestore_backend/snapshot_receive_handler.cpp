@@ -92,8 +92,16 @@ int HSHomeObject::SnapshotReceiveHandler::process_shard_snapshot_data(ResyncShar
 }
 
 int HSHomeObject::SnapshotReceiveHandler::process_blobs_snapshot_data(ResyncBlobDataBatch const& data_blobs,
-                                                                      const snp_batch_id_t batch_num) {
+                                                                      const snp_batch_id_t batch_num,
+                                                                      bool is_last_batch) {
     ctx_->cur_batch_num = batch_num;
+
+    // Find chunk id for current shard
+    auto chunk_id = home_obj_.get_shard_chunk(ctx_->shard_cursor);
+    RELEASE_ASSERT(chunk_id.has_value(), "Failed to load chunk of current shard_cursor:{}", ctx_->shard_cursor);
+    homestore::blk_alloc_hints hints;
+    hints.chunk_id_hint = *chunk_id;
+
     for (unsigned int i = 0; i < data_blobs.blob_list()->size(); i++) {
         const auto blob = data_blobs.blob_list()->Get(i);
 
@@ -141,11 +149,6 @@ int HSHomeObject::SnapshotReceiveHandler::process_blobs_snapshot_data(ResyncBlob
         }
 
         // Alloc & persist blob data
-        auto chunk_id = home_obj_.get_shard_chunk(ctx_->shard_cursor);
-        RELEASE_ASSERT(chunk_id.has_value(), "Failed to load chunk of current shard_cursor:{}", ctx_->shard_cursor);
-        homestore::blk_alloc_hints hints;
-        hints.chunk_id_hint = *chunk_id;
-
         auto data_size = blob->data()->size();
         homestore::MultiBlkId blk_id;
         auto status = homestore::data_service().alloc_blks(
@@ -188,6 +191,17 @@ int HSHomeObject::SnapshotReceiveHandler::process_blobs_snapshot_data(ResyncBlob
             free_allocated_blks();
             return ADD_BLOB_INDEX_ERR;
         }
+    }
+
+    if (is_last_batch) {
+        // Release chunk for sealed shard
+        ShardInfo::State state;
+        {
+            std::scoped_lock lock_guard(home_obj_._shard_lock);
+            auto iter = home_obj_._shard_map.find(ctx_->shard_cursor);
+            state = (*iter->second)->info.state;
+        }
+        if (state == ShardInfo::State::SEALED) { home_obj_.chunk_selector()->release_chunk(chunk_id.value()); }
     }
 
     return 0;

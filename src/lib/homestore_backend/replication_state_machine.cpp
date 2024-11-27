@@ -345,7 +345,8 @@ void ReplicationStateMachine::write_snapshot_data(std::shared_ptr< homestore::sn
                        HSHomeObject::get_sequence_num_from_shard_id(m_snp_rcv_handler->get_shard_cursor()),
                    "Shard id not matching with the current shard cursor");
     auto blob_batch = GetSizePrefixedResyncBlobDataBatch(data_buf);
-    auto ret = m_snp_rcv_handler->process_blobs_snapshot_data(*blob_batch, obj_id.batch_id);
+    auto ret =
+        m_snp_rcv_handler->process_blobs_snapshot_data(*blob_batch, obj_id.batch_id, blob_batch->is_last_batch());
     if (ret) {
         // Do not proceed, will request for resending the current blob batch
         LOGE("Failed to process blob snapshot data lsn:{} obj_id {} shard {} batch {}, err {}", s->get_last_log_idx(),
