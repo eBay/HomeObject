@@ -327,9 +327,8 @@ TEST_F(HomeObjectFixture, SnapshotReceiveHandler) {
         CreateResyncPGMetaDataDirect(builder, pg_id, &uuid, blob_seq_num, num_shards_per_pg, &members, &shard_ids);
     builder.Finish(pg_entry);
     auto pg_meta = GetResyncPGMetaData(builder.GetBufferPointer());
-    builder.Reset();
-
     handler->process_pg_snapshot_data(*pg_meta);
+    builder.Reset();
 
     // Step 2: Test shard and blob batches
     std::random_device rd; // Random generators for blob corruption
@@ -357,9 +356,8 @@ TEST_F(HomeObjectFixture, SnapshotReceiveHandler) {
                                       shard.created_time, shard.last_modified_time, shard.total_capacity_bytes, 0);
         builder.Finish(shard_entry);
         auto shard_meta = GetResyncShardMetaData(builder.GetBufferPointer());
-        builder.Reset();
-
         auto ret = handler->process_shard_snapshot_data(*shard_meta);
+        builder.Reset();
         ASSERT_EQ(ret, 0);
 
         auto res = _obj_inst->shard_manager()->get_shard(shard.id).get();
@@ -428,9 +426,8 @@ TEST_F(HomeObjectFixture, SnapshotReceiveHandler) {
             }
             builder.Finish(CreateResyncBlobDataBatchDirect(builder, &blob_entries, true));
             auto blob_batch = GetResyncBlobDataBatch(builder.GetBufferPointer());
-            builder.Reset();
-
             ret = handler->process_blobs_snapshot_data(*blob_batch, j, j == num_batches_per_shard);
+            builder.Reset();
             ASSERT_EQ(ret, 0);
         }
         for (const auto& b : blob_map) {

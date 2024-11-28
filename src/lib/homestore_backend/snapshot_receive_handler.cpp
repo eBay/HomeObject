@@ -45,30 +45,31 @@ int HSHomeObject::SnapshotReceiveHandler::process_shard_snapshot_data(ResyncShar
     // Persist shard meta on chunk data
     homestore::chunk_num_t chunk_id = shard_meta.vchunk_id(); // FIXME: vchunk id to chunk id
 
-    shard_info_superblk shard_sb;
-    shard_sb.info.id = shard_meta.shard_id();
-    shard_sb.info.placement_group = shard_meta.pg_id();
-    shard_sb.info.state = static_cast< ShardInfo::State >(shard_meta.state());
-    shard_sb.info.lsn = shard_meta.created_lsn();
-    shard_sb.info.created_time = shard_meta.created_time();
-    shard_sb.info.last_modified_time = shard_meta.last_modified_time();
-    shard_sb.info.available_capacity_bytes = shard_meta.total_capacity_bytes();
-    shard_sb.info.total_capacity_bytes = shard_meta.total_capacity_bytes();
-    shard_sb.info.deleted_capacity_bytes = 0;
-    shard_sb.chunk_id = chunk_id;
+    sisl::io_blob_safe aligned_buf(sisl::round_up(sizeof(shard_info_superblk), io_align), io_align);
+    shard_info_superblk* shard_sb = r_cast< shard_info_superblk* >(aligned_buf.bytes());
+    shard_sb->info.id = shard_meta.shard_id();
+    shard_sb->info.placement_group = shard_meta.pg_id();
+    shard_sb->info.state = static_cast< ShardInfo::State >(shard_meta.state());
+    shard_sb->info.lsn = shard_meta.created_lsn();
+    shard_sb->info.created_time = shard_meta.created_time();
+    shard_sb->info.last_modified_time = shard_meta.last_modified_time();
+    shard_sb->info.available_capacity_bytes = shard_meta.total_capacity_bytes();
+    shard_sb->info.total_capacity_bytes = shard_meta.total_capacity_bytes();
+    shard_sb->info.deleted_capacity_bytes = 0;
+    shard_sb->chunk_id = chunk_id;
 
     homestore::MultiBlkId blk_id;
-    const auto hints = home_obj_.chunk_selector()->chunk_to_hints(shard_sb.chunk_id);
+    const auto hints = home_obj_.chunk_selector()->chunk_to_hints(shard_sb->chunk_id);
     auto status = homestore::data_service().alloc_blks(
-        sisl::round_up(sizeof(shard_sb), homestore::data_service().get_blk_size()), hints, blk_id);
+        sisl::round_up(aligned_buf.size(), homestore::data_service().get_blk_size()), hints, blk_id);
     if (status != homestore::BlkAllocStatus::SUCCESS) {
         LOGE("Failed to allocate blocks for shard {}", shard_meta.shard_id());
         return ALLOC_BLK_ERR;
     }
-    shard_sb.chunk_id = blk_id.to_single_blkid().chunk_num(); // FIXME: remove this after intergating vchunk
+    shard_sb->chunk_id = blk_id.to_single_blkid().chunk_num(); // FIXME: remove this after intergating vchunk
 
     const auto ret = homestore::data_service()
-                         .async_write(r_cast< char const* >(&shard_sb), sizeof(shard_sb), blk_id)
+                         .async_write(r_cast< char const* >(aligned_buf.cbytes()), aligned_buf.size(), blk_id)
                          .thenValue([&blk_id](auto&& err) -> BlobManager::AsyncResult< blob_id_t > {
                              // TODO: do we need to update repl_dev metrics?
                              if (err) {
@@ -85,7 +86,7 @@ int HSHomeObject::SnapshotReceiveHandler::process_shard_snapshot_data(ResyncShar
     }
 
     // Now let's create local shard
-    home_obj_.local_create_shard(shard_sb.info, shard_sb.chunk_id, blk_id.blk_count());
+    home_obj_.local_create_shard(shard_sb->info, shard_sb->chunk_id, blk_id.blk_count());
     ctx_->shard_cursor = shard_meta.shard_id();
     ctx_->cur_batch_num = 0;
     return 0;
@@ -150,9 +151,12 @@ int HSHomeObject::SnapshotReceiveHandler::process_blobs_snapshot_data(ResyncBlob
 
         // Alloc & persist blob data
         auto data_size = blob->data()->size();
+        sisl::io_blob_safe aligned_buf(sisl::round_up(data_size, io_align), io_align);
+        std::memcpy(aligned_buf.bytes(), blob_data, data_size);
+
         homestore::MultiBlkId blk_id;
         auto status = homestore::data_service().alloc_blks(
-            sisl::round_up(data_size, homestore::data_service().get_blk_size()), hints, blk_id);
+            sisl::round_up(aligned_buf.size(), homestore::data_service().get_blk_size()), hints, blk_id);
         if (status != homestore::BlkAllocStatus::SUCCESS) {
             LOGE("Failed to allocate blocks for shard {} blob {}", ctx_->shard_cursor, blob->blob_id());
             return ALLOC_BLK_ERR;
@@ -166,7 +170,7 @@ int HSHomeObject::SnapshotReceiveHandler::process_blobs_snapshot_data(ResyncBlob
         };
 
         const auto ret = homestore::data_service()
-                             .async_write(r_cast< char const* >(blob_data), data_size, blk_id)
+                             .async_write(r_cast< char const* >(aligned_buf.cbytes()), aligned_buf.size(), blk_id)
                              .thenValue([&blk_id](auto&& err) -> BlobManager::AsyncResult< blob_id_t > {
                                  // TODO: do we need to update repl_dev metrics?
                                  if (err) {

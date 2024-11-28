@@ -198,7 +198,7 @@ int ReplicationStateMachine::read_snapshot_data(std::shared_ptr< homestore::snap
 
     if (snp_data->user_ctx == nullptr) {
         // Create the pg blob iterator for the first time.
-        pg_iter = new HSHomeObject::PGBlobIterator(*home_object_, repl_dev()->group_id());
+        pg_iter = new HSHomeObject::PGBlobIterator(*home_object_, repl_dev()->group_id(), context->get_lsn());
         snp_data->user_ctx = (void*)pg_iter;
     } else { pg_iter = r_cast< HSHomeObject::PGBlobIterator* >(snp_data->user_ctx); }
 
