@@ -201,11 +201,13 @@ ReplicationStateMachine::create_snapshot(std::shared_ptr< homestore::snapshot_co
     auto s = ctx->nuraft_snapshot();
 
     std::lock_guard lk(m_snapshot_lock);
-    auto current = dynamic_pointer_cast< homestore::nuraft_snapshot_context >(m_snapshot_context)->nuraft_snapshot();
-    if (s->get_last_log_idx() < current->get_last_log_idx()) {
-        LOGI("Skipping create snapshot new idx/term: {}/{}  current idx/term: {}/{}", s->get_last_log_idx(),
-             s->get_last_log_term(), current->get_last_log_idx(), current->get_last_log_term());
-        return folly::makeSemiFuture< homestore::ReplResult< folly::Unit > >(folly::Unit{});
+    if (m_snapshot_context != nullptr) {
+        auto current = dynamic_pointer_cast< homestore::nuraft_snapshot_context >(m_snapshot_context)->nuraft_snapshot();
+        if (s->get_last_log_idx() < current->get_last_log_idx()) {
+            LOGI("Skipping create snapshot new idx/term: {}/{}  current idx/term: {}/{}", s->get_last_log_idx(),
+                 s->get_last_log_term(), current->get_last_log_idx(), current->get_last_log_term());
+            return folly::makeSemiFuture< homestore::ReplResult< folly::Unit > >(folly::Unit{});
+        }
     }
 
     LOGI("create snapshot last_log_idx: {} last_log_term: {}", s->get_last_log_idx(), s->get_last_log_term());
