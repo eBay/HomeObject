@@ -316,8 +316,8 @@ public:
         uint64_t max_batch_size_;
     };
 
-    // SnapshotReceiverContext is the context used in follower side snapshot receiving. [drafting] The functions is not the final version.
-    struct SnapshotReceiveHandler {
+    class SnapshotReceiveHandler {
+    public:
         enum ErrorCode {
             ALLOC_BLK_ERR = 1,
             WRITE_DATA_ERR,
@@ -329,24 +329,37 @@ public:
         constexpr static shard_id_t invalid_shard_id = 0;
         constexpr static shard_id_t shard_list_end_marker = ULLONG_MAX;
 
-        SnapshotReceiveHandler(HSHomeObject& home_obj, pg_id_t pg_id_, homestore::group_id_t group_id, int64_t lsn,
-                               shared< homestore::ReplDev > repl_dev);
+        SnapshotReceiveHandler(HSHomeObject& home_obj, shared< homestore::ReplDev > repl_dev);
+
         void process_pg_snapshot_data(ResyncPGMetaData const& pg_meta);
         int process_shard_snapshot_data(ResyncShardMetaData const& shard_meta);
-        int process_blobs_snapshot_data(ResyncBlobDataBatch const& data_blobs, snp_batch_id_t batch_num);
+        int process_blobs_snapshot_data(ResyncBlobDataBatch const& data_blobs, snp_batch_id_t batch_num,
+                                        bool is_last_batch);
+
+        int64_t get_context_lsn() const;
+        void reset_context(int64_t lsn, pg_id_t pg_id);
+        shard_id_t get_shard_cursor() const;
         shard_id_t get_next_shard() const;
 
-        shard_id_t shard_cursor_{invalid_shard_id};
-        snp_batch_id_t cur_batch_num_{0};
-        std::vector< shard_id_t > shard_list_;
+    private:
+        // SnapshotContext is the context data of current snapshot transmission
+        struct SnapshotContext {
+            shard_id_t shard_cursor{invalid_shard_id};
+            snp_batch_id_t cur_batch_num{0};
+            std::vector< shard_id_t > shard_list;
+            const int64_t snp_lsn;
+            const pg_id_t pg_id;
+            shared< BlobIndexTable > index_table;
 
-        const int64_t snp_lsn_{0};
+            SnapshotContext(int64_t lsn, pg_id_t pg_id) : snp_lsn{lsn}, pg_id{pg_id} {}
+        };
+
         HSHomeObject& home_obj_;
-        const homestore::group_id_t group_id_;
-        const pg_id_t pg_id_;
         const shared< homestore::ReplDev > repl_dev_;
 
-        //snapshot info, can be used as a checkpoint for recovery
+        std::unique_ptr< SnapshotContext > ctx_;
+
+        // snapshot info, can be used as a checkpoint for recovery
         snapshot_info_superblk snp_info_;
         // other stats for snapshot transmission progress
     };

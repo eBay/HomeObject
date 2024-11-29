@@ -3,6 +3,8 @@
 #include "lib/homestore_backend/index_kv.hpp"
 #include "generated/resync_blob_data_generated.h"
 
+#include <homestore/replication_service.hpp>
+
 TEST_F(HomeObjectFixture, BasicEquivalence) {
     auto shard_mgr = _obj_inst->shard_manager();
     auto pg_mgr = _obj_inst->pg_manager();
@@ -285,4 +287,166 @@ TEST_F(HomeObjectFixture, PGBlobIterator) {
     ASSERT_TRUE(pg_iter->update_cursor(objId(LAST_OBJ_ID)));
 }
 
-TEST_F(HomeObjectFixture, SnapshotReceiveHandler) {}
+TEST_F(HomeObjectFixture, SnapshotReceiveHandler) {
+    // TODO: add filps to test corrupted data
+    // MUST TEST WITH replica=1
+    constexpr uint64_t snp_lsn = 1;
+    constexpr uint64_t num_shards_per_pg = 3;
+    constexpr uint64_t num_open_shards_per_pg = 2; // Should be less than num_shards_per_pg
+    constexpr uint64_t num_batches_per_shard = 3;
+    constexpr uint64_t num_blobs_per_batch = 5;
+    constexpr int corrupted_blob_percentage = 10;
+
+    // We have to create a PG first to init repl_dev
+    constexpr pg_id_t pg_id = 1;
+    create_pg(pg_id); // to create repl dev
+    PGStats stats;
+    ASSERT_TRUE(_obj_inst->pg_manager()->get_stats(pg_id, stats));
+    auto r_dev = homestore::HomeStore::instance()->repl_service().get_repl_dev(stats.replica_set_uuid);
+    ASSERT_TRUE(r_dev.hasValue());
+
+    auto handler = std::make_unique< homeobject::HSHomeObject::SnapshotReceiveHandler >(*_obj_inst, r_dev.value());
+    handler->reset_context(snp_lsn, pg_id);
+
+    // Step 1: Test write pg meta - cannot test full logic since the PG already exists
+    // Generate ResyncPGMetaData message
+    LOGINFO("TESTING: applying meta for pg {}", pg_id);
+    constexpr auto blob_seq_num = num_shards_per_pg * num_batches_per_shard * num_blobs_per_batch;
+    flatbuffers::FlatBufferBuilder builder;
+    std::vector< flatbuffers::Offset< Member > > members;
+    std::vector uuid(stats.replica_set_uuid.begin(), stats.replica_set_uuid.end());
+    for (auto& member : stats.members) {
+        auto id = std::vector< std::uint8_t >(std::get< 0 >(member).begin(), std::get< 0 >(member).end());
+        members.push_back(CreateMemberDirect(builder, &id, std::get< 1 >(member).c_str(), 100));
+    }
+    std::vector< uint64_t > shard_ids;
+    for (uint64_t i = 1; i <= num_shards_per_pg; i++) {
+        shard_ids.push_back(i);
+    }
+    auto pg_entry =
+        CreateResyncPGMetaDataDirect(builder, pg_id, &uuid, blob_seq_num, num_shards_per_pg, &members, &shard_ids);
+    builder.Finish(pg_entry);
+    auto pg_meta = GetResyncPGMetaData(builder.GetBufferPointer());
+    handler->process_pg_snapshot_data(*pg_meta);
+    builder.Reset();
+
+    // Step 2: Test shard and blob batches
+    std::random_device rd; // Random generators for blob corruption
+    std::mt19937 gen(rd());
+    std::uniform_int_distribution<> corrupt_dis(1, 100);
+    std::uniform_int_distribution<> random_bytes_dis(1, 16 * 1024);
+
+    blob_id_t cur_blob_id{0};
+    for (uint64_t i = 1; i <= num_shards_per_pg; i++) {
+        LOGINFO("TESTING: applying meta for shard {}", i);
+
+        // Step 2-1: Test write shard meta
+        // Generate ResyncShardMetaData message
+        ShardInfo shard;
+        shard.id = i;
+        shard.state =
+            i <= num_shards_per_pg - num_open_shards_per_pg ? ShardInfo::State::SEALED : ShardInfo::State::OPEN;
+        shard.created_time = get_time_since_epoch_ms();
+        shard.last_modified_time = shard.created_time;
+        shard.total_capacity_bytes = 1024 * Mi;
+        shard.lsn = snp_lsn;
+
+        auto shard_entry =
+            CreateResyncShardMetaData(builder, shard.id, pg_id, static_cast< uint8_t >(shard.state), shard.lsn,
+                                      shard.created_time, shard.last_modified_time, shard.total_capacity_bytes, 0);
+        builder.Finish(shard_entry);
+        auto shard_meta = GetResyncShardMetaData(builder.GetBufferPointer());
+        auto ret = handler->process_shard_snapshot_data(*shard_meta);
+        builder.Reset();
+        ASSERT_EQ(ret, 0);
+
+        auto res = _obj_inst->shard_manager()->get_shard(shard.id).get();
+        ASSERT_TRUE(!!res);
+        auto shard_res = std::move(res.value());
+        ASSERT_EQ(shard_res.id, shard.id);
+        ASSERT_EQ(shard_res.state, shard.state);
+        ASSERT_EQ(shard_res.created_time, shard.created_time);
+        ASSERT_EQ(shard_res.last_modified_time, shard.last_modified_time);
+        ASSERT_EQ(shard_res.total_capacity_bytes, shard.total_capacity_bytes);
+        ASSERT_EQ(shard_res.lsn, shard.lsn);
+        // TODO: vchunk id
+
+        // Step 2-2: Test write blob batch data
+        // Generate ResyncBlobDataBatch message
+        std::map< blob_id_t, std::tuple< Blob, bool > > blob_map;
+        for (uint64_t j = 1; j <= num_batches_per_shard; j++) {
+            LOGINFO("TESTING: applying blobs for shard {} batch {}", shard.id, j);
+            std::vector< ::flatbuffers::Offset< ResyncBlobData > > blob_entries;
+            for (uint64_t k = 0; k < num_blobs_per_batch; k++) {
+                auto blob_state = corrupt_dis(gen) <= corrupted_blob_percentage ? ResyncBlobState::CORRUPTED
+                                                                                : ResyncBlobState::NORMAL;
+
+                // Construct raw blob buffer
+                auto blob = build_blob(cur_blob_id);
+                const auto aligned_hdr_size =
+                    sisl::round_up(sizeof(HSHomeObject::BlobHeader) + blob.user_key.size(), io_align);
+                sisl::io_blob_safe blob_raw(aligned_hdr_size + blob.body.size(), io_align);
+                HSHomeObject::BlobHeader hdr;
+                hdr.type = HSHomeObject::DataHeader::data_type_t::BLOB_INFO;
+                hdr.shard_id = shard.id;
+                hdr.blob_id = cur_blob_id;
+                hdr.hash_algorithm = HSHomeObject::BlobHeader::HashAlgorithm::CRC32;
+                hdr.blob_size = blob.body.size();
+                hdr.user_key_size = blob.user_key.size();
+                hdr.object_offset = blob.object_off;
+                hdr.data_offset = aligned_hdr_size;
+                _obj_inst->compute_blob_payload_hash(hdr.hash_algorithm, blob.body.cbytes(), blob.body.size(),
+                                                     reinterpret_cast< uint8_t* >(blob.user_key.data()),
+                                                     blob.user_key.size(), hdr.hash,
+                                                     HSHomeObject::BlobHeader::blob_max_hash_len);
+
+                std::memcpy(blob_raw.bytes(), &hdr, sizeof(HSHomeObject::BlobHeader));
+                if (!blob.user_key.empty()) {
+                    std::memcpy((blob_raw.bytes() + sizeof(HSHomeObject::BlobHeader)), blob.user_key.data(),
+                                blob.user_key.size());
+                }
+                std::memcpy(blob_raw.bytes() + aligned_hdr_size, blob.body.cbytes(), blob.body.size());
+
+                // Simulate blob data corruption - tamper with random bytes
+                if (blob_state == ResyncBlobState::CORRUPTED) {
+                    constexpr int corrupted_bytes = 5;
+                    for (auto i = 0; i < corrupted_bytes; i++) {
+                        auto offset = random_bytes_dis(gen) % blob_raw.size();
+                        auto byte = random_bytes_dis(gen) % 256;
+                        blob_raw.bytes()[offset] = byte;
+                        LOGINFO("Changing byte at offset {} to simulate data corruption", offset, byte);
+                    }
+                }
+
+                std::vector data(blob_raw.bytes(), blob_raw.bytes() + blob_raw.size());
+                blob_entries.push_back(
+                    CreateResyncBlobDataDirect(builder, cur_blob_id, static_cast< uint8_t >(blob_state), &data));
+                blob_map[cur_blob_id++] =
+                    std::make_tuple< Blob, bool >(std::move(blob), blob_state == ResyncBlobState::CORRUPTED);
+            }
+            builder.Finish(CreateResyncBlobDataBatchDirect(builder, &blob_entries, true));
+            auto blob_batch = GetResyncBlobDataBatch(builder.GetBufferPointer());
+            ret = handler->process_blobs_snapshot_data(*blob_batch, j, j == num_batches_per_shard);
+            builder.Reset();
+            ASSERT_EQ(ret, 0);
+        }
+        for (const auto& b : blob_map) {
+            auto blob_id = b.first;
+            auto& blob = std::get< 0 >(b.second);
+            auto is_corrupted = std::get< 1 >(b.second);
+
+            auto res = _obj_inst->blob_manager()->get(shard.id, blob_id, 0, blob.body.size()).get();
+            if (is_corrupted) {
+                ASSERT_FALSE(!!res);
+            } else {
+                ASSERT_TRUE(!!res);
+                auto blob_res = std::move(res.value());
+                ASSERT_EQ(blob_res.body.size(), blob.body.size());
+                ASSERT_EQ(std::memcmp(blob_res.body.bytes(), blob.body.cbytes(), blob_res.body.size()), 0);
+            }
+        }
+        if (shard.state == ShardInfo::State::SEALED) {
+            // TODO: Verify chunk is released. Currently we don't have chunk_id, so let's do this after rebasing
+        }
+    }
+}
