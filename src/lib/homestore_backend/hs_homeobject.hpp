@@ -81,15 +81,27 @@ public:
     struct pg_info_superblk {
         pg_id_t id;
         uint32_t num_members;
+        uint32_t num_chunks;
         peer_id_t replica_set_uuid;
+        uint64_t pg_size;
         homestore::uuid_t index_table_uuid;
         blob_id_t blob_sequence_num;
         uint64_t active_blob_count;        // Total number of active blobs
         uint64_t tombstone_blob_count;     // Total number of tombstones
         uint64_t total_occupied_blk_count; // Total number of occupied blocks
-        pg_members members[1];             // ISO C++ forbids zero-size array
+        char data[1];                      // ISO C++ forbids zero-size array
+        // Data layout inside 'data':
+        // First, an array of 'pg_members' structures:
+        // | pg_members[0] | pg_members[1] | ... | pg_members[num_members-1] |
+        // Immediately followed by an array of 'chunk_num_t' values (representing physical chunkID):
+        // | chunk_num_t[0] | chunk_num_t[1] | ... | chunk_num_t[num_chunks-1] |
+        // Here, 'chunk_num_t[i]' represents the p_chunk_id for the v_chunk_id 'i', where v_chunk_id starts from 0 and
+        // increases sequentially.
 
-        uint32_t size() const { return sizeof(pg_info_superblk) + ((num_members - 1) * sizeof(pg_members)); }
+        uint32_t size() const {
+            return sizeof(pg_info_superblk) - sizeof(char) + num_members * sizeof(pg_members) +
+                num_chunks * sizeof(homestore::chunk_num_t);
+        }
         static std::string name() { return _pg_meta_name; }
 
         pg_info_superblk() = default;
@@ -98,14 +110,28 @@ public:
         pg_info_superblk& operator=(pg_info_superblk const& rhs) {
             id = rhs.id;
             num_members = rhs.num_members;
+            num_chunks = rhs.num_chunks;
+            pg_size = rhs.pg_size;
             replica_set_uuid = rhs.replica_set_uuid;
             index_table_uuid = rhs.index_table_uuid;
             blob_sequence_num = rhs.blob_sequence_num;
-            memcpy(members, rhs.members, sizeof(pg_members) * num_members);
+
+            memcpy(get_pg_members_mutable(), rhs.get_pg_members(), sizeof(pg_members) * num_members);
+            memcpy(get_chunk_ids_mutable(), rhs.get_chunk_ids(), sizeof(homestore::chunk_num_t) * num_chunks);
             return *this;
         }
 
         void copy(pg_info_superblk const& rhs) { *this = rhs; }
+
+        pg_members* get_pg_members_mutable() { return reinterpret_cast< pg_members* >(data); }
+        const pg_members* get_pg_members() const { return reinterpret_cast< const pg_members* >(data); }
+
+        homestore::chunk_num_t* get_chunk_ids_mutable() {
+            return reinterpret_cast< homestore::chunk_num_t* >(data + num_members * sizeof(pg_members));
+        }
+        const homestore::chunk_num_t* get_chunk_ids() const {
+            return reinterpret_cast< const homestore::chunk_num_t* >(data + num_members * sizeof(pg_members));
+        }
     };
 
     struct DataHeader {
@@ -125,7 +151,8 @@ public:
 
     struct shard_info_superblk : public DataHeader {
         ShardInfo info;
-        homestore::chunk_num_t chunk_id;
+        homestore::chunk_num_t p_chunk_id;
+        homestore::chunk_num_t v_chunk_id;
     };
     //TODO this blk is used to store snapshot metadata/status for recovery
     struct snapshot_info_superblk {};
@@ -196,11 +223,11 @@ public:
     public:
         homestore::superblk< pg_info_superblk > pg_sb_;
         shared< homestore::ReplDev > repl_dev_;
-        std::optional< homestore::chunk_num_t > any_allocated_chunk_id_{};
         std::shared_ptr< BlobIndexTable > index_table_;
         PGMetrics metrics_;
 
-        HS_PG(PGInfo info, shared< homestore::ReplDev > rdev, shared< BlobIndexTable > index_table);
+        HS_PG(PGInfo info, shared< homestore::ReplDev > rdev, shared< BlobIndexTable > index_table,
+              std::shared_ptr< const std::vector< homestore::chunk_num_t > > pg_chunk_ids);
         HS_PG(homestore::superblk< pg_info_superblk >&& sb, shared< homestore::ReplDev > rdev);
         ~HS_PG() override = default;
 
@@ -218,24 +245,16 @@ public:
          * Returns the number of open shards on this PG.
          */
         uint32_t open_shards() const;
-
-        /**
-         * Retrieves the device hint associated with this PG(if any shard is created).
-         *
-         * @param selector The HeapChunkSelector object.
-         * @return An optional uint32_t value representing the device hint, or std::nullopt if no hint is available.
-         */
-        std::optional< uint32_t > dev_hint(cshared< HeapChunkSelector >) const;
     };
 
     struct HS_Shard : public Shard {
         homestore::superblk< shard_info_superblk > sb_;
-        HS_Shard(ShardInfo info, homestore::chunk_num_t chunk_id);
+        HS_Shard(ShardInfo info, homestore::chunk_num_t p_chunk_id);
         HS_Shard(homestore::superblk< shard_info_superblk >&& sb);
         ~HS_Shard() override = default;
 
         void update_info(const ShardInfo& info);
-        auto chunk_id() const { return sb_->chunk_id; }
+        auto p_chunk_id() const { return sb_->p_chunk_id; }
     };
 
 #pragma pack(1)
@@ -299,7 +318,12 @@ public:
         void pack_resync_message(sisl::io_blob_safe& dest_blob, SyncMessageType type);
         bool end_of_scan() const;
 
-        std::vector<ShardInfo> shard_list_{0};
+        struct ShardEntry {
+            ShardInfo info;
+            homestore::chunk_num_t v_chunk_num;
+        };
+
+        std::vector< ShardEntry > shard_list_{0};
 
         objId cur_obj_id_{1, 0};
         uint64_t cur_shard_idx_{0};
@@ -324,6 +348,7 @@ public:
             INVALID_BLOB_HEADER,
             BLOB_DATA_CORRUPTED,
             ADD_BLOB_INDEX_ERR,
+            CREATE_PG_ERR,
         };
 
         constexpr static shard_id_t invalid_shard_id = 0;
@@ -331,7 +356,7 @@ public:
 
         SnapshotReceiveHandler(HSHomeObject& home_obj, shared< homestore::ReplDev > repl_dev);
 
-        void process_pg_snapshot_data(ResyncPGMetaData const& pg_meta);
+        int process_pg_snapshot_data(ResyncPGMetaData const& pg_meta);
         int process_shard_snapshot_data(ResyncShardMetaData const& shard_meta);
         int process_blobs_snapshot_data(ResyncBlobDataBatch const& data_blobs, snp_batch_id_t batch_num,
                                         bool is_last_batch);
@@ -382,7 +407,8 @@ private:
 
     // create pg related
     static PGManager::NullAsyncResult do_create_pg(cshared< homestore::ReplDev > repl_dev, PGInfo&& pg_info);
-    HS_PG* local_create_pg(shared< homestore::ReplDev > repl_dev, PGInfo pg_info);
+    folly::Expected< HSHomeObject::HS_PG*, PGError > local_create_pg(shared< homestore::ReplDev > repl_dev,
+                                                                     PGInfo pg_info);
     static std::string serialize_pg_info(const PGInfo& info);
     static PGInfo deserialize_pg_info(const unsigned char* pg_info_str, size_t size);
     void add_pg_to_map(unique< HS_PG > hs_pg);
@@ -392,13 +418,14 @@ private:
 
     static ShardInfo deserialize_shard_info(const char* shard_info_str, size_t size);
     static std::string serialize_shard_info(const ShardInfo& info);
-    void local_create_shard(ShardInfo shard_info, homestore::chunk_num_t chunk_num, homestore::blk_count_t blk_count);
+    void local_create_shard(ShardInfo shard_info, homestore::chunk_num_t p_chunk_num, homestore::blk_count_t blk_count);
     void add_new_shard_to_map(ShardPtr&& shard);
     void update_shard_in_map(const ShardInfo& shard_info);
 
     // recover part
     void register_homestore_metablk_callback();
     void on_pg_meta_blk_found(sisl::byte_view const& buf, void* meta_cookie);
+    void on_pg_meta_blk_recover_completed(bool success);
     void on_shard_meta_blk_found(homestore::meta_blk* mblk, sisl::byte_view buf);
     void on_shard_meta_blk_recover_completed(bool success);
 
@@ -473,9 +500,17 @@ public:
      * @brief Retrieves the chunk number associated with the given shard ID.
      *
      * @param id The ID of the shard to retrieve the chunk number for.
-     * @return An optional chunk number if the shard ID is valid, otherwise an empty optional.
+     * @return An optional chunk number values shard p_chunk_id if the shard ID is valid, otherwise an empty optional.
      */
-    std::optional< homestore::chunk_num_t > get_shard_chunk(shard_id_t id) const;
+    std::optional< homestore::chunk_num_t > get_shard_p_chunk_id(shard_id_t id) const;
+
+    /**
+     * @brief Retrieves the chunk number associated with the given shard ID.
+     *
+     * @param id The ID of the shard to retrieve the chunk number for.
+     * @return An optional chunk number values shard v_chunk_id if the shard ID is valid, otherwise an empty optional.
+     */
+    std::optional< homestore::chunk_num_t > get_shard_v_chunk_id(shard_id_t id) const;
 
     /**
      * @brief Get the sequence number of the shard from the shard id.
@@ -492,12 +527,28 @@ public:
     void on_replica_restart();
 
     /**
-     * @brief Returns any chunk number for the given pg ID.
+     * @brief Extracts the physical chunk ID for create shard from the message.
      *
-     * @param pg The pg ID to get the chunk number for.
-     * @return A tuple of <if pg exist, if shard exist, chunk number if both exist>.
+     * @param header The message header that includes the shard_info_superblk, which contains the data necessary for
+     * extracting and mapping the chunk ID.
+     * @return An optional virtual chunk id if the extraction and mapping process is successful, otherwise an empty
+     * optional.
      */
-    std::tuple< bool, bool, homestore::chunk_num_t > get_any_chunk_id(pg_id_t pg);
+    std::optional< homestore::chunk_num_t > resolve_v_chunk_id_from_msg(sisl::blob const& header);
+
+    /**
+     * @brief Releases a chunk based on the information provided in a CREATE_SHARD message.
+     *
+     * This function is invoked during log rollback or when the proposer encounters an error.
+     * Its primary purpose is to ensure that the state of pg_chunks is reverted to the correct state.
+     *
+     * @param header The message header that includes the shard_info_superblk, which contains the data necessary for
+     * extracting and mapping the chunk ID.
+     * @return Returns true if the chunk was successfully released, false otherwise.
+     */
+
+    bool release_chunk_based_on_create_shard_message(sisl::blob const& header);
+    bool pg_exists(pg_id_t pg_id) const;
 
     cshared< HeapChunkSelector > chunk_selector() const { return chunk_selector_; }
 

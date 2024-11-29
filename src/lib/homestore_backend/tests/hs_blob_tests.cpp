@@ -327,7 +327,8 @@ TEST_F(HomeObjectFixture, SnapshotReceiveHandler) {
         CreateResyncPGMetaDataDirect(builder, pg_id, &uuid, blob_seq_num, num_shards_per_pg, &members, &shard_ids);
     builder.Finish(pg_entry);
     auto pg_meta = GetResyncPGMetaData(builder.GetBufferPointer());
-    handler->process_pg_snapshot_data(*pg_meta);
+    auto ret = handler->process_pg_snapshot_data(*pg_meta);
+    ASSERT_EQ(ret, 0);
     builder.Reset();
 
     // Step 2: Test shard and blob batches
@@ -351,9 +352,11 @@ TEST_F(HomeObjectFixture, SnapshotReceiveHandler) {
         shard.total_capacity_bytes = 1024 * Mi;
         shard.lsn = snp_lsn;
 
-        auto shard_entry =
-            CreateResyncShardMetaData(builder, shard.id, pg_id, static_cast< uint8_t >(shard.state), shard.lsn,
-                                      shard.created_time, shard.last_modified_time, shard.total_capacity_bytes, 0);
+        auto v_chunk_id = _obj_inst->chunk_selector()->get_most_available_blk_chunk(pg_id);
+
+        auto shard_entry = CreateResyncShardMetaData(builder, shard.id, pg_id, static_cast< uint8_t >(shard.state),
+                                                     shard.lsn, shard.created_time, shard.last_modified_time,
+                                                     shard.total_capacity_bytes, v_chunk_id.value());
         builder.Finish(shard_entry);
         auto shard_meta = GetResyncShardMetaData(builder.GetBufferPointer());
         auto ret = handler->process_shard_snapshot_data(*shard_meta);
@@ -369,7 +372,6 @@ TEST_F(HomeObjectFixture, SnapshotReceiveHandler) {
         ASSERT_EQ(shard_res.last_modified_time, shard.last_modified_time);
         ASSERT_EQ(shard_res.total_capacity_bytes, shard.total_capacity_bytes);
         ASSERT_EQ(shard_res.lsn, shard.lsn);
-        // TODO: vchunk id
 
         // Step 2-2: Test write blob batch data
         // Generate ResyncBlobDataBatch message

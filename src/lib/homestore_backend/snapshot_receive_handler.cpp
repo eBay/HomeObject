@@ -9,7 +9,7 @@ HSHomeObject::SnapshotReceiveHandler::SnapshotReceiveHandler(HSHomeObject& home_
                                                              shared< homestore::ReplDev > repl_dev) :
         home_obj_(home_obj), repl_dev_(std::move(repl_dev)) {}
 
-void HSHomeObject::SnapshotReceiveHandler::process_pg_snapshot_data(ResyncPGMetaData const& pg_meta) {
+int HSHomeObject::SnapshotReceiveHandler::process_pg_snapshot_data(ResyncPGMetaData const& pg_meta) {
     LOGI("process_pg_snapshot_data pg_id:{}", pg_meta.pg_id());
 
     // Init shard list
@@ -31,20 +31,24 @@ void HSHomeObject::SnapshotReceiveHandler::process_pg_snapshot_data(ResyncPGMeta
         pg_member.priority = member->priority();
         pg_info.members.insert(pg_member);
     }
-    const auto hs_pg = home_obj_.local_create_pg(repl_dev_, pg_info);
+    auto ret = home_obj_.local_create_pg(repl_dev_, pg_info);
+    if (ret.hasError()) {
+        LOGE("Failed to create PG {}, err {}", pg_meta.pg_id(), ret.error());
+        return CREATE_PG_ERR;
+    }
+    auto hs_pg = ret.value();
 
     // Init a base set of pg blob & shard sequence num. Will catch up later on shard/blob creation if not up-to-date
     hs_pg->shard_sequence_num_ = pg_meta.shard_seq_num();
     hs_pg->durable_entities_update(
         [&pg_meta](auto& de) { de.blob_sequence_num.store(pg_meta.blob_seq_num(), std::memory_order_relaxed); });
+    return 0;
 }
 
 int HSHomeObject::SnapshotReceiveHandler::process_shard_snapshot_data(ResyncShardMetaData const& shard_meta) {
     LOGI("process_shard_snapshot_data shard_id:{}", shard_meta.shard_id());
 
     // Persist shard meta on chunk data
-    homestore::chunk_num_t chunk_id = shard_meta.vchunk_id(); // FIXME: vchunk id to chunk id
-
     sisl::io_blob_safe aligned_buf(sisl::round_up(sizeof(shard_info_superblk), io_align), io_align);
     shard_info_superblk* shard_sb = r_cast< shard_info_superblk* >(aligned_buf.bytes());
     shard_sb->info.id = shard_meta.shard_id();
@@ -56,17 +60,19 @@ int HSHomeObject::SnapshotReceiveHandler::process_shard_snapshot_data(ResyncShar
     shard_sb->info.available_capacity_bytes = shard_meta.total_capacity_bytes();
     shard_sb->info.total_capacity_bytes = shard_meta.total_capacity_bytes();
     shard_sb->info.deleted_capacity_bytes = 0;
-    shard_sb->chunk_id = chunk_id;
+    shard_sb->v_chunk_id = shard_meta.vchunk_id();
+
+    homestore::blk_alloc_hints hints;
+    hints.application_hint = static_cast< uint64_t >(ctx_->pg_id) << 16 | shard_sb->v_chunk_id;
 
     homestore::MultiBlkId blk_id;
-    const auto hints = home_obj_.chunk_selector()->chunk_to_hints(shard_sb->chunk_id);
     auto status = homestore::data_service().alloc_blks(
         sisl::round_up(aligned_buf.size(), homestore::data_service().get_blk_size()), hints, blk_id);
     if (status != homestore::BlkAllocStatus::SUCCESS) {
         LOGE("Failed to allocate blocks for shard {}", shard_meta.shard_id());
         return ALLOC_BLK_ERR;
     }
-    shard_sb->chunk_id = blk_id.to_single_blkid().chunk_num(); // FIXME: remove this after intergating vchunk
+    shard_sb->p_chunk_id = blk_id.to_single_blkid().chunk_num();
 
     const auto ret = homestore::data_service()
                          .async_write(r_cast< char const* >(aligned_buf.cbytes()), aligned_buf.size(), blk_id)
@@ -86,7 +92,7 @@ int HSHomeObject::SnapshotReceiveHandler::process_shard_snapshot_data(ResyncShar
     }
 
     // Now let's create local shard
-    home_obj_.local_create_shard(shard_sb->info, shard_sb->chunk_id, blk_id.blk_count());
+    home_obj_.local_create_shard(shard_sb->info, shard_sb->p_chunk_id, blk_id.blk_count());
     ctx_->shard_cursor = shard_meta.shard_id();
     ctx_->cur_batch_num = 0;
     return 0;
@@ -97,11 +103,12 @@ int HSHomeObject::SnapshotReceiveHandler::process_blobs_snapshot_data(ResyncBlob
                                                                       bool is_last_batch) {
     ctx_->cur_batch_num = batch_num;
 
-    // Find chunk id for current shard
-    auto chunk_id = home_obj_.get_shard_chunk(ctx_->shard_cursor);
-    RELEASE_ASSERT(chunk_id.has_value(), "Failed to load chunk of current shard_cursor:{}", ctx_->shard_cursor);
+    // Find physical chunk id for current shard
+    auto v_chunk_id = home_obj_.get_shard_v_chunk_id(ctx_->shard_cursor);
+    auto p_chunk_id = home_obj_.get_shard_p_chunk_id(ctx_->shard_cursor);
+    RELEASE_ASSERT(p_chunk_id.has_value(), "Failed to load chunk of current shard_cursor:{}", ctx_->shard_cursor);
     homestore::blk_alloc_hints hints;
-    hints.chunk_id_hint = *chunk_id;
+    hints.chunk_id_hint = *p_chunk_id;
 
     for (unsigned int i = 0; i < data_blobs.blob_list()->size(); i++) {
         const auto blob = data_blobs.blob_list()->Get(i);
@@ -205,7 +212,9 @@ int HSHomeObject::SnapshotReceiveHandler::process_blobs_snapshot_data(ResyncBlob
             auto iter = home_obj_._shard_map.find(ctx_->shard_cursor);
             state = (*iter->second)->info.state;
         }
-        if (state == ShardInfo::State::SEALED) { home_obj_.chunk_selector()->release_chunk(chunk_id.value()); }
+        if (state == ShardInfo::State::SEALED) {
+            home_obj_.chunk_selector()->release_chunk(ctx_->pg_id, v_chunk_id.value());
+        }
     }
 
     return 0;

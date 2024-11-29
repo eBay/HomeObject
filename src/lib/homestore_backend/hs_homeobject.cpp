@@ -226,7 +226,7 @@ void HSHomeObject::on_replica_restart() {
             [this](homestore::meta_blk* mblk, sisl::byte_view buf, size_t size) {
                 on_pg_meta_blk_found(std::move(buf), voidptr_cast(mblk));
             },
-            nullptr, true);
+            [this](bool success) { on_pg_meta_blk_recover_completed(success); }, true);
         HomeStore::instance()->meta_service().read_sub_sb(_pg_meta_name);
 
         // recover shard
@@ -321,6 +321,11 @@ sisl::io_blob_safe& HSHomeObject::get_pad_buf(uint32_t pad_len) {
         return zpad_bufs_[0];
     }
     return zpad_bufs_[idx];
+}
+
+bool HSHomeObject::pg_exists(pg_id_t pg_id) const {
+    std::shared_lock lock_guard(_pg_lock);
+    return _pg_map.contains(pg_id);
 }
 
 } // namespace homeobject

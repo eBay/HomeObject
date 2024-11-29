@@ -114,7 +114,10 @@ void HSHomeObject::print_btree_index(pg_id_t pg_id) {
 shared< BlobIndexTable > HSHomeObject::get_index_table(pg_id_t pg_id) {
     std::shared_lock lock_guard(_pg_lock);
     auto iter = _pg_map.find(pg_id);
-    RELEASE_ASSERT(iter != _pg_map.end(), "PG not found");
+    if (iter == _pg_map.end()) {
+        LOGW("PG not found for pg_id={} when getting inde table", pg_id);
+        return nullptr;
+    }
     auto hs_pg = static_cast< HSHomeObject::HS_PG* >(iter->second.get());
     RELEASE_ASSERT(hs_pg->index_table_ != nullptr, "Index table not found for PG");
     return hs_pg->index_table_;
