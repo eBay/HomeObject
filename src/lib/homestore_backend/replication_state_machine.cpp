@@ -198,7 +198,7 @@ int ReplicationStateMachine::read_snapshot_data(std::shared_ptr< homestore::snap
 
     if (snp_data->user_ctx == nullptr) {
         // Create the pg blob iterator for the first time.
-        pg_iter = new HSHomeObject::PGBlobIterator(*home_object_, repl_dev()->group_id());
+        pg_iter = new HSHomeObject::PGBlobIterator(*home_object_, repl_dev()->group_id(), context->get_lsn());
         snp_data->user_ctx = (void*)pg_iter;
     } else { pg_iter = r_cast< HSHomeObject::PGBlobIterator* >(snp_data->user_ctx); }
 
@@ -268,10 +268,13 @@ void ReplicationStateMachine::write_snapshot_data(std::shared_ptr< homestore::sn
                                                   std::shared_ptr< homestore::snapshot_data > snp_data) {
     RELEASE_ASSERT(context != nullptr, "Context null");
     RELEASE_ASSERT(snp_data != nullptr, "Snapshot data null");
+    auto r_dev = repl_dev();
+    if (!m_snp_rcv_handler) {
+        m_snp_rcv_handler = std::make_unique< HSHomeObject::SnapshotReceiveHandler >(*home_object_, r_dev);
+    }
+
     auto s = dynamic_pointer_cast< homestore::nuraft_snapshot_context >(context)->nuraft_snapshot();
     auto obj_id = objId(static_cast< snp_obj_id_t >(snp_data->offset));
-    auto r_dev = repl_dev();
-
     auto log_suffix = fmt::format("group={} term={} lsn={} shard={} batch_num={} size={}",
                                   uuids::to_string(r_dev->group_id()), s->get_last_log_term(), s->get_last_log_idx(),
                                   obj_id.shard_seq_num, obj_id.batch_id, snp_data->blob.size());
@@ -280,10 +283,6 @@ void ReplicationStateMachine::write_snapshot_data(std::shared_ptr< homestore::sn
         LOGD("Write snapshot reached is_last_obj true {}", log_suffix);
         return;
     }
-
-    // Check if the snapshot context is same as the current snapshot context.
-    // If not, drop the previous context and re-init a new one
-    if (m_snp_rcv_handler && m_snp_rcv_handler->snp_lsn_ != context->get_lsn()) { m_snp_rcv_handler.reset(nullptr); }
 
     // Check message integrity
     // TODO: add a flip here to simulate corrupted message
@@ -304,11 +303,15 @@ void ReplicationStateMachine::write_snapshot_data(std::shared_ptr< homestore::sn
         // PG metadata & shard list message
         RELEASE_ASSERT(obj_id.batch_id == 0, "Invalid obj_id");
 
-        // TODO: Reset all data of current PG - let's resync on a pristine base
-
         auto pg_data = GetSizePrefixedResyncPGMetaData(data_buf);
-        m_snp_rcv_handler = std::make_unique< HSHomeObject::SnapshotReceiveHandler >(
-            *home_object_, pg_data->pg_id(), r_dev->group_id(), context->get_lsn(), r_dev);
+
+        // Check if the snapshot context is same as the current snapshot context.
+        // If not, drop the previous context and re-init a new one
+        if (m_snp_rcv_handler->get_context_lsn() != context->get_lsn()) {
+            m_snp_rcv_handler->reset_context(pg_data->pg_id(), context->get_lsn());
+            // TODO: Reset all data of current PG - let's resync on a pristine base
+        }
+
         m_snp_rcv_handler->process_pg_snapshot_data(*pg_data);
         snp_data->offset =
             objId(HSHomeObject::get_sequence_num_from_shard_id(m_snp_rcv_handler->get_next_shard()), 0).value;
@@ -316,8 +319,8 @@ void ReplicationStateMachine::write_snapshot_data(std::shared_ptr< homestore::sn
         return;
     }
 
-    RELEASE_ASSERT(m_snp_rcv_handler,
-                   "Snapshot receiver not initialized"); // Here we should have a valid snapshot receiver context
+    RELEASE_ASSERT(m_snp_rcv_handler->get_context_lsn() == context->get_lsn(), "Snapshot context lsn not matching");
+
     if (obj_id.batch_id == 0) {
         // Shard metadata message
         RELEASE_ASSERT(obj_id.shard_seq_num != 0, "Invalid obj_id");
@@ -339,10 +342,11 @@ void ReplicationStateMachine::write_snapshot_data(std::shared_ptr< homestore::sn
     // Blob data message
     // TODO: enhance error handling for wrong shard id - what may cause this?
     RELEASE_ASSERT(obj_id.shard_seq_num ==
-                       HSHomeObject::get_sequence_num_from_shard_id(m_snp_rcv_handler->shard_cursor_),
+                       HSHomeObject::get_sequence_num_from_shard_id(m_snp_rcv_handler->get_shard_cursor()),
                    "Shard id not matching with the current shard cursor");
     auto blob_batch = GetSizePrefixedResyncBlobDataBatch(data_buf);
-    auto ret = m_snp_rcv_handler->process_blobs_snapshot_data(*blob_batch, obj_id.batch_id);
+    auto ret =
+        m_snp_rcv_handler->process_blobs_snapshot_data(*blob_batch, obj_id.batch_id, blob_batch->is_last_batch());
     if (ret) {
         // Do not proceed, will request for resending the current blob batch
         LOGE("Failed to process blob snapshot data lsn:{} obj_id {} shard {} batch {}, err {}", s->get_last_log_idx(),
