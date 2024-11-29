@@ -9,7 +9,7 @@ required_conan_version = ">=1.60.0"
 
 class HomeObjectConan(ConanFile):
     name = "homeobject"
-    version = "2.1.9"
+    version = "2.1.11"
 
     homepage = "https://github.com/eBay/HomeObject"
     description = "Blob Store built on HomeReplication"
@@ -20,17 +20,17 @@ class HomeObjectConan(ConanFile):
     settings = "arch", "os", "compiler", "build_type"
 
     options = {
-                "shared": ['True', 'False'],
-                "fPIC": ['True', 'False'],
-                "coverage": ['True', 'False'],
-                "sanitize": ['True', 'False'],
-              }
+        "shared": ['True', 'False'],
+        "fPIC": ['True', 'False'],
+        "coverage": ['True', 'False'],
+        "sanitize": ['True', 'False'],
+    }
     default_options = {
-                'shared': False,
-                'fPIC': True,
-                'coverage': False,
-                'sanitize': False,
-            }
+        'shared': False,
+        'fPIC': True,
+        'coverage': False,
+        'sanitize': False,
+    }
 
     exports_sources = ("CMakeLists.txt", "cmake/*", "src/*", "LICENSE")
 

@@ -6,18 +6,22 @@ TEST_F(HomeObjectFixture, CreateMultiShards) {
     auto _shard_1 = create_shard(pg_id, 64 * Mi);
     auto _shard_2 = create_shard(pg_id, 64 * Mi);
 
-    auto chunk_num_1 = _obj_inst->get_shard_chunk(_shard_1.id);
+    auto chunk_num_1 = _obj_inst->get_shard_p_chunk_id(_shard_1.id);
     ASSERT_TRUE(chunk_num_1.has_value());
 
-    auto chunk_num_2 = _obj_inst->get_shard_chunk(_shard_2.id);
+    auto chunk_num_2 = _obj_inst->get_shard_p_chunk_id(_shard_2.id);
     ASSERT_TRUE(chunk_num_2.has_value());
 
-    // check if both chunk is on the same pdev;
-    auto alloc_hint1 = _obj_inst->chunk_selector()->chunk_to_hints(chunk_num_1.value());
-    auto alloc_hint2 = _obj_inst->chunk_selector()->chunk_to_hints(chunk_num_2.value());
-    ASSERT_TRUE(alloc_hint1.pdev_id_hint.has_value());
-    ASSERT_TRUE(alloc_hint2.pdev_id_hint.has_value());
-    ASSERT_TRUE(alloc_hint1.pdev_id_hint.value() == alloc_hint2.pdev_id_hint.value());
+    // check if both chunk is on the same pg and pdev;
+    auto chunks = _obj_inst->chunk_selector()->m_chunks;
+    ASSERT_TRUE(chunks.find(chunk_num_1.value()) != chunks.end());
+    ASSERT_TRUE(chunks.find(chunk_num_2.value()) != chunks.end());
+    auto chunk_1 = chunks[chunk_num_1.value()];
+    auto chunk_2 = chunks[chunk_num_2.value()];
+    ASSERT_TRUE(chunk_1->m_pg_id.has_value());
+    ASSERT_TRUE(chunk_2->m_pg_id.has_value());
+    ASSERT_TRUE(chunk_1->m_pg_id.value() == chunk_2->m_pg_id.value());
+    ASSERT_TRUE(chunk_1->get_pdev_id() == chunk_2->get_pdev_id());
 }
 
 TEST_F(HomeObjectFixture, CreateMultiShardsOnMultiPG) {
@@ -30,20 +34,24 @@ TEST_F(HomeObjectFixture, CreateMultiShardsOnMultiPG) {
 
     for (const auto pg : pgs) {
         auto shard_info = create_shard(pg, Mi);
-        auto chunk_num_1 = _obj_inst->get_shard_chunk(shard_info.id);
+        auto chunk_num_1 = _obj_inst->get_shard_p_chunk_id(shard_info.id);
         ASSERT_TRUE(chunk_num_1.has_value());
 
         // create another shard again.
         shard_info = create_shard(pg, Mi);
-        auto chunk_num_2 = _obj_inst->get_shard_chunk(shard_info.id);
+        auto chunk_num_2 = _obj_inst->get_shard_p_chunk_id(shard_info.id);
         ASSERT_TRUE(chunk_num_2.has_value());
 
-        // check if both chunk is on the same pdev;
-        auto alloc_hint1 = _obj_inst->chunk_selector()->chunk_to_hints(chunk_num_1.value());
-        auto alloc_hint2 = _obj_inst->chunk_selector()->chunk_to_hints(chunk_num_2.value());
-        ASSERT_TRUE(alloc_hint1.pdev_id_hint.has_value());
-        ASSERT_TRUE(alloc_hint2.pdev_id_hint.has_value());
-        ASSERT_TRUE(alloc_hint1.pdev_id_hint.value() == alloc_hint2.pdev_id_hint.value());
+        // check if both chunk is on the same pg and pdev;
+        auto chunks = _obj_inst->chunk_selector()->m_chunks;
+        ASSERT_TRUE(chunks.find(chunk_num_1.value()) != chunks.end());
+        ASSERT_TRUE(chunks.find(chunk_num_2.value()) != chunks.end());
+        auto chunk_1 = chunks[chunk_num_1.value()];
+        auto chunk_2 = chunks[chunk_num_2.value()];
+        ASSERT_TRUE(chunk_1->m_pg_id.has_value());
+        ASSERT_TRUE(chunk_2->m_pg_id.has_value());
+        ASSERT_TRUE(chunk_1->m_pg_id.value() == chunk_2->m_pg_id.value());
+        ASSERT_TRUE(chunk_1->get_pdev_id() == chunk_2->get_pdev_id());
     }
 }
 
