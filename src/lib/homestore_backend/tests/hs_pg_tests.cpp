@@ -84,6 +84,45 @@ TEST_F(HomeObjectFixture, PGExceedSpaceTest) {
     }
 }
 
+TEST_F(HomeObjectFixture, PGSizeLessThanChunkTest) {
+    LOGINFO("HomeObject replica={} setup completed", g_helper->replica_num());
+    g_helper->sync();
+    pg_id_t pg_id{1};
+    if (0 == g_helper->replica_num()) { // leader
+        auto memebers = g_helper->members();
+        auto name = g_helper->name();
+        auto info = homeobject::PGInfo(pg_id);
+        info.size = 1; // less than chunk size
+        for (const auto& member : memebers) {
+            if (0 == member.second) {
+                // by default, leader is the first member
+                info.members.insert(homeobject::PGMember{member.first, name + std::to_string(member.second), 1});
+            } else {
+                info.members.insert(homeobject::PGMember{member.first, name + std::to_string(member.second), 0});
+            }
+        }
+        auto p = _obj_inst->pg_manager()->create_pg(std::move(info)).get();
+        ASSERT_TRUE(p.hasError());
+        PGError error = p.error();
+        ASSERT_EQ(PGError::INVALID_ARG, error);
+    } else {
+        auto start_time = std::chrono::steady_clock::now();
+        bool res = true;
+        // follower need to wait for pg creation
+        while (!pg_exist(pg_id)) {
+            auto current_time = std::chrono::steady_clock::now();
+            auto duration = std::chrono::duration_cast< std::chrono::seconds >(current_time - start_time).count();
+            if (duration >= 20) {
+                LOGINFO("Failed to create pg {} at follower", pg_id);
+                res = false;
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+        }
+        ASSERT_FALSE(res);
+    }
+}
+
 TEST_F(HomeObjectFixture, PGRecoveryTest) {
     // create 10 pg
     for (pg_id_t i = 1; i < 11; i++) {

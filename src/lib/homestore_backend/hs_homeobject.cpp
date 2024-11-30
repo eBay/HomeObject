@@ -98,6 +98,8 @@ private:
 //
 // This should assert if we can not initialize HomeStore.
 //
+uint64_t HSHomeObject::_hs_chunk_size = HS_CHUNK_SIZE;
+
 DevType HSHomeObject::get_device_type(string const& devname) {
     const iomgr::drive_type dtype = iomgr::DriveInterface::get_drive_type(devname);
     if (dtype == iomgr::drive_type::block_hdd || dtype == iomgr::drive_type::file_on_hdd) { return DevType::HDD; }
@@ -168,7 +170,8 @@ void HSHomeObject::init_homestore() {
                 {HS_SERVICE::REPLICATION,
                  hs_format_params{.dev_type = HSDevType::Data,
                                   .size_pct = 99.0,
-                                  .num_chunks = 60000,
+                                  .num_chunks = 0,
+                                  .chunk_size = _hs_chunk_size,
                                   .block_size = _data_block_size,
                                   .alloc_type = blk_allocator_type_t::append,
                                   .chunk_sel_type = chunk_selector_type_t::CUSTOM}},
@@ -185,7 +188,8 @@ void HSHomeObject::init_homestore() {
                 {HS_SERVICE::REPLICATION,
                  hs_format_params{.dev_type = run_on_type,
                                   .size_pct = 79.0,
-                                  .num_chunks = 60000,
+                                  .num_chunks = 0,
+                                  .chunk_size = _hs_chunk_size,
                                   .block_size = _data_block_size,
                                   .alloc_type = blk_allocator_type_t::append,
                                   .chunk_sel_type = chunk_selector_type_t::CUSTOM}},

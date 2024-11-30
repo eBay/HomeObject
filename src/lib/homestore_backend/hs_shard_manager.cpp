@@ -343,6 +343,7 @@ void HSHomeObject::on_shard_message_commit(int64_t lsn, sisl::blob const& h, hom
     case ReplicationMessageType::CREATE_SHARD_MSG: {
         auto sb = r_cast< shard_info_superblk const* >(h.cbytes() + sizeof(ReplicationMessageHeader));
         auto shard_info = sb->info;
+        auto v_chunk_id = sb->v_chunk_id;
         shard_info.lsn = lsn;
 
         bool shard_exist = false;
@@ -351,11 +352,12 @@ void HSHomeObject::on_shard_message_commit(int64_t lsn, sisl::blob const& h, hom
             shard_exist = (_shard_map.find(shard_info.id) != _shard_map.end());
         }
         if (!shard_exist) {
-            add_new_shard_to_map(std::make_unique< HS_Shard >(shard_info, blkids.chunk_num()));
+            add_new_shard_to_map(std::make_unique< HS_Shard >(shard_info, blkids.chunk_num(), v_chunk_id));
             // select_specific_chunk() will do something only when we are relaying journal after restart, during the
             // runtime flow chunk is already been be mark busy when we write the shard info to the repldev.
             auto pg_id = shard_info.placement_group;
-            chunk_selector_->select_specific_chunk(pg_id, blkids.chunk_num());
+            auto chunk = chunk_selector_->select_specific_chunk(pg_id, v_chunk_id);
+            RELEASE_ASSERT(chunk != nullptr, "chunk selection failed with v_chunk_id: {} in PG: {}", v_chunk_id, pg_id);
         }
         if (ctx) { ctx->promise_.setValue(ShardManager::Result< ShardInfo >(shard_info)); }
 
@@ -524,11 +526,13 @@ bool HSHomeObject::release_chunk_based_on_create_shard_message(sisl::blob const&
     }
 }
 
-HSHomeObject::HS_Shard::HS_Shard(ShardInfo shard_info, homestore::chunk_num_t p_chunk_id) :
+HSHomeObject::HS_Shard::HS_Shard(ShardInfo shard_info, homestore::chunk_num_t p_chunk_id,
+                                 homestore::chunk_num_t v_chunk_id) :
         Shard(std::move(shard_info)), sb_(_shard_meta_name) {
     sb_.create(sizeof(shard_info_superblk));
     sb_->info = info;
     sb_->p_chunk_id = p_chunk_id;
+    sb_->v_chunk_id = v_chunk_id;
     sb_.write();
 }
 
