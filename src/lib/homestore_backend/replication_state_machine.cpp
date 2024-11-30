@@ -167,7 +167,10 @@ ReplicationStateMachine::get_blk_alloc_hints(sisl::blob const& header, uint32_t 
 
     case ReplicationMessageType::SEAL_SHARD_MSG: {
         auto p_chunkID = home_object_->get_shard_p_chunk_id(msg_header->shard_id);
-        RELEASE_ASSERT(p_chunkID.has_value(), "unknown shard id to get binded chunk");
+        if (!p_chunkID.has_value()) {
+            LOGW("shard does not exist, underlying engine will retry this later", msg_header->shard_id);
+            return folly::makeUnexpected(homestore::ReplServiceError::RESULT_NOT_EXIST_YET);
+        }
         homestore::blk_alloc_hints hints;
         hints.chunk_id_hint = p_chunkID.value();
         return hints;

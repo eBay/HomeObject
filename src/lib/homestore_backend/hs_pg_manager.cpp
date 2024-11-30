@@ -60,13 +60,13 @@ PGManager::NullAsyncResult HSHomeObject::_create_pg(PGInfo&& pg_info, std::set< 
     auto pg_id = pg_info.id;
     if (auto lg = std::shared_lock(_pg_lock); _pg_map.end() != _pg_map.find(pg_id)) return folly::Unit();
 
-    if (pg_info.size == 0) {
-        LOGW("Not supported to create empty PG, pg_id {}, pg_size {}", pg_id, pg_info.size);
+    const auto most_avail_num_chunks = chunk_selector()->most_avail_num_chunks();
+    const auto chunk_size = chunk_selector()->get_chunk_size();
+    if (pg_info.size < chunk_size) {
+        LOGW("Not support to create PG which pg_size {} < chunk_size {}", pg_info.size, chunk_size);
         return folly::makeUnexpected(PGError::INVALID_ARG);
     }
 
-    const auto most_avail_num_chunks = chunk_selector()->most_avail_num_chunks();
-    const auto chunk_size = chunk_selector()->get_chunk_size();
     const auto needed_num_chunks = sisl::round_down(pg_info.size, chunk_size) / chunk_size;
     if (needed_num_chunks > most_avail_num_chunks) {
         LOGW("No enough space to create pg, pg_id {}, needed_num_chunks {}, most_avail_num_chunks {}", pg_id,
@@ -173,7 +173,8 @@ void HSHomeObject::on_create_pg_message_commit(int64_t lsn, sisl::blob const& he
     RELEASE_ASSERT(index_table_pg_map_.count(uuid_str) == 0, "duplicate index table found");
     index_table_pg_map_[uuid_str] = PgIndexTable{pg_id, index_table};
 
-    LOGI("Index table created for pg {} uuid {}", pg_id, uuid_str);
+    LOGI("create pg {} successfully, index table uuid={} pg_size={} num_chunk={}", pg_id, uuid_str, pg_info.size,
+         num_chunk.value());
     hs_pg->index_table_ = index_table;
     // Add to index service, so that it gets cleaned up when index service is shutdown.
     homestore::hs()->index_service().add_index_table(index_table);

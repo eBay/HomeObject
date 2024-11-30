@@ -108,7 +108,7 @@ protected:
         const uint32_t chunk_size = HCS.get_chunk_size();
         const u_int64_t pg_size = chunk_size * 3;
         for (uint16_t pg_id = 1; pg_id < 4; ++pg_id) {
-            // not supported to create empty pg
+            // not supported to create pg which pg_size < chunk_size
             ASSERT_FALSE(HCS.select_chunks_for_pg(pg_id, 0).has_value());
             ASSERT_EQ(HCS.select_chunks_for_pg(pg_id, pg_size).value(), 3);
             uint32_t last_pdev_id = 0;
