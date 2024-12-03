@@ -35,11 +35,14 @@ BlobError toBlobError(homestore::ReplServiceError const&);
 ShardError toShardError(homestore::ReplServiceError const&);
 
 class HSHomeObject : public HomeObjectImpl {
+private:
     /// NOTE: Be wary to change these as they effect on-disk format!
     inline static auto const _svc_meta_name = std::string("HomeObject");
     inline static auto const _pg_meta_name = std::string("PGManager");
     inline static auto const _shard_meta_name = std::string("ShardManager");
+    static constexpr uint64_t HS_CHUNK_SIZE = 2 * Gi;
     static constexpr uint32_t _data_block_size = 1024;
+    static uint64_t _hs_chunk_size;
     ///
 
     /// Overridable Helpers
@@ -249,7 +252,7 @@ public:
 
     struct HS_Shard : public Shard {
         homestore::superblk< shard_info_superblk > sb_;
-        HS_Shard(ShardInfo info, homestore::chunk_num_t p_chunk_id);
+        HS_Shard(ShardInfo info, homestore::chunk_num_t p_chunk_id, homestore::chunk_num_t v_chunk_id);
         HS_Shard(homestore::superblk< shard_info_superblk >&& sb);
         ~HS_Shard() override = default;
 
@@ -418,7 +421,8 @@ private:
 
     static ShardInfo deserialize_shard_info(const char* shard_info_str, size_t size);
     static std::string serialize_shard_info(const ShardInfo& info);
-    void local_create_shard(ShardInfo shard_info, homestore::chunk_num_t p_chunk_num, homestore::blk_count_t blk_count);
+    void local_create_shard(ShardInfo shard_info, homestore::chunk_num_t v_chunk_id, homestore::chunk_num_t p_chunk_id,
+                            homestore::blk_count_t blk_count);
     void add_new_shard_to_map(ShardPtr&& shard);
     void update_shard_in_map(const ShardInfo& shard_info);
 

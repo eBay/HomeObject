@@ -34,24 +34,30 @@ TEST_F(HomeObjectFixture, CreateMultiShardsOnMultiPG) {
 
     for (const auto pg : pgs) {
         auto shard_info = create_shard(pg, Mi);
-        auto chunk_num_1 = _obj_inst->get_shard_p_chunk_id(shard_info.id);
-        ASSERT_TRUE(chunk_num_1.has_value());
+        auto p_chunk_ID1 = _obj_inst->get_shard_p_chunk_id(shard_info.id);
+        auto v_chunk_ID1 = _obj_inst->get_shard_v_chunk_id(shard_info.id);
+        ASSERT_TRUE(p_chunk_ID1.has_value());
+        ASSERT_TRUE(v_chunk_ID1.has_value());
 
         // create another shard again.
         shard_info = create_shard(pg, Mi);
-        auto chunk_num_2 = _obj_inst->get_shard_p_chunk_id(shard_info.id);
-        ASSERT_TRUE(chunk_num_2.has_value());
+        auto p_chunk_ID2 = _obj_inst->get_shard_p_chunk_id(shard_info.id);
+        auto v_chunk_ID2 = _obj_inst->get_shard_v_chunk_id(shard_info.id);
+        ASSERT_TRUE(p_chunk_ID2.has_value());
+        ASSERT_TRUE(v_chunk_ID2.has_value());
 
+        // v_chunk_id should not same
+        ASSERT_NE(v_chunk_ID1.value(), v_chunk_ID2.value());
         // check if both chunk is on the same pg and pdev;
         auto chunks = _obj_inst->chunk_selector()->m_chunks;
-        ASSERT_TRUE(chunks.find(chunk_num_1.value()) != chunks.end());
-        ASSERT_TRUE(chunks.find(chunk_num_2.value()) != chunks.end());
-        auto chunk_1 = chunks[chunk_num_1.value()];
-        auto chunk_2 = chunks[chunk_num_2.value()];
+        ASSERT_TRUE(chunks.find(p_chunk_ID1.value()) != chunks.end());
+        ASSERT_TRUE(chunks.find(p_chunk_ID2.value()) != chunks.end());
+        auto chunk_1 = chunks[p_chunk_ID1.value()];
+        auto chunk_2 = chunks[p_chunk_ID2.value()];
         ASSERT_TRUE(chunk_1->m_pg_id.has_value());
         ASSERT_TRUE(chunk_2->m_pg_id.has_value());
-        ASSERT_TRUE(chunk_1->m_pg_id.value() == chunk_2->m_pg_id.value());
-        ASSERT_TRUE(chunk_1->get_pdev_id() == chunk_2->get_pdev_id());
+        ASSERT_EQ(chunk_1->m_pg_id.value(), chunk_2->m_pg_id.value());
+        ASSERT_EQ(chunk_1->get_pdev_id(), chunk_2->get_pdev_id());
     }
 }
 
@@ -62,6 +68,51 @@ TEST_F(HomeObjectFixture, SealShard) {
     ASSERT_EQ(ShardInfo::State::OPEN, shard_info.state);
 
     // seal the shard
+    shard_info = seal_shard(shard_info.id);
+    ASSERT_EQ(ShardInfo::State::SEALED, shard_info.state);
+
+    // seal the shard again
+    shard_info = seal_shard(shard_info.id);
+    ASSERT_EQ(ShardInfo::State::SEALED, shard_info.state);
+
+    // create shard until no space left, we have 5 chunks in one pg.
+    for (auto i = 0; i < 5; i++) {
+        shard_info = create_shard(pg_id, 64 * Mi);
+        ASSERT_EQ(ShardInfo::State::OPEN, shard_info.state);
+    }
+
+    {
+        g_helper->sync();
+
+        // expect to create shard failed
+        run_on_pg_leader(pg_id, [&]() {
+            auto s = _obj_inst->shard_manager()->create_shard(pg_id, 64 * Mi).get();
+            ASSERT_TRUE(s.hasError());
+            ASSERT_EQ(ShardError::NO_SPACE_LEFT, s.error());
+        });
+
+        auto start_time = std::chrono::steady_clock::now();
+        bool res = true;
+
+        while (g_helper->get_uint64_id() == INVALID_UINT64_ID) {
+            auto current_time = std::chrono::steady_clock::now();
+            auto duration = std::chrono::duration_cast< std::chrono::seconds >(current_time - start_time).count();
+            if (duration >= 20) {
+                LOGINFO("Failed to create shard at pg {}", pg_id);
+                res = false;
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+        }
+        ASSERT_FALSE(res);
+    }
+
+    shard_info = seal_shard(shard_info.id);
+    ASSERT_EQ(ShardInfo::State::SEALED, shard_info.state);
+
+    shard_info = create_shard(pg_id, 64 * Mi);
+    ASSERT_EQ(ShardInfo::State::OPEN, shard_info.state);
+
     shard_info = seal_shard(shard_info.id);
     ASSERT_EQ(ShardInfo::State::SEALED, shard_info.state);
 }

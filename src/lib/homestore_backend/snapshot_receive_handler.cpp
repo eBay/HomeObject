@@ -92,7 +92,7 @@ int HSHomeObject::SnapshotReceiveHandler::process_shard_snapshot_data(ResyncShar
     }
 
     // Now let's create local shard
-    home_obj_.local_create_shard(shard_sb->info, shard_sb->p_chunk_id, blk_id.blk_count());
+    home_obj_.local_create_shard(shard_sb->info, shard_sb->v_chunk_id, shard_sb->p_chunk_id, blk_id.blk_count());
     ctx_->shard_cursor = shard_meta.shard_id();
     ctx_->cur_batch_num = 0;
     return 0;

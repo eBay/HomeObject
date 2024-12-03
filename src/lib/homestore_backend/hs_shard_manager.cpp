@@ -303,8 +303,8 @@ void HSHomeObject::on_shard_message_rollback(int64_t lsn, sisl::blob const& head
 }
 
 // FIXME: Bugfix in progress from Hooper, will fix later.
-void HSHomeObject::local_create_shard(ShardInfo shard_info, homestore::chunk_num_t p_chunk_num,
-                                      homestore::blk_count_t blk_count) {
+void HSHomeObject::local_create_shard(ShardInfo shard_info, homestore::chunk_num_t v_chunk_id,
+                                      homestore::chunk_num_t p_chunk_id, homestore::blk_count_t blk_count) {
     bool shard_exist = false;
     {
         scoped_lock lock_guard(_shard_lock);
@@ -312,11 +312,12 @@ void HSHomeObject::local_create_shard(ShardInfo shard_info, homestore::chunk_num
     }
 
     if (!shard_exist) {
-        add_new_shard_to_map(std::make_unique< HS_Shard >(shard_info, p_chunk_num));
+        add_new_shard_to_map(std::make_unique< HS_Shard >(shard_info, p_chunk_id, v_chunk_id));
         // select_specific_chunk() will do something only when we are relaying journal after restart, during the
         // runtime flow chunk is already been be mark busy when we write the shard info to the repldev.
         auto pg_id = shard_info.placement_group;
-        chunk_selector_->select_specific_chunk(pg_id, p_chunk_num);
+        auto chunk = chunk_selector_->select_specific_chunk(pg_id, v_chunk_id);
+        RELEASE_ASSERT(chunk != nullptr, "chunk selection failed with v_chunk_id: {} in PG: {}", v_chunk_id, pg_id);
     }
 
     // update pg's total_occupied_blk_count
@@ -372,9 +373,10 @@ void HSHomeObject::on_shard_message_commit(int64_t lsn, sisl::blob const& h, hom
     case ReplicationMessageType::CREATE_SHARD_MSG: {
         auto sb = r_cast< shard_info_superblk const* >(h.cbytes() + sizeof(ReplicationMessageHeader));
         auto shard_info = sb->info;
+        auto v_chunk_id = sb->v_chunk_id;
         shard_info.lsn = lsn;
 
-        local_create_shard(shard_info, blkids.chunk_num(), blkids.blk_count());
+        local_create_shard(shard_info, v_chunk_id, blkids.chunk_num(), blkids.blk_count());
         if (ctx) { ctx->promise_.setValue(ShardManager::Result< ShardInfo >(shard_info)); }
 
         // update pg's total_occupied_blk_count
@@ -542,11 +544,13 @@ bool HSHomeObject::release_chunk_based_on_create_shard_message(sisl::blob const&
     }
 }
 
-HSHomeObject::HS_Shard::HS_Shard(ShardInfo shard_info, homestore::chunk_num_t p_chunk_id) :
+HSHomeObject::HS_Shard::HS_Shard(ShardInfo shard_info, homestore::chunk_num_t p_chunk_id,
+                                 homestore::chunk_num_t v_chunk_id) :
         Shard(std::move(shard_info)), sb_(_shard_meta_name) {
     sb_.create(sizeof(shard_info_superblk));
     sb_->info = info;
     sb_->p_chunk_id = p_chunk_id;
+    sb_->v_chunk_id = v_chunk_id;
     sb_.write();
 }
 

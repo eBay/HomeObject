@@ -167,7 +167,10 @@ ReplicationStateMachine::get_blk_alloc_hints(sisl::blob const& header, uint32_t 
 
     case ReplicationMessageType::SEAL_SHARD_MSG: {
         auto p_chunkID = home_object_->get_shard_p_chunk_id(msg_header->shard_id);
-        RELEASE_ASSERT(p_chunkID.has_value(), "unknown shard id to get binded chunk");
+        if (!p_chunkID.has_value()) {
+            LOGW("shard does not exist, underlying engine will retry this later", msg_header->shard_id);
+            return folly::makeUnexpected(homestore::ReplServiceError::RESULT_NOT_EXIST_YET);
+        }
         homestore::blk_alloc_hints hints;
         hints.chunk_id_hint = p_chunkID.value();
         return hints;
@@ -201,11 +204,13 @@ ReplicationStateMachine::create_snapshot(std::shared_ptr< homestore::snapshot_co
     auto s = ctx->nuraft_snapshot();
 
     std::lock_guard lk(m_snapshot_lock);
-    auto current = dynamic_pointer_cast< homestore::nuraft_snapshot_context >(m_snapshot_context)->nuraft_snapshot();
-    if (s->get_last_log_idx() < current->get_last_log_idx()) {
-        LOGI("Skipping create snapshot new idx/term: {}/{}  current idx/term: {}/{}", s->get_last_log_idx(),
-             s->get_last_log_term(), current->get_last_log_idx(), current->get_last_log_term());
-        return folly::makeSemiFuture< homestore::ReplResult< folly::Unit > >(folly::Unit{});
+    if (m_snapshot_context != nullptr) {
+        auto current = dynamic_pointer_cast< homestore::nuraft_snapshot_context >(m_snapshot_context)->nuraft_snapshot();
+        if (s->get_last_log_idx() < current->get_last_log_idx()) {
+            LOGI("Skipping create snapshot new idx/term: {}/{}  current idx/term: {}/{}", s->get_last_log_idx(),
+                 s->get_last_log_term(), current->get_last_log_idx(), current->get_last_log_term());
+            return folly::makeSemiFuture< homestore::ReplResult< folly::Unit > >(folly::Unit{});
+        }
     }
 
     LOGI("create snapshot last_log_idx: {} last_log_term: {}", s->get_last_log_idx(), s->get_last_log_term());
