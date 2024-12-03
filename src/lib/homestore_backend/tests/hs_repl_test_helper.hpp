@@ -43,20 +43,21 @@ namespace bip = boost::interprocess;
 using namespace homeobject;
 
 #define INVALID_UINT64_ID UINT64_MAX
+#define INVALID_CHUNK_NUM UINT16_MAX
 
 namespace test_common {
 
 class HSReplTestHelper {
 protected:
     struct IPCData {
-        void sync(uint64_t sync_point, uint32_t max_count = 0) {
-            if (max_count == 0) { max_count = SISL_OPTIONS["replicas"].as< uint8_t >(); }
+        void sync(uint64_t sync_point, uint32_t max_count) {
             std::unique_lock< bip::interprocess_mutex > lg(mtx_);
             ++homeobject_replica_count_;
             if (homeobject_replica_count_ == max_count) {
                 sync_point_num_ = sync_point;
                 homeobject_replica_count_ = 0;
                 uint64_id_ = INVALID_UINT64_ID;
+                v_chunk_id_ = INVALID_CHUNK_NUM;
                 cv_.notify_all();
             } else {
                 cv_.wait(lg, [this, sync_point]() { return sync_point_num_ == sync_point; });
@@ -73,6 +74,16 @@ protected:
             return uint64_id_;
         }
 
+        void set_v_chunk_id(homestore::chunk_num_t input_v_chunk_id) {
+            std::unique_lock< bip::interprocess_mutex > lg(mtx_);
+            v_chunk_id_ = input_v_chunk_id;
+        }
+
+        homestore::chunk_num_t get_v_chunk_id() {
+            std::unique_lock< bip::interprocess_mutex > lg(mtx_);
+            return v_chunk_id_;
+        }
+
     private:
         bip::interprocess_mutex mtx_;
         bip::interprocess_condition cv_;
@@ -80,6 +91,9 @@ protected:
 
         // the following variables are used to share shard_id and blob_id among different replicas
         uint64_t uint64_id_{0};
+
+        // used to verify identical layout
+        homestore::chunk_num_t v_chunk_id_{0};
 
         // the nth synchronization point, that is how many times different replicas have synced
         uint64_t sync_point_num_{UINT64_MAX};
@@ -132,13 +146,13 @@ public:
     friend class TestReplApplication;
 
     HSReplTestHelper(std::string const& name, std::vector< std::string > const& args, char** argv) :
-            name_{name}, args_{args}, argv_{argv} {}
+            test_name_{name}, args_{args}, argv_{argv} {}
 
-    void setup(uint32_t num_replicas) {
-        num_replicas_ = num_replicas;
-        replica_num_ = SISL_OPTIONS["replica_num"].as< uint16_t >();
+    void setup(uint8_t num_replicas) {
+        total_replicas_nums_ = num_replicas;
+        replica_num_ = SISL_OPTIONS["replica_num"].as< uint8_t >();
 
-        sisl::logging::SetLogger(name_ + std::string("_replica_") + std::to_string(replica_num_));
+        sisl::logging::SetLogger(test_name_ + std::string("_replica_") + std::to_string(replica_num_));
         sisl::logging::SetLogPattern("[%D %T%z] [%^%L%$] [%n] [%t] %v");
 
         boost::uuids::string_generator gen;
@@ -171,9 +185,7 @@ public:
                 dev_list_.emplace_back(dev);
             }
         }
-        name_ += std::to_string(replica_num_);
-
-        // prepare_devices();
+        name_ = test_name_ + std::to_string(replica_num_);
 
         if (replica_num_ == 0) {
             // Erase previous shmem and create a new shmem with IPCData structure
@@ -252,12 +264,15 @@ public:
     std::map< peer_id_t, uint32_t > const& members() const { return members_; }
 
     std::string name() const { return name_; }
+    std::string test_name() const { return test_name_; }
 
     void teardown() { sisl::GrpcAsyncClientWorker::shutdown_all(); }
 
-    void sync(uint32_t num_members = 0) { ipc_data_->sync(sync_point_num++, num_members); }
+    void sync() { ipc_data_->sync(sync_point_num++, total_replicas_nums_); }
     void set_uint64_id(uint64_t uint64_id) { ipc_data_->set_uint64_id(uint64_id); }
     uint64_t get_uint64_id() { return ipc_data_->get_uint64_id(); }
+    void set_v_chunk_id(homestore::chunk_num_t v_chunk_id) { ipc_data_->set_v_chunk_id(v_chunk_id); }
+    homestore::chunk_num_t get_v_chunk_id() { return ipc_data_->get_v_chunk_id(); }
 
     void check_and_kill(int port) {
         std::string command = "lsof -t -i:" + std::to_string(port);
@@ -329,11 +344,12 @@ private:
 
 private:
     uint8_t replica_num_;
+    uint8_t total_replicas_nums_;
     uint64_t sync_point_num{0};
     std::string name_;
+    std::string test_name_;
     std::vector< std::string > args_;
     char** argv_;
-    uint32_t num_replicas_;
     std::vector< std::string > generated_devs;
     std::vector< std::string > dev_list_;
     std::shared_ptr< homeobject::HomeObject > homeobj_;

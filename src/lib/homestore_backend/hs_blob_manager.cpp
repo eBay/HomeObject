@@ -99,6 +99,11 @@ BlobManager::AsyncResult< blob_id_t > HSHomeObject::_put_blob(ShardInfo const& s
 
     RELEASE_ASSERT(repl_dev != nullptr, "Repl dev instance null");
 
+    if (!repl_dev->is_leader()) {
+        LOGW("failed to put blob for pg [{}], shard [{}], not leader", pg_id, shard.id);
+        return folly::makeUnexpected(BlobErrorCode::NOT_LEADER);
+    }
+
     // Create a put_blob request which allocates for header, key and blob_header, user_key. Data sgs are added later
     auto req = put_blob_req_ctx::make(sizeof(BlobHeader) + blob.user_key.size());
     req->header()->msg_type = ReplicationMessageType::PUT_BLOB_MSG;
@@ -349,16 +354,19 @@ HSHomeObject::blob_put_get_blk_alloc_hints(sisl::blob const& header, cintrusive<
         return folly::makeUnexpected(homestore::ReplServiceError::FAILED);
     }
 
-    auto chunk_id = get_shard_chunk(msg_header->shard_id);
-    if (!chunk_id.has_value()) {
+    std::scoped_lock lock_guard(_shard_lock);
+    auto shard_iter = _shard_map.find(msg_header->shard_id);
+    if (shard_iter == _shard_map.end()) {
         LOGW("Received a blob_put on an unknown shard:{}, underlying engine will retry this later",
              msg_header->shard_id);
         return folly::makeUnexpected(homestore::ReplServiceError::RESULT_NOT_EXIST_YET);
     }
-    BLOGD(msg_header->shard_id, "n/a", "Picked chunk_id={}", *chunk_id);
+
+    auto hs_shard = d_cast< HS_Shard* >((*shard_iter->second).get());
+    BLOGD(msg_header->shard_id, "n/a", "Picked p_chunk_id={}", hs_shard->sb_->p_chunk_id);
 
     homestore::blk_alloc_hints hints;
-    hints.chunk_id_hint = *chunk_id;
+    hints.chunk_id_hint = hs_shard->sb_->p_chunk_id;
     return hints;
 }
 
@@ -374,6 +382,11 @@ BlobManager::NullAsyncResult HSHomeObject::_del_blob(ShardInfo const& shard, blo
     }
 
     RELEASE_ASSERT(repl_dev != nullptr, "Repl dev instance null");
+
+    if (!repl_dev->is_leader()) {
+        LOGW("failed to del blob for pg [{}], shard [{}], blob_id [{}], not leader", pg_id, shard.id, blob_id);
+        return folly::makeUnexpected(BlobErrorCode::NOT_LEADER);
+    }
 
     // Create an unaligned header request unaligned
     auto req = repl_result_ctx< BlobManager::Result< BlobInfo > >::make(0u /* header_extn */,

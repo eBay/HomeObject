@@ -36,6 +36,7 @@ public:
     HomeObjectFixture() : rand_blob_size{1u, 16 * 1024}, rand_user_key_size{1u, 1024} {}
 
     void SetUp() override {
+        HSHomeObject::_hs_chunk_size = 20 * Mi;
         _obj_inst = std::dynamic_pointer_cast< HSHomeObject >(g_helper->build_new_homeobject());
         g_helper->sync();
     }
@@ -55,17 +56,36 @@ public:
         std::this_thread::sleep_for(std::chrono::seconds(5));
     }
 
-    // schedule create_pg to replica_num
-    void create_pg(pg_id_t pg_id, uint32_t replica_num = 0) {
-        if (replica_num == g_helper->replica_num()) {
-            auto memebers = g_helper->members();
-            auto name = g_helper->name();
+    /**
+     * \brief create pg with a given id.
+     *
+     * \param pg_id pg id that will be newly created.
+     * \param leader_replica_num the replica number that will be the initial leader of repl dev of this pg
+     * \param excluding_replicas_in_pg the set of replicas that will be excluded in the initial members of this pg. this
+     * means all the started replicas that are not in this set will be the initial members of this pg.
+     */
+    void create_pg(pg_id_t pg_id, uint8_t leader_replica_num = 0,
+                   std::optional< std::unordered_set< uint8_t > > excluding_replicas_in_pg = std::nullopt) {
+        std::unordered_set< uint8_t > excluding_pg_replicas;
+        if (excluding_replicas_in_pg.has_value()) excluding_pg_replicas = excluding_replicas_in_pg.value();
+        if (excluding_pg_replicas.contains(leader_replica_num))
+            RELEASE_ASSERT(false, "fail to create pg, leader_replica_num {} is excluded in the pg", leader_replica_num);
+
+        auto my_replica_num = g_helper->replica_num();
+        if (excluding_pg_replicas.contains(my_replica_num)) return;
+
+        auto pg_size = SISL_OPTIONS["pg_size"].as< uint64_t >() * Mi;
+        auto name = g_helper->test_name();
+
+        if (leader_replica_num == my_replica_num) {
+            auto members = g_helper->members();
             auto info = homeobject::PGInfo(pg_id);
-            for (const auto& member : memebers) {
-                if (replica_num == member.second) {
+            info.size = pg_size;
+            for (const auto& member : members) {
+                if (leader_replica_num == member.second) {
                     // by default, leader is the first member
                     info.members.insert(homeobject::PGMember{member.first, name + std::to_string(member.second), 1});
-                } else {
+                } else if (!excluding_pg_replicas.contains(member.second)) {
                     info.members.insert(homeobject::PGMember{member.first, name + std::to_string(member.second), 0});
                 }
             }
@@ -83,6 +103,7 @@ public:
 
     ShardInfo create_shard(pg_id_t pg_id, uint64_t size_bytes) {
         g_helper->sync();
+        if (!am_i_in_pg(pg_id)) return {};
         // schedule create_shard only on leader
         run_on_pg_leader(pg_id, [&]() {
             auto s = _obj_inst->shard_manager()->create_shard(pg_id, size_bytes).get();
@@ -106,16 +127,28 @@ public:
             std::this_thread::sleep_for(std::chrono::milliseconds(1000));
         }
 
+        // set v_chunk_id to IPC
+        run_on_pg_leader(pg_id, [&]() {
+            auto v_chunkID = _obj_inst->get_shard_v_chunk_id(shard_id);
+            RELEASE_ASSERT(v_chunkID.has_value(), "failed to get shard v_chunk_id");
+            g_helper->set_v_chunk_id(v_chunkID.value());
+        });
+
+        // get v_chunk_id from IPC and compare with local
+        auto leader_v_chunk_id = g_helper->get_v_chunk_id();
+        auto local_v_chunkID = _obj_inst->get_shard_v_chunk_id(shard_id);
+        RELEASE_ASSERT(local_v_chunkID.has_value(), "failed to get shard v_chunk_id");
+        RELEASE_ASSERT(leader_v_chunk_id == local_v_chunkID, "v_chunk_id supposed to be identical");
+
         auto r = _obj_inst->shard_manager()->get_shard(shard_id).get();
         RELEASE_ASSERT(!!r, "failed to get shard {}", shard_id);
         return r.value();
     }
 
     ShardInfo seal_shard(shard_id_t shard_id) {
-        // before seal shard, we need to wait all the memebers to complete shard state verification
         g_helper->sync();
         auto r = _obj_inst->shard_manager()->get_shard(shard_id).get();
-        RELEASE_ASSERT(!!r, "failed to get shard {}", shard_id);
+        if (!r) return {};
         auto pg_id = r.value().placement_group;
 
         run_on_pg_leader(pg_id, [&]() {
@@ -134,10 +167,10 @@ public:
         }
     }
 
-    void put_blob(shard_id_t shard_id, Blob&& blob) {
+    void put_blob(shard_id_t shard_id, Blob&& blob, bool need_sync_before_start = true) {
         g_helper->sync();
         auto r = _obj_inst->shard_manager()->get_shard(shard_id).get();
-        RELEASE_ASSERT(!!r, "failed to get shard {}", shard_id);
+        if (!r) return;
         auto pg_id = r.value().placement_group;
 
         run_on_pg_leader(pg_id, [&]() {
@@ -159,9 +192,11 @@ public:
 
     // TODO:make this run in parallel
     void put_blobs(std::map< pg_id_t, std::vector< shard_id_t > > const& pg_shard_id_vec,
-                   uint64_t const num_blobs_per_shard, std::map< pg_id_t, blob_id_t >& pg_blob_id) {
+                   uint64_t const num_blobs_per_shard, std::map< pg_id_t, blob_id_t >& pg_blob_id,
+                   bool need_sync_before_start = true) {
         g_helper->sync();
         for (const auto& [pg_id, shard_vec] : pg_shard_id_vec) {
+            if (!am_i_in_pg(pg_id)) continue;
             // the blob_id of a pg is a continuous number starting from 0 and increasing by 1
             blob_id_t current_blob_id{pg_blob_id[pg_id]};
 
@@ -194,6 +229,7 @@ public:
             pg_blob_id[pg_id] = current_blob_id;
             auto last_blob_id = pg_blob_id[pg_id] - 1;
             while (!blob_exist(shard_id, last_blob_id)) {
+                LOGINFO("waiting for pg_id {} blob {} to be created locally", pg_id, last_blob_id);
                 std::this_thread::sleep_for(std::chrono::milliseconds(1000));
             }
             LOGINFO("shard {} blob {} is created locally, which means all the blob before {} are created", shard_id,
@@ -220,6 +256,7 @@ public:
                        uint64_t const num_blobs_per_shard, std::map< pg_id_t, blob_id_t >& pg_blob_id) {
         g_helper->sync();
         for (const auto& [pg_id, shard_vec] : pg_shard_id_vec) {
+            if (!am_i_in_pg(pg_id)) continue;
             run_on_pg_leader(pg_id, [&]() {
                 blob_id_t current_blob_id{0};
                 for (; current_blob_id < pg_blob_id[pg_id];) {
@@ -248,6 +285,7 @@ public:
         uint32_t off = 0, len = 0;
 
         for (const auto& [pg_id, shard_vec] : pg_shard_id_vec) {
+            if (!am_i_in_pg(pg_id)) continue;
             blob_id_t current_blob_id{0};
             for (const auto& shard_id : shard_vec) {
                 for (uint64_t k = 0; k < num_blobs_per_shard; k++) {
@@ -285,6 +323,7 @@ public:
         uint32_t exp_tombstone_blobs = deleted_all ? shards_per_pg * blobs_per_shard : 0;
 
         for (uint32_t i = 1; i <= num_pgs; ++i) {
+            if (!am_i_in_pg(i)) continue;
             PGStats stats;
             _obj_inst->pg_manager()->get_stats(i, stats);
             ASSERT_EQ(stats.num_active_objects, exp_active_blobs)
@@ -307,6 +346,8 @@ public:
 
         EXPECT_EQ(lhs->id, rhs->id);
         EXPECT_EQ(lhs->num_members, rhs->num_members);
+        EXPECT_EQ(lhs->num_chunks, rhs->num_chunks);
+        EXPECT_EQ(lhs->pg_size, rhs->pg_size);
         EXPECT_EQ(lhs->replica_set_uuid, rhs->replica_set_uuid);
         EXPECT_EQ(lhs->index_table_uuid, rhs->index_table_uuid);
         EXPECT_EQ(lhs->blob_sequence_num, rhs->blob_sequence_num);
@@ -315,9 +356,12 @@ public:
         EXPECT_EQ(lhs->total_occupied_blk_count, rhs->total_occupied_blk_count);
         EXPECT_EQ(lhs->tombstone_blob_count, rhs->tombstone_blob_count);
         for (uint32_t i = 0; i < lhs->num_members; i++) {
-            EXPECT_EQ(lhs->members[i].id, rhs->members[i].id);
-            EXPECT_EQ(lhs->members[i].priority, rhs->members[i].priority);
-            EXPECT_EQ(0, std::strcmp(lhs->members[i].name, rhs->members[i].name));
+            EXPECT_EQ(lhs->get_pg_members()[i].id, rhs->get_pg_members()[i].id);
+            EXPECT_EQ(lhs->get_pg_members()[i].priority, rhs->get_pg_members()[i].priority);
+            EXPECT_EQ(0, std::strcmp(lhs->get_pg_members()[i].name, rhs->get_pg_members()[i].name));
+        }
+        for (homestore::chunk_num_t i = 0; i < lhs->num_chunks; ++i) {
+            EXPECT_EQ(lhs->get_chunk_ids()[i], rhs->get_chunk_ids()[i]);
         }
     }
 
@@ -338,9 +382,31 @@ public:
     void run_on_pg_leader(pg_id_t pg_id, auto&& lambda) {
         PGStats pg_stats;
         auto res = _obj_inst->pg_manager()->get_stats(pg_id, pg_stats);
-        RELEASE_ASSERT(res, "can not get pg {} stats", pg_id);
+        if (!res) return;
         if (g_helper->my_replica_id() == pg_stats.leader_id) { lambda(); }
         // TODO: add logic for check and retry of leader change if necessary
+    }
+
+    void run_if_in_pg(pg_id_t pg_id, auto&& lambda) {
+        if (am_i_in_pg(pg_id)) lambda();
+    }
+
+    bool am_i_in_pg(pg_id_t pg_id) {
+        PGStats pg_stats;
+        auto res = _obj_inst->pg_manager()->get_stats(pg_id, pg_stats);
+        if (!res) return false;
+        for (const auto& member : pg_stats.members) {
+            if (std::get< 0 >(member) == g_helper->my_replica_id()) return true;
+        }
+        return false;
+    }
+
+    // wait for the last blob to be created locally, which means all the blob before this blob are created
+    void wait_for_all(shard_id_t shard_id, blob_id_t blob_id) {
+        while (true) {
+            if (blob_exist(shard_id, blob_id)) return;
+            std::this_thread::sleep_for(1s);
+        }
     }
 
 private:
