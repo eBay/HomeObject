@@ -2,6 +2,12 @@
 #include "replication_state_machine.hpp"
 #include "hs_backend_config.hpp"
 
+#include "generated/resync_pg_data_generated.h"
+#include "generated/resync_shard_data_generated.h"
+#include "generated/resync_blob_data_generated.h"
+#include <homestore/replication/repl_dev.h>
+#include <homestore/replication/repl_decls.h>
+
 namespace homeobject {
 void ReplicationStateMachine::on_commit(int64_t lsn, const sisl::blob& header, const sisl::blob& key,
                                         const homestore::MultiBlkId& pbas, cintrusive< homestore::repl_req_ctx >& ctx) {
@@ -36,6 +42,16 @@ bool ReplicationStateMachine::on_pre_commit(int64_t lsn, sisl::blob const& heade
     // For shard creation, since homestore repldev inside will write shard header to data service first before this
     // function is called. So there is nothing is needed to do and we can get the binding chunk_id with the newly shard
     // from the blkid in on_commit()
+    if (ctx->op_code() == homestore::journal_type_t::HS_CTRL_REPLACE) {
+        LOGI("pre_commit replace member log entry, lsn:{}", lsn);
+        return true;
+    }
+
+    if (ctx->op_code() == homestore::journal_type_t::HS_CTRL_DESTROY) {
+        LOGI("pre_commit destroy member log entry, lsn:{}", lsn);
+        return true;
+    }
+
     const ReplicationMessageHeader* msg_header = r_cast< const ReplicationMessageHeader* >(header.cbytes());
     if (msg_header->corrupted()) {
         LOGE("corrupted message in pre_commit, lsn:{}", lsn);
@@ -62,6 +78,10 @@ void ReplicationStateMachine::on_rollback(int64_t lsn, sisl::blob const& header,
         return;
     }
     switch (msg_header->msg_type) {
+    case ReplicationMessageType::CREATE_SHARD_MSG: {
+        home_object_->on_shard_message_rollback(lsn, header, key, ctx);
+        break;
+    }
     case ReplicationMessageType::SEAL_SHARD_MSG: {
         home_object_->on_shard_message_rollback(lsn, header, key, ctx);
         break;
@@ -86,7 +106,13 @@ void ReplicationStateMachine::on_error(ReplServiceError error, const sisl::blob&
         result_ctx->promise_.setValue(folly::makeUnexpected(homeobject::toPgError(error)));
         break;
     }
-    case ReplicationMessageType::CREATE_SHARD_MSG:
+    case ReplicationMessageType::CREATE_SHARD_MSG: {
+        bool res = home_object_->release_chunk_based_on_create_shard_message(header);
+        if (!res) { LOGW("failed to release chunk based on create shard msg"); }
+        auto result_ctx = boost::static_pointer_cast< repl_result_ctx< ShardManager::Result< ShardInfo > > >(ctx).get();
+        result_ctx->promise_.setValue(folly::makeUnexpected(toShardError(error)));
+        break;
+    }
     case ReplicationMessageType::SEAL_SHARD_MSG: {
         auto result_ctx = boost::static_pointer_cast< repl_result_ctx< ShardManager::Result< ShardInfo > > >(ctx).get();
         result_ctx->promise_.setValue(folly::makeUnexpected(toShardError(error)));
@@ -117,24 +143,36 @@ ReplicationStateMachine::get_blk_alloc_hints(sisl::blob const& header, uint32_t 
     const ReplicationMessageHeader* msg_header = r_cast< const ReplicationMessageHeader* >(header.cbytes());
     switch (msg_header->msg_type) {
     case ReplicationMessageType::CREATE_SHARD_MSG: {
-        auto const [pg_found, shards_found, chunk_id] = home_object_->get_any_chunk_id(msg_header->pg_id);
-        if (!pg_found) {
-            LOGW("Requesting a chunk for an unknown pg={}, letting the caller retry after sometime", msg_header->pg_id);
-            return folly::makeUnexpected(homestore::ReplServiceError::RESULT_NOT_EXIST_YET);
-        } else if (!shards_found) {
-            // pg is empty without any shards, we leave the decision the HeapChunkSelector to select a pdev
-            // with most available space and then select one chunk based on that pdev
-        } else {
-            return home_object_->chunk_selector()->chunk_to_hints(chunk_id);
+        pg_id_t pg_id = msg_header->pg_id;
+        // check whether the pg exists
+        if (!home_object_->pg_exists(pg_id)) {
+            LOGI("can not find pg {} when getting blk_alloc_hint", pg_id);
+            // TODO:: add error code to indicate the pg not found in homestore side
+            return folly::makeUnexpected(homestore::ReplServiceError::NO_SPACE_LEFT);
         }
-        break;
+
+        auto v_chunkID = home_object_->resolve_v_chunk_id_from_msg(header);
+        if (!v_chunkID.has_value()) {
+            LOGW("can not resolve v_chunk_id from msg");
+            return folly::makeUnexpected(homestore::ReplServiceError::FAILED);
+        }
+        homestore::blk_alloc_hints hints;
+        // Both chunk_num_t and pg_id_t are of type uint16_t.
+        static_assert(std::is_same< pg_id_t, uint16_t >::value, "pg_id_t is not uint16_t");
+        static_assert(std::is_same< homestore::chunk_num_t, uint16_t >::value, "chunk_num_t is not uint16_t");
+        homestore::chunk_num_t v_chunk_id = v_chunkID.value();
+        hints.application_hint = ((uint64_t)pg_id << 16) | v_chunk_id;
+        return hints;
     }
 
     case ReplicationMessageType::SEAL_SHARD_MSG: {
-        auto chunk_id = home_object_->get_shard_chunk(msg_header->shard_id);
-        RELEASE_ASSERT(chunk_id.has_value(), "unknown shard id to get binded chunk");
+        auto p_chunkID = home_object_->get_shard_p_chunk_id(msg_header->shard_id);
+        if (!p_chunkID.has_value()) {
+            LOGW("shard does not exist, underlying engine will retry this later", msg_header->shard_id);
+            return folly::makeUnexpected(homestore::ReplServiceError::RESULT_NOT_EXIST_YET);
+        }
         homestore::blk_alloc_hints hints;
-        hints.chunk_id_hint = chunk_id.value();
+        hints.chunk_id_hint = p_chunkID.value();
         return hints;
     }
 
@@ -166,11 +204,13 @@ ReplicationStateMachine::create_snapshot(std::shared_ptr< homestore::snapshot_co
     auto s = ctx->nuraft_snapshot();
 
     std::lock_guard lk(m_snapshot_lock);
-    auto current = dynamic_pointer_cast< homestore::nuraft_snapshot_context >(m_snapshot_context)->nuraft_snapshot();
-    if (s->get_last_log_idx() < current->get_last_log_idx()) {
-        LOGI("Skipping create snapshot new idx/term: {}/{}  current idx/term: {}/{}", s->get_last_log_idx(),
-             s->get_last_log_term(), current->get_last_log_idx(), current->get_last_log_term());
-        return folly::makeSemiFuture< homestore::ReplResult< folly::Unit > >(folly::Unit{});
+    if (m_snapshot_context != nullptr) {
+        auto current = dynamic_pointer_cast< homestore::nuraft_snapshot_context >(m_snapshot_context)->nuraft_snapshot();
+        if (s->get_last_log_idx() < current->get_last_log_idx()) {
+            LOGI("Skipping create snapshot new idx/term: {}/{}  current idx/term: {}/{}", s->get_last_log_idx(),
+                 s->get_last_log_term(), current->get_last_log_idx(), current->get_last_log_term());
+            return folly::makeSemiFuture< homestore::ReplResult< folly::Unit > >(folly::Unit{});
+        }
     }
 
     LOGI("create snapshot last_log_idx: {} last_log_term: {}", s->get_last_log_idx(), s->get_last_log_term());
@@ -312,7 +352,13 @@ void ReplicationStateMachine::write_snapshot_data(std::shared_ptr< homestore::sn
             // TODO: Reset all data of current PG - let's resync on a pristine base
         }
 
-        m_snp_rcv_handler->process_pg_snapshot_data(*pg_data);
+        auto ret = m_snp_rcv_handler->process_pg_snapshot_data(*pg_data);
+        if (ret) {
+            // Do not proceed, will request for resending the PG data
+            LOGE("Failed to process PG snapshot data lsn:{} obj_id {} shard {} batch {}, err {}", s->get_last_log_idx(),
+                 obj_id.value, obj_id.shard_seq_num, obj_id.batch_id, ret);
+            return;
+        }
         snp_data->offset =
             objId(HSHomeObject::get_sequence_num_from_shard_id(m_snp_rcv_handler->get_next_shard()), 0).value;
         LOGD("Write snapshot, processed PG data pg_id:{} {}", pg_data->pg_id(), log_suffix);
@@ -331,10 +377,10 @@ void ReplicationStateMachine::write_snapshot_data(std::shared_ptr< homestore::sn
             // Do not proceed, will request for resending the shard data
             LOGE("Failed to process shard snapshot data lsn:{} obj_id {} shard {} batch {}, err {}",
                  s->get_last_log_idx(), obj_id.value, obj_id.shard_seq_num, obj_id.batch_id, ret);
-        } else {
-            // Request for the next batch
-            snp_data->offset = objId(obj_id.shard_seq_num, 1).value;
+            return;
         }
+        // Request for the next batch
+        snp_data->offset = objId(obj_id.shard_seq_num, 1).value;
         LOGD("Write snapshot, processed shard data shard_seq_num:{} {}", obj_id.shard_seq_num, log_suffix);
         return;
     }
