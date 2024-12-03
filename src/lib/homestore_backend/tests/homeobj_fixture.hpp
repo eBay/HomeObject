@@ -36,6 +36,7 @@ public:
     HomeObjectFixture() : rand_blob_size{1u, 16 * 1024}, rand_user_key_size{1u, 1024} {}
 
     void SetUp() override {
+        HSHomeObject::_hs_chunk_size = 20 * Mi;
         _obj_inst = std::dynamic_pointer_cast< HSHomeObject >(g_helper->build_new_homeobject());
         g_helper->sync();
     }
@@ -125,6 +126,19 @@ public:
             // shard creation to complete locally
             std::this_thread::sleep_for(std::chrono::milliseconds(1000));
         }
+
+        // set v_chunk_id to IPC
+        run_on_pg_leader(pg_id, [&]() {
+            auto v_chunkID = _obj_inst->get_shard_v_chunk_id(shard_id);
+            RELEASE_ASSERT(v_chunkID.has_value(), "failed to get shard v_chunk_id");
+            g_helper->set_v_chunk_id(v_chunkID.value());
+        });
+
+        // get v_chunk_id from IPC and compare with local
+        auto leader_v_chunk_id = g_helper->get_v_chunk_id();
+        auto local_v_chunkID = _obj_inst->get_shard_v_chunk_id(shard_id);
+        RELEASE_ASSERT(local_v_chunkID.has_value(), "failed to get shard v_chunk_id");
+        RELEASE_ASSERT(leader_v_chunk_id == local_v_chunkID, "v_chunk_id supposed to be identical");
 
         auto r = _obj_inst->shard_manager()->get_shard(shard_id).get();
         RELEASE_ASSERT(!!r, "failed to get shard {}", shard_id);

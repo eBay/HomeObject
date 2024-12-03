@@ -56,7 +56,7 @@ csharedChunk HeapChunkSelector::select_chunk(homestore::blk_count_t count, const
         // Both chunk_num_t and pg_id_t are of type uint16_t.
         static_assert(std::is_same< pg_id_t, uint16_t >::value, "pg_id_t is not uint16_t");
         static_assert(std::is_same< homestore::chunk_num_t, uint16_t >::value, "chunk_num_t is not uint16_t");
-        uint32_t application_hint = hint.application_hint.value();
+        auto application_hint = hint.application_hint.value();
         pg_id_t pg_id = (uint16_t)(application_hint >> 16 & 0xFFFF);
         homestore::chunk_num_t v_chunk_id = (uint16_t)(application_hint & 0xFFFF);
         return select_specific_chunk(pg_id, v_chunk_id);
@@ -129,12 +129,13 @@ std::optional< uint32_t > HeapChunkSelector::select_chunks_for_pg(pg_id_t pg_id,
         LOGWARNMOD(homeobject, "PG had already created, pg_id {}", pg_id);
         return std::nullopt;
     }
-    if (pg_size == 0) {
-        LOGWARNMOD(homeobject, "Not supported to create empty PG, pg_id {}, pg_size {}", pg_id, pg_size);
+
+    const auto chunk_size = get_chunk_size();
+    if (pg_size < chunk_size) {
+        LOGWARNMOD(homeobject, "pg_size {} is less than chunk_size {}", pg_size, chunk_size);
         return std::nullopt;
     }
 
-    const auto chunk_size = get_chunk_size();
     const uint32_t num_chunk = sisl::round_down(pg_size, chunk_size) / chunk_size;
 
     // Select a pdev with the most available num chunk
