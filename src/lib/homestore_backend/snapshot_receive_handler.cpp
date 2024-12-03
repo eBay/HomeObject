@@ -21,6 +21,8 @@ int HSHomeObject::SnapshotReceiveHandler::process_pg_snapshot_data(ResyncPGMetaD
 
     // Create local PG
     PGInfo pg_info(pg_meta.pg_id());
+    pg_info.size = pg_meta.pg_size();
+    pg_info.chunk_size =  pg_meta.chunk_size();
     std::copy_n(pg_meta.replica_set_uuid()->data(), 16, pg_info.replica_set_uuid.begin());
     for (unsigned int i = 0; i < pg_meta.members()->size(); i++) {
         const auto member = pg_meta.members()->Get(i);

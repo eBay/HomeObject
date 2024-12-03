@@ -270,6 +270,7 @@ int ReplicationStateMachine::read_snapshot_obj(std::shared_ptr< homestore::snaps
     auto obj_id = objId(snp_obj->offset);
     log_str = fmt::format("{} shard_seq_num={} batch_num={}", log_str, obj_id.shard_seq_num, obj_id.batch_id);
 
+    LOGD("read current snp obj {}", log_str)
     //invalid Id
     if (!pg_iter->update_cursor(obj_id)) {
         LOGW("Invalid objId in snapshot read, {}, current shard_seq_num={}, current batch_num={}",
@@ -350,7 +351,8 @@ void ReplicationStateMachine::write_snapshot_obj(std::shared_ptr< homestore::sna
         // Check if the snapshot context is same as the current snapshot context.
         // If not, drop the previous context and re-init a new one
         if (m_snp_rcv_handler->get_context_lsn() != context->get_lsn()) {
-            m_snp_rcv_handler->reset_context(pg_data->pg_id(), context->get_lsn());
+            LOGI("reset context from lsn:{} to lsn:{}", m_snp_rcv_handler->get_context_lsn(), context->get_lsn());
+            m_snp_rcv_handler->reset_context(context->get_lsn(), pg_data->pg_id());
             // TODO: Reset all data of current PG - let's resync on a pristine base
         }
 
