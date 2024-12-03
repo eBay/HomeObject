@@ -196,6 +196,8 @@ TEST_F(HomeObjectFixture, PGBlobIterator) {
     auto u1 = pg_msg->replica_set_uuid();
     auto u2 = pg->pg_info_.replica_set_uuid;
     ASSERT_EQ(std::string(u1->begin(), u1->end()), std::string(u2.begin(), u2.end()));
+    ASSERT_EQ(pg_msg->pg_size(), pg->pg_info_.size);
+    ASSERT_EQ(pg_msg->chunk_size(), pg->pg_info_.chunk_size);
     ASSERT_EQ(pg_msg->blob_seq_num(), pg->durable_entities().blob_sequence_num.load());
     ASSERT_EQ(pg_msg->shard_seq_num(), pg->shard_sequence_num_);
 
@@ -300,6 +302,9 @@ TEST_F(HomeObjectFixture, SnapshotReceiveHandler) {
     // We have to create a PG first to init repl_dev
     constexpr pg_id_t pg_id = 1;
     create_pg(pg_id); // to create repl dev
+    auto iter = _obj_inst->_pg_map.find(pg_id);
+    ASSERT_TRUE(iter != _obj_inst->_pg_map.end());
+    auto pg = iter->second.get();
     PGStats stats;
     ASSERT_TRUE(_obj_inst->pg_manager()->get_stats(pg_id, stats));
     auto r_dev = homestore::HomeStore::instance()->repl_service().get_repl_dev(stats.replica_set_uuid);
@@ -324,7 +329,7 @@ TEST_F(HomeObjectFixture, SnapshotReceiveHandler) {
         shard_ids.push_back(i);
     }
     auto pg_entry =
-        CreateResyncPGMetaDataDirect(builder, pg_id, &uuid, blob_seq_num, num_shards_per_pg, &members, &shard_ids);
+        CreateResyncPGMetaDataDirect(builder, pg_id, &uuid, pg->pg_info_.size, pg->pg_info_.chunk_size, blob_seq_num, num_shards_per_pg, &members, &shard_ids);
     builder.Finish(pg_entry);
     auto pg_meta = GetResyncPGMetaData(builder.GetBufferPointer());
     auto ret = handler->process_pg_snapshot_data(*pg_meta);
