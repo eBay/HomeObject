@@ -92,7 +92,7 @@ void ReplicationStateMachine::on_rollback(int64_t lsn, sisl::blob const& header,
     }
 }
 
-void ReplicationStateMachine::on_restart() { home_object_->on_replica_restart(); }
+void ReplicationStateMachine::on_restart() { LOGD("ReplicationStateMachine::on_restart");}
 
 void ReplicationStateMachine::on_error(ReplServiceError error, const sisl::blob& header, const sisl::blob& key,
                                        cintrusive< repl_req_ctx >& ctx) {
@@ -231,8 +231,8 @@ std::shared_ptr< homestore::snapshot_context > ReplicationStateMachine::last_sna
     return snp;
 }
 
-int ReplicationStateMachine::read_snapshot_data(std::shared_ptr< homestore::snapshot_context > context,
-                                                std::shared_ptr< homestore::snapshot_data > snp_data) {
+int ReplicationStateMachine::read_snapshot_obj(std::shared_ptr< homestore::snapshot_context > context,
+                                                std::shared_ptr< homestore::snapshot_obj > snp_data) {
     HSHomeObject::PGBlobIterator* pg_iter = nullptr;
     auto s = dynamic_pointer_cast< homestore::nuraft_snapshot_context >(context)->nuraft_snapshot();
 
@@ -304,8 +304,8 @@ int ReplicationStateMachine::read_snapshot_data(std::shared_ptr< homestore::snap
     return 0;
 }
 
-void ReplicationStateMachine::write_snapshot_data(std::shared_ptr< homestore::snapshot_context > context,
-                                                  std::shared_ptr< homestore::snapshot_data > snp_data) {
+void ReplicationStateMachine::write_snapshot_obj(std::shared_ptr< homestore::snapshot_context > context,
+                                                  std::shared_ptr< homestore::snapshot_obj > snp_data) {
     RELEASE_ASSERT(context != nullptr, "Context null");
     RELEASE_ASSERT(snp_data != nullptr, "Snapshot data null");
     auto r_dev = repl_dev();
