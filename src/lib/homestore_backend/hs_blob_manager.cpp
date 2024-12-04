@@ -101,7 +101,7 @@ BlobManager::AsyncResult< blob_id_t > HSHomeObject::_put_blob(ShardInfo const& s
 
     if (!repl_dev->is_leader()) {
         LOGW("failed to put blob for pg [{}], shard [{}], not leader", pg_id, shard.id);
-        return folly::makeUnexpected(BlobErrorCode::NOT_LEADER);
+        return folly::makeUnexpected(BlobError(BlobErrorCode::NOT_LEADER, repl_dev->get_leader_id()));
     }
 
     // Create a put_blob request which allocates for header, key and blob_header, user_key. Data sgs are added later
@@ -385,7 +385,7 @@ BlobManager::NullAsyncResult HSHomeObject::_del_blob(ShardInfo const& shard, blo
 
     if (!repl_dev->is_leader()) {
         LOGW("failed to del blob for pg [{}], shard [{}], blob_id [{}], not leader", pg_id, shard.id, blob_id);
-        return folly::makeUnexpected(BlobErrorCode::NOT_LEADER);
+        return folly::makeUnexpected(BlobError(BlobErrorCode::NOT_LEADER, repl_dev->get_leader_id()));
     }
 
     // Create an unaligned header request unaligned
