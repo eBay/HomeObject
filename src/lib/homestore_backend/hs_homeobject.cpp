@@ -313,6 +313,7 @@ HomeObjectStats HSHomeObject::_get_stats() const {
 
     stats.num_open_shards = num_open_shards;
     stats.avail_open_shards = chunk_selector()->total_chunks() - num_open_shards;
+    stats.num_disks =  chunk_selector()->total_disks();
     return stats;
 }
 
