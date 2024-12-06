@@ -152,6 +152,8 @@ TEST_F(HeapChunkSelectorTest, test_for_each_chunk) {
     ASSERT_EQ(size.load(), 18);
 }
 
+TEST_F(HeapChunkSelectorTest, test_total_disks) { ASSERT_EQ(HCS.total_disks(), 3); }
+
 TEST_F(HeapChunkSelectorTest, test_identical_layout) {
     const homestore::blk_count_t count = 1;
     homestore::blk_alloc_hints hints;
