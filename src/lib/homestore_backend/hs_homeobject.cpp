@@ -60,6 +60,10 @@ public:
         return it->second;
     }
 
+    void on_repl_devs_init_completed() override {
+        _home_object->on_replica_restart();
+    }
+
     std::pair< std::string, uint16_t > lookup_peer(homestore::replica_id_t uuid) const override {
         std::string endpoint;
         // for folly::uri to parse correctly, we need to add "http://" prefix
@@ -195,13 +199,14 @@ void HSHomeObject::init_homestore() {
                                   .chunk_sel_type = chunk_selector_type_t::CUSTOM}},
             });
         }
-
+        // We dont have any repl dev now, explicitly call init_completed_cb() where we register PG/Shard meta types.
+        repl_app->on_repl_devs_init_completed();
         // Create a superblock that contains our SvcId
         auto svc_sb = homestore::superblk< svc_info_superblk_t >(_svc_meta_name);
         svc_sb.create(sizeof(svc_info_superblk_t));
         svc_sb->svc_id_ = _our_id;
         svc_sb.write();
-        on_replica_restart();
+
     } else {
         RELEASE_ASSERT(!_our_id.is_nil(), "No SvcId read after HomeStore recovery!");
         auto const new_id = app->discover_svcid(_our_id);
