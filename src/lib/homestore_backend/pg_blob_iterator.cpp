@@ -64,7 +64,7 @@ objId HSHomeObject::PGBlobIterator::expected_next_obj_id() {
         return objId(cur_obj_id_.shard_seq_num, cur_obj_id_.batch_id + 1);
     }
     //next shard
-    if (cur_shard_idx_ < shard_list_.size() - 1) {
+    if (cur_shard_idx_ < static_cast< int64_t >(shard_list_.size() - 1)) {
         auto next_shard_seq_num = shard_list_[cur_shard_idx_ + 1].info.id & 0xFFFFFFFFFFFF;
         return objId(next_shard_seq_num, 0);
     }
@@ -103,7 +103,7 @@ bool HSHomeObject::PGBlobIterator::create_pg_snapshot_data(sisl::io_blob_safe& m
         shard_ids.push_back(shard.info.id);
     }
 
-    auto pg_entry = CreateResyncPGMetaDataDirect(builder_, pg_info.id, &uuid, pg->durable_entities().blob_sequence_num,
+    auto pg_entry = CreateResyncPGMetaDataDirect(builder_, pg_info.id, &uuid, pg_info.size, pg_info.chunk_size, pg->durable_entities().blob_sequence_num,
                                                  pg->shard_sequence_num_, &members, &shard_ids);
     builder_.FinishSizePrefixed(pg_entry);
 
@@ -212,7 +212,7 @@ bool HSHomeObject::PGBlobIterator::create_blobs_snapshot_data(sisl::io_blob_safe
         }
 
         sisl::io_blob_safe blob;
-        auto retries = HS_BACKEND_DYNAMIC_CONFIG(snapshot_blob_load_retry);
+        uint8_t retries = HS_BACKEND_DYNAMIC_CONFIG(snapshot_blob_load_retry);
         for (int i = 0; i < retries; i++) {
             auto result = load_blob_data(info, state).get();
             if (result.hasError() && result.error().code == BlobErrorCode::READ_FAILED) {
@@ -241,7 +241,7 @@ bool HSHomeObject::PGBlobIterator::create_blobs_snapshot_data(sisl::io_blob_safe
     builder_.FinishSizePrefixed(
         CreateResyncBlobDataBatchDirect(builder_, &blob_entries, end_of_shard));
 
-    LOGD("create blobs snapshot data batch: shard_id={}, batch_num={}, total_bytes={}, blob_num={}, end_of_shard={}",
+    LOGD("create blobs snapshot data batch: shard_seq_num={}, batch_num={}, total_bytes={}, blob_num={}, end_of_shard={}",
          cur_obj_id_.shard_seq_num, cur_obj_id_.batch_id, total_bytes, blob_entries.size(), end_of_shard);
 
     pack_resync_message(data_blob, SyncMessageType::SHARD_BATCH);
