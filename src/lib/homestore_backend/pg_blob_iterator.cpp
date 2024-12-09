@@ -12,9 +12,7 @@
 namespace homeobject {
 HSHomeObject::PGBlobIterator::PGBlobIterator(HSHomeObject& home_obj, homestore::group_id_t group_id,
                                              uint64_t upto_lsn) :
-    home_obj_(home_obj),
-    group_id_(group_id),
-    snp_start_lsn_(upto_lsn) {
+        home_obj_(home_obj), group_id_(group_id), snp_start_lsn_(upto_lsn) {
     auto pg = get_pg_metadata();
     pg_id_ = pg->pg_info_.id;
     repl_dev_ = static_cast< HS_PG* >(pg)->repl_dev_;
@@ -22,12 +20,16 @@ HSHomeObject::PGBlobIterator::PGBlobIterator(HSHomeObject& home_obj, homestore::
     if (max_batch_size_ == 0) { max_batch_size_ = DEFAULT_MAX_BATCH_SIZE_MB * Mi; }
 
     if (upto_lsn != 0) {
-        // Iterate all shards and its blob which have lsn <= upto_lsn
-        for (auto& shard : pg->shards_) { if (shard->info.lsn <= upto_lsn) { shard_list_.emplace_back(shard->info); } }
-        //sort shard list by <vchunkid, lsn>
-        std::sort(shard_list_.begin(), shard_list_.end(), [](const ShardInfo& a, const ShardInfo& b) {
-            //TODO compare vchunk id
-            return a.lsn < b.lsn;
+        // Iterate all shards and its blobs which have lsn <= upto_lsn
+        for (auto& shard : pg->shards_) {
+            if (shard->info.lsn <= upto_lsn) {
+                auto v_chunk_id = home_obj_.get_shard_v_chunk_id(shard->info.id);
+                shard_list_.emplace_back(shard->info, v_chunk_id.value());
+            }
+        }
+        // sort shard list by <vchunkid, lsn> to ensure open shards positioned after sealed shards
+        std::ranges::sort(shard_list_, [](ShardEntry& a, ShardEntry& b) {
+            return a.v_chunk_num != b.v_chunk_num ? a.v_chunk_num < b.v_chunk_num : a.info.lsn < b.info.lsn;
         });
     }
 }
@@ -62,8 +64,8 @@ objId HSHomeObject::PGBlobIterator::expected_next_obj_id() {
         return objId(cur_obj_id_.shard_seq_num, cur_obj_id_.batch_id + 1);
     }
     //next shard
-    if (cur_shard_idx_ < shard_list_.size() - 1) {
-        auto next_shard_seq_num = shard_list_[cur_shard_idx_+1].id & 0xFFFFFFFFFFFF;
+    if (cur_shard_idx_ < static_cast< int64_t >(shard_list_.size() - 1)) {
+        auto next_shard_seq_num = shard_list_[cur_shard_idx_ + 1].info.id & 0xFFFFFFFFFFFF;
         return objId(next_shard_seq_num, 0);
     }
     return objId(LAST_OBJ_ID);
@@ -88,7 +90,7 @@ bool HSHomeObject::PGBlobIterator::create_pg_snapshot_data(sisl::io_blob_safe& m
         return false;
     }
     auto pg_info = pg->pg_info_;
-    
+
     std::vector< std::uint8_t > uuid(pg_info.replica_set_uuid.begin(), pg_info.replica_set_uuid.end());
 
     std::vector< ::flatbuffers::Offset< homeobject::Member > > members;
@@ -97,9 +99,11 @@ bool HSHomeObject::PGBlobIterator::create_pg_snapshot_data(sisl::io_blob_safe& m
         members.push_back(CreateMemberDirect(builder_, &id, member.name.c_str(), member.priority));
     }
     std::vector< uint64_t > shard_ids;
-    for (auto& shard : shard_list_) { shard_ids.push_back(shard.id); }
+    for (auto& shard : shard_list_) {
+        shard_ids.push_back(shard.info.id);
+    }
 
-    auto pg_entry = CreateResyncPGMetaDataDirect(builder_, pg_info.id, &uuid, pg->durable_entities().blob_sequence_num,
+    auto pg_entry = CreateResyncPGMetaDataDirect(builder_, pg_info.id, &uuid, pg_info.size, pg_info.chunk_size, pg->durable_entities().blob_sequence_num,
                                                  pg->shard_sequence_num_, &members, &shard_ids);
     builder_.FinishSizePrefixed(pg_entry);
 
@@ -116,12 +120,9 @@ bool HSHomeObject::PGBlobIterator::generate_shard_blob_list() {
 
 bool HSHomeObject::PGBlobIterator::create_shard_snapshot_data(sisl::io_blob_safe& meta_blob) {
     auto shard = shard_list_[cur_shard_idx_];
-
-    //TODO fill vchunk
-    auto vchunk_id = 0;
-    auto shard_entry = CreateResyncShardMetaData(builder_, shard.id, pg_id_, uint8_t(shard.state), shard.lsn,
-                                                 shard.created_time, shard.last_modified_time,
-                                                 shard.total_capacity_bytes, vchunk_id);
+    auto shard_entry = CreateResyncShardMetaData(
+        builder_, shard.info.id, pg_id_, static_cast< uint8_t >(shard.info.state), shard.info.lsn,
+        shard.info.created_time, shard.info.last_modified_time, shard.info.total_capacity_bytes, shard.v_chunk_num);
 
     builder_.FinishSizePrefixed(shard_entry);
 
@@ -211,7 +212,7 @@ bool HSHomeObject::PGBlobIterator::create_blobs_snapshot_data(sisl::io_blob_safe
         }
 
         sisl::io_blob_safe blob;
-        auto retries = HS_BACKEND_DYNAMIC_CONFIG(snapshot_blob_load_retry);
+        uint8_t retries = HS_BACKEND_DYNAMIC_CONFIG(snapshot_blob_load_retry);
         for (int i = 0; i < retries; i++) {
             auto result = load_blob_data(info, state).get();
             if (result.hasError() && result.error().code == BlobErrorCode::READ_FAILED) {
@@ -240,7 +241,7 @@ bool HSHomeObject::PGBlobIterator::create_blobs_snapshot_data(sisl::io_blob_safe
     builder_.FinishSizePrefixed(
         CreateResyncBlobDataBatchDirect(builder_, &blob_entries, end_of_shard));
 
-    LOGD("create blobs snapshot data batch: shard_id={}, batch_num={}, total_bytes={}, blob_num={}, end_of_shard={}",
+    LOGD("create blobs snapshot data batch: shard_seq_num={}, batch_num={}, total_bytes={}, blob_num={}, end_of_shard={}",
          cur_obj_id_.shard_seq_num, cur_obj_id_.batch_id, total_bytes, blob_entries.size(), end_of_shard);
 
     pack_resync_message(data_blob, SyncMessageType::SHARD_BATCH);

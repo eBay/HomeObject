@@ -151,6 +151,18 @@ public:
 
     uint32_t get_chunk_size() const;
 
+    /**
+     * @brief Returns the number of disks we seen
+     *
+     * Warning : calling this before HS fully start might getting wrong result.
+     *
+     * This function returns the number of disks the chunk selector seen.
+     * It should be the accurate source that how many disks in the system for data.
+     * If a disk is down in degraded mode, it wont be load and no chunk will be
+     * added into selector.
+     */
+    uint32_t total_disks() const { return m_per_dev_heap.size(); }
+
 private:
     void add_chunk_internal(const chunk_num_t, bool add_to_heap = true);
 

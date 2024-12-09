@@ -323,8 +323,8 @@ public:
 
         std::vector<ShardInfo> shard_list_{0};
 
-        objId cur_obj_id_{1, 0};
-        uint64_t cur_shard_idx_{0};
+        objId cur_obj_id_{0, 0};
+        int64_t cur_shard_idx_{-1};
         std::vector<BlobInfo> cur_blob_list_{0};
         uint64_t cur_start_blob_idx_{0};
         uint64_t cur_batch_blob_count_{0};
