@@ -92,7 +92,7 @@ void ReplicationStateMachine::on_rollback(int64_t lsn, sisl::blob const& header,
     }
 }
 
-void ReplicationStateMachine::on_restart() { home_object_->on_replica_restart(); }
+void ReplicationStateMachine::on_restart() { LOGD("ReplicationStateMachine::on_restart");}
 
 void ReplicationStateMachine::on_error(ReplServiceError error, const sisl::blob& header, const sisl::blob& key,
                                        cintrusive< repl_req_ctx >& ctx) {
