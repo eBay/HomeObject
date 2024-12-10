@@ -73,7 +73,7 @@ uint16_t VChunk::get_chunk_id() const { return m_internal_chunk->get_chunk_id();
 blk_num_t VChunk::get_total_blks() const { return m_internal_chunk->get_total_blks(); }
 
 uint64_t VChunk::size() const { return m_internal_chunk->size(); }
-
+void VChunk::reset() {}
 cshared< Chunk > VChunk::get_internal_chunk() const { return m_internal_chunk; }
 
 } // namespace homestore
@@ -273,6 +273,18 @@ TEST_F(HeapChunkSelectorTest, test_select_specific_chunk_and_release_chunk) {
         ASSERT_EQ(pg_chunk_collection->available_blk_count, 1 + 2);
         ASSERT_EQ(pg_id, chunk->get_pdev_id()); // in this ut, pg_id is same as pdev id
         ASSERT_EQ(p_chunk_id, chunk->get_chunk_id());
+    }
+}
+
+TEST_F(HeapChunkSelectorTest, test_return_pg_chunks) {
+    for (uint16_t pg_id = 1; pg_id < 4; ++pg_id) {
+        ASSERT_TRUE(HCS.return_pg_chunks_to_dev_heap(pg_id));
+        ASSERT_EQ(HCS.m_per_pg_chunks.find(pg_id), HCS.m_per_pg_chunks.end());
+        ASSERT_EQ(HCS.m_per_dev_heap[pg_id]->available_blk_count, 1 + 2 + 3);
+        ASSERT_EQ(HCS.m_per_dev_heap[pg_id]->available_blk_count, HCS.m_per_dev_heap[pg_id]->m_total_blks);
+    }
+    for (const auto& [_, chunk] : HCS.m_chunks) {
+        ASSERT_EQ(chunk->m_state, ChunkState::AVAILABLE);
     }
 }
 

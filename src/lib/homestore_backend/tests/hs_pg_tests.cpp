@@ -124,6 +124,11 @@ TEST_F(HomeObjectFixture, PGSizeLessThanChunkTest) {
 }
 
 TEST_F(HomeObjectFixture, PGRecoveryTest) {
+    auto id = _obj_inst->our_uuid();
+    // test recovery with pristine state firstly
+    restart();
+    EXPECT_EQ(id, _obj_inst->our_uuid());
+
     // create 10 pg
     for (pg_id_t i = 1; i < 11; i++) {
         pg_id_t pg_id{i};
@@ -131,12 +136,8 @@ TEST_F(HomeObjectFixture, PGRecoveryTest) {
     }
 
     // get pg map
-    HSHomeObject* ho = dynamic_cast< HSHomeObject* >(_obj_inst.get());
     std::map< pg_id_t, std::unique_ptr< PG > > pg_map;
-    pg_map.swap(ho->_pg_map);
-
-    // get uuid
-    auto id = ho->our_uuid();
+    pg_map.swap(_obj_inst->_pg_map);
 
     // restart
     restart();
