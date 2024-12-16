@@ -69,5 +69,12 @@ target_link_libraries(homestore_test_dynamic PUBLIC
     ${COMMON_TEST_DEPS}
 )
 
-add_test(NAME HomestoreTestDynamic COMMAND homestore_test_dynamic -csv error --executor immediate --config_path ./ --override_config homestore_config.consensus.snapshot_freq_distance:0)
+add_test(NAME HomestoreTestDynamic
+        COMMAND homestore_test_dynamic -csv error --executor immediate --config_path ./
+        --override_config homestore_config.consensus.snapshot_freq_distance:0)
 
+# To test both baseline & incremental resync functionality, we use 13 to minimize the likelihood of it being a divisor of the total LSN (currently 30)
+add_test(NAME HomestoreTestDynamicWithResync
+        COMMAND homestore_test_dynamic -csv error --executor immediate --config_path ./
+        --override_config homestore_config.consensus.snapshot_freq_distance:13
+        --override_config homestore_config.consensus.num_reserved_log_items=13)

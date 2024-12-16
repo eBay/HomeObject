@@ -33,6 +33,13 @@ int HSHomeObject::SnapshotReceiveHandler::process_pg_snapshot_data(ResyncPGMetaD
         pg_member.priority = member->priority();
         pg_info.members.insert(pg_member);
     }
+
+#ifdef _PRERELEASE
+    if (iomgr_flip::instance()->test_flip("snapshot_receiver_pg_error")) {
+        LOGW("Simulating PG snapshot error");
+        return CREATE_PG_ERR;
+    }
+#endif
     auto ret = home_obj_.local_create_pg(repl_dev_, pg_info);
     if (ret.hasError()) {
         LOGE("Failed to create PG {}, err {}", pg_meta.pg_id(), ret.error());
@@ -76,6 +83,20 @@ int HSHomeObject::SnapshotReceiveHandler::process_shard_snapshot_data(ResyncShar
     }
     shard_sb->p_chunk_id = blk_id.to_single_blkid().chunk_num();
 
+    auto free_allocated_blks = [blk_id]() {
+        homestore::data_service().async_free_blk(blk_id).thenValue([blk_id](auto&& err) {
+            LOGD("Freed blk_id:{} due to failure in persisting shard info, err {}", blk_id.to_string(),
+                 err ? err.message() : "nil");
+        });
+    };
+
+#ifdef _PRERELEASE
+    if (iomgr_flip::instance()->test_flip("snapshot_receiver_shard_write_data_error")) {
+        LOGW("Simulating shard snapshot write data error");
+        free_allocated_blks();
+        return WRITE_DATA_ERR;
+    }
+#endif
     const auto ret = homestore::data_service()
                          .async_write(r_cast< char const* >(aligned_buf.cbytes()), aligned_buf.size(), blk_id)
                          .thenValue([&blk_id](auto&& err) -> BlobManager::AsyncResult< blob_id_t > {
@@ -90,6 +111,7 @@ int HSHomeObject::SnapshotReceiveHandler::process_shard_snapshot_data(ResyncShar
                          .get();
     if (ret.hasError()) {
         LOGE("Failed to write shard info of shard_id {} to blk_id:{}", shard_meta.shard_id(), blk_id.to_string());
+        free_allocated_blks();
         return WRITE_DATA_ERR;
     }
 
@@ -178,6 +200,13 @@ int HSHomeObject::SnapshotReceiveHandler::process_blobs_snapshot_data(ResyncBlob
             });
         };
 
+#ifdef _PRERELEASE
+        if (iomgr_flip::instance()->test_flip("snapshot_receiver_blob_write_data_error")) {
+            LOGW("Simulating blob snapshot write data error");
+            free_allocated_blks();
+            return WRITE_DATA_ERR;
+        }
+#endif
         const auto ret = homestore::data_service()
                              .async_write(r_cast< char const* >(aligned_buf.cbytes()), aligned_buf.size(), blk_id)
                              .thenValue([&blk_id](auto&& err) -> BlobManager::AsyncResult< blob_id_t > {
