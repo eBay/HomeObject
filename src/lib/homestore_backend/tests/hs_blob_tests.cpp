@@ -290,7 +290,6 @@ TEST_F(HomeObjectFixture, PGBlobIterator) {
 }
 
 TEST_F(HomeObjectFixture, SnapshotReceiveHandler) {
-    // MUST TEST WITH replica=1
     constexpr uint64_t snp_lsn = 1;
     constexpr uint64_t num_shards_per_pg = 3;
     constexpr uint64_t num_open_shards_per_pg = 2; // Should be less than num_shards_per_pg

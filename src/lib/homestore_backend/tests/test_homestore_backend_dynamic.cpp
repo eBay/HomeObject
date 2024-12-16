@@ -57,7 +57,7 @@ TEST_F(HomeObjectFixture, ReplaceMember) {
     put_blobs(pg_shard_id_vec, num_blobs_per_shard, pg_blob_id);
 
     verify_get_blob(pg_shard_id_vec, num_blobs_per_shard);
-    verify_obj_count(1, num_blobs_per_shard, num_shards_per_pg, false);
+    verify_obj_count(1, num_shards_per_pg, num_blobs_per_shard, false);
 
     // all the replicas , including the spare ones, sync at this point
     g_helper->sync();
@@ -65,6 +65,19 @@ TEST_F(HomeObjectFixture, ReplaceMember) {
     // step 3: replace a member
     auto out_member_id = g_helper->replica_id(num_replicas - 1);
     auto in_member_id = g_helper->replica_id(num_replicas); /*spare replica*/
+
+#ifdef _PRERELEASE
+    // Set flips (name, count, percentage) to simulate different error scenarios
+    set_basic_flip("pg_blob_iterator_create_snapshot_data_error", 1);     // simulate read pg snapshot data error
+    set_basic_flip("pg_blob_iterator_generate_shard_blob_list_error", 1); // simulate generate shard blob list error
+    // simulate load blob data error - do not enable until completing the resume logic
+    // set_basic_flip("pg_blob_iterator_load_blob_data_error", 1, 10);
+
+    set_basic_flip("state_machine_write_corrupted_data", 3, 25);       // simulate random data corruption
+    set_basic_flip("snapshot_receiver_pg_error", 1);                   // simulate pg creation error
+    set_basic_flip("snapshot_receiver_shard_write_data_error", 2, 33); // simulate shard write data error
+    set_basic_flip("snapshot_receiver_blob_write_data_error", 4, 15);  // simulate blob write data error
+#endif
 
     run_on_pg_leader(pg_id, [&]() {
         auto r = _obj_inst->pg_manager()
