@@ -40,6 +40,7 @@ HSHomeObject::recover_index_table(homestore::superblk< homestore::index_table_sb
     return index_table;
 }
 
+//The bool result indicates if the blob already exists, but if the existing pbas is the same as the new pbas, it will return homestore::btree_status_t::success.
 std::pair< bool, homestore::btree_status_t > HSHomeObject::add_to_index_table(shared< BlobIndexTable > index_table,
                                                                               const BlobInfo& blob_info) {
     BlobRouteKey index_key{BlobRoute{blob_info.shard_id, blob_info.blob_id}};
@@ -48,8 +49,17 @@ std::pair< bool, homestore::btree_status_t > HSHomeObject::add_to_index_table(sh
                                              &existing_value};
     auto status = index_table->put(put_req);
     if (status != homestore::btree_status_t::success) {
+        if (existing_value.pbas().is_valid() && existing_value.pbas() == blob_info.pbas) {
+            LOGT(
+                "blob already exists, but existing pbas is the same as the new pbas, ignore it, blob_id={}, pbas={}, status={}",
+                blob_info.blob_id, blob_info.pbas.to_string(), status);
+            return {true, homestore::btree_status_t::success};
+        }
         if (existing_value.pbas().is_valid() || existing_value.pbas() == tombstone_pbas) {
             // Check if the blob id already exists in the index or its tombstone.
+            LOGW(
+                "blob already exists, and conflict occurs, blob_id={}, existing pbas={}, new pbas={}, status={}",
+                blob_info.blob_id, existing_value.pbas().to_string(), blob_info.pbas.to_string(), status);
             return {true, status};
         }
         LOGE("Failed to put to index table error {}", status);
