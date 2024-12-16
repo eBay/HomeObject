@@ -41,9 +41,9 @@ PGError toPgError(ReplServiceError const& e) {
     case ReplServiceError::RETRY_REQUEST:
         return PGError::RETRY_REQUEST;
     /* TODO: enable this after add erro type to homestore
-    case ReplServiceError::CRC_MISMATCH:
-        return PGError::CRC_MISMATCH;
-     */
+            case ReplServiceError::CRC_MISMATCH:
+                return PGError::CRC_MISMATCH;
+             */
     case ReplServiceError::OK:
         DEBUG_ASSERT(false, "Should not process OK!");
         [[fallthrough]];
