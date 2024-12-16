@@ -49,8 +49,9 @@ PGError toPgError(ReplServiceError const& e) {
         [[fallthrough]];
     case ReplServiceError::FAILED:
         return PGError::UNKNOWN;
+    default:
+        return PGError::UNKNOWN;
     }
-    return PGError::UNKNOWN;
 }
 
 [[maybe_unused]] static homestore::ReplDev& pg_repl_dev(PG const& pg) {
