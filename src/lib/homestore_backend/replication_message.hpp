@@ -67,6 +67,7 @@ struct ReplicationMessageHeader : public BaseMessageHeader<ReplicationMessageHea
     pg_id_t pg_id{0};
     uint8_t reserved_pad[4]{};
     shard_id_t shard_id{0};
+    blob_id_t blob_id{0};
 
     bool corrupted() const{
         if (magic_num != HOMEOBJECT_REPLICATION_MAGIC || protocol_version != HOMEOBJECT_REPLICATION_PROTOCOL_VERSION_V1) {

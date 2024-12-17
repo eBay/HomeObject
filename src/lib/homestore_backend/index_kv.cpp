@@ -40,6 +40,7 @@ HSHomeObject::recover_index_table(homestore::superblk< homestore::index_table_sb
     return index_table;
 }
 
+//The bool result indicates if the blob already exists and has conflict with the input value.
 std::pair< bool, homestore::btree_status_t > HSHomeObject::add_to_index_table(shared< BlobIndexTable > index_table,
                                                                               const BlobInfo& blob_info) {
     BlobRouteKey index_key{BlobRoute{blob_info.shard_id, blob_info.blob_id}};
@@ -48,7 +49,8 @@ std::pair< bool, homestore::btree_status_t > HSHomeObject::add_to_index_table(sh
                                              &existing_value};
     auto status = index_table->put(put_req);
     if (status != homestore::btree_status_t::success) {
-        if (existing_value.pbas().is_valid() || existing_value.pbas() == tombstone_pbas) {
+        if (existing_value.pbas().is_valid() || existing_value.pbas() == tombstone_pbas
+            || existing_value.pbas() != blob_info.pbas) {
             // Check if the blob id already exists in the index or its tombstone.
             return {true, status};
         }
