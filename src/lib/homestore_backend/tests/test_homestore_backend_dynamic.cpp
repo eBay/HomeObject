@@ -66,6 +66,15 @@ TEST_F(HomeObjectFixture, ReplaceMember) {
     auto out_member_id = g_helper->replica_id(num_replicas - 1);
     auto in_member_id = g_helper->replica_id(num_replicas); /*spare replica*/
 
+    // get out_member's index_table_uuid with pg_id
+    string index_table_uuid_str;
+    if (out_member_id == g_helper->my_replica_id()) {
+        auto iter = _obj_inst->_pg_map.find(pg_id);
+        RELEASE_ASSERT(iter != _obj_inst->_pg_map.end(), "PG not found");
+        auto hs_pg = static_cast< homeobject::HSHomeObject::HS_PG* >(iter->second.get());
+        index_table_uuid_str = boost::uuids::to_string(hs_pg->pg_sb_->index_table_uuid);
+    }
+
     run_on_pg_leader(pg_id, [&]() {
         auto r = _obj_inst->pg_manager()
                      ->replace_member(pg_id, out_member_id, PGMember{in_member_id, "new_member", 0})
@@ -90,6 +99,40 @@ TEST_F(HomeObjectFixture, ReplaceMember) {
         verify_get_blob(pg_shard_id_vec, num_blobs_per_shard);
         verify_obj_count(1, num_blobs_per_shard, num_shards_per_pg, false);
     });
+
+    // step 5: Verify no pg related data in out_member
+    if (out_member_id == g_helper->my_replica_id()) {
+        while (am_i_in_pg(pg_id)) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+            LOGINFO("old member is waiting to leave pg {}", pg_id);
+        }
+
+        verify_pg_destroy(pg_id, index_table_uuid_str, pg_shard_id_vec[pg_id]);
+        // since this case out_member don't have any pg, so we can check each chunk.
+        for (const auto& [_, chunk] : _obj_inst->chunk_selector()->m_chunks) {
+            ASSERT_EQ(chunk->m_state, ChunkState::AVAILABLE);
+            ASSERT_EQ(chunk->available_blks(), chunk->get_total_blks());
+        }
+        LOGINFO("check no pg related data in out member successfully");
+    }
+
+    // Step 6: restart, verify the blobs again on all members, including the new spare replica, and out_member
+    restart();
+    run_if_in_pg(pg_id, [&]() {
+        verify_get_blob(pg_shard_id_vec, num_blobs_per_shard);
+        verify_obj_count(1, num_blobs_per_shard, num_shards_per_pg, false);
+        LOGINFO("After restart, check pg related data in pg members successfully");
+    });
+
+    if (out_member_id == g_helper->my_replica_id()) {
+        verify_pg_destroy(pg_id, index_table_uuid_str, pg_shard_id_vec[pg_id]);
+        // since this case out_member don't have any pg, so we can check each chunk.
+        for (const auto& [_, chunk] : _obj_inst->chunk_selector()->m_chunks) {
+            ASSERT_EQ(chunk->m_state, ChunkState::AVAILABLE);
+            ASSERT_EQ(chunk->available_blks(), chunk->get_total_blks());
+        }
+        LOGINFO("After restart, check no pg related data in out member successfully");
+    }
 }
 
 SISL_OPTION_GROUP(

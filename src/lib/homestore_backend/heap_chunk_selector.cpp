@@ -118,6 +118,54 @@ bool HeapChunkSelector::release_chunk(const pg_id_t pg_id, const chunk_num_t v_c
     return true;
 }
 
+bool HeapChunkSelector::reset_pg_chunks(pg_id_t pg_id) {
+    std::shared_lock lock_guard(m_chunk_selector_mtx);
+    auto pg_it = m_per_pg_chunks.find(pg_id);
+    if (pg_it == m_per_pg_chunks.end()) {
+        LOGWARNMOD(homeobject, "No pg found for pg_id {}", pg_id);
+        return false;
+    }
+    {
+        auto pg_chunk_collection = pg_it->second;
+        std::scoped_lock lock(pg_chunk_collection->mtx);
+        for (auto& chunk : pg_chunk_collection->m_pg_chunks) {
+            chunk->reset();
+        }
+    }
+    return true;
+}
+
+bool HeapChunkSelector::return_pg_chunks_to_dev_heap(const pg_id_t pg_id) {
+    std::unique_lock lock_guard(m_chunk_selector_mtx);
+    auto pg_it = m_per_pg_chunks.find(pg_id);
+    if (pg_it == m_per_pg_chunks.end()) {
+        LOGWARNMOD(homeobject, "No pg found for pg_id {}", pg_id);
+        return false;
+    }
+
+    auto pg_chunk_collection = pg_it->second;
+    auto pdev_id = pg_chunk_collection->m_pg_chunks[0]->get_pdev_id();
+    auto pdev_it = m_per_dev_heap.find(pdev_id);
+    RELEASE_ASSERT(pdev_it != m_per_dev_heap.end(), "pdev {} should in per dev heap", pdev_id);
+    auto pdev_heap = pdev_it->second;
+
+    {
+        std::scoped_lock lock(pdev_heap->mtx, pg_chunk_collection->mtx);
+        for (auto& chunk : pg_chunk_collection->m_pg_chunks) {
+            if (chunk->m_state == ChunkState::INUSE) {
+                chunk->m_state = ChunkState::AVAILABLE;
+            } // with shard which should be first
+            chunk->m_pg_id = std::nullopt;
+            chunk->m_v_chunk_id = std::nullopt;
+
+            pdev_heap->m_heap.emplace(chunk);
+            pdev_heap->available_blk_count += chunk->available_blks();
+        }
+    }
+    m_per_pg_chunks.erase(pg_it);
+    return true;
+}
+
 uint32_t HeapChunkSelector::get_chunk_size() const {
     const auto chunk = m_chunks.begin()->second;
     return chunk->size();

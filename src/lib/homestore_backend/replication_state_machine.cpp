@@ -193,8 +193,14 @@ void ReplicationStateMachine::on_replace_member(const homestore::replica_member_
 }
 
 void ReplicationStateMachine::on_destroy(const homestore::group_id_t& group_id) {
-    // TODO:: add the logic to handle destroy
-    LOGI("replica destroyed");
+    auto PG_ID = home_object_->get_pg_id_with_group_id(group_id);
+    if (!PG_ID.has_value()) {
+        LOGW("do not have pg mapped by group_id {}", boost::uuids::to_string(group_id));
+        return;
+    }
+    home_object_->pg_destroy(PG_ID.value());
+    LOGI("replica destroyed, cleared PG {} resources with group_id {}", PG_ID.value(),
+         boost::uuids::to_string(group_id));
 }
 
 homestore::AsyncReplResult<>

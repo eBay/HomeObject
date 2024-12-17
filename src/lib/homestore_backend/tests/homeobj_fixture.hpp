@@ -131,11 +131,11 @@ public:
         run_on_pg_leader(pg_id, [&]() {
             auto v_chunkID = _obj_inst->get_shard_v_chunk_id(shard_id);
             RELEASE_ASSERT(v_chunkID.has_value(), "failed to get shard v_chunk_id");
-            g_helper->set_v_chunk_id(v_chunkID.value());
+            g_helper->set_auxiliary_uint64_id(v_chunkID.value());
         });
 
         // get v_chunk_id from IPC and compare with local
-        auto leader_v_chunk_id = g_helper->get_v_chunk_id();
+        auto leader_v_chunk_id = g_helper->get_auxiliary_uint64_id();
         auto local_v_chunkID = _obj_inst->get_shard_v_chunk_id(shard_id);
         RELEASE_ASSERT(local_v_chunkID.has_value(), "failed to get shard v_chunk_id");
         RELEASE_ASSERT(leader_v_chunk_id == local_v_chunkID, "v_chunk_id supposed to be identical");
@@ -316,6 +316,22 @@ public:
                 << "Active objs stats not correct " << g_helper->replica_num();
             ASSERT_EQ(stats.num_tombstone_objects, exp_tombstone_blobs) << "Deleted objs stats not correct";
         }
+    }
+
+    void verify_pg_destroy(pg_id_t pg_id, const string& index_table_uuid_str,
+                           const std::vector< shard_id_t >& shard_id_vec) {
+        // check pg
+        ASSERT_FALSE(pg_exist(pg_id));
+        ASSERT_EQ(_obj_inst->index_table_pg_map_.find(index_table_uuid_str), _obj_inst->index_table_pg_map_.end());
+        // check shards
+        auto e = _obj_inst->shard_manager()->list_shards(pg_id).get();
+        ASSERT_EQ(e.error(), ShardError::UNKNOWN_PG);
+        for (const auto& shard_id : shard_id_vec) {
+            ASSERT_FALSE(shard_exist(shard_id));
+        }
+        // check chunk_selector
+        const auto& chunk_selector = _obj_inst->chunk_selector();
+        ASSERT_EQ(chunk_selector->m_per_pg_chunks.find(pg_id), chunk_selector->m_per_pg_chunks.end());
     }
 
     void verify_hs_pg(HSHomeObject::HS_PG* lhs_pg, HSHomeObject::HS_PG* rhs_pg) {

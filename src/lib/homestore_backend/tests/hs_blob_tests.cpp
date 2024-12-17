@@ -14,6 +14,9 @@ TEST_F(HomeObjectFixture, BasicEquivalence) {
 }
 
 TEST_F(HomeObjectFixture, BasicPutGetDelBlobWRestart) {
+    // test recovery with pristine state firstly
+    restart();
+
     auto num_pgs = SISL_OPTIONS["num_pgs"].as< uint64_t >();
     auto num_shards_per_pg = SISL_OPTIONS["num_shards"].as< uint64_t >() / num_pgs;
 

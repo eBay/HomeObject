@@ -44,6 +44,7 @@ ShardError toShardError(ReplServiceError const& e) {
     }
 }
 
+
 uint64_t ShardManager::max_shard_size() { return Gi; }
 
 uint64_t ShardManager::max_shard_num_in_pg() { return ((uint64_t)0x01) << shard_width; }
@@ -523,6 +524,25 @@ bool HSHomeObject::release_chunk_based_on_create_shard_message(sisl::blob const&
              msg_header->msg_type);
         return false;
     }
+    }
+}
+
+void HSHomeObject::destroy_shards(pg_id_t pg_id) {
+    auto lg = std::scoped_lock(_pg_lock, _shard_lock);
+    auto iter = _pg_map.find(pg_id);
+    if (iter == _pg_map.end()) {
+        LOGW("on shards destroy with unknown pg_id {}", pg_id);
+        return;
+    }
+
+    auto& pg = iter->second;
+    for (auto& shard : pg->shards_) {
+        // release open shard v_chunk
+        auto hs_shard = s_cast< HS_Shard* >(shard.get());
+        // destroy shard super blk
+        hs_shard->sb_.destroy();
+        // erase shard in shard map
+        _shard_map.erase(shard->info.id);
     }
 }
 

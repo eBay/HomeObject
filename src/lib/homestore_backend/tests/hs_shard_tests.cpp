@@ -171,6 +171,9 @@ TEST_F(HomeObjectFixture, ShardManagerRecovery) {
 }
 
 TEST_F(HomeObjectFixture, SealedShardRecovery) {
+    // test recovery with pristine state firstly
+    restart();
+
     pg_id_t pg_id{1};
     create_pg(pg_id);
 

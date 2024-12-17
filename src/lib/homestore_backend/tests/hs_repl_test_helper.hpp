@@ -43,7 +43,6 @@ namespace bip = boost::interprocess;
 using namespace homeobject;
 
 #define INVALID_UINT64_ID UINT64_MAX
-#define INVALID_CHUNK_NUM UINT16_MAX
 
 namespace test_common {
 
@@ -57,7 +56,7 @@ protected:
                 sync_point_num_ = sync_point;
                 homeobject_replica_count_ = 0;
                 uint64_id_ = INVALID_UINT64_ID;
-                v_chunk_id_ = INVALID_CHUNK_NUM;
+                auxiliary_uint64_id_ = UINT64_MAX;
                 cv_.notify_all();
             } else {
                 cv_.wait(lg, [this, sync_point]() { return sync_point_num_ == sync_point; });
@@ -74,14 +73,13 @@ protected:
             return uint64_id_;
         }
 
-        void set_v_chunk_id(homestore::chunk_num_t input_v_chunk_id) {
+        void set_auxiliary_uint64_id(uint64_t input_auxiliary_uint64_id) {
             std::unique_lock< bip::interprocess_mutex > lg(mtx_);
-            v_chunk_id_ = input_v_chunk_id;
+            auxiliary_uint64_id_ = input_auxiliary_uint64_id;
         }
-
-        homestore::chunk_num_t get_v_chunk_id() {
+        uint64_t get_auxiliary_uint64_id() {
             std::unique_lock< bip::interprocess_mutex > lg(mtx_);
-            return v_chunk_id_;
+            return auxiliary_uint64_id_;
         }
 
     private:
@@ -89,11 +87,9 @@ protected:
         bip::interprocess_condition cv_;
         uint8_t homeobject_replica_count_{0};
 
-        // the following variables are used to share shard_id and blob_id among different replicas
+        // the following variables are used to share shard_id, blob_id and others among different replicas
         uint64_t uint64_id_{0};
-
-        // used to verify identical layout
-        homestore::chunk_num_t v_chunk_id_{0};
+        uint64_t auxiliary_uint64_id_{0};
 
         // the nth synchronization point, that is how many times different replicas have synced
         uint64_t sync_point_num_{UINT64_MAX};
@@ -271,9 +267,10 @@ public:
     void sync() { ipc_data_->sync(sync_point_num++, total_replicas_nums_); }
     void set_uint64_id(uint64_t uint64_id) { ipc_data_->set_uint64_id(uint64_id); }
     uint64_t get_uint64_id() { return ipc_data_->get_uint64_id(); }
-    void set_v_chunk_id(homestore::chunk_num_t v_chunk_id) { ipc_data_->set_v_chunk_id(v_chunk_id); }
-    homestore::chunk_num_t get_v_chunk_id() { return ipc_data_->get_v_chunk_id(); }
-
+    void set_auxiliary_uint64_id(uint64_t input_auxiliary_uint64_id) {
+        ipc_data_->set_auxiliary_uint64_id(input_auxiliary_uint64_id);
+    }
+    uint64_t get_auxiliary_uint64_id() { return ipc_data_->get_auxiliary_uint64_id(); }
     void check_and_kill(int port) {
         std::string command = "lsof -t -i:" + std::to_string(port);
         if (::system(command.c_str())) {
