@@ -363,12 +363,18 @@ void ReplicationStateMachine::write_snapshot_obj(std::shared_ptr< homestore::sna
 
         auto pg_data = GetSizePrefixedResyncPGMetaData(data_buf);
 
+        //Check if pg exists, if yes, clean the stale pg resources, may be due to previous snapshot failure. Let's resync on a pristine base
+        if (home_object_->pg_exists(pg_data->pg_id())) {
+            LOGI("pg already exists, clean pg resources before snapshot, pg_id:{} {}", pg_data->pg_id(), log_suffix);
+            home_object_->pg_destroy(pg_data->pg_id());
+            LOGI("reset context from lsn:{} to lsn:{}", m_snp_rcv_handler->get_context_lsn(), context->get_lsn());
+            m_snp_rcv_handler->reset_context(context->get_lsn(), pg_data->pg_id());
+        }
         // Check if the snapshot context is same as the current snapshot context.
         // If not, drop the previous context and re-init a new one
         if (m_snp_rcv_handler->get_context_lsn() != context->get_lsn()) {
             LOGI("reset context from lsn:{} to lsn:{}", m_snp_rcv_handler->get_context_lsn(), context->get_lsn());
             m_snp_rcv_handler->reset_context(context->get_lsn(), pg_data->pg_id());
-            // TODO: Reset all data of current PG - let's resync on a pristine base
         }
 
         auto ret = m_snp_rcv_handler->process_pg_snapshot_data(*pg_data);
