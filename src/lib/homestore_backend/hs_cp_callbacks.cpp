@@ -23,7 +23,9 @@ using homestore::CPContext;
 
 namespace homeobject {
 
-std::unique_ptr< CPContext > HSHomeObject::MyCPCallbacks::on_switchover_cp(CP* cur_cp, CP* new_cp) { return nullptr; }
+std::unique_ptr< CPContext > HSHomeObject::MyCPCallbacks::on_switchover_cp(CP* cur_cp, CP* new_cp) {
+    return std::make_unique< CPContext >(new_cp);
+}
 
 // when cp_flush is called, it means that all the dirty candidates are already in the dirty list.
 // new dirty candidates will arrive on next cp's context.
