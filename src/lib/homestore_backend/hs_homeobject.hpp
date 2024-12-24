@@ -33,6 +33,7 @@ static constexpr uint64_t io_align{512};
 PGError toPgError(homestore::ReplServiceError const&);
 BlobError toBlobError(homestore::ReplServiceError const&);
 ShardError toShardError(homestore::ReplServiceError const&);
+ENUM(PGState, uint8_t, ALIVE = 0, DESTROYED);
 
 class HSHomeObject : public HomeObjectImpl {
 private:
@@ -83,6 +84,7 @@ public:
 
     struct pg_info_superblk {
         pg_id_t id;
+        PGState state;
         uint32_t num_members;
         uint32_t num_chunks;
         peer_id_t replica_set_uuid;
@@ -112,6 +114,7 @@ public:
 
         pg_info_superblk& operator=(pg_info_superblk const& rhs) {
             id = rhs.id;
+            state = rhs.state;
             num_members = rhs.num_members;
             num_chunks = rhs.num_chunks;
             pg_size = rhs.pg_size;
@@ -484,6 +487,20 @@ public:
                               const homestore::replica_member_info& member_in);
 
     /**
+     * @brief Cleans up and recycles resources for the PG identified by the given pg_id on the current node.
+     *
+     * This function is called when the replication device leaves or when a specific PG is destroyed on the current
+     * node. Note that this function does not perform Raft synchronization with other nodes.
+     *
+     * Possible scenarios for calling this function include:
+     * - A member-out node cleaning up resources for a specified PG.
+     * - During baseline rsync to clean up PG resources on the current node.
+     *
+     * @param pg_id The ID of the PG to be destroyed.
+     */
+    void pg_destroy(pg_id_t pg_id);
+
+    /**
      * @brief Callback function invoked when a message is committed on a shard.
      *
      * @param lsn The logical sequence number of the message.
@@ -569,6 +586,7 @@ public:
                                    size_t hash_len) const;
 
     std::shared_ptr< BlobIndexTable > recover_index_table(homestore::superblk< homestore::index_table_sb >&& sb);
+    std::optional< pg_id_t > get_pg_id_with_group_id(homestore::group_id_t group_id) const;
 
 private:
     std::shared_ptr< BlobIndexTable > create_index_table();
@@ -593,6 +611,36 @@ private:
     sisl::io_blob_safe& get_pad_buf(uint32_t pad_len);
 
     // void trigger_timed_events();
+
+    /**
+     * @brief Marks the PG as destroyed.
+     *
+     * Updates the internal state to indicate that the specified PG is destroyed and ensures its state is persisted.
+     *
+     * @param pg_id The ID of the PG to be marked as destroyed.
+     */
+    void mark_pg_destroyed(pg_id_t pg_id);
+
+    /**
+     * @brief Cleans up and recycles resources for shards in the PG located using a PG ID.
+     *
+     * @param pg_id The ID of the PG whose shards are to be destroyed.
+     */
+    void destroy_shards(pg_id_t pg_id);
+
+    /**
+     * @brief Resets the chunks for the given PG ID and triggers a checkpoint flush.
+     *
+     * @param pg_id The ID of the PG whose chunks are to be reset.
+     */
+    void reset_pg_chunks(pg_id_t pg_id);
+
+    /**
+     * @brief Cleans up and recycles resources for the PG located using a pg_id.
+     *
+     * @param pg_id The ID of the PG to be cleaned.
+     */
+    void cleanup_pg_resources(pg_id_t pg_id);
 };
 
 class BlobIndexServiceCallbacks : public homestore::IndexServiceCallbacks {
