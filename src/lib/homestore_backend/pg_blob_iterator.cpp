@@ -84,6 +84,12 @@ PG* HSHomeObject::PGBlobIterator::get_pg_metadata() {
 }
 
 bool HSHomeObject::PGBlobIterator::create_pg_snapshot_data(sisl::io_blob_safe& meta_blob) {
+#ifdef _PRERELEASE
+    if (iomgr_flip::instance()->test_flip("pg_blob_iterator_create_snapshot_data_error")) {
+        LOGW("Simulating creating pg snapshot data error");
+        return false;
+    }
+#endif
     auto pg = home_obj_._pg_map[pg_id_].get();
     if (pg == nullptr) {
         LOGE("PG not found in pg_map, pg_id={}", pg_id_);
@@ -112,6 +118,12 @@ bool HSHomeObject::PGBlobIterator::create_pg_snapshot_data(sisl::io_blob_safe& m
 }
 
 bool HSHomeObject::PGBlobIterator::generate_shard_blob_list() {
+#ifdef _PRERELEASE
+    if (iomgr_flip::instance()->test_flip("pg_blob_iterator_generate_shard_blob_list_error")) {
+        LOGW("Simulating generating shard blob list error");
+        return false;
+    }
+#endif
     auto r = home_obj_.query_blobs_in_shard(pg_id_, cur_obj_id_.shard_seq_num, 0, UINT64_MAX);
     if (!r) { return false; }
     cur_blob_list_ = r.value();
@@ -211,6 +223,12 @@ bool HSHomeObject::PGBlobIterator::create_blobs_snapshot_data(sisl::io_blob_safe
             continue;
         }
 
+#ifdef _PRERELEASE
+        if (iomgr_flip::instance()->test_flip("pg_blob_iterator_load_blob_data_error")) {
+            LOGW("Simulating loading blob data error");
+            return false;
+        }
+#endif
         sisl::io_blob_safe blob;
         uint8_t retries = HS_BACKEND_DYNAMIC_CONFIG(snapshot_blob_load_retry);
         for (int i = 0; i < retries; i++) {

@@ -293,14 +293,13 @@ TEST_F(HomeObjectFixture, PGBlobIterator) {
 }
 
 TEST_F(HomeObjectFixture, SnapshotReceiveHandler) {
-    // TODO: add filps to test corrupted data
-    // MUST TEST WITH replica=1
     constexpr uint64_t snp_lsn = 1;
     constexpr uint64_t num_shards_per_pg = 3;
     constexpr uint64_t num_open_shards_per_pg = 2; // Should be less than num_shards_per_pg
-    constexpr uint64_t num_batches_per_shard = 3;
+    constexpr uint64_t num_batches_per_shard = 5;
     constexpr uint64_t num_blobs_per_batch = 5;
-    constexpr int corrupted_blob_percentage = 10;
+    constexpr int corrupted_blob_percentage = 10;             // Percentage of blobs with state = CORRUPTED
+    constexpr int unexpected_corrupted_batch_percentage = 15; // Percentage of batches with unexpected data corruption
 
     // We have to create a PG first to init repl_dev
     constexpr pg_id_t pg_id = 1;
@@ -353,8 +352,9 @@ TEST_F(HomeObjectFixture, SnapshotReceiveHandler) {
         // Generate ResyncShardMetaData message
         ShardInfo shard;
         shard.id = i;
-        shard.state =
-            i <= num_shards_per_pg - num_open_shards_per_pg ? ShardInfo::State::SEALED : ShardInfo::State::OPEN;
+        shard.state = i <= num_shards_per_pg - num_open_shards_per_pg
+            ? ShardInfo::State::SEALED
+            : ShardInfo::State::OPEN; // Open shards arrive at last
         shard.created_time = get_time_since_epoch_ms();
         shard.last_modified_time = shard.created_time;
         shard.total_capacity_bytes = 1024 * Mi;
@@ -370,6 +370,9 @@ TEST_F(HomeObjectFixture, SnapshotReceiveHandler) {
         auto ret = handler->process_shard_snapshot_data(*shard_meta);
         builder.Reset();
         ASSERT_EQ(ret, 0);
+        ASSERT_EQ(handler->get_shard_cursor(), shard.id);
+        ASSERT_EQ(handler->get_next_shard(),
+                  i == num_shards_per_pg ? HSHomeObject::SnapshotReceiveHandler::shard_list_end_marker : i + 1);
 
         auto res = _obj_inst->shard_manager()->get_shard(shard.id).get();
         ASSERT_TRUE(!!res);
@@ -385,8 +388,11 @@ TEST_F(HomeObjectFixture, SnapshotReceiveHandler) {
         // Generate ResyncBlobDataBatch message
         std::map< blob_id_t, std::tuple< Blob, bool > > blob_map;
         for (uint64_t j = 1; j <= num_batches_per_shard; j++) {
-            LOGINFO("TESTING: applying blobs for shard {} batch {}", shard.id, j);
-            std::vector< ::flatbuffers::Offset< ResyncBlobData > > blob_entries;
+            // Don't test unexpected corruption on the last batch, since for simplicity we're not simulating resending
+            bool is_corrupted_batch =
+                j < num_batches_per_shard && corrupt_dis(gen) <= unexpected_corrupted_batch_percentage;
+            LOGINFO("TESTING: applying blobs for shard {} batch {}, is_corrupted {}", shard.id, j, is_corrupted_batch);
+            std::vector< flatbuffers::Offset< ResyncBlobData > > blob_entries;
             for (uint64_t k = 0; k < num_blobs_per_batch; k++) {
                 auto blob_state = corrupt_dis(gen) <= corrupted_blob_percentage ? ResyncBlobState::CORRUPTED
                                                                                 : ResyncBlobState::NORMAL;
@@ -418,7 +424,8 @@ TEST_F(HomeObjectFixture, SnapshotReceiveHandler) {
                 std::memcpy(blob_raw.bytes() + aligned_hdr_size, blob.body.cbytes(), blob.body.size());
 
                 // Simulate blob data corruption - tamper with random bytes
-                if (blob_state == ResyncBlobState::CORRUPTED) {
+                if (is_corrupted_batch || blob_state == ResyncBlobState::CORRUPTED) {
+                    LOGINFO("Simulating corrupted blob data for shard {} blob {}", shard.id, cur_blob_id);
                     constexpr int corrupted_bytes = 5;
                     for (auto i = 0; i < corrupted_bytes; i++) {
                         auto offset = random_bytes_dis(gen) % blob_raw.size();
@@ -431,15 +438,27 @@ TEST_F(HomeObjectFixture, SnapshotReceiveHandler) {
                 std::vector data(blob_raw.bytes(), blob_raw.bytes() + blob_raw.size());
                 blob_entries.push_back(
                     CreateResyncBlobDataDirect(builder, cur_blob_id, static_cast< uint8_t >(blob_state), &data));
-                blob_map[cur_blob_id++] =
-                    std::make_tuple< Blob, bool >(std::move(blob), blob_state == ResyncBlobState::CORRUPTED);
+                if (!is_corrupted_batch) {
+                    blob_map[cur_blob_id] =
+                        std::make_tuple< Blob, bool >(std::move(blob), blob_state == ResyncBlobState::CORRUPTED);
+                }
+                cur_blob_id++;
             }
             builder.Finish(CreateResyncBlobDataBatchDirect(builder, &blob_entries, true));
             auto blob_batch = GetResyncBlobDataBatch(builder.GetBufferPointer());
             ret = handler->process_blobs_snapshot_data(*blob_batch, j, j == num_batches_per_shard);
+            if (is_corrupted_batch) {
+                ASSERT_NE(ret, 0);
+            } else {
+                ASSERT_EQ(ret, 0);
+            }
             builder.Reset();
-            ASSERT_EQ(ret, 0);
+            ASSERT_EQ(handler->get_shard_cursor(), shard.id);
+            ASSERT_EQ(handler->get_next_shard(),
+                      i == num_shards_per_pg ? HSHomeObject::SnapshotReceiveHandler::shard_list_end_marker : i + 1);
         }
+
+        // Verify blobs
         for (const auto& b : blob_map) {
             auto blob_id = b.first;
             auto& blob = std::get< 0 >(b.second);
@@ -455,8 +474,13 @@ TEST_F(HomeObjectFixture, SnapshotReceiveHandler) {
                 ASSERT_EQ(std::memcmp(blob_res.body.bytes(), blob.body.cbytes(), blob_res.body.size()), 0);
             }
         }
+
+        // Verify chunk of sealed shards are successfully released
         if (shard.state == ShardInfo::State::SEALED) {
-            // TODO: Verify chunk is released. Currently we don't have chunk_id, so let's do this after rebasing
+            auto v = _obj_inst->get_shard_v_chunk_id(shard.id);
+            ASSERT_TRUE(v.has_value());
+            ASSERT_EQ(v.value(), v_chunk_id.value());
+            ASSERT_TRUE(_obj_inst->chunk_selector()->is_chunk_available(pg_id, v.value()));
         }
     }
 }

@@ -474,9 +474,37 @@ private:
         return blob;
     }
 
+#ifdef _PRERELEASE
+    void set_basic_flip(const std::string flip_name, uint32_t count = 1, uint32_t percent = 100) {
+        flip::FlipCondition null_cond;
+        flip::FlipFrequency freq;
+        freq.set_count(count);
+        freq.set_percent(percent);
+        m_fc.inject_noreturn_flip(flip_name, {null_cond}, freq);
+        LOGINFO("Flip {} set", flip_name);
+    }
+
+    void set_delay_flip(const std::string flip_name, uint64_t delay_usec, uint32_t count = 1, uint32_t percent = 100) {
+        flip::FlipCondition null_cond;
+        flip::FlipFrequency freq;
+        freq.set_count(count);
+        freq.set_percent(percent);
+        m_fc.inject_delay_flip(flip_name, {null_cond}, freq, delay_usec);
+        LOGINFO("Flip {} set", flip_name);
+    }
+
+    void remove_flip(const std::string flip_name) {
+        m_fc.remove_flip(flip_name);
+        LOGINFO("Flip {} removed", flip_name);
+    }
+#endif
+
 private:
     std::random_device rnd{};
     std::default_random_engine rnd_engine{rnd()};
     std::uniform_int_distribution< uint32_t > rand_blob_size;
     std::uniform_int_distribution< uint32_t > rand_user_key_size;
+#ifdef _PRERELEASE
+    flip::FlipClient m_fc{iomgr_flip::instance()};
+#endif
 };

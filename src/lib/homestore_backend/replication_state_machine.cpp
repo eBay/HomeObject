@@ -246,6 +246,8 @@ int ReplicationStateMachine::read_snapshot_obj(std::shared_ptr< homestore::snaps
         // Create the pg blob iterator for the first time.
         pg_iter = new HSHomeObject::PGBlobIterator(*home_object_, repl_dev()->group_id(), context->get_lsn());
         snp_obj->user_ctx = (void*)pg_iter;
+        LOGD("Allocated new pg blob iterator {}, group={}, lsn={}", static_cast< void* >(pg_iter),
+             boost::uuids::to_string(repl_dev()->group_id()), s->get_last_log_idx());
     } else {
         pg_iter = r_cast< HSHomeObject::PGBlobIterator* >(snp_obj->user_ctx);
     }
@@ -265,7 +267,6 @@ int ReplicationStateMachine::read_snapshot_obj(std::shared_ptr< homestore::snaps
     auto log_str = fmt::format("group={}, term={}, lsn={},",
                                boost::uuids::to_string(repl_dev()->group_id()), s->get_last_log_term(),
                                s->get_last_log_idx());
-    //TODO snp_data->offset is int64, need to change to uint64 in homestore
     if (snp_obj->offset == LAST_OBJ_ID) {
         // No more shards to read, baseline resync is finished after this.
         snp_obj->is_last_obj = true;
@@ -293,8 +294,9 @@ int ReplicationStateMachine::read_snapshot_obj(std::shared_ptr< homestore::snaps
         }
         return 0;
     }
-    //shard metadata message
-    if (obj_id.shard_seq_num != 0 && obj_id.batch_id == 0) {
+
+    // shard metadata message
+    if (obj_id.batch_id == 0) {
         if (!pg_iter->generate_shard_blob_list()) {
             LOGE("Failed to generate shard blob list for snapshot read, {}", log_str);
             return -1;
@@ -305,7 +307,8 @@ int ReplicationStateMachine::read_snapshot_obj(std::shared_ptr< homestore::snaps
         }
         return 0;
     }
-    //general blob message
+
+    // general blob message
     if (!pg_iter->create_blobs_snapshot_data(snp_obj->blob)) {
         LOGE("Failed to create blob batch data for snapshot read, {}", log_str);
         return -1;
@@ -334,7 +337,13 @@ void ReplicationStateMachine::write_snapshot_obj(std::shared_ptr< homestore::sna
     }
 
     // Check message integrity
-    // TODO: add a flip here to simulate corrupted message
+#ifdef _PRERELEASE
+    if (iomgr_flip::instance()->test_flip("state_machine_write_corrupted_data")) {
+        LOGW("Simulating writing corrupted snapshot data, lsn:{}, obj_id {} shard {} batch {}", s->get_last_log_idx(),
+             obj_id.value, obj_id.shard_seq_num, obj_id.batch_id);
+        return;
+    }
+#endif
     auto header = r_cast< const SyncMessageHeader* >(snp_obj->blob.cbytes());
     if (header->corrupted()) {
         LOGE("corrupted message in write_snapshot_data, lsn:{}, obj_id {} shard {} batch {}", s->get_last_log_idx(),
@@ -426,14 +435,16 @@ void ReplicationStateMachine::write_snapshot_obj(std::shared_ptr< homestore::sna
 }
 
 void ReplicationStateMachine::free_user_snp_ctx(void*& user_snp_ctx) {
-    if (user_snp_ctx) {
+    if (user_snp_ctx == nullptr) {
         LOGE("User snapshot context null group={}", boost::uuids::to_string(repl_dev()->group_id()));
         return;
     }
 
     auto pg_iter = r_cast< HSHomeObject::PGBlobIterator* >(user_snp_ctx);
-    LOGD("Freeing snapshot iterator pg_id={} group={}", pg_iter->pg_id_, boost::uuids::to_string(pg_iter->group_id_));
+    LOGD("Freeing snapshot iterator {}, pg_id={} group={}", static_cast< void* >(pg_iter), pg_iter->pg_id_,
+         boost::uuids::to_string(pg_iter->group_id_));
     delete pg_iter;
+    user_snp_ctx = nullptr;
 }
 
 } // namespace homeobject
