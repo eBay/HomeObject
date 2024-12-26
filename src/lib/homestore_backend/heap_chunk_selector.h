@@ -79,6 +79,20 @@ public:
     // It is used in two scenarios: 1. seal shard  2. create shard rollback
     bool release_chunk(const pg_id_t pg_id, const chunk_num_t v_chunk_id);
 
+    bool reset_pg_chunks(pg_id_t pg_id);
+
+    /**
+     * Releases all chunks associated with the specified pg_id.
+     *
+     * This function is used to return all chunks that are currently associated with a particular
+     * pg identified by the given pg_id. It is typically used in scenarios where
+     * all chunks associated with a pg need to be freed, such as pg move out.
+     *
+     * @param pg_id The ID of the protection group whose chunks are to be released.
+     * @return A boolean value indicating whether the operation was successful.
+     */
+    bool return_pg_chunks_to_dev_heap(pg_id_t pg_id);
+
     /**
      * select chunks for pg, chunks need to be in same pdev.
      *
