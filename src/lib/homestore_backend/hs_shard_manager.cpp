@@ -303,7 +303,6 @@ void HSHomeObject::on_shard_message_rollback(int64_t lsn, sisl::blob const& head
     }
 }
 
-// FIXME: Bugfix in progress from Hooper, will fix later.
 void HSHomeObject::local_create_shard(ShardInfo shard_info, homestore::chunk_num_t v_chunk_id,
                                       homestore::chunk_num_t p_chunk_id, homestore::blk_count_t blk_count) {
     bool shard_exist = false;

@@ -27,7 +27,7 @@ HSHomeObject::PGBlobIterator::PGBlobIterator(HSHomeObject& home_obj, homestore::
                 shard_list_.emplace_back(shard->info, v_chunk_id.value());
             }
         }
-        // sort shard list by <vchunkid, lsn> to ensure open shards positioned after sealed shards
+        // Sort shard list by <vchunkid, lsn> to ensure open shards positioned after sealed shards within each chunk
         std::ranges::sort(shard_list_, [](ShardEntry& a, ShardEntry& b) {
             return a.v_chunk_num != b.v_chunk_num ? a.v_chunk_num < b.v_chunk_num : a.info.lsn < b.info.lsn;
         });
