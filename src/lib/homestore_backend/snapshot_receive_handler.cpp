@@ -212,15 +212,15 @@ int HSHomeObject::SnapshotReceiveHandler::process_blobs_snapshot_data(ResyncBlob
                              .thenValue([&blk_id](auto&& err) -> BlobManager::AsyncResult< blob_id_t > {
                                  // TODO: do we need to update repl_dev metrics?
                                  if (err) {
-                                     LOGE("Failed to write shard info to blk_id: {}", blk_id.to_string());
+                                     LOGE("Failed to write blob info to blk_id: {}", blk_id.to_string());
                                      return folly::makeUnexpected(BlobError(BlobErrorCode::REPLICATION_ERROR));
                                  }
-                                 LOGD("Shard info written to blk_id:{}", blk_id.to_string());
+                                 LOGD("Blob info written to blk_id:{}", blk_id.to_string());
                                  return 0;
                              })
                              .get();
         if (ret.hasError()) {
-            LOGE("Failed to write shard info of blob_id {} to blk_id:{}", blob->blob_id(), blk_id.to_string());
+            LOGE("Failed to write blob info of blob_id {} to blk_id:{}", blob->blob_id(), blk_id.to_string());
             free_allocated_blks();
             return WRITE_DATA_ERR;
         }

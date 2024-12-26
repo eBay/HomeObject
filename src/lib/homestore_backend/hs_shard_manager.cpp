@@ -319,7 +319,7 @@ void HSHomeObject::local_create_shard(ShardInfo shard_info, homestore::chunk_num
         auto pg_id = shard_info.placement_group;
         auto chunk = chunk_selector_->select_specific_chunk(pg_id, v_chunk_id);
         RELEASE_ASSERT(chunk != nullptr, "chunk selection failed with v_chunk_id: {} in PG: {}", v_chunk_id, pg_id);
-    }
+    } else { LOGD("shard {} already exist, skip creating shard", shard_info.id); }
 
     // update pg's total_occupied_blk_count
     HS_PG* hs_pg{nullptr};
@@ -380,17 +380,6 @@ void HSHomeObject::on_shard_message_commit(int64_t lsn, sisl::blob const& h, hom
         local_create_shard(shard_info, v_chunk_id, blkids.chunk_num(), blkids.blk_count());
         if (ctx) { ctx->promise_.setValue(ShardManager::Result< ShardInfo >(shard_info)); }
 
-        // update pg's total_occupied_blk_count
-        HS_PG* hs_pg{nullptr};
-        {
-            std::shared_lock lock_guard(_pg_lock);
-            auto iter = _pg_map.find(shard_info.placement_group);
-            RELEASE_ASSERT(iter != _pg_map.end(), "PG not found");
-            hs_pg = static_cast< HS_PG* >(iter->second.get());
-        }
-        hs_pg->durable_entities_update([&blkids](auto& de) {
-            de.total_occupied_blk_count.fetch_add(blkids.blk_count(), std::memory_order_relaxed);
-        });
         LOGI("Commit done for CREATE_SHARD_MSG for shard {}", shard_info.id);
 
         break;
