@@ -10,7 +10,7 @@
 namespace homeobject {
 
 ENUM(ShardError, uint16_t, UNKNOWN = 1, TIMEOUT, INVALID_ARG, NOT_LEADER, UNSUPPORTED_OP, UNKNOWN_PG, UNKNOWN_SHARD,
-     PG_NOT_READY, CRC_MISMATCH, NO_SPACE_LEFT);
+     PG_NOT_READY, CRC_MISMATCH, NO_SPACE_LEFT, RETRY_REQUEST);
 
 struct ShardInfo {
     enum class State : uint8_t {
