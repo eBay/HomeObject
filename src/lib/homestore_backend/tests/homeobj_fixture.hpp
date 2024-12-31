@@ -237,6 +237,20 @@ public:
         }
     }
 
+    void del_blob(pg_id_t pg_id, shard_id_t shard_id, blob_id_t blob_id) {
+        g_helper->sync();
+        run_on_pg_leader(pg_id, [&]()
+        {
+            auto g = _obj_inst->blob_manager()->del(shard_id, blob_id).get();
+            ASSERT_TRUE(g);
+            LOGINFO("delete blob, pg {} shard {} blob {}", pg_id, shard_id, blob_id);
+        });
+        while (blob_exist(shard_id, blob_id)) {
+            LOGINFO("waiting for shard {} blob {} to be deleted locally", shard_id, blob_id);
+            std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+        }
+    }
+
     // TODO:make this run in parallel
     void del_all_blobs(std::map< pg_id_t, std::vector< shard_id_t > > const& pg_shard_id_vec,
                        uint64_t const num_blobs_per_shard, std::map< pg_id_t, blob_id_t >& pg_blob_id) {
@@ -460,9 +474,37 @@ private:
         return blob;
     }
 
+#ifdef _PRERELEASE
+    void set_basic_flip(const std::string flip_name, uint32_t count = 1, uint32_t percent = 100) {
+        flip::FlipCondition null_cond;
+        flip::FlipFrequency freq;
+        freq.set_count(count);
+        freq.set_percent(percent);
+        m_fc.inject_noreturn_flip(flip_name, {null_cond}, freq);
+        LOGINFO("Flip {} set", flip_name);
+    }
+
+    void set_delay_flip(const std::string flip_name, uint64_t delay_usec, uint32_t count = 1, uint32_t percent = 100) {
+        flip::FlipCondition null_cond;
+        flip::FlipFrequency freq;
+        freq.set_count(count);
+        freq.set_percent(percent);
+        m_fc.inject_delay_flip(flip_name, {null_cond}, freq, delay_usec);
+        LOGINFO("Flip {} set", flip_name);
+    }
+
+    void remove_flip(const std::string flip_name) {
+        m_fc.remove_flip(flip_name);
+        LOGINFO("Flip {} removed", flip_name);
+    }
+#endif
+
 private:
     std::random_device rnd{};
     std::default_random_engine rnd_engine{rnd()};
     std::uniform_int_distribution< uint32_t > rand_blob_size;
     std::uniform_int_distribution< uint32_t > rand_user_key_size;
+#ifdef _PRERELEASE
+    flip::FlipClient m_fc{iomgr_flip::instance()};
+#endif
 };

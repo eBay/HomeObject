@@ -1,0 +1,17 @@
+native_include "sisl/utility/non_null_ptr.hpp";
+
+namespace homeobject;
+
+table ResyncShardMetaData {
+    shard_id : uint64;                      // shard id to be created with;
+    pg_id : uint16;                            // pg id which this shard belongs to;
+    state : ubyte;                             // shard state;
+    created_lsn : uint64;                 // lsn on shard creation;
+    created_time : uint64;               // shard creation time
+    last_modified_time : ulong;       // shard last modify time
+    total_capacity_bytes : ulong;    // total capacity of the shard
+    vchunk_id : uint16;                     // vchunk id
+}
+
+//ShardMetaData schema is the first batch(batch=0) in the shard transmission
+root_type ResyncShardMetaData;

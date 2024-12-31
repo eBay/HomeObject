@@ -10,11 +10,11 @@ table HSBackendSettings {
     // timer thread freq in us
     backend_timer_us: uint64 = 60000000 (hotswap);
 
-    // Maximum number of blobs in a snapshot batch
-    max_num_blobs_in_snapshot_batch: uint64 = 1024 (hotswap);
-
     // Maximum size of a snapshot batch
     max_snapshot_batch_size_mb: uint64 = 128 (hotswap);
+
+    //Snapshot blob load retry count
+    snapshot_blob_load_retry: uint8 = 3 (hotswap);
 }
 
 root_type HSBackendSettings;

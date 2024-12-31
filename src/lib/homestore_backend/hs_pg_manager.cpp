@@ -1,6 +1,7 @@
 #include <boost/uuid/random_generator.hpp>
 #include <boost/uuid/string_generator.hpp>
 #include <homestore/replication_service.hpp>
+#include <utility>
 #include "hs_homeobject.hpp"
 #include "replication_state_machine.hpp"
 
@@ -40,9 +41,9 @@ PGError toPgError(ReplServiceError const& e) {
     case ReplServiceError::RETRY_REQUEST:
         return PGError::RETRY_REQUEST;
     /* TODO: enable this after add erro type to homestore
-    case ReplServiceError::CRC_MISMATCH:
-        return PGError::CRC_MISMATCH;
-     */
+            case ReplServiceError::CRC_MISMATCH:
+                return PGError::CRC_MISMATCH;
+             */
     case ReplServiceError::OK:
         DEBUG_ASSERT(false, "Should not process OK!");
         [[fallthrough]];
@@ -111,6 +112,57 @@ PGManager::NullAsyncResult HSHomeObject::do_create_pg(cshared< homestore::ReplDe
     });
 }
 
+folly::Expected< HSHomeObject::HS_PG*, PGError > HSHomeObject::local_create_pg(shared< ReplDev > repl_dev,
+                                                                               PGInfo pg_info) {
+    auto pg_id = pg_info.id;
+    {
+        auto lg = shared_lock(_pg_lock);
+        if (auto it = _pg_map.find(pg_id); it != _pg_map.end()) {
+            LOGW("PG already exists, pg_id {}", pg_id);
+            return dynamic_cast< HS_PG* >(it->second.get());
+        }
+    }
+
+    auto local_chunk_size = chunk_selector()->get_chunk_size();
+    if (pg_info.chunk_size != local_chunk_size) {
+        LOGE("Chunk sizes are inconsistent, leader_chunk_size={}, local_chunk_size={}", pg_info.chunk_size,
+             local_chunk_size);
+        return folly::makeUnexpected< PGError >(PGError::UNKNOWN);
+    }
+
+    // select chunks for pg
+    auto const num_chunk = chunk_selector()->select_chunks_for_pg(pg_id, pg_info.size);
+    if (!num_chunk.has_value()) {
+        LOGW("Failed to select chunks for pg {}", pg_id);
+        return folly::makeUnexpected(PGError::NO_SPACE_LEFT);
+    }
+    auto chunk_ids = chunk_selector()->get_pg_chunks(pg_id);
+    if (chunk_ids == nullptr) {
+        LOGW("Failed to get pg chunks, pg_id {}", pg_id);
+        return folly::makeUnexpected(PGError::NO_SPACE_LEFT);
+    }
+
+    // create index table and pg
+    auto index_table = create_index_table();
+    auto uuid_str = boost::uuids::to_string(index_table->uuid());
+
+    auto hs_pg = std::make_unique< HS_PG >(std::move(pg_info), std::move(repl_dev), index_table, chunk_ids);
+    auto ret = hs_pg.get();
+    {
+        scoped_lock lck(index_lock_);
+        RELEASE_ASSERT(index_table_pg_map_.count(uuid_str) == 0, "duplicate index table found");
+        index_table_pg_map_[uuid_str] = PgIndexTable{pg_id, index_table};
+
+        LOGI("create pg {} successfully, index table uuid={} pg_size={} num_chunk={}", pg_id, uuid_str, pg_info.size,
+             num_chunk.value());
+        hs_pg->index_table_ = index_table;
+        // Add to index service, so that it gets cleaned up when index service is shutdown.
+        hs()->index_service().add_index_table(index_table);
+        add_pg_to_map(std::move(hs_pg));
+    }
+    return ret;
+}
+
 void HSHomeObject::on_create_pg_message_commit(int64_t lsn, sisl::blob const& header,
                                                shared< homestore::ReplDev > repl_dev,
                                                cintrusive< homestore::repl_req_ctx >& hs_ctx) {
@@ -138,51 +190,14 @@ void HSHomeObject::on_create_pg_message_commit(int64_t lsn, sisl::blob const& he
     }
 
     auto pg_info = deserialize_pg_info(serailized_pg_info_buf, serailized_pg_info_size);
-    auto pg_id = pg_info.id;
-    if (auto lg = std::shared_lock(_pg_lock); _pg_map.end() != _pg_map.find(pg_id)) {
-        LOGW("PG already exists, lsn:{}, pg_id {}", lsn, pg_id);
-        if (ctx) { ctx->promise_.setValue(folly::Unit()); }
-        return;
+    auto ret = local_create_pg(std::move(repl_dev), pg_info);
+    if (ctx) {
+        if (ret.hasError()) {
+            ctx->promise_.setValue(folly::makeUnexpected(ret.error()));
+        } else {
+            ctx->promise_.setValue(folly::Unit());
+        }
     }
-
-    auto local_chunk_size = chunk_selector()->get_chunk_size();
-    if (pg_info.chunk_size != local_chunk_size) {
-        LOGE("Chunk sizes are inconsistent, leader_chunk_size={}, local_chunk_size={}", pg_info.chunk_size,
-             local_chunk_size);
-        if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(PGError::UNKNOWN)); }
-        return;
-    }
-
-    // select chunks for pg
-    auto const num_chunk = chunk_selector()->select_chunks_for_pg(pg_id, pg_info.size);
-    if (!num_chunk.has_value()) {
-        LOGW("Failed to select chunks for pg {}", pg_id);
-        if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(PGError::NO_SPACE_LEFT)); }
-        return;
-    }
-    auto chunk_ids = chunk_selector()->get_pg_chunks(pg_id);
-    if (chunk_ids == nullptr) {
-        LOGW("Failed to get pg chunks, pg_id {}", pg_id);
-        if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(PGError::NO_SPACE_LEFT)); }
-        return;
-    }
-    // create index table and pg
-    // TODO create index table during create shard.
-    auto index_table = create_index_table();
-    auto uuid_str = boost::uuids::to_string(index_table->uuid());
-
-    auto hs_pg = std::make_unique< HS_PG >(std::move(pg_info), std::move(repl_dev), index_table, chunk_ids);
-    std::scoped_lock lock_guard(index_lock_);
-    RELEASE_ASSERT(index_table_pg_map_.count(uuid_str) == 0, "duplicate index table found");
-    index_table_pg_map_[uuid_str] = PgIndexTable{pg_id, index_table};
-
-    LOGI("create pg {} successfully, index table uuid={} pg_size={} num_chunk={}", pg_id, uuid_str, pg_info.size,
-         num_chunk.value());
-    hs_pg->index_table_ = index_table;
-    // Add to index service, so that it gets cleaned up when index service is shutdown.
-    homestore::hs()->index_service().add_index_table(index_table);
-    add_pg_to_map(std::move(hs_pg));
-    if (ctx) ctx->promise_.setValue(folly::Unit());
 }
 
 PGManager::NullAsyncResult HSHomeObject::_replace_member(pg_id_t pg_id, peer_id_t const& old_member_id,
