@@ -106,6 +106,11 @@ BlobManager::AsyncResult< blob_id_t > HSHomeObject::_put_blob(ShardInfo const& s
         return folly::makeUnexpected(BlobError(BlobErrorCode::NOT_LEADER, repl_dev->get_leader_id()));
     }
 
+    if (!repl_dev->is_ready_for_traffic()) {
+        LOGW("failed to put blob for pg [{}], shard [{}], not ready for traffic", pg_id, shard.id);
+        return folly::makeUnexpected(BlobError(BlobErrorCode::RETRY_REQUEST));
+    }
+
     // Create a put_blob request which allocates for header, key and blob_header, user_key. Data sgs are added later
     auto req = put_blob_req_ctx::make(sizeof(BlobHeader) + blob.user_key.size());
     req->header()->msg_type = ReplicationMessageType::PUT_BLOB_MSG;
@@ -273,6 +278,11 @@ BlobManager::AsyncResult< Blob > HSHomeObject::_get_blob(ShardInfo const& shard,
     RELEASE_ASSERT(repl_dev != nullptr, "Repl dev instance null");
     RELEASE_ASSERT(index_table != nullptr, "Index table instance null");
 
+    if (!repl_dev->is_ready_for_traffic()) {
+        LOGW("failed to get blob for pg [{}], shard [{}], not ready for traffic", pg_id, shard.id);
+        return folly::makeUnexpected(BlobError(BlobErrorCode::RETRY_REQUEST));
+    }
+
     auto r = get_blob_from_index_table(index_table, shard.id, blob_id);
     if (!r) {
         BLOGE(shard.id, blob_id, "Blob not found in index during get blob");
@@ -410,6 +420,11 @@ BlobManager::NullAsyncResult HSHomeObject::_del_blob(ShardInfo const& shard, blo
     if (!repl_dev->is_leader()) {
         LOGW("failed to del blob for pg [{}], shard [{}], blob_id [{}], not leader", pg_id, shard.id, blob_id);
         return folly::makeUnexpected(BlobError(BlobErrorCode::NOT_LEADER, repl_dev->get_leader_id()));
+    }
+
+    if (!repl_dev->is_ready_for_traffic()) {
+        LOGW("failed to del blob for pg [{}], shard [{}], not ready for traffic", pg_id, shard.id);
+        return folly::makeUnexpected(BlobError(BlobErrorCode::RETRY_REQUEST));
     }
 
     // Create an unaligned header request unaligned
