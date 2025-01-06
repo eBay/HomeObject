@@ -192,18 +192,19 @@ bool HeapChunkSelector::is_chunk_available(const pg_id_t pg_id, const chunk_num_
 
 std::optional< uint32_t > HeapChunkSelector::select_chunks_for_pg(pg_id_t pg_id, uint64_t pg_size) {
     std::unique_lock lock_guard(m_chunk_selector_mtx);
-    if (m_per_pg_chunks.find(pg_id) != m_per_pg_chunks.end()) {
-        LOGWARNMOD(homeobject, "PG had already created, pg_id {}", pg_id);
-        return std::nullopt;
-    }
-
     const auto chunk_size = get_chunk_size();
     if (pg_size < chunk_size) {
         LOGWARNMOD(homeobject, "pg_size {} is less than chunk_size {}", pg_size, chunk_size);
         return std::nullopt;
     }
-
     const uint32_t num_chunk = sisl::round_down(pg_size, chunk_size) / chunk_size;
+
+    if (m_per_pg_chunks.find(pg_id) != m_per_pg_chunks.end()) {
+        // leader may call select_chunks_for_pg multiple times
+        RELEASE_ASSERT(num_chunk == m_per_pg_chunks[pg_id]->m_pg_chunks.size(), "num_chunk should be same");
+        LOGWARNMOD(homeobject, "PG had already created, pg_id {}", pg_id);
+        return num_chunk;
+    }
 
     // Select a pdev with the most available num chunk
     auto most_avail_dev_it = std::max_element(m_per_dev_heap.begin(), m_per_dev_heap.end(),

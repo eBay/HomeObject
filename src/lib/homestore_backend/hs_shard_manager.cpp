@@ -553,7 +553,6 @@ void HSHomeObject::destroy_shards(pg_id_t pg_id) {
 
     auto& pg = iter->second;
     for (auto& shard : pg->shards_) {
-        // release open shard v_chunk
         auto hs_shard = s_cast< HS_Shard* >(shard.get());
         // destroy shard super blk
         hs_shard->sb_.destroy();

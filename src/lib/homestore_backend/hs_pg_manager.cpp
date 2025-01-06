@@ -64,32 +64,58 @@ PGManager::NullAsyncResult HSHomeObject::_create_pg(PGInfo&& pg_info, std::set< 
     auto pg_id = pg_info.id;
     if (auto lg = std::shared_lock(_pg_lock); _pg_map.end() != _pg_map.find(pg_id)) return folly::Unit();
 
-    const auto most_avail_num_chunks = chunk_selector()->most_avail_num_chunks();
     const auto chunk_size = chunk_selector()->get_chunk_size();
     if (pg_info.size < chunk_size) {
         LOGW("Not support to create PG which pg_size {} < chunk_size {}", pg_info.size, chunk_size);
         return folly::makeUnexpected(PGError::INVALID_ARG);
     }
 
-    const auto needed_num_chunks = sisl::round_down(pg_info.size, chunk_size) / chunk_size;
-    if (needed_num_chunks > most_avail_num_chunks) {
-        LOGW("No enough space to create pg, pg_id {}, needed_num_chunks {}, most_avail_num_chunks {}", pg_id,
-             needed_num_chunks, most_avail_num_chunks);
+    auto const num_chunk = chunk_selector()->select_chunks_for_pg(pg_id, pg_info.size);
+    if (!num_chunk.has_value()) {
+        LOGW("Failed to select chunks for pg {}", pg_id);
         return folly::makeUnexpected(PGError::NO_SPACE_LEFT);
     }
 
     pg_info.chunk_size = chunk_size;
     pg_info.replica_set_uuid = boost::uuids::random_generator()();
+    const auto repl_dev_group_id = pg_info.replica_set_uuid;
     return hs_repl_service()
         .create_repl_dev(pg_info.replica_set_uuid, peers)
         .via(executor_)
         .thenValue([this, pg_info = std::move(pg_info)](auto&& v) mutable -> PGManager::NullAsyncResult {
+#ifdef _PRERELEASE
+            if (iomgr_flip::instance()->test_flip("create_pg_create_repl_dev_error")) {
+                LOGW("Simulating create repl dev error in creating pg");
+                v = folly::makeUnexpected(ReplServiceError::FAILED);
+            }
+#endif
+
             if (v.hasError()) { return folly::makeUnexpected(toPgError(v.error())); }
             // we will write a PGHeader across the raft group and when it is committed
             // all raft members will create PGinfo and index table for this PG.
 
             // FIXME:https://github.com/eBay/HomeObject/pull/136#discussion_r1470504271
             return do_create_pg(v.value(), std::move(pg_info));
+        })
+        .thenValue([this, pg_id, repl_dev_group_id](auto&& r) -> PGManager::NullAsyncResult {
+            // reclaim resources if failed to create pg
+            if (r.hasError()) {
+                bool res = chunk_selector_->return_pg_chunks_to_dev_heap(pg_id);
+                RELEASE_ASSERT(res, "Failed to return pg {} chunks to dev_heap", pg_id);
+                // no matter if create repl dev successfully, remove it.
+                // if don't have repl dev, it will return ReplServiceError::SERVER_NOT_FOUND
+                return hs_repl_service()
+                    .remove_repl_dev(repl_dev_group_id)
+                    .deferValue([r, repl_dev_group_id](auto&& e) -> PGManager::NullAsyncResult {
+                        if (e != ReplServiceError::OK) {
+                            LOGW("Failed to remove repl device which group_id {}, error: {}", repl_dev_group_id, e);
+                        }
+
+                        // still return the original error
+                        return folly::makeUnexpected(r.error());
+                    });
+            }
+            return folly::Unit();
         });
 }
 
@@ -103,6 +129,13 @@ PGManager::NullAsyncResult HSHomeObject::do_create_pg(cshared< homestore::ReplDe
     req->header()->payload_crc = crc32_ieee(init_crc32, r_cast< const uint8_t* >(serailized_pg_info.data()), info_size);
     req->header()->seal();
     std::memcpy(req->header_extn(), serailized_pg_info.data(), info_size);
+
+#ifdef _PRERELEASE
+    if (iomgr_flip::instance()->test_flip("create_pg_raft_message_error")) {
+        LOGW("Simulating raft message error in creating pg");
+        return folly::makeUnexpected(PGError::UNKNOWN);
+    }
+#endif
 
     // replicate this create pg message to all raft members of this group
     repl_dev->async_alloc_write(req->header_buf(), sisl::blob{}, sisl::sg_list{}, req);
@@ -291,7 +324,7 @@ void HSHomeObject::mark_pg_destroyed(pg_id_t pg_id) {
     auto lg = std::scoped_lock(_pg_lock);
     auto iter = _pg_map.find(pg_id);
     if (iter == _pg_map.end()) {
-        LOGW("on pg destroy with unknown pg_id {}", pg_id);
+        LOGW("mark pg destroyed with unknown pg_id {}", pg_id);
         return;
     }
     auto& pg = iter->second;
@@ -301,8 +334,7 @@ void HSHomeObject::mark_pg_destroyed(pg_id_t pg_id) {
 }
 
 void HSHomeObject::reset_pg_chunks(pg_id_t pg_id) {
-    bool res = chunk_selector_->reset_pg_chunks(pg_id);
-    RELEASE_ASSERT(res, "Failed to reset all chunks in pg {}", pg_id);
+    chunk_selector_->reset_pg_chunks(pg_id);
     auto fut = homestore::hs()->cp_mgr().trigger_cp_flush(true /* force */);
     auto on_complete = [&](auto success) {
         RELEASE_ASSERT(success, "Failed to trigger CP flush");
