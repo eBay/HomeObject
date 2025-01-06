@@ -87,6 +87,7 @@ public:
         PGState state;
         uint32_t num_members;
         uint32_t num_chunks;
+        uint64_t chunk_size;
         peer_id_t replica_set_uuid;
         uint64_t pg_size;
         homestore::uuid_t index_table_uuid;

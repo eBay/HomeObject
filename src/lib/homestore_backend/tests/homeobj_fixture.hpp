@@ -363,6 +363,7 @@ public:
         EXPECT_EQ(lhs->id, rhs->id);
         EXPECT_EQ(lhs->num_members, rhs->num_members);
         EXPECT_EQ(lhs->num_chunks, rhs->num_chunks);
+        EXPECT_EQ(lhs->chunk_size, rhs->chunk_size);
         EXPECT_EQ(lhs->pg_size, rhs->pg_size);
         EXPECT_EQ(lhs->replica_set_uuid, rhs->replica_set_uuid);
         EXPECT_EQ(lhs->index_table_uuid, rhs->index_table_uuid);
@@ -379,6 +380,12 @@ public:
         for (homestore::chunk_num_t i = 0; i < lhs->num_chunks; ++i) {
             EXPECT_EQ(lhs->get_chunk_ids()[i], rhs->get_chunk_ids()[i]);
         }
+
+        //verify recovered pg_info
+        EXPECT_EQ(lhs_pg->pg_info_.id, rhs_pg->pg_info_.id);
+        EXPECT_EQ(lhs_pg->pg_info_.replica_set_uuid, rhs_pg->pg_info_.replica_set_uuid);
+        EXPECT_EQ(lhs_pg->pg_info_.size, rhs_pg->pg_info_.size);
+        EXPECT_EQ(lhs_pg->pg_info_.chunk_size, rhs_pg->pg_info_.chunk_size);
     }
 
     void verify_hs_shard(const ShardInfo& lhs, const ShardInfo& rhs) {

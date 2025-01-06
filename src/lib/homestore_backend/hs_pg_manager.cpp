@@ -430,6 +430,7 @@ PGInfo HSHomeObject::HS_PG::pg_info_from_sb(homestore::superblk< pg_info_superbl
     }
     pginfo.size = sb->pg_size;
     pginfo.replica_set_uuid = sb->replica_set_uuid;
+    pginfo.chunk_size = sb->chunk_size;
     return pginfo;
 }
 
@@ -448,6 +449,7 @@ HSHomeObject::HS_PG::HS_PG(PGInfo info, shared< homestore::ReplDev > rdev, share
     pg_sb_->state = PGState::ALIVE;
     pg_sb_->num_members = pg_info_.members.size();
     pg_sb_->num_chunks = num_chunks;
+    pg_sb_->chunk_size = pg_info_.chunk_size;
     pg_sb_->pg_size = pg_info_.size;
     pg_sb_->replica_set_uuid = repl_dev_->group_id();
     pg_sb_->index_table_uuid = index_table_->uuid();
