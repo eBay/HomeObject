@@ -23,6 +23,7 @@ target_sources("${PROJECT_NAME}_homestore" PRIVATE
     hs_shard_manager.cpp
     hs_pg_manager.cpp
     pg_blob_iterator.cpp
+    snapshot_receive_handler.cpp
     index_kv.cpp
     heap_chunk_selector.cpp
     replication_state_machine.cpp
@@ -41,7 +42,8 @@ settings_gen_cpp(
     ${CMAKE_CURRENT_BINARY_DIR}/generated/
     "${PROJECT_NAME}_homestore"
     hs_backend_config.fbs
-    resync_pg_shard.fbs
+    resync_pg_data.fbs
+    resync_shard_data.fbs
     resync_blob_data.fbs
   )
 
@@ -67,5 +69,12 @@ target_link_libraries(homestore_test_dynamic PUBLIC
     ${COMMON_TEST_DEPS}
 )
 
-add_test(NAME HomestoreTestDynamic COMMAND homestore_test_dynamic -csv error --executor immediate --config_path ./ --override_config homestore_config.consensus.snapshot_freq_distance:0)
+add_test(NAME HomestoreTestDynamic
+        COMMAND homestore_test_dynamic -csv error --executor immediate --config_path ./
+        --override_config homestore_config.consensus.snapshot_freq_distance:0)
 
+# To test both baseline & incremental resync functionality, we use 13 to minimize the likelihood of it being a divisor of the total LSN (currently 30)
+add_test(NAME HomestoreTestDynamicWithResync
+        COMMAND homestore_test_dynamic -csv error --executor immediate --config_path ./
+        --override_config homestore_config.consensus.snapshot_freq_distance:13
+        --override_config homestore_config.consensus.num_reserved_log_items=13)

@@ -13,6 +13,9 @@
 #include "replication_message.hpp"
 #include "homeobject/common.hpp"
 #include "index_kv.hpp"
+#include "generated/resync_pg_data_generated.h"
+#include "generated/resync_shard_data_generated.h"
+#include "generated/resync_blob_data_generated.h"
 
 namespace homestore {
 struct meta_blk;
@@ -157,6 +160,8 @@ public:
         homestore::chunk_num_t p_chunk_id;
         homestore::chunk_num_t v_chunk_id;
     };
+    //TODO this blk is used to store snapshot metadata/status for recovery
+    struct snapshot_info_superblk {};
 #pragma pack()
 
 public:
@@ -309,21 +314,85 @@ public:
     struct PGBlobIterator {
         PGBlobIterator(HSHomeObject& home_obj, homestore::group_id_t group_id, uint64_t upto_lsn = 0);
         PG* get_pg_metadata();
-        int64_t get_next_blobs(uint64_t max_num_blobs_in_batch, uint64_t max_batch_size_bytes,
-                               std::vector< HSHomeObject::BlobInfoData >& blob_vec, bool& end_of_shard);
-        void create_pg_shard_snapshot_data(sisl::io_blob_safe& meta_blob);
-        void create_blobs_snapshot_data(std::vector< HSHomeObject::BlobInfoData >& blob_vec,
-                                        sisl::io_blob_safe& data_blob, bool end_of_shard);
+        bool update_cursor(objId id);
+        objId expected_next_obj_id();
+        bool generate_shard_blob_list();
+        BlobManager::AsyncResult< sisl::io_blob_safe > load_blob_data(const BlobInfo& blob_info, ResyncBlobState& state);
+        bool create_pg_snapshot_data(sisl::io_blob_safe& meta_blob);
+        bool create_shard_snapshot_data(sisl::io_blob_safe& meta_blob);
+        bool create_blobs_snapshot_data(sisl::io_blob_safe& data_blob);
+        void pack_resync_message(sisl::io_blob_safe& dest_blob, SyncMessageType type);
         bool end_of_scan() const;
 
-        uint64_t cur_shard_seq_num_{1};
-        int64_t cur_blob_id_{-1};
-        uint64_t max_shard_seq_num_{0};
-        uint64_t cur_snapshot_batch_num{0};
+        struct ShardEntry {
+            ShardInfo info;
+            homestore::chunk_num_t v_chunk_num;
+        };
+
+        std::vector< ShardEntry > shard_list_{0};
+
+        objId cur_obj_id_{0, 0};
+        int64_t cur_shard_idx_{-1};
+        std::vector<BlobInfo> cur_blob_list_{0};
+        uint64_t cur_start_blob_idx_{0};
+        uint64_t cur_batch_blob_count_{0};
+        flatbuffers::FlatBufferBuilder builder_;
+
         HSHomeObject& home_obj_;
         homestore::group_id_t group_id_;
+        uint64_t snp_start_lsn_;
         pg_id_t pg_id_;
         shared< homestore::ReplDev > repl_dev_;
+        uint64_t max_batch_size_;
+    };
+
+    class SnapshotReceiveHandler {
+    public:
+        enum ErrorCode {
+            ALLOC_BLK_ERR = 1,
+            WRITE_DATA_ERR,
+            INVALID_BLOB_HEADER,
+            BLOB_DATA_CORRUPTED,
+            ADD_BLOB_INDEX_ERR,
+            CREATE_PG_ERR,
+        };
+
+        constexpr static shard_id_t invalid_shard_id = 0;
+        constexpr static shard_id_t shard_list_end_marker = ULLONG_MAX;
+
+        SnapshotReceiveHandler(HSHomeObject& home_obj, shared< homestore::ReplDev > repl_dev);
+
+        int process_pg_snapshot_data(ResyncPGMetaData const& pg_meta);
+        int process_shard_snapshot_data(ResyncShardMetaData const& shard_meta);
+        int process_blobs_snapshot_data(ResyncBlobDataBatch const& data_blobs, snp_batch_id_t batch_num,
+                                        bool is_last_batch);
+
+        int64_t get_context_lsn() const;
+        void reset_context(int64_t lsn, pg_id_t pg_id);
+        shard_id_t get_shard_cursor() const;
+        shard_id_t get_next_shard() const;
+
+    private:
+        // SnapshotContext is the context data of current snapshot transmission
+        struct SnapshotContext {
+            shard_id_t shard_cursor{invalid_shard_id};
+            snp_batch_id_t cur_batch_num{0};
+            std::vector< shard_id_t > shard_list;
+            const int64_t snp_lsn;
+            const pg_id_t pg_id;
+            shared< BlobIndexTable > index_table;
+
+            SnapshotContext(int64_t lsn, pg_id_t pg_id) : snp_lsn{lsn}, pg_id{pg_id} {}
+        };
+
+        HSHomeObject& home_obj_;
+        const shared< homestore::ReplDev > repl_dev_;
+
+        std::unique_ptr< SnapshotContext > ctx_;
+
+        // snapshot info, can be used as a checkpoint for recovery
+        snapshot_info_superblk snp_info_;
+        // other stats for snapshot transmission progress
     };
 
 private:
@@ -343,17 +412,20 @@ private:
                                                     const homestore::MultiBlkId& blkid) const;
 
     // create pg related
-    PGManager::NullAsyncResult do_create_pg(cshared< homestore::ReplDev > repl_dev, PGInfo&& pg_info);
+    static PGManager::NullAsyncResult do_create_pg(cshared< homestore::ReplDev > repl_dev, PGInfo&& pg_info);
+    folly::Expected< HSHomeObject::HS_PG*, PGError > local_create_pg(shared< homestore::ReplDev > repl_dev,
+                                                                     PGInfo pg_info);
     static std::string serialize_pg_info(const PGInfo& info);
     static PGInfo deserialize_pg_info(const unsigned char* pg_info_str, size_t size);
     void add_pg_to_map(unique< HS_PG > hs_pg);
 
     // create shard related
     shard_id_t generate_new_shard_id(pg_id_t pg);
-    uint64_t get_sequence_num_from_shard_id(uint64_t shard_id_t) const;
 
     static ShardInfo deserialize_shard_info(const char* shard_info_str, size_t size);
     static std::string serialize_shard_info(const ShardInfo& info);
+    void local_create_shard(ShardInfo shard_info, homestore::chunk_num_t v_chunk_id, homestore::chunk_num_t p_chunk_id,
+                            homestore::blk_count_t blk_count);
     void add_new_shard_to_map(ShardPtr&& shard);
     void update_shard_in_map(const ShardInfo& shard_info);
 
@@ -462,6 +534,14 @@ public:
     std::optional< homestore::chunk_num_t > get_shard_v_chunk_id(shard_id_t id) const;
 
     /**
+     * @brief Get the sequence number of the shard from the shard id.
+     *
+     * @param shard_id The ID of the shard.
+     * @return The sequence number of the shard.
+     */
+    static uint64_t get_sequence_num_from_shard_id(uint64_t shard_id);
+
+    /**
      * @brief recover PG and shard from the superblock.
      *
      */
@@ -498,6 +578,7 @@ public:
                             const homestore::MultiBlkId& pbas, cintrusive< homestore::repl_req_ctx >& hs_ctx);
     void on_blob_del_commit(int64_t lsn, sisl::blob const& header, sisl::blob const& key,
                             cintrusive< homestore::repl_req_ctx >& hs_ctx);
+    bool local_add_blob_info(pg_id_t pg_id, BlobInfo const &blob_info);
     homestore::ReplResult< homestore::blk_alloc_hints >
     blob_put_get_blk_alloc_hints(sisl::blob const& header, cintrusive< homestore::repl_req_ctx >& ctx);
     void compute_blob_payload_hash(BlobHeader::HashAlgorithm algorithm, const uint8_t* blob_bytes, size_t blob_size,

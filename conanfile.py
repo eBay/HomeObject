@@ -9,7 +9,7 @@ required_conan_version = ">=1.60.0"
 
 class HomeObjectConan(ConanFile):
     name = "homeobject"
-    version = "2.1.20"
+    version = "2.2.0"
 
     homepage = "https://github.com/eBay/HomeObject"
     description = "Blob Store built on HomeReplication"
@@ -20,17 +20,17 @@ class HomeObjectConan(ConanFile):
     settings = "arch", "os", "compiler", "build_type"
 
     options = {
-                "shared": ['True', 'False'],
-                "fPIC": ['True', 'False'],
-                "coverage": ['True', 'False'],
-                "sanitize": ['True', 'False'],
-              }
+        "shared": ['True', 'False'],
+        "fPIC": ['True', 'False'],
+        "coverage": ['True', 'False'],
+        "sanitize": ['True', 'False'],
+    }
     default_options = {
-                'shared': False,
-                'fPIC': True,
-                'coverage': False,
-                'sanitize': False,
-            }
+        'shared': False,
+        'fPIC': True,
+        'coverage': False,
+        'sanitize': False,
+    }
 
     exports_sources = ("CMakeLists.txt", "cmake/*", "src/*", "LICENSE")
 
@@ -49,7 +49,7 @@ class HomeObjectConan(ConanFile):
 
     def requirements(self):
         self.requires("sisl/[^12.2]@oss/master", transitive_headers=True)
-        self.requires("homestore/[^6.5]@oss/master")
+        self.requires("homestore/[^6.6]@oss/master")
         self.requires("iomgr/[^11.3]@oss/master")
         self.requires("lz4/1.9.4", override=True)
         self.requires("openssl/3.3.1", override=True)

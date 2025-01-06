@@ -38,6 +38,8 @@ BlobError toBlobError(ReplServiceError const& e) {
     case ReplServiceError::RESULT_NOT_EXIST_YET:
         [[fallthrough]];
     case ReplServiceError::TERM_MISMATCH:
+        [[fallthrough]];
+    case ReplServiceError::DATA_DUPLICATED:
         return BlobError(BlobErrorCode::REPLICATION_ERROR);
     case ReplServiceError::NOT_LEADER:
         return BlobError(BlobErrorCode::NOT_LEADER);
@@ -116,6 +118,7 @@ BlobManager::AsyncResult< blob_id_t > HSHomeObject::_put_blob(ShardInfo const& s
     req->header()->payload_crc = 0;
     req->header()->shard_id = shard.id;
     req->header()->pg_id = pg_id;
+    req->header()->blob_id = new_blob_id;
     req->header()->seal();
 
     // Serialize blob_id as Replication key
@@ -182,6 +185,51 @@ BlobManager::AsyncResult< blob_id_t > HSHomeObject::_put_blob(ShardInfo const& s
     });
 }
 
+bool HSHomeObject::local_add_blob_info(pg_id_t const pg_id, BlobInfo const& blob_info) {
+    HS_PG* hs_pg{nullptr};
+    {
+        shared_lock lock_guard(_pg_lock);
+        const auto iter = _pg_map.find(pg_id);
+        RELEASE_ASSERT(iter != _pg_map.end(), "PG not found");
+        hs_pg = dynamic_cast< HS_PG* >(iter->second.get());
+    }
+    shared< BlobIndexTable > index_table = hs_pg->index_table_;
+    RELEASE_ASSERT(index_table != nullptr, "Index table not initialized");
+
+    // Write to index table with key {shard id, blob id} and value {pba}.
+    auto const [exist_already, status] = add_to_index_table(index_table, blob_info);
+    LOGTRACEMOD(blobmgr, "blob put commit shard_id: {} blob_id: {}, exist_already:{}, status:{}, pbas: {}",
+                blob_info.shard_id, blob_info.blob_id, exist_already, status, blob_info.pbas.to_string());
+    if (status != homestore::btree_status_t::success) {
+        LOGE("Failed to insert into index table for blob {} err {}", blob_info.blob_id, enum_name(status));
+        return false;
+    }
+    if (!exist_already) {
+        // The PG superblock (durable entities) will be persisted as part of HS_CLIENT Checkpoint, which is always
+        // done ahead of the Index Checkpoint. Hence, if the index already has this entity, whatever durable
+        // counters updated as part of the update would have been persisted already in PG superblock. So if we were
+        // to increment now, it will be a duplicate increment, hence ignoring for cases where index already exist
+        // for this blob put.
+
+        // Update the durable counters. We need to update the blob_sequence_num here only for replay case, as the
+        // number is already updated in the put_blob call.
+        hs_pg->durable_entities_update([&blob_info](auto& de) {
+            auto existing_blob_id = de.blob_sequence_num.load();
+            auto next_blob_id = blob_info.blob_id + 1;
+            while (next_blob_id > existing_blob_id &&
+                   // we need update the blob_sequence_num to existing_blob_id+1 so that if leader changes, we can
+                   // still get the up-to-date blob_sequence_num
+                   !de.blob_sequence_num.compare_exchange_weak(existing_blob_id, next_blob_id)) {}
+            de.active_blob_count.fetch_add(1, std::memory_order_relaxed);
+            de.total_occupied_blk_count.fetch_add(blob_info.pbas.blk_count(), std::memory_order_relaxed);
+        });
+    } else {
+        LOGTRACEMOD(blobmgr, "blob already exists in index table, skip it. shard_id: {} blob_id: {}",
+                    blob_info.shard_id, blob_info.blob_id);
+    }
+    return true;
+}
+
 void HSHomeObject::on_blob_put_commit(int64_t lsn, sisl::blob const& header, sisl::blob const& key,
                                       homestore::MultiBlkId const& pbas,
                                       cintrusive< homestore::repl_req_ctx >& hs_ctx) {
@@ -199,54 +247,19 @@ void HSHomeObject::on_blob_put_commit(int64_t lsn, sisl::blob const& header, sis
     }
 
     auto const blob_id = *(reinterpret_cast< blob_id_t* >(const_cast< uint8_t* >(key.cbytes())));
-    shared< BlobIndexTable > index_table;
-    HS_PG* hs_pg{nullptr};
-    {
-        std::shared_lock lock_guard(_pg_lock);
-        auto iter = _pg_map.find(msg_header->pg_id);
-        RELEASE_ASSERT(iter != _pg_map.end(), "PG not found");
-        hs_pg = static_cast< HS_PG* >(iter->second.get());
-    }
-
-    index_table = hs_pg->index_table_;
-    RELEASE_ASSERT(index_table != nullptr, "Index table not intialized");
+    auto const pg_id = msg_header->pg_id;
 
     BlobInfo blob_info;
     blob_info.shard_id = msg_header->shard_id;
     blob_info.blob_id = blob_id;
     blob_info.pbas = pbas;
 
-    // Write to index table with key {shard id, blob id } and value {pba}.
-    auto const [exist_already, status] = add_to_index_table(index_table, blob_info);
-    LOGTRACEMOD(blobmgr, "blob put commit shard_id: {} blob_id: {}, lsn:{}, exist_already:{}, status:{}, pbas: {}",
-                msg_header->shard_id, blob_id, lsn, exist_already, status, pbas.to_string());
-    if (!exist_already) {
-        if (status != homestore::btree_status_t::success) {
-            LOGE("Failed to insert into index table for blob {} err {}", lsn, enum_name(status));
-            if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(BlobError(BlobErrorCode::INDEX_ERROR))); }
-            return;
-        } else {
-            // The PG superblock (durable entities) will be persisted as part of HS_CLIENT Checkpoint, which is always
-            // done ahead of the Index Checkpoint. Hence if the index already has this entity, whatever durable counters
-            // updated as part of the update would have been persisted already in PG superblock. So if we were to
-            // increment now, it will be a duplicate increment, hence ignorning for cases where index already exist for
-            // this blob put.
+    bool success = local_add_blob_info(pg_id, blob_info);
 
-            // Update the durable counters. We need to update the blob_sequence_num here only for replay case, as the
-            // number is already updated in the put_blob call.
-            hs_pg->durable_entities_update([&blob_id, &pbas](auto& de) {
-                auto existing_blob_id = de.blob_sequence_num.load();
-                auto next_blob_id = blob_id + 1;
-                while ((next_blob_id > existing_blob_id) &&
-                       // we need update the blob_sequence_num to existing_blob_id+1 so that if leader changes, we can
-                       // still get the up-to-date blob_sequence_num
-                       !de.blob_sequence_num.compare_exchange_weak(existing_blob_id, next_blob_id)) {}
-                de.active_blob_count.fetch_add(1, std::memory_order_relaxed);
-                de.total_occupied_blk_count.fetch_add(pbas.blk_count(), std::memory_order_relaxed);
-            });
-        }
+    if (ctx) {
+        ctx->promise_.setValue(success ? BlobManager::Result< BlobInfo >(blob_info)
+                                       : folly::makeUnexpected(BlobError(BlobErrorCode::INDEX_ERROR)));
     }
-    if (ctx) { ctx->promise_.setValue(BlobManager::Result< BlobInfo >(blob_info)); }
 }
 
 BlobManager::AsyncResult< Blob > HSHomeObject::_get_blob(ShardInfo const& shard, blob_id_t blob_id, uint64_t req_offset,
@@ -357,6 +370,13 @@ HSHomeObject::blob_put_get_blk_alloc_hints(sisl::blob const& header, cintrusive<
         return folly::makeUnexpected(homestore::ReplServiceError::FAILED);
     }
 
+    auto pg_iter = _pg_map.find(msg_header->pg_id);
+    if (pg_iter == _pg_map.end()) {
+        LOGW("Received a blob_put on an unknown pg:{}, underlying engine will retry this later",
+             msg_header->pg_id);
+        return folly::makeUnexpected(homestore::ReplServiceError::RESULT_NOT_EXIST_YET);
+    }
+
     std::scoped_lock lock_guard(_shard_lock);
     auto shard_iter = _shard_map.find(msg_header->shard_id);
     if (shard_iter == _shard_map.end()) {
@@ -365,11 +385,22 @@ HSHomeObject::blob_put_get_blk_alloc_hints(sisl::blob const& header, cintrusive<
         return folly::makeUnexpected(homestore::ReplServiceError::RESULT_NOT_EXIST_YET);
     }
 
+    homestore::blk_alloc_hints hints;
+
     auto hs_shard = d_cast< HS_Shard* >((*shard_iter->second).get());
     BLOGD(msg_header->shard_id, "n/a", "Picked p_chunk_id={}", hs_shard->sb_->p_chunk_id);
-
-    homestore::blk_alloc_hints hints;
     hints.chunk_id_hint = hs_shard->sb_->p_chunk_id;
+
+    if (msg_header->blob_id != 0) {
+        //check if the blob already exists, if yes, return the blk id
+        auto index_table = d_cast< HS_PG* >(pg_iter->second.get())->index_table_;
+        auto r = get_blob_from_index_table(index_table, msg_header->shard_id, msg_header->blob_id);
+        if (r.hasValue()) {
+            LOGT("Blob has already been persisted, blob_id:{}, shard_id:{}", msg_header->blob_id, msg_header->shard_id);
+            hints.committed_blk_id = r.value();
+        }
+    }
+
     return hints;
 }
 

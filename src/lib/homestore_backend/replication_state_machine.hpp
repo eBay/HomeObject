@@ -181,15 +181,18 @@ public:
     virtual bool apply_snapshot(std::shared_ptr< homestore::snapshot_context > context) override;
     virtual std::shared_ptr< homestore::snapshot_context > last_snapshot() override;
     virtual int read_snapshot_obj(std::shared_ptr< homestore::snapshot_context > context,
-                                   std::shared_ptr< homestore::snapshot_obj > snp_data) override;
+                                   std::shared_ptr< homestore::snapshot_obj > snp_obj) override;
     virtual void write_snapshot_obj(std::shared_ptr< homestore::snapshot_context > context,
-                                     std::shared_ptr< homestore::snapshot_obj > snp_data) override;
+                                     std::shared_ptr< homestore::snapshot_obj > snp_obj) override;
     virtual void free_user_snp_ctx(void*& user_snp_ctx) override;
 
 private:
     HSHomeObject* home_object_{nullptr};
+
     std::shared_ptr< homestore::snapshot_context > m_snapshot_context;
     std::mutex m_snapshot_lock;
+
+    std::unique_ptr<HSHomeObject::SnapshotReceiveHandler> m_snp_rcv_handler;
 };
 
 } // namespace homeobject

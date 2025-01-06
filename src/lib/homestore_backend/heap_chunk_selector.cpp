@@ -171,6 +171,25 @@ uint32_t HeapChunkSelector::get_chunk_size() const {
     return chunk->size();
 }
 
+bool HeapChunkSelector::is_chunk_available(const pg_id_t pg_id, const chunk_num_t v_chunk_id) const {
+    std::shared_lock lock_guard(m_chunk_selector_mtx);
+    auto pg_it = m_per_pg_chunks.find(pg_id);
+    if (pg_it == m_per_pg_chunks.end()) {
+        LOGWARNMOD(homeobject, "No pg found for pg_id {}", pg_id);
+        return false;
+    }
+
+    auto pg_chunk_collection = pg_it->second;
+    auto& pg_chunks = pg_chunk_collection->m_pg_chunks;
+    if (v_chunk_id >= pg_chunks.size()) {
+        LOGWARNMOD(homeobject, "No chunk found for v_chunk_id {}", v_chunk_id);
+        return false;
+    }
+    std::scoped_lock lock(pg_chunk_collection->mtx);
+    auto chunk = pg_chunks[v_chunk_id];
+    return chunk->available();
+}
+
 std::optional< uint32_t > HeapChunkSelector::select_chunks_for_pg(pg_id_t pg_id, uint64_t pg_size) {
     std::unique_lock lock_guard(m_chunk_selector_mtx);
     if (m_per_pg_chunks.find(pg_id) != m_per_pg_chunks.end()) {

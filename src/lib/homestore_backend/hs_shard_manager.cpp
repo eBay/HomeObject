@@ -59,8 +59,8 @@ shard_id_t HSHomeObject::generate_new_shard_id(pg_id_t pgid) {
     return make_new_shard_id(pgid, new_sequence_num);
 }
 
-uint64_t HSHomeObject::get_sequence_num_from_shard_id(uint64_t shard_id_t) const {
-    return shard_id_t & (max_shard_num_in_pg() - 1);
+uint64_t HSHomeObject::get_sequence_num_from_shard_id(uint64_t shard_id) {
+    return shard_id & (max_shard_num_in_pg() - 1);
 }
 
 std::string HSHomeObject::serialize_shard_info(const ShardInfo& info) {
@@ -313,6 +313,35 @@ void HSHomeObject::on_shard_message_rollback(int64_t lsn, sisl::blob const& head
     }
 }
 
+void HSHomeObject::local_create_shard(ShardInfo shard_info, homestore::chunk_num_t v_chunk_id,
+                                      homestore::chunk_num_t p_chunk_id, homestore::blk_count_t blk_count) {
+    bool shard_exist = false;
+    {
+        scoped_lock lock_guard(_shard_lock);
+        shard_exist = (_shard_map.find(shard_info.id) != _shard_map.end());
+    }
+
+    if (!shard_exist) {
+        add_new_shard_to_map(std::make_unique< HS_Shard >(shard_info, p_chunk_id, v_chunk_id));
+        // select_specific_chunk() will do something only when we are relaying journal after restart, during the
+        // runtime flow chunk is already been be mark busy when we write the shard info to the repldev.
+        auto pg_id = shard_info.placement_group;
+        auto chunk = chunk_selector_->select_specific_chunk(pg_id, v_chunk_id);
+        RELEASE_ASSERT(chunk != nullptr, "chunk selection failed with v_chunk_id: {} in PG: {}", v_chunk_id, pg_id);
+    } else { LOGD("shard {} already exist, skip creating shard", shard_info.id); }
+
+    // update pg's total_occupied_blk_count
+    HS_PG* hs_pg{nullptr};
+    {
+        shared_lock lock_guard(_pg_lock);
+        auto iter = _pg_map.find(shard_info.placement_group);
+        RELEASE_ASSERT(iter != _pg_map.end(), "PG not found");
+        hs_pg = static_cast< HS_PG* >(iter->second.get());
+    }
+    hs_pg->durable_entities_update(
+        [blk_count](auto& de) { de.total_occupied_blk_count.fetch_add(blk_count, std::memory_order_relaxed); });
+}
+
 void HSHomeObject::on_shard_message_commit(int64_t lsn, sisl::blob const& h, homestore::MultiBlkId const& blkids,
                                            shared< homestore::ReplDev > repl_dev,
                                            cintrusive< homestore::repl_req_ctx >& hs_ctx) {
@@ -357,32 +386,9 @@ void HSHomeObject::on_shard_message_commit(int64_t lsn, sisl::blob const& h, hom
         auto v_chunk_id = sb->v_chunk_id;
         shard_info.lsn = lsn;
 
-        bool shard_exist = false;
-        {
-            std::scoped_lock lock_guard(_shard_lock);
-            shard_exist = (_shard_map.find(shard_info.id) != _shard_map.end());
-        }
-        if (!shard_exist) {
-            add_new_shard_to_map(std::make_unique< HS_Shard >(shard_info, blkids.chunk_num(), v_chunk_id));
-            // select_specific_chunk() will do something only when we are relaying journal after restart, during the
-            // runtime flow chunk is already been be mark busy when we write the shard info to the repldev.
-            auto pg_id = shard_info.placement_group;
-            auto chunk = chunk_selector_->select_specific_chunk(pg_id, v_chunk_id);
-            RELEASE_ASSERT(chunk != nullptr, "chunk selection failed with v_chunk_id: {} in PG: {}", v_chunk_id, pg_id);
-        }
+        local_create_shard(shard_info, v_chunk_id, blkids.chunk_num(), blkids.blk_count());
         if (ctx) { ctx->promise_.setValue(ShardManager::Result< ShardInfo >(shard_info)); }
 
-        // update pg's total_occupied_blk_count
-        HS_PG* hs_pg{nullptr};
-        {
-            std::shared_lock lock_guard(_pg_lock);
-            auto iter = _pg_map.find(shard_info.placement_group);
-            RELEASE_ASSERT(iter != _pg_map.end(), "PG not found");
-            hs_pg = static_cast< HS_PG* >(iter->second.get());
-        }
-        hs_pg->durable_entities_update([&blkids](auto& de) {
-            de.total_occupied_blk_count.fetch_add(blkids.blk_count(), std::memory_order_relaxed);
-        });
         LOGI("Commit done for CREATE_SHARD_MSG for shard {}", shard_info.id);
 
         break;
