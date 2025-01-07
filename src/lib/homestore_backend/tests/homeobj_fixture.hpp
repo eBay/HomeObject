@@ -450,7 +450,7 @@ private:
     }
 
     void trigger_cp(bool wait) {
-        auto fut = homestore::hs()->cp_mgr().trigger_cp_flush(true /* force */);
+        auto fut = homestore::hs()->cp_mgr().trigger_cp_flush(false /* force */);
         auto on_complete = [&](auto success) {
             EXPECT_EQ(success, true);
             LOGINFO("CP Flush completed");

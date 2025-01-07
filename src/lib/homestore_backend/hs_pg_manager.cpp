@@ -316,8 +316,15 @@ std::optional< pg_id_t > HSHomeObject::get_pg_id_with_group_id(homestore::group_
 void HSHomeObject::pg_destroy(pg_id_t pg_id) {
     mark_pg_destroyed(pg_id);
     destroy_shards(pg_id);
-    reset_pg_chunks(pg_id);
-    cleanup_pg_resources(pg_id);
+    chunk_selector_->reset_pg_chunks(pg_id);
+    destroy_pg_index_table(pg_id);
+    destroy_pg_superblk(pg_id);
+
+    // return pg chunks to dev heap
+    // which must be done after destroying pg super blk to avoid multiple pg use same chunks
+    bool res = chunk_selector_->return_pg_chunks_to_dev_heap(pg_id);
+    RELEASE_ASSERT(res, "Failed to return pg {} chunks to dev_heap", pg_id);
+
     LOGI("pg {} is destroyed", pg_id);
 }
 void HSHomeObject::mark_pg_destroyed(pg_id_t pg_id) {
@@ -333,25 +340,14 @@ void HSHomeObject::mark_pg_destroyed(pg_id_t pg_id) {
     hs_pg->pg_sb_.write();
 }
 
-void HSHomeObject::reset_pg_chunks(pg_id_t pg_id) {
-    chunk_selector_->reset_pg_chunks(pg_id);
-    auto fut = homestore::hs()->cp_mgr().trigger_cp_flush(true /* force */);
-    auto on_complete = [&](auto success) {
-        RELEASE_ASSERT(success, "Failed to trigger CP flush");
-        LOGI("CP Flush completed");
-    };
-    on_complete(std::move(fut).get());
-}
-
-void HSHomeObject::cleanup_pg_resources(pg_id_t pg_id) {
+void HSHomeObject::destroy_pg_index_table(pg_id_t pg_id) {
     auto lg = std::scoped_lock(_pg_lock);
     auto iter = _pg_map.find(pg_id);
     if (iter == _pg_map.end()) {
-        LOGW("on pg resource release with unknown pg_id {}", pg_id);
+        LOGW("destroy pg index table with unknown pg_id {}", pg_id);
         return;
     }
 
-    // destroy index table
     auto& pg = iter->second;
     auto hs_pg = s_cast< HS_PG* >(pg.get());
     if (nullptr != hs_pg->index_table_) {
@@ -360,17 +356,34 @@ void HSHomeObject::cleanup_pg_resources(pg_id_t pg_id) {
         hs()->index_service().remove_index_table(hs_pg->index_table_);
         hs_pg->index_table_->destroy();
     }
+}
 
-    // destroy pg super blk
-    hs_pg->pg_sb_.destroy();
+void HSHomeObject::destroy_pg_superblk(pg_id_t pg_id) {
+    // pay attention: cp_flush will try get '_pg_lock' to flush all pg ops.
+    // before destroy pg superblk, we must ensure all ops on this pg are persisted
+    auto fut = homestore::hs()->cp_mgr().trigger_cp_flush(false /* force */);
+    auto on_complete = [&](auto success) {
+        RELEASE_ASSERT(success, "Failed to trigger CP flush");
+        LOGI("CP Flush trigged by pg_destroy completed, pg_id={}", pg_id);
+    };
+    on_complete(std::move(fut).get());
 
-    // return pg chunks to dev heap
-    // which must be done after destroying pg super blk to avoid multiple pg use same chunks
-    bool res = chunk_selector_->return_pg_chunks_to_dev_heap(pg_id);
-    RELEASE_ASSERT(res, "Failed to return pg {} chunks to dev_heap", pg_id);
+    {
+        auto lg = std::scoped_lock(_pg_lock);
+        auto iter = _pg_map.find(pg_id);
+        if (iter == _pg_map.end()) {
+            LOGW("destroy pg superblk with unknown pg_id {}", pg_id);
+            return;
+        }
 
-    // erase pg in pg map
-    _pg_map.erase(iter);
+        // destroy pg super blk
+        auto& pg = iter->second;
+        auto hs_pg = s_cast< HS_PG* >(pg.get());
+        hs_pg->pg_sb_.destroy();
+
+        // erase pg in pg map
+        _pg_map.erase(iter);
+    }
 }
 
 void HSHomeObject::add_pg_to_map(unique< HS_PG > hs_pg) {
