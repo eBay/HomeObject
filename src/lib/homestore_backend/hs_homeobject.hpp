@@ -630,18 +630,19 @@ private:
     void destroy_shards(pg_id_t pg_id);
 
     /**
-     * @brief Resets the chunks for the given PG ID and triggers a checkpoint flush.
+     * @brief destroy index table for the PG located using a pg_id.
      *
-     * @param pg_id The ID of the PG whose chunks are to be reset.
+     * @param pg_id The ID of the PG to be destroyed.
      */
-    void reset_pg_chunks(pg_id_t pg_id);
+    void destroy_pg_index_table(pg_id_t pg_id);
 
-    /**
-     * @brief Cleans up and recycles resources for the PG located using a pg_id.
+/**
+     * @brief Destroy the superblock for the PG identified by pg_id.
+     * Ensures all operations are persisted by triggering a cp flush before destruction.
      *
-     * @param pg_id The ID of the PG to be cleaned.
+     * @param pg_id The ID of the PG to be destroyed.
      */
-    void cleanup_pg_resources(pg_id_t pg_id);
+    void destroy_pg_superblk(pg_id_t pg_id);
 };
 
 class BlobIndexServiceCallbacks : public homestore::IndexServiceCallbacks {
