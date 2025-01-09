@@ -234,7 +234,6 @@ public:
                         if (!pattern.empty()) { fmt::format_to(std::back_inserter(pattern), ":"); }
                         fmt::format_to(std::back_inserter(pattern), "{}", ti->test_case_name());
                         fmt::format_to(std::back_inserter(pattern), ".{}", ti->name());
-                        break;
                     }
                 }
             }
@@ -249,8 +248,8 @@ public:
         c.detach();
     }
 
-    std::shared_ptr< homeobject::HomeObject > build_new_homeobject() {
-        auto is_restart = SISL_OPTIONS["is_restart"].as< bool >();
+    std::shared_ptr< HomeObject > build_new_homeobject() {
+        auto is_restart = is_current_testcase_restarted();
         prepare_devices(!is_restart);
         homeobj_ = init_homeobject(std::weak_ptr< TestReplApplication >(app));
         return homeobj_;
@@ -300,13 +299,21 @@ public:
 
     void teardown() { sisl::GrpcAsyncClientWorker::shutdown_all(); }
 
-    void sync() { ipc_data_->sync(sync_point_num++, total_replicas_nums_); }
+    void sync() {
+        LOGINFO("=== Syncing: replica={}(total {}), sync_point_num={} ===", replica_num_, total_replicas_nums_,
+                sync_point_num);
+        ipc_data_->sync(sync_point_num++, total_replicas_nums_);
+    }
+
     void set_uint64_id(uint64_t uint64_id) { ipc_data_->set_uint64_id(uint64_id); }
     uint64_t get_uint64_id() { return ipc_data_->get_uint64_id(); }
+
     void set_auxiliary_uint64_id(uint64_t input_auxiliary_uint64_id) {
         ipc_data_->set_auxiliary_uint64_id(input_auxiliary_uint64_id);
     }
+
     uint64_t get_auxiliary_uint64_id() { return ipc_data_->get_auxiliary_uint64_id(); }
+
     void check_and_kill(int port) {
         std::string command = "lsof -t -i:" + std::to_string(port);
         if (::system(command.c_str())) {
@@ -321,6 +328,25 @@ public:
                 std::cout << "Failed to kill the process." << std::endl;
             }
         }
+    }
+
+    bool is_current_testcase_restarted() const {
+        if (!SISL_OPTIONS["is_restart"].as< bool >()) { return false; }
+
+        // check if the current testcase is the first one
+        auto ut = testing::UnitTest::GetInstance();
+        for (int i = 0; i < ut->total_test_suite_count(); i++) {
+            auto ts = ut->GetTestSuite(i);
+            if (!ts->should_run()) { continue; }
+            for (int j = 0; j < ts->total_test_count(); j++) {
+                auto ti = ts->GetTestInfo(j);
+                if (!ti->should_run()) { continue; }
+                if (ti != ut->current_test_info()) { return false; }
+                return true;
+            }
+        }
+        RELEASE_ASSERT(true, "Cannot find any available testcase");
+        return false; // should not reach here
     }
 
 private:

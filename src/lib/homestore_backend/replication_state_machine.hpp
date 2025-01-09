@@ -175,16 +175,15 @@ public:
     /// @brief Called when the replica is being destroyed by nuraft;
     void on_destroy(const homestore::group_id_t& group_id) override;
 
-    /// Not Implemented
-    /// @brief Called when the snapshot is being created by nuraft;
+    // Snapshot related functions
     homestore::AsyncReplResult<> create_snapshot(std::shared_ptr< homestore::snapshot_context > context) override;
-    virtual bool apply_snapshot(std::shared_ptr< homestore::snapshot_context > context) override;
-    virtual std::shared_ptr< homestore::snapshot_context > last_snapshot() override;
-    virtual int read_snapshot_obj(std::shared_ptr< homestore::snapshot_context > context,
-                                   std::shared_ptr< homestore::snapshot_obj > snp_obj) override;
-    virtual void write_snapshot_obj(std::shared_ptr< homestore::snapshot_context > context,
-                                     std::shared_ptr< homestore::snapshot_obj > snp_obj) override;
-    virtual void free_user_snp_ctx(void*& user_snp_ctx) override;
+    bool apply_snapshot(std::shared_ptr< homestore::snapshot_context > context) override;
+    std::shared_ptr< homestore::snapshot_context > last_snapshot() override;
+    int read_snapshot_obj(std::shared_ptr< homestore::snapshot_context > context,
+                          std::shared_ptr< homestore::snapshot_obj > snp_obj) override;
+    void write_snapshot_obj(std::shared_ptr< homestore::snapshot_context > context,
+                            std::shared_ptr< homestore::snapshot_obj > snp_obj) override;
+    void free_user_snp_ctx(void*& user_snp_ctx) override;
 
 private:
     HSHomeObject* home_object_{nullptr};

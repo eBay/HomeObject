@@ -1,7 +1,7 @@
 #include <utility>
 
 #include "hs_homeobject.hpp"
-
+#include "replication_state_machine.hpp"
 #include <homestore/blkdata_service.hpp>
 
 namespace homeobject {
@@ -22,7 +22,7 @@ int HSHomeObject::SnapshotReceiveHandler::process_pg_snapshot_data(ResyncPGMetaD
     // Create local PG
     PGInfo pg_info(pg_meta.pg_id());
     pg_info.size = pg_meta.pg_size();
-    pg_info.chunk_size =  pg_meta.chunk_size();
+    pg_info.chunk_size = pg_meta.chunk_size();
     std::copy_n(pg_meta.replica_set_uuid()->data(), 16, pg_info.replica_set_uuid.begin());
     for (unsigned int i = 0; i < pg_meta.members()->size(); i++) {
         const auto member = pg_meta.members()->Get(i);
@@ -51,6 +51,8 @@ int HSHomeObject::SnapshotReceiveHandler::process_pg_snapshot_data(ResyncPGMetaD
     hs_pg->shard_sequence_num_ = pg_meta.shard_seq_num();
     hs_pg->durable_entities_update(
         [&pg_meta](auto& de) { de.blob_sequence_num.store(pg_meta.blob_seq_num(), std::memory_order_relaxed); });
+
+    // No need to persist snp info superblock since it's almost meaningless to resume from this point.
     return 0;
 }
 
@@ -147,18 +149,16 @@ int HSHomeObject::SnapshotReceiveHandler::process_blobs_snapshot_data(ResyncBlob
         auto delay = iomgr_flip::instance()->get_test_flip< long >("write_snapshot_save_blob_latency",
                                                                    static_cast< long >(blob->blob_id()));
         if (delay) {
-            LOGI("Simulating pg snapshot receive data with delay, delay:{}, blob_id:{}", delay.get(),
-                 blob->blob_id());
+            LOGI("Simulating pg snapshot receive data with delay, delay:{}, blob_id:{}", delay.get(), blob->blob_id());
             std::this_thread::sleep_for(std::chrono::milliseconds(delay.get()));
         }
 #endif
 
         // Check duplication to avoid reprocessing. This may happen on resent blob batches.
         if (!ctx_->index_table) {
-            std::shared_lock lock_guard(home_obj_._pg_lock);
-            auto iter = home_obj_._pg_map.find(ctx_->pg_id);
-            RELEASE_ASSERT(iter != home_obj_._pg_map.end(), "PG not found");
-            ctx_->index_table = dynamic_cast< HS_PG* >(iter->second.get())->index_table_;
+            auto hs_pg = get_hs_pg(ctx_->pg_id);
+            RELEASE_ASSERT(hs_pg != nullptr, "PG not found for pg_id:{}", ctx_->pg_id);
+            ctx_->index_table = hs_pg->index_table_;
         }
         RELEASE_ASSERT(ctx_->index_table != nullptr, "Index table instance null");
         if (home_obj_.get_blob_from_index_table(ctx_->index_table, ctx_->shard_cursor, blob->blob_id())) {
@@ -256,15 +256,53 @@ int HSHomeObject::SnapshotReceiveHandler::process_blobs_snapshot_data(ResyncBlob
         if (state == ShardInfo::State::SEALED) {
             home_obj_.chunk_selector()->release_chunk(ctx_->pg_id, v_chunk_id.value());
         }
+
+        // We only update the snp info superblk on completion of each shard, since resumption is also shard-level
+        update_snp_info_sb(ctx_->shard_cursor == ctx_->shard_list.front());
     }
 
     return 0;
 }
 
 int64_t HSHomeObject::SnapshotReceiveHandler::get_context_lsn() const { return ctx_ ? ctx_->snp_lsn : -1; }
+pg_id_t HSHomeObject::SnapshotReceiveHandler::get_context_pg_id() const { return ctx_ ? ctx_->pg_id : 0; }
+
+bool HSHomeObject::SnapshotReceiveHandler::load_prev_context() {
+    HS_PG* hs_pg = nullptr;
+    {
+        std::shared_lock lck(home_obj_._pg_lock);
+        auto iter = find_if(home_obj_._pg_map.begin(), home_obj_._pg_map.end(), [this](auto& pg) {
+            auto hs_pg = dynamic_cast< HS_PG* >(pg.second.get());
+            return hs_pg->repl_dev_ == repl_dev_;
+        });
+        hs_pg = iter == home_obj_._pg_map.end() ? nullptr : dynamic_cast< HS_PG* >(iter->second.get());
+    }
+    if (hs_pg == nullptr || hs_pg->snp_rcvr_info_sb_.is_empty()) { return false; }
+
+    RELEASE_ASSERT(hs_pg->snp_rcvr_info_sb_->pg_id == hs_pg->pg_sb_->id,
+                   "PG id in snp_info sb not matching with PG sb");
+
+    ctx_ = std::make_unique< SnapshotContext >(hs_pg->snp_rcvr_info_sb_->snp_lsn, hs_pg->snp_rcvr_info_sb_->pg_id);
+    ctx_->shard_cursor = hs_pg->snp_rcvr_info_sb_->shard_cursor;
+    ctx_->cur_batch_num = 0; // Always resume from the beginning of the shard
+    ctx_->index_table = hs_pg->index_table_;
+    ctx_->shard_list = hs_pg->snp_rcvr_info_sb_->get_shard_list();
+
+    LOGINFO("Resuming snapshot receiver context from lsn:{} pg_id:{} shard_cursor:{}", ctx_->snp_lsn,
+            hs_pg->snp_rcvr_info_sb_->pg_id, ctx_->shard_cursor);
+    return true;
+}
 
 void HSHomeObject::SnapshotReceiveHandler::reset_context(int64_t lsn, pg_id_t pg_id) {
+    if (ctx_ != nullptr) { destroy_context(); }
     ctx_ = std::make_unique< SnapshotContext >(lsn, pg_id);
+}
+
+void HSHomeObject::SnapshotReceiveHandler::destroy_context() {
+    auto hs_pg = get_hs_pg(ctx_->pg_id);
+    if (hs_pg == nullptr) { return; }
+    hs_pg->snp_rcvr_info_sb_.destroy();
+    ctx_.reset();
 }
 
 shard_id_t HSHomeObject::SnapshotReceiveHandler::get_shard_cursor() const { return ctx_->shard_cursor; }
@@ -281,6 +319,54 @@ shard_id_t HSHomeObject::SnapshotReceiveHandler::get_next_shard() const {
     }
 
     return invalid_shard_id;
+}
+
+// TODO: extract a more common function at HomeObject level
+HSHomeObject::HS_PG* HSHomeObject::SnapshotReceiveHandler::get_hs_pg(pg_id_t pg_id) {
+    std::shared_lock lck(home_obj_._pg_lock);
+    auto iter = home_obj_._pg_map.find(pg_id);
+    return iter == home_obj_._pg_map.end() ? nullptr : dynamic_cast< HS_PG* >(iter->second.get());
+}
+
+void HSHomeObject::SnapshotReceiveHandler::update_snp_info_sb(bool init) {
+    auto hs_pg = get_hs_pg(ctx_->pg_id);
+    RELEASE_ASSERT(hs_pg != nullptr, "PG not found");
+
+    auto* sb = hs_pg->snp_rcvr_info_sb_.get();
+    if (init) {
+        if (!hs_pg->snp_rcvr_info_sb_.is_empty()) { hs_pg->snp_rcvr_info_sb_.destroy(); }
+        sb = hs_pg->snp_rcvr_info_sb_.create(sizeof(snapshot_rcvr_info_superblk) +
+                                             ctx_->shard_list.size() * sizeof(shard_id_t));
+        sb->shard_cnt = ctx_->shard_list.size();
+        std::copy(ctx_->shard_list.begin(), ctx_->shard_list.end(), sb->shard_list);
+    }
+    RELEASE_ASSERT(sb != nullptr, "Snapshot info superblk not found");
+    sb->snp_lsn = ctx_->snp_lsn;
+    sb->pg_id = ctx_->pg_id;
+    sb->shard_cursor = get_next_shard();
+    hs_pg->snp_rcvr_info_sb_.write();
+
+    // Ensure all the superblk & corresponding index/data update have been written to disk
+    auto fut = homestore::hs()->cp_mgr().trigger_cp_flush(true /* force */);
+    LOGINFO("Update snp_info sb, CP Flush {}", std::move(fut).get() ? "success" : "failed");
+}
+
+void HSHomeObject::on_snp_rcvr_meta_blk_found(homestore::meta_blk* mblk, sisl::byte_view buf) {
+    LOGINFO("Found snapshot info meta blk");
+    homestore::superblk< snapshot_rcvr_info_superblk > sb(_snp_rcvr_meta_name);
+    sb.load(buf, mblk);
+
+    {
+        std::shared_lock lock_guard(_pg_lock);
+        auto iter = _pg_map.find(sb->pg_id);
+        RELEASE_ASSERT(iter != _pg_map.end(), "PG not found");
+        auto hs_pg = dynamic_cast< HS_PG* >(iter->second.get());
+        hs_pg->snp_rcvr_info_sb_ = std::move(sb);
+    }
+}
+
+void HSHomeObject::on_snp_rcvr_meta_blk_recover_completed(bool success) {
+    LOGINFO("Snapshot info meta blk recovery completed");
 }
 
 } // namespace homeobject

@@ -226,6 +226,8 @@ ReplicationStateMachine::create_snapshot(std::shared_ptr< homestore::snapshot_co
 
 bool ReplicationStateMachine::apply_snapshot(std::shared_ptr< homestore::snapshot_context > context) {
     // TODO persist snapshot
+    m_snp_rcv_handler->destroy_context();
+
     std::lock_guard lk(m_snapshot_lock);
     m_snapshot_context = context;
     return true;
@@ -238,7 +240,7 @@ std::shared_ptr< homestore::snapshot_context > ReplicationStateMachine::last_sna
 }
 
 int ReplicationStateMachine::read_snapshot_obj(std::shared_ptr< homestore::snapshot_context > context,
-                                                std::shared_ptr< homestore::snapshot_obj > snp_obj) {
+                                               std::shared_ptr< homestore::snapshot_obj > snp_obj) {
     HSHomeObject::PGBlobIterator* pg_iter = nullptr;
     auto s = dynamic_pointer_cast< homestore::nuraft_snapshot_context >(context)->nuraft_snapshot();
 
@@ -278,15 +280,15 @@ int ReplicationStateMachine::read_snapshot_obj(std::shared_ptr< homestore::snaps
     log_str = fmt::format("{} shard_seq_num={} batch_num={}", log_str, obj_id.shard_seq_num, obj_id.batch_id);
 
     LOGD("read current snp obj {}", log_str)
-    //invalid Id
+    // invalid Id
     if (!pg_iter->update_cursor(obj_id)) {
         LOGW("Invalid objId in snapshot read, {}, current shard_seq_num={}, current batch_num={}",
              log_str, pg_iter->cur_obj_id_.shard_seq_num, pg_iter->cur_obj_id_.batch_id);
         return -1;
     }
 
-    //pg metadata message
-    //shardId starts from 1
+    // pg metadata message
+    // shardId starts from 1
     if (obj_id.shard_seq_num == 0) {
         if (!pg_iter->create_pg_snapshot_data(snp_obj->blob)) {
             LOGE("Failed to create pg snapshot data for snapshot read, {}", log_str);
@@ -323,10 +325,14 @@ void ReplicationStateMachine::write_snapshot_obj(std::shared_ptr< homestore::sna
     auto r_dev = repl_dev();
     if (!m_snp_rcv_handler) {
         m_snp_rcv_handler = std::make_unique< HSHomeObject::SnapshotReceiveHandler >(*home_object_, r_dev);
+        if (m_snp_rcv_handler->load_prev_context()) {
+            LOGI("Reloaded previous snapshot context, lsn:{} pg_id:{} shard:{}", context->get_lsn(),
+                 m_snp_rcv_handler->get_context_pg_id(), m_snp_rcv_handler->get_next_shard());
+        }
     }
 
     auto s = dynamic_pointer_cast< homestore::nuraft_snapshot_context >(context)->nuraft_snapshot();
-    auto obj_id = objId(static_cast< snp_obj_id_t >(snp_obj->offset));
+    auto obj_id = objId(snp_obj->offset);
     auto log_suffix = fmt::format("group={} term={} lsn={} shard={} batch_num={} size={}",
                                   uuids::to_string(r_dev->group_id()), s->get_last_log_term(), s->get_last_log_idx(),
                                   obj_id.shard_seq_num, obj_id.batch_id, snp_obj->blob.size());
@@ -363,19 +369,25 @@ void ReplicationStateMachine::write_snapshot_obj(std::shared_ptr< homestore::sna
 
         auto pg_data = GetSizePrefixedResyncPGMetaData(data_buf);
 
-        //Check if pg exists, if yes, clean the stale pg resources, may be due to previous snapshot failure. Let's resync on a pristine base
+        if (m_snp_rcv_handler->get_context_lsn() == context->get_lsn() && m_snp_rcv_handler->get_shard_cursor() != 0) {
+            // Request to resume from the beginning of shard
+            snp_obj->offset =
+                m_snp_rcv_handler->get_shard_cursor() == HSHomeObject::SnapshotReceiveHandler::shard_list_end_marker
+                ? LAST_OBJ_ID
+                : objId(HSHomeObject::get_sequence_num_from_shard_id(m_snp_rcv_handler->get_shard_cursor()), 0).value;
+            LOGI("Resume from previous context breakpoint, lsn:{} pg_id:{} shard:{}", context->get_lsn(),
+                 pg_data->pg_id(), m_snp_rcv_handler->get_next_shard());
+            return;
+        }
+
+        // Init a new transmission
+        // If PG already exists, clean the stale pg resources. Let's resync on a pristine base
         if (home_object_->pg_exists(pg_data->pg_id())) {
             LOGI("pg already exists, clean pg resources before snapshot, pg_id:{} {}", pg_data->pg_id(), log_suffix);
             home_object_->pg_destroy(pg_data->pg_id());
-            LOGI("reset context from lsn:{} to lsn:{}", m_snp_rcv_handler->get_context_lsn(), context->get_lsn());
-            m_snp_rcv_handler->reset_context(context->get_lsn(), pg_data->pg_id());
         }
-        // Check if the snapshot context is same as the current snapshot context.
-        // If not, drop the previous context and re-init a new one
-        if (m_snp_rcv_handler->get_context_lsn() != context->get_lsn()) {
-            LOGI("reset context from lsn:{} to lsn:{}", m_snp_rcv_handler->get_context_lsn(), context->get_lsn());
-            m_snp_rcv_handler->reset_context(context->get_lsn(), pg_data->pg_id());
-        }
+        LOGI("reset context from lsn:{} to lsn:{}", m_snp_rcv_handler->get_context_lsn(), context->get_lsn());
+        m_snp_rcv_handler->reset_context(context->get_lsn(), pg_data->pg_id());
 
         auto ret = m_snp_rcv_handler->process_pg_snapshot_data(*pg_data);
         if (ret) {
@@ -452,5 +464,4 @@ void ReplicationStateMachine::free_user_snp_ctx(void*& user_snp_ctx) {
     delete pg_iter;
     user_snp_ctx = nullptr;
 }
-
 } // namespace homeobject
