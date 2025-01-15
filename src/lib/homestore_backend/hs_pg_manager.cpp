@@ -61,18 +61,26 @@ PGError toPgError(ReplServiceError const& e) {
 }
 
 PGManager::NullAsyncResult HSHomeObject::_create_pg(PGInfo&& pg_info, std::set< peer_id_t > const& peers) {
+    if (is_shutting_down()) {
+        LOGI("service is being shut down");
+        return folly::makeUnexpected(PGError::SHUTTING_DOWN);
+    }
+    incr_pending_request_num();
+
     auto pg_id = pg_info.id;
     if (auto lg = std::shared_lock(_pg_lock); _pg_map.end() != _pg_map.find(pg_id)) return folly::Unit();
 
     const auto chunk_size = chunk_selector()->get_chunk_size();
     if (pg_info.size < chunk_size) {
         LOGW("Not support to create PG which pg_size {} < chunk_size {}", pg_info.size, chunk_size);
+        decr_pending_request_num();
         return folly::makeUnexpected(PGError::INVALID_ARG);
     }
 
     auto const num_chunk = chunk_selector()->select_chunks_for_pg(pg_id, pg_info.size);
     if (!num_chunk.has_value()) {
         LOGW("Failed to select chunks for pg {}", pg_id);
+        decr_pending_request_num();
         return folly::makeUnexpected(PGError::NO_SPACE_LEFT);
     }
 
@@ -106,15 +114,17 @@ PGManager::NullAsyncResult HSHomeObject::_create_pg(PGInfo&& pg_info, std::set< 
                 // if don't have repl dev, it will return ReplServiceError::SERVER_NOT_FOUND
                 return hs_repl_service()
                     .remove_repl_dev(repl_dev_group_id)
-                    .deferValue([r, repl_dev_group_id](auto&& e) -> PGManager::NullAsyncResult {
+                    .deferValue([r, repl_dev_group_id, this](auto&& e) -> PGManager::NullAsyncResult {
                         if (e != ReplServiceError::OK) {
                             LOGW("Failed to remove repl device which group_id {}, error: {}", repl_dev_group_id, e);
                         }
 
                         // still return the original error
+                        decr_pending_request_num();
                         return folly::makeUnexpected(r.error());
                     });
             }
+            decr_pending_request_num();
             return folly::Unit();
         });
 }
@@ -235,6 +245,11 @@ void HSHomeObject::on_create_pg_message_commit(int64_t lsn, sisl::blob const& he
 
 PGManager::NullAsyncResult HSHomeObject::_replace_member(pg_id_t pg_id, peer_id_t const& old_member_id,
                                                          PGMember const& new_member, uint32_t commit_quorum) {
+    if (is_shutting_down()) {
+        LOGI("service is being shut down");
+        return folly::makeUnexpected(PGError::SHUTTING_DOWN);
+    }
+    incr_pending_request_num();
 
     group_id_t group_id;
     {
@@ -245,6 +260,7 @@ PGManager::NullAsyncResult HSHomeObject::_replace_member(pg_id_t pg_id, peer_id_
 
         if (!repl_dev.is_leader() && commit_quorum == 0) {
             // Only leader can replace a member
+            decr_pending_request_num();
             return folly::makeUnexpected(PGError::NOT_LEADER);
         }
         group_id = repl_dev.group_id();
@@ -264,6 +280,7 @@ PGManager::NullAsyncResult HSHomeObject::_replace_member(pg_id_t pg_id, peer_id_
         .replace_member(group_id, out_replica, in_replica, commit_quorum)
         .via(executor_)
         .thenValue([this](auto&& v) mutable -> PGManager::NullAsyncResult {
+            decr_pending_request_num();
             if (v.hasError()) { return folly::makeUnexpected(toPgError(v.error())); }
             return folly::Unit();
         });
