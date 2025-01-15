@@ -44,7 +44,6 @@ ShardError toShardError(ReplServiceError const& e) {
     }
 }
 
-
 uint64_t ShardManager::max_shard_size() { return Gi; }
 
 uint64_t ShardManager::max_shard_num_in_pg() { return ((uint64_t)0x01) << shard_width; }
@@ -94,25 +93,36 @@ ShardInfo HSHomeObject::deserialize_shard_info(const char* json_str, size_t str_
 }
 
 ShardManager::AsyncResult< ShardInfo > HSHomeObject::_create_shard(pg_id_t pg_owner, uint64_t size_bytes) {
+
+    if (is_shutting_down()) {
+        LOGI("service is being shut down");
+        return folly::makeUnexpected(ShardError::SHUTTING_DOWN);
+    }
+    incr_pending_request_num();
+
     auto hs_pg = get_hs_pg(pg_owner);
     if (!hs_pg) {
         LOGW("failed to create shard with non-exist pg [{}]", pg_owner);
+        decr_pending_request_num();
         return folly::makeUnexpected(ShardError::UNKNOWN_PG);
     }
     auto repl_dev = hs_pg->repl_dev_;
 
     if (!repl_dev) {
         LOGW("failed to get repl dev instance for pg [{}]", pg_owner);
+        decr_pending_request_num();
         return folly::makeUnexpected(ShardError::PG_NOT_READY);
     }
 
     if (!repl_dev->is_leader()) {
         LOGW("failed to create shard for pg [{}], not leader", pg_owner);
+        decr_pending_request_num();
         return folly::makeUnexpected(ShardError::NOT_LEADER);
     }
 
     if (!repl_dev->is_ready_for_traffic()) {
         LOGW("failed to create shard for pg [{}], not ready for traffic", pg_owner);
+        decr_pending_request_num();
         return folly::makeUnexpected(ShardError::RETRY_REQUEST);
     }
 
@@ -123,6 +133,7 @@ ShardManager::AsyncResult< ShardInfo > HSHomeObject::_create_shard(pg_id_t pg_ow
     const auto v_chunkID = chunk_selector()->get_most_available_blk_chunk(pg_owner);
     if (!v_chunkID.has_value()) {
         LOGW("no availble chunk left to create shard for pg [{}]", pg_owner);
+        decr_pending_request_num();
         return folly::makeUnexpected(ShardError::NO_SPACE_LEFT);
     }
 
@@ -168,6 +179,12 @@ ShardManager::AsyncResult< ShardInfo > HSHomeObject::_create_shard(pg_id_t pg_ow
 }
 
 ShardManager::AsyncResult< ShardInfo > HSHomeObject::_seal_shard(ShardInfo const& info) {
+    if (is_shutting_down()) {
+        LOGI("service is being shut down");
+        return folly::makeUnexpected(ShardError::SHUTTING_DOWN);
+    }
+    incr_pending_request_num();
+
     auto pg_id = info.placement_group;
     auto shard_id = info.id;
 
@@ -178,11 +195,13 @@ ShardManager::AsyncResult< ShardInfo > HSHomeObject::_seal_shard(ShardInfo const
 
     if (!repl_dev->is_leader()) {
         LOGW("failed to seal shard for shard [{}], not leader", shard_id);
+        decr_pending_request_num();
         return folly::makeUnexpected(ShardError::NOT_LEADER);
     }
 
     if (!repl_dev->is_ready_for_traffic()) {
         LOGW("failed to seal shard for shard [{}], not ready for traffic", shard_id);
+        decr_pending_request_num();
         return folly::makeUnexpected(ShardError::RETRY_REQUEST);
     }
 
@@ -232,7 +251,12 @@ bool HSHomeObject::on_shard_message_pre_commit(int64_t lsn, sisl::blob const& he
     const ReplicationMessageHeader* msg_header = r_cast< const ReplicationMessageHeader* >(header.cbytes());
     if (msg_header->corrupted()) {
         LOGW("replication message header is corrupted with crc error, lsn:{}", lsn);
-        if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(ShardError::CRC_MISMATCH)); }
+        if (ctx) {
+            ctx->promise_.setValue(folly::makeUnexpected(ShardError::CRC_MISMATCH));
+            decr_pending_request_num();
+        }
+        // TODO::if fail to pre_commit, shuold we crash here?
+
         return false;
     }
     switch (msg_header->msg_type) {
@@ -271,14 +295,22 @@ void HSHomeObject::on_shard_message_rollback(int64_t lsn, sisl::blob const& head
     const ReplicationMessageHeader* msg_header = r_cast< const ReplicationMessageHeader* >(header.cbytes());
     if (msg_header->corrupted()) {
         LOGW("replication message header is corrupted with crc error, lsn:{}", lsn);
-        if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(ShardError::CRC_MISMATCH)); }
+        if (ctx) {
+            ctx->promise_.setValue(folly::makeUnexpected(ShardError::CRC_MISMATCH));
+            decr_pending_request_num();
+        }
         return;
     }
 
     switch (msg_header->msg_type) {
     case ReplicationMessageType::CREATE_SHARD_MSG: {
         bool res = release_chunk_based_on_create_shard_message(header);
-        if (!res) { LOGW("failed to release chunk based on create shard msg"); }
+        if (!res) {
+            // FIXME: should we crash here?
+            LOGW("failed to release chunk based on create shard msg");
+        }
+        // TODO:set a proper error code
+        if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(ShardError::RETRY_REQUEST)); }
         break;
     }
     case ReplicationMessageType::SEAL_SHARD_MSG: {
@@ -298,12 +330,16 @@ void HSHomeObject::on_shard_message_rollback(int64_t lsn, sisl::blob const& head
                      shard_info.id);
             }
         }
+        // TODO:set a proper error code
+        if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(ShardError::RETRY_REQUEST)); }
+
         break;
     }
     default: {
         break;
     }
     }
+    if (ctx) decr_pending_request_num();
 }
 
 void HSHomeObject::local_create_shard(ShardInfo shard_info, homestore::chunk_num_t v_chunk_id,
@@ -321,7 +357,9 @@ void HSHomeObject::local_create_shard(ShardInfo shard_info, homestore::chunk_num
         auto pg_id = shard_info.placement_group;
         auto chunk = chunk_selector_->select_specific_chunk(pg_id, v_chunk_id);
         RELEASE_ASSERT(chunk != nullptr, "chunk selection failed with v_chunk_id: {} in PG: {}", v_chunk_id, pg_id);
-    } else { LOGD("shard {} already exist, skip creating shard", shard_info.id); }
+    } else {
+        LOGD("shard {} already exist, skip creating shard", shard_info.id);
+    }
 
     // update pg's total_occupied_blk_count
     auto hs_pg = get_hs_pg(shard_info.placement_group);
@@ -341,7 +379,11 @@ void HSHomeObject::on_shard_message_commit(int64_t lsn, sisl::blob const& h, hom
     auto header = r_cast< const ReplicationMessageHeader* >(h.cbytes());
     if (header->corrupted()) {
         LOGW("replication message header is corrupted with crc error, lsn:{}", lsn);
-        if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(ShardError::CRC_MISMATCH)); }
+        if (ctx) {
+            ctx->promise_.setValue(folly::makeUnexpected(ShardError::CRC_MISMATCH));
+            decr_pending_request_num();
+        }
+        // TODO::if fail to commit, shuold we crash here?
         return;
     }
 
@@ -355,14 +397,20 @@ void HSHomeObject::on_shard_message_commit(int64_t lsn, sisl::blob const& h, hom
     std::error_code err = repl_dev->async_read(blkids, value_sgs, value_blob.size()).get();
     if (err) {
         LOGW("failed to read data from homestore blks, lsn:{}", lsn);
-        if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(ShardError::UNKNOWN)); }
+        if (ctx) {
+            ctx->promise_.setValue(folly::makeUnexpected(ShardError::UNKNOWN));
+            decr_pending_request_num();
+        }
         return;
     }
 
     if (crc32_ieee(init_crc32, value.cbytes(), value.size()) != header->payload_crc) {
         // header & value is inconsistent;
         LOGW("replication message header is inconsistent with value, lsn:{}", lsn);
-        if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(ShardError::CRC_MISMATCH)); }
+        if (ctx) {
+            ctx->promise_.setValue(folly::makeUnexpected(ShardError::CRC_MISMATCH));
+            decr_pending_request_num();
+        }
         return;
     }
 #endif
@@ -405,11 +453,16 @@ void HSHomeObject::on_shard_message_commit(int64_t lsn, sisl::blob const& h, hom
             LOGW("try to commit SEAL_SHARD_MSG but shard state is not sealed, shard_id: {}", shard_info.id);
         if (ctx) { ctx->promise_.setValue(ShardManager::Result< ShardInfo >(shard_info)); }
         LOGI("Commit done for SEAL_SHARD_MSG for shard {}", shard_info.id);
+
         break;
     }
     default:
         break;
     }
+
+    // only for leader and it`s not log replay, then we can make sure this is a on-line client request and we should dec
+    //  the pending request num.
+    if (ctx) decr_pending_request_num();
 }
 
 void HSHomeObject::on_shard_meta_blk_found(homestore::meta_blk* mblk, sisl::byte_view buf) {
