@@ -38,7 +38,9 @@ SISL_OPTION_GROUP(
     (qdepth, "", "qdepth", "Max outstanding operations", ::cxxopts::value< uint32_t >()->default_value("8"), "number"),
     (num_pgs, "", "num_pgs", "number of pgs", ::cxxopts::value< uint64_t >()->default_value("2"), "number"),
     (num_shards, "", "num_shards", "number of shards", ::cxxopts::value< uint64_t >()->default_value("4"), "number"),
-    (num_blobs, "", "num_blobs", "number of blobs", ::cxxopts::value< uint64_t >()->default_value("20"), "number"));
+    (num_blobs, "", "num_blobs", "number of blobs", ::cxxopts::value< uint64_t >()->default_value("20"), "number"),
+    (is_restart, "", "is_restart", "the process is restart or the first start", ::cxxopts::value< bool >()->
+        default_value("false"), "true or false"));
 
 SISL_LOGGING_INIT(homeobject)
 #define test_options logging, config, homeobject, test_homeobject_repl_common
