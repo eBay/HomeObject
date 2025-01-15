@@ -161,7 +161,7 @@ public:
         homestore::chunk_num_t p_chunk_id;
         homestore::chunk_num_t v_chunk_id;
     };
-    //TODO this blk is used to store snapshot metadata/status for recovery
+    // TODO this blk is used to store snapshot metadata/status for recovery
     struct snapshot_info_superblk {};
 #pragma pack()
 
@@ -318,7 +318,8 @@ public:
         bool update_cursor(objId id);
         objId expected_next_obj_id();
         bool generate_shard_blob_list();
-        BlobManager::AsyncResult< sisl::io_blob_safe > load_blob_data(const BlobInfo& blob_info, ResyncBlobState& state);
+        BlobManager::AsyncResult< sisl::io_blob_safe > load_blob_data(const BlobInfo& blob_info,
+                                                                      ResyncBlobState& state);
         bool create_pg_snapshot_data(sisl::io_blob_safe& meta_blob);
         bool create_shard_snapshot_data(sisl::io_blob_safe& meta_blob);
         bool create_blobs_snapshot_data(sisl::io_blob_safe& data_blob);
@@ -334,7 +335,7 @@ public:
 
         objId cur_obj_id_{0, 0};
         int64_t cur_shard_idx_{-1};
-        std::vector<BlobInfo> cur_blob_list_{0};
+        std::vector< BlobInfo > cur_blob_list_{0};
         uint64_t cur_start_blob_idx_{0};
         uint64_t cur_batch_blob_count_{0};
         flatbuffers::FlatBufferBuilder builder_;
@@ -579,7 +580,7 @@ public:
                             const homestore::MultiBlkId& pbas, cintrusive< homestore::repl_req_ctx >& hs_ctx);
     void on_blob_del_commit(int64_t lsn, sisl::blob const& header, sisl::blob const& key,
                             cintrusive< homestore::repl_req_ctx >& hs_ctx);
-    bool local_add_blob_info(pg_id_t pg_id, BlobInfo const &blob_info);
+    bool local_add_blob_info(pg_id_t pg_id, BlobInfo const& blob_info);
     homestore::ReplResult< homestore::blk_alloc_hints >
     blob_put_get_blk_alloc_hints(sisl::blob const& header, cintrusive< homestore::repl_req_ctx >& ctx);
     void compute_blob_payload_hash(BlobHeader::HashAlgorithm algorithm, const uint8_t* blob_bytes, size_t blob_size,
@@ -642,6 +643,20 @@ private:
      * @param pg_id The ID of the PG to be cleaned.
      */
     void cleanup_pg_resources(pg_id_t pg_id);
+
+    // graceful shutdown related
+private:
+    std::atomic_bool shutting_down{false};
+    mutable std::atomic_uint64_t pending_request_num{0};
+
+    bool is_shutting_down() const { return shutting_down.load(); }
+    void start_shutting_down() { shutting_down = true; }
+
+    uint64_t get_pending_request_num() const { return pending_request_num.load(); }
+
+    // only leader will call incr and decr pending request num
+    void incr_pending_request_num() const { pending_request_num++; }
+    void decr_pending_request_num() const { pending_request_num--; }
 };
 
 class BlobIndexServiceCallbacks : public homestore::IndexServiceCallbacks {

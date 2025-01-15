@@ -82,6 +82,12 @@ struct put_blob_req_ctx : public repl_result_ctx< BlobManager::Result< HSHomeObj
 };
 
 BlobManager::AsyncResult< blob_id_t > HSHomeObject::_put_blob(ShardInfo const& shard, Blob&& blob) {
+    if (is_shutting_down()) {
+        LOGI("service is being shut down");
+        return folly::makeUnexpected(BlobErrorCode::SHUTTING_DOWN);
+    }
+    incr_pending_request_num();
+
     auto& pg_id = shard.placement_group;
     shared< homestore::ReplDev > repl_dev;
     blob_id_t new_blob_id;
@@ -103,11 +109,13 @@ BlobManager::AsyncResult< blob_id_t > HSHomeObject::_put_blob(ShardInfo const& s
 
     if (!repl_dev->is_leader()) {
         LOGW("failed to put blob for pg [{}], shard [{}], not leader", pg_id, shard.id);
+        decr_pending_request_num();
         return folly::makeUnexpected(BlobError(BlobErrorCode::NOT_LEADER, repl_dev->get_leader_id()));
     }
 
     if (!repl_dev->is_ready_for_traffic()) {
         LOGW("failed to put blob for pg [{}], shard [{}], not ready for traffic", pg_id, shard.id);
+        decr_pending_request_num();
         return folly::makeUnexpected(BlobError(BlobErrorCode::RETRY_REQUEST));
     }
 
@@ -242,7 +250,10 @@ void HSHomeObject::on_blob_put_commit(int64_t lsn, sisl::blob const& header, sis
     auto msg_header = r_cast< ReplicationMessageHeader const* >(header.cbytes());
     if (msg_header->corrupted()) {
         LOGE("replication message header is corrupted with crc error, lsn:{}", lsn);
-        if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(BlobError(BlobErrorCode::CHECKSUM_MISMATCH))); }
+        if (ctx) {
+            ctx->promise_.setValue(folly::makeUnexpected(BlobError(BlobErrorCode::CHECKSUM_MISMATCH)));
+            decr_pending_request_num();
+        }
         return;
     }
 
@@ -259,11 +270,18 @@ void HSHomeObject::on_blob_put_commit(int64_t lsn, sisl::blob const& header, sis
     if (ctx) {
         ctx->promise_.setValue(success ? BlobManager::Result< BlobInfo >(blob_info)
                                        : folly::makeUnexpected(BlobError(BlobErrorCode::INDEX_ERROR)));
+        decr_pending_request_num();
     }
 }
 
 BlobManager::AsyncResult< Blob > HSHomeObject::_get_blob(ShardInfo const& shard, blob_id_t blob_id, uint64_t req_offset,
                                                          uint64_t req_len) const {
+    if (is_shutting_down()) {
+        LOGI("service is being shut down");
+        return folly::makeUnexpected(BlobErrorCode::SHUTTING_DOWN);
+    }
+    incr_pending_request_num();
+
     auto& pg_id = shard.placement_group;
     shared< BlobIndexTable > index_table;
     shared< homestore::ReplDev > repl_dev;
@@ -280,12 +298,14 @@ BlobManager::AsyncResult< Blob > HSHomeObject::_get_blob(ShardInfo const& shard,
 
     if (!repl_dev->is_ready_for_traffic()) {
         LOGW("failed to get blob for pg [{}], shard [{}], not ready for traffic", pg_id, shard.id);
+        decr_pending_request_num();
         return folly::makeUnexpected(BlobError(BlobErrorCode::RETRY_REQUEST));
     }
 
     auto r = get_blob_from_index_table(index_table, shard.id, blob_id);
     if (!r) {
         BLOGE(shard.id, blob_id, "Blob not found in index during get blob");
+        decr_pending_request_num();
         return folly::makeUnexpected(r.error());
     }
 
@@ -309,17 +329,20 @@ BlobManager::AsyncResult< Blob > HSHomeObject::_get_blob_data(const shared< home
                     read_buf = std::move(read_buf)](auto&& result) mutable -> BlobManager::AsyncResult< Blob > {
             if (result) {
                 BLOGE(shard_id, blob_id, "Failed to get blob: err={}", blob_id, shard_id, result.value());
+                decr_pending_request_num();
                 return folly::makeUnexpected(BlobError(BlobErrorCode::READ_FAILED));
             }
 
             BlobHeader const* header = r_cast< BlobHeader const* >(read_buf.cbytes());
             if (!header->valid()) {
                 BLOGE(shard_id, blob_id, "Invalid header found: [header={}]", header->to_string());
+                decr_pending_request_num();
                 return folly::makeUnexpected(BlobError(BlobErrorCode::READ_FAILED));
             }
 
             if (header->shard_id != shard_id) {
                 BLOGE(shard_id, blob_id, "Invalid shard_id in header: [header={}]", header->to_string());
+                decr_pending_request_num();
                 return folly::makeUnexpected(BlobError(BlobErrorCode::READ_FAILED));
             }
 
@@ -336,12 +359,14 @@ BlobManager::AsyncResult< Blob > HSHomeObject::_get_blob_data(const shared< home
             if (std::memcmp(computed_hash, header->hash, BlobHeader::blob_max_hash_len) != 0) {
                 BLOGE(shard_id, blob_id, "Hash mismatch header [{}] [computed={:np}]", header->to_string(),
                       spdlog::to_hex(computed_hash, computed_hash + BlobHeader::blob_max_hash_len));
+                decr_pending_request_num();
                 return folly::makeUnexpected(BlobError(BlobErrorCode::CHECKSUM_MISMATCH));
             }
 
             if (req_offset + req_len > header->blob_size) {
                 BLOGE(shard_id, blob_id, "Invalid offset length requested in get blob offset={} len={} size={}",
                       req_offset, req_len, header->blob_size);
+                decr_pending_request_num();
                 return folly::makeUnexpected(BlobError(BlobErrorCode::INVALID_ARG));
             }
 
@@ -352,6 +377,7 @@ BlobManager::AsyncResult< Blob > HSHomeObject::_get_blob_data(const shared< home
             std::memcpy(body.bytes(), blob_bytes + req_offset, res_len);
 
             BLOGT(blob_id, shard_id, "Blob get success: blkid={}", blkid.to_string());
+            decr_pending_request_num();
             return Blob(std::move(body), std::move(user_key), header->object_offset, repl_dev->get_leader_id());
         });
 }
@@ -366,14 +392,16 @@ HSHomeObject::blob_put_get_blk_alloc_hints(sisl::blob const& header, cintrusive<
     auto msg_header = r_cast< ReplicationMessageHeader* >(const_cast< uint8_t* >(header.cbytes()));
     if (msg_header->corrupted()) {
         LOGE("replication message header is corrupted with crc error shard:{}", msg_header->shard_id);
-        if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(BlobError(BlobErrorCode::CHECKSUM_MISMATCH))); }
+        if (ctx) {
+            ctx->promise_.setValue(folly::makeUnexpected(BlobError(BlobErrorCode::CHECKSUM_MISMATCH)));
+            decr_pending_request_num();
+        }
         return folly::makeUnexpected(homestore::ReplServiceError::FAILED);
     }
 
     auto pg_iter = _pg_map.find(msg_header->pg_id);
     if (pg_iter == _pg_map.end()) {
-        LOGW("Received a blob_put on an unknown pg:{}, underlying engine will retry this later",
-             msg_header->pg_id);
+        LOGW("Received a blob_put on an unknown pg:{}, underlying engine will retry this later", msg_header->pg_id);
         return folly::makeUnexpected(homestore::ReplServiceError::RESULT_NOT_EXIST_YET);
     }
 
@@ -392,7 +420,7 @@ HSHomeObject::blob_put_get_blk_alloc_hints(sisl::blob const& header, cintrusive<
     hints.chunk_id_hint = hs_shard->sb_->p_chunk_id;
 
     if (msg_header->blob_id != 0) {
-        //check if the blob already exists, if yes, return the blk id
+        // check if the blob already exists, if yes, return the blk id
         auto index_table = d_cast< HS_PG* >(pg_iter->second.get())->index_table_;
         auto r = get_blob_from_index_table(index_table, msg_header->shard_id, msg_header->blob_id);
         if (r.hasValue()) {
@@ -405,6 +433,12 @@ HSHomeObject::blob_put_get_blk_alloc_hints(sisl::blob const& header, cintrusive<
 }
 
 BlobManager::NullAsyncResult HSHomeObject::_del_blob(ShardInfo const& shard, blob_id_t blob_id) {
+    if (is_shutting_down()) {
+        LOGI("service is being shut down");
+        return folly::makeUnexpected(BlobErrorCode::SHUTTING_DOWN);
+    }
+    incr_pending_request_num();
+
     BLOGT(shard.id, blob_id, "deleting blob");
     auto& pg_id = shard.placement_group;
     shared< homestore::ReplDev > repl_dev;
@@ -419,11 +453,13 @@ BlobManager::NullAsyncResult HSHomeObject::_del_blob(ShardInfo const& shard, blo
 
     if (!repl_dev->is_leader()) {
         LOGW("failed to del blob for pg [{}], shard [{}], blob_id [{}], not leader", pg_id, shard.id, blob_id);
+        decr_pending_request_num();
         return folly::makeUnexpected(BlobError(BlobErrorCode::NOT_LEADER, repl_dev->get_leader_id()));
     }
 
     if (!repl_dev->is_ready_for_traffic()) {
         LOGW("failed to del blob for pg [{}], shard [{}], not ready for traffic", pg_id, shard.id);
+        decr_pending_request_num();
         return folly::makeUnexpected(BlobError(BlobErrorCode::RETRY_REQUEST));
     }
 
@@ -441,7 +477,8 @@ BlobManager::NullAsyncResult HSHomeObject::_del_blob(ShardInfo const& shard, blo
     std::memcpy(req->key_buf().bytes(), &blob_id, sizeof(blob_id_t));
 
     repl_dev->async_alloc_write(req->cheader_buf(), req->ckey_buf(), sisl::sg_list{}, req);
-    return req->result().deferValue([repl_dev](const auto& result) -> folly::Expected< folly::Unit, BlobError > {
+    return req->result().deferValue([this, repl_dev](const auto& result) -> folly::Expected< folly::Unit, BlobError > {
+        decr_pending_request_num();
         if (result.hasError()) {
             auto err = result.error();
             if (err.getCode() == BlobErrorCode::NOT_LEADER) { err.current_leader = repl_dev->get_leader_id(); }
