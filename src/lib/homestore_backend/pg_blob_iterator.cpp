@@ -228,6 +228,13 @@ bool HSHomeObject::PGBlobIterator::create_blobs_snapshot_data(sisl::io_blob_safe
             LOGW("Simulating loading blob data error");
             return false;
         }
+        //FIXME: not work for now
+        auto delay = iomgr_flip::instance()->get_test_flip< uint64_t >("read_snapshot_load_blob_latency", info.blob_id);
+        if (delay) {
+            LOGI("Simulating pg blob iterator load data with delay, delay:{}, blob_id:{}", delay.get(),
+                 info.blob_id);
+            std::this_thread::sleep_for(std::chrono::milliseconds(delay.get()));
+        }
 #endif
         sisl::io_blob_safe blob;
         uint8_t retries = HS_BACKEND_DYNAMIC_CONFIG(snapshot_blob_load_retry);

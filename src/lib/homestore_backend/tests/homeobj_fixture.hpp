@@ -47,13 +47,33 @@ public:
         g_helper->delete_homeobject();
     }
 
-    void restart() {
+    void restart(uint32_t shutdown_delay_secs = 0u, uint32_t restart_delay_secs = 0u) {
         g_helper->sync();
         trigger_cp(true);
+        _obj_inst.reset();
+        _obj_inst = std::dynamic_pointer_cast< HSHomeObject >(g_helper->restart(shutdown_delay_secs, restart_delay_secs));
+        // wait for leader to be elected
+        std::this_thread::sleep_for(std::chrono::seconds(5));
+    }
+
+    void stop() {
+        LOGINFO("Stoping homeobject replica={}", g_helper->my_replica_id());
+        _obj_inst.reset();
+        g_helper->homeobj_.reset();
+        sleep(120);
+    }
+
+    void start() {
+        LOGINFO("Starting homeobject replica={}", g_helper->my_replica_id());
         _obj_inst.reset();
         _obj_inst = std::dynamic_pointer_cast< HSHomeObject >(g_helper->restart());
         // wait for leader to be elected
         std::this_thread::sleep_for(std::chrono::seconds(5));
+    }
+
+    void kill() {
+        LOGINFO("SigKilling homeobject replica={}", g_helper->my_replica_id());
+        std::raise(SIGKILL);
     }
 
     /**
@@ -281,14 +301,17 @@ public:
 
     // TODO:make this run in parallel
     void verify_get_blob(std::map< pg_id_t, std::vector< shard_id_t > > const& pg_shard_id_vec,
-                         uint64_t const num_blobs_per_shard, bool const use_random_offset = false) {
+                         uint64_t const num_blobs_per_shard, bool const use_random_offset = false,
+                         std::map<pg_id_t, blob_id_t> pg_start_blob_id = std::map<pg_id_t, blob_id_t>()) {
         uint32_t off = 0, len = 0;
 
         for (const auto& [pg_id, shard_vec] : pg_shard_id_vec) {
             if (!am_i_in_pg(pg_id)) continue;
             blob_id_t current_blob_id{0};
+            if (pg_start_blob_id.find(pg_id) != pg_start_blob_id.end()) current_blob_id = pg_start_blob_id[pg_id];
             for (const auto& shard_id : shard_vec) {
                 for (uint64_t k = 0; k < num_blobs_per_shard; k++) {
+                    LOGDEBUG("going to verify blob pg {} shard {} blob {}", pg_id, shard_id, current_blob_id);
                     auto blob = build_blob(current_blob_id);
                     len = blob.body.size();
                     if (use_random_offset) {
@@ -491,6 +514,17 @@ private:
         LOGINFO("Flip {} set", flip_name);
     }
 
+    template <typename T>
+void set_retval_flip(const std::string flip_name, const T retval,
+                     uint32_t count = 1, uint32_t percent = 100,  flip::FlipCondition cond = flip::FlipCondition())
+    {
+        flip::FlipFrequency freq;
+        freq.set_count(count);
+        freq.set_percent(percent);
+        ASSERT_TRUE(m_fc.inject_retval_flip(flip_name, {cond}, freq, retval));
+        LOGINFO("Flip {} with returned value set, value={}", flip_name, retval);
+    }
+
     void set_delay_flip(const std::string flip_name, uint64_t delay_usec, uint32_t count = 1, uint32_t percent = 100) {
         flip::FlipCondition null_cond;
         flip::FlipFrequency freq;
@@ -505,7 +539,7 @@ private:
         LOGINFO("Flip {} removed", flip_name);
     }
 #endif
-
+    void RestartFollowerDuringBaselineResyncUsingSigKill(uint64_t flip_delay, uint64_t restart_interval);
 private:
     std::random_device rnd{};
     std::default_random_engine rnd_engine{rnd()};
