@@ -246,7 +246,7 @@ void HomeObjectFixture::RestartFollowerDuringBaselineResyncUsingSigKill(uint64_t
            //wait for kill
            std::this_thread::sleep_for(std::chrono::milliseconds(restart_interval));
            LOGINFO("going to restart new member")
-           g_helper->spawn_homeobject_process(num_replicas, true, "HomeObjectFixture.RestartFollowerDuringBaselineResyncAndTimeout");
+           g_helper->spawn_homeobject_process(num_replicas, true);
        }
         // SyncPoint 2(others): wait for restart completed, new member will call g_helper->sync() at setup func to end up this stage implicitly.
         LOGINFO("waiting for new member start up")

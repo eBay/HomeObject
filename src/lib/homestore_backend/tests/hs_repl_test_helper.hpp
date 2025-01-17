@@ -217,12 +217,29 @@ public:
         app = std::make_shared< TestReplApplication >(*this);
     }
 
-    void spawn_homeobject_process(uint8_t replica_num, bool is_restart, string test_name="") {
+    void spawn_homeobject_process(uint8_t replica_num, bool is_restart) {
         std::string cmd_line;
         fmt::format_to(std::back_inserter(cmd_line), "{} --replica_num {} --is_restart={}", args_[0], replica_num,
                        is_restart? "true" : "false");
-        if ("" != test_name) {
-            fmt::format_to(std::back_inserter(cmd_line), " --gtest_filter={}", test_name);
+        if (is_restart) {
+            auto ut = testing::UnitTest::GetInstance();
+            std::string pattern = "";
+            bool is_following = false;
+            for (int i = 0; i < ut->total_test_suite_count(); i++) {
+                auto ts = ut->GetTestSuite(i);
+                for (int j = 0; j < ts->total_test_count(); j++) {
+                    auto ti = ts->GetTestInfo(j);
+                    if (!is_following && ti == ut->current_test_info()) { is_following = true; }
+                    if (is_following && ti->should_run()) {
+                        if (!pattern.empty()) { fmt::format_to(std::back_inserter(pattern), ":"); }
+                        fmt::format_to(std::back_inserter(pattern), "{}", ti->test_case_name());
+                        fmt::format_to(std::back_inserter(pattern), ".{}", ti->name());
+                        break;
+                    }
+                }
+            }
+            LOGINFO("Restart, gtest filter pattern: {}", pattern);
+            if ("" != pattern) { fmt::format_to(std::back_inserter(cmd_line), " --gtest_filter={}", pattern); }
         }
         for (int j{1}; j < (int)args_.size(); ++j) {
             fmt::format_to(std::back_inserter(cmd_line), " {}", args_[j]);
