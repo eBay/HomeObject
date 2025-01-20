@@ -198,20 +198,16 @@ public:
             ipc_data_ = new (region_->get_address()) IPCData;
 
             for (uint32_t i{1}; i < num_replicas; ++i) {
-                LOGINFO("Spawning Homeobject replica={} instance", i);
-
-                std::string cmd_line;
-                fmt::format_to(std::back_inserter(cmd_line), "{} --replica_num {}", args_[0], i);
-                for (int j{1}; j < (int)args_.size(); ++j) {
-                    fmt::format_to(std::back_inserter(cmd_line), " {}", args_[j]);
-                }
-                boost::process::child c(boost::process::cmd = cmd_line, proc_grp_);
-                c.detach();
+                spawn_homeobject_process(i, false);
             }
         } else {
             shm_ = std::make_unique< bip::shared_memory_object >(bip::open_only, "HO_repl_test_shmem", bip::read_write);
             region_ = std::make_unique< bip::mapped_region >(*shm_, bip::read_write);
             ipc_data_ = static_cast< IPCData* >(region_->get_address());
+            if (SISL_OPTIONS["is_restart"].as<bool>()) {
+                // reset sync point to the next sync point before restart
+                sync_point_num = ipc_data_->sync_point_num_ + 1;
+            }
         }
 
         int tmp_argc = 1;
@@ -221,8 +217,41 @@ public:
         app = std::make_shared< TestReplApplication >(*this);
     }
 
+    void spawn_homeobject_process(uint8_t replica_num, bool is_restart) {
+        std::string cmd_line;
+        fmt::format_to(std::back_inserter(cmd_line), "{} --replica_num {} --is_restart={}", args_[0], replica_num,
+                       is_restart? "true" : "false");
+        if (is_restart) {
+            auto ut = testing::UnitTest::GetInstance();
+            std::string pattern = "";
+            bool is_following = false;
+            for (int i = 0; i < ut->total_test_suite_count(); i++) {
+                auto ts = ut->GetTestSuite(i);
+                for (int j = 0; j < ts->total_test_count(); j++) {
+                    auto ti = ts->GetTestInfo(j);
+                    if (!is_following && ti == ut->current_test_info()) { is_following = true; }
+                    if (is_following && ti->should_run()) {
+                        if (!pattern.empty()) { fmt::format_to(std::back_inserter(pattern), ":"); }
+                        fmt::format_to(std::back_inserter(pattern), "{}", ti->test_case_name());
+                        fmt::format_to(std::back_inserter(pattern), ".{}", ti->name());
+                        break;
+                    }
+                }
+            }
+            LOGINFO("Restart, gtest filter pattern: {}", pattern);
+            if ("" != pattern) { fmt::format_to(std::back_inserter(cmd_line), " --gtest_filter={}", pattern); }
+        }
+        for (int j{1}; j < (int)args_.size(); ++j) {
+            fmt::format_to(std::back_inserter(cmd_line), " {}", args_[j]);
+        }
+        LOGINFO("Spawning Homeobject cmd: {}", cmd_line);
+        boost::process::child c(boost::process::cmd = cmd_line, proc_grp_);
+        c.detach();
+    }
+
     std::shared_ptr< homeobject::HomeObject > build_new_homeobject() {
-        prepare_devices();
+        auto is_restart = SISL_OPTIONS["is_restart"].as< bool >();
+        prepare_devices(!is_restart);
         homeobj_ = init_homeobject(std::weak_ptr< TestReplApplication >(app));
         return homeobj_;
     }
@@ -233,9 +262,16 @@ public:
         remove_test_files();
     }
 
-    std::shared_ptr< homeobject::HomeObject > restart(uint32_t shutdown_delay_secs = 5u) {
-        LOGINFO("Restarting homeobject replica={}", replica_num_);
+    std::shared_ptr< homeobject::HomeObject > restart(uint32_t shutdown_delay_secs = 0u, uint32_t restart_delay_secs = 0u) {
+        if (shutdown_delay_secs > 0) {
+            std::this_thread::sleep_for(std::chrono::seconds(shutdown_delay_secs));
+        }
+        LOGINFO("Stoping homeobject after {} secs, replica={}", shutdown_delay_secs, replica_num_);
         homeobj_.reset();
+        if (restart_delay_secs > 0) {
+            std::this_thread::sleep_for(std::chrono::seconds(restart_delay_secs));
+        }
+        LOGINFO("Starting homeobject after {} secs, replica={}", restart_delay_secs, replica_num_);
         homeobj_ = init_homeobject(std::weak_ptr< TestReplApplication >(app));
         return homeobj_;
     }

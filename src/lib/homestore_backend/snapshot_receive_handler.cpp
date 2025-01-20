@@ -143,6 +143,16 @@ int HSHomeObject::SnapshotReceiveHandler::process_blobs_snapshot_data(ResyncBlob
             continue;
         }
 
+#ifdef _PRERELEASE
+        auto delay = iomgr_flip::instance()->get_test_flip< long >("write_snapshot_save_blob_latency",
+                                                                   static_cast< long >(blob->blob_id()));
+        if (delay) {
+            LOGI("Simulating pg snapshot receive data with delay, delay:{}, blob_id:{}", delay.get(),
+                 blob->blob_id());
+            std::this_thread::sleep_for(std::chrono::milliseconds(delay.get()));
+        }
+#endif
+
         // Check duplication to avoid reprocessing. This may happen on resent blob batches.
         if (!ctx_->index_table) {
             std::shared_lock lock_guard(home_obj_._pg_lock);
