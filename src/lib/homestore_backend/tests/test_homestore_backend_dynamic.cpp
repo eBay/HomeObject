@@ -151,7 +151,7 @@ TEST_F(HomeObjectFixture, ReplaceMember) {
 
 //Restart during baseline resync and timeout
 TEST_F(HomeObjectFixture, RestartFollowerDuringBaselineResyncAndTimeout) {
-    RestartFollowerDuringBaselineResyncUsingSigKill(30000, 10000);
+    RestartFollowerDuringBaselineResyncUsingSigKill(10000, 10000);
 }
 
 // Test case to restart new member during baseline resync, it will start 4 process to simulate the 4 replicas, let's say P0, P1, P2 and P3.
@@ -166,17 +166,19 @@ void HomeObjectFixture::RestartFollowerDuringBaselineResyncUsingSigKill(uint64_t
    auto is_restart = SISL_OPTIONS["is_restart"].as< bool >();
    auto num_replicas = SISL_OPTIONS["replicas"].as< uint8_t >();
     pg_id_t pg_id{1};
-    #ifdef _PRERELEASE
+    if(!is_restart) {
+#ifdef _PRERELEASE
         //simulate delay in snapshot read data
-        flip::FlipCondition cond1;
+        flip::FlipCondition cond;
         blob_id_t blob_id = 7;
-        m_fc.create_condition("blob id", flip::Operator::DONT_CARE, blob_id, &cond1);
+        m_fc.create_condition("blob id", flip::Operator::EQUAL, static_cast<long>(blob_id), &cond);
         //This latency simulation is used to workaround the shutdown concurrency issue
-        set_retval_flip("read_snapshot_load_blob_latency", flip_delay /*ms*/, 1, 100, cond1);
+        // set_retval_flip("read_snapshot_load_blob_latency", static_cast<long>(flip_delay) /*ms*/, 10, 100, cond1);
         //simulate delay in snapshot write data
-        //set_retval_flip("write_snapshot_save_blob_latency", 30 * 1000 /*ms*/, 1, 100, cond);
+        set_retval_flip("write_snapshot_save_blob_latency", static_cast<long>(flip_delay) /*ms*/, 1, 100, cond);
 
-    #endif
+#endif
+    }
     // ====================Stage 1:  Create a pg without spare replicas and put blobs.====================
 
     std::unordered_set< uint8_t > excluding_replicas_in_pg;

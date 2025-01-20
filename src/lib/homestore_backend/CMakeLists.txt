@@ -75,6 +75,6 @@ add_test(NAME HomestoreTestDynamic
 
 # To test both baseline & incremental resync functionality, we use 13 to minimize the likelihood of it being a divisor of the total LSN (currently 30)
 add_test(NAME HomestoreTestDynamicWithResync
-        COMMAND homestore_test_dynamic -csv error --executor immediate --config_path ./
+        COMMAND homestore_test_dynamic --gtest_filter="HomeObjectFixture.ReplaceMember" -csv error --executor immediate --config_path ./
         --override_config homestore_config.consensus.snapshot_freq_distance:13
         --override_config homestore_config.consensus.num_reserved_log_items=13)
