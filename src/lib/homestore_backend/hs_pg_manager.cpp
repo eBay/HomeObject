@@ -316,7 +316,7 @@ std::optional< pg_id_t > HSHomeObject::get_pg_id_with_group_id(homestore::group_
 void HSHomeObject::pg_destroy(pg_id_t pg_id) {
     mark_pg_destroyed(pg_id);
     destroy_shards(pg_id);
-    chunk_selector_->reset_pg_chunks(pg_id);
+    destroy_hs_resources(pg_id);
     destroy_pg_index_table(pg_id);
     destroy_pg_superblk(pg_id);
 
@@ -338,6 +338,28 @@ void HSHomeObject::mark_pg_destroyed(pg_id_t pg_id) {
     auto hs_pg = s_cast< HS_PG* >(pg.get());
     hs_pg->pg_sb_->state = PGState::DESTROYED;
     hs_pg->pg_sb_.write();
+}
+
+void HSHomeObject::destroy_hs_resources(pg_id_t pg_id) {
+    // Step 1: purge on repl dev
+    auto lg = std::scoped_lock(_pg_lock);
+    auto iter = _pg_map.find(pg_id);
+    if (iter == _pg_map.end()) {
+        LOGW("destroy repl dev with unknown pg_id {}", pg_id);
+        return;
+    }
+
+    auto& pg = iter->second;
+    auto group_id = pg->pg_info_.replica_set_uuid;
+    auto v = hs_repl_service().get_repl_dev(group_id);
+    if (v.hasError()) {
+        LOGW("get repl dev for group_id={} has failed", boost::uuids::to_string(group_id));
+        return;
+    }
+   v.value()->purge();
+
+   // Step 2: reset pg chunks
+   chunk_selector_->reset_pg_chunks(pg_id);
 }
 
 void HSHomeObject::destroy_pg_index_table(pg_id_t pg_id) {

@@ -630,6 +630,13 @@ private:
     void destroy_shards(pg_id_t pg_id);
 
     /**
+     *  @brief Cleans up resources associated with the PG identified by pg_id on HomeStore side.
+     *
+     *  @param pg_id The ID of the PG to be
+     */
+    void destroy_hs_resources(pg_id_t pg_id);
+
+    /**
      * @brief destroy index table for the PG located using a pg_id.
      *
      * @param pg_id The ID of the PG to be destroyed.
