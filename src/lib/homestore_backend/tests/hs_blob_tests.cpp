@@ -298,7 +298,7 @@ TEST_F(HomeObjectFixture, SnapshotReceiveHandler) {
     constexpr uint64_t num_open_shards_per_pg = 2; // Should be less than num_shards_per_pg
     constexpr uint64_t num_batches_per_shard = 5;
     constexpr uint64_t num_blobs_per_batch = 5;
-    constexpr int corrupted_blob_percentage = 10;             // Percentage of blobs with state = CORRUPTED
+    constexpr int corrupted_blob_percentage = 9;              // Percentage of blobs with state = CORRUPTED
     constexpr int unexpected_corrupted_batch_percentage = 15; // Percentage of batches with unexpected data corruption
 
     // We have to create a PG first to init repl_dev

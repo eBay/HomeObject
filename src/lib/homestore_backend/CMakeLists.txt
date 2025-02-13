@@ -77,4 +77,5 @@ add_test(NAME HomestoreTestDynamic
 add_test(NAME HomestoreTestDynamicWithResync
         COMMAND homestore_test_dynamic -csv error --executor immediate --config_path ./
         --override_config homestore_config.consensus.snapshot_freq_distance:13
-        --override_config homestore_config.consensus.num_reserved_log_items=13)
+        --override_config homestore_config.consensus.num_reserved_log_items=13
+        --override_config homestore_config.consensus.snapshot_sync_ctx_timeout_ms=5000)

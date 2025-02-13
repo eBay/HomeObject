@@ -2,6 +2,8 @@
 
 #include "hs_homeobject.hpp"
 #include "replication_state_machine.hpp"
+
+#include <boost/uuid/random_generator.hpp>
 #include <homestore/blkdata_service.hpp>
 
 namespace homeobject {
@@ -277,16 +279,20 @@ bool HSHomeObject::SnapshotReceiveHandler::load_prev_context() {
         });
         hs_pg = iter == home_obj_._pg_map.end() ? nullptr : dynamic_cast< HS_PG* >(iter->second.get());
     }
-    if (hs_pg == nullptr || hs_pg->snp_rcvr_info_sb_.is_empty()) { return false; }
+    if (hs_pg == nullptr || hs_pg->snp_rcvr_info_sb_.is_empty() || hs_pg->snp_rcvr_shard_list_sb_.is_empty() ||
+        hs_pg->snp_rcvr_info_sb_->snp_lsn != hs_pg->snp_rcvr_shard_list_sb_->snp_lsn) {
+        return false;
+    }
 
-    RELEASE_ASSERT(hs_pg->snp_rcvr_info_sb_->pg_id == hs_pg->pg_sb_->id,
+    RELEASE_ASSERT(hs_pg->snp_rcvr_info_sb_->pg_id == hs_pg->pg_sb_->id &&
+                       hs_pg->snp_rcvr_shard_list_sb_->pg_id == hs_pg->pg_sb_->id,
                    "PG id in snp_info sb not matching with PG sb");
 
     ctx_ = std::make_unique< SnapshotContext >(hs_pg->snp_rcvr_info_sb_->snp_lsn, hs_pg->snp_rcvr_info_sb_->pg_id);
     ctx_->shard_cursor = hs_pg->snp_rcvr_info_sb_->shard_cursor;
     ctx_->cur_batch_num = 0; // Always resume from the beginning of the shard
     ctx_->index_table = hs_pg->index_table_;
-    ctx_->shard_list = hs_pg->snp_rcvr_info_sb_->get_shard_list();
+    ctx_->shard_list = hs_pg->snp_rcvr_shard_list_sb_->get_shard_list();
 
     LOGINFO("Resuming snapshot receiver context from lsn:{} pg_id:{} shard_cursor:{}", ctx_->snp_lsn,
             hs_pg->snp_rcvr_info_sb_->pg_id, ctx_->shard_cursor);
@@ -302,6 +308,7 @@ void HSHomeObject::SnapshotReceiveHandler::destroy_context() {
     auto hs_pg = get_hs_pg(ctx_->pg_id);
     if (hs_pg == nullptr) { return; }
     hs_pg->snp_rcvr_info_sb_.destroy();
+    hs_pg->snp_rcvr_shard_list_sb_.destroy();
     ctx_.reset();
 }
 
@@ -335,10 +342,16 @@ void HSHomeObject::SnapshotReceiveHandler::update_snp_info_sb(bool init) {
     auto* sb = hs_pg->snp_rcvr_info_sb_.get();
     if (init) {
         if (!hs_pg->snp_rcvr_info_sb_.is_empty()) { hs_pg->snp_rcvr_info_sb_.destroy(); }
-        sb = hs_pg->snp_rcvr_info_sb_.create(sizeof(snapshot_rcvr_info_superblk) +
-                                             ctx_->shard_list.size() * sizeof(shard_id_t));
-        sb->shard_cnt = ctx_->shard_list.size();
-        std::copy(ctx_->shard_list.begin(), ctx_->shard_list.end(), sb->shard_list);
+        if (!hs_pg->snp_rcvr_shard_list_sb_.is_empty()) { hs_pg->snp_rcvr_shard_list_sb_.destroy(); }
+        sb = hs_pg->snp_rcvr_info_sb_.create(sizeof(snapshot_rcvr_info_superblk));
+
+        auto lst_sb = hs_pg->snp_rcvr_shard_list_sb_.create(sizeof(snapshot_rcvr_shard_list_superblk) +
+                                                            (ctx_->shard_list.size() - 1) * sizeof(shard_id_t));
+        lst_sb->pg_id = ctx_->pg_id;
+        lst_sb->snp_lsn = ctx_->snp_lsn;
+        lst_sb->shard_cnt = ctx_->shard_list.size();
+        std::copy(ctx_->shard_list.begin(), ctx_->shard_list.end(), lst_sb->shard_list);
+        hs_pg->snp_rcvr_shard_list_sb_.write();
     }
     RELEASE_ASSERT(sb != nullptr, "Snapshot info superblk not found");
     sb->snp_lsn = ctx_->snp_lsn;
@@ -361,12 +374,32 @@ void HSHomeObject::on_snp_rcvr_meta_blk_found(homestore::meta_blk* mblk, sisl::b
         auto iter = _pg_map.find(sb->pg_id);
         RELEASE_ASSERT(iter != _pg_map.end(), "PG not found");
         auto hs_pg = dynamic_cast< HS_PG* >(iter->second.get());
+        if (!hs_pg->snp_rcvr_info_sb_.is_empty()) { hs_pg->snp_rcvr_info_sb_.destroy(); }
         hs_pg->snp_rcvr_info_sb_ = std::move(sb);
     }
 }
 
 void HSHomeObject::on_snp_rcvr_meta_blk_recover_completed(bool success) {
     LOGINFO("Snapshot info meta blk recovery completed");
+}
+
+void HSHomeObject::on_snp_rcvr_shard_list_meta_blk_found(homestore::meta_blk* mblk, sisl::byte_view buf) {
+    LOGINFO("Found snapshot shard list meta blk");
+    homestore::superblk< snapshot_rcvr_shard_list_superblk > sb(_snp_rcvr_shard_list_meta_name);
+    sb.load(buf, mblk);
+
+    {
+        std::shared_lock lock_guard(_pg_lock);
+        auto iter = _pg_map.find(sb->pg_id);
+        RELEASE_ASSERT(iter != _pg_map.end(), "PG not found");
+        auto hs_pg = dynamic_cast< HS_PG* >(iter->second.get());
+        if (!hs_pg->snp_rcvr_shard_list_sb_.is_empty()) { hs_pg->snp_rcvr_shard_list_sb_.destroy(); }
+        hs_pg->snp_rcvr_shard_list_sb_ = std::move(sb);
+    }
+}
+
+void HSHomeObject::on_snp_rcvr_shard_list_meta_blk_recover_completed(bool success) {
+    LOGINFO("Snapshot shard list meta blk recovery completed");
 }
 
 } // namespace homeobject

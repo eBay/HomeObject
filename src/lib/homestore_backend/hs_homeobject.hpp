@@ -42,6 +42,7 @@ private:
     inline static auto const _pg_meta_name = std::string("PGManager");
     inline static auto const _shard_meta_name = std::string("ShardManager");
     inline static auto const _snp_rcvr_meta_name = std::string("SnapshotReceiver");
+    inline static auto const _snp_rcvr_shard_list_meta_name = std::string("SnapshotReceiverShardList");
     static constexpr uint64_t HS_CHUNK_SIZE = 2 * Gi;
     static constexpr uint32_t _data_block_size = 1024;
     static uint64_t _hs_chunk_size;
@@ -163,19 +164,28 @@ public:
         homestore::chunk_num_t v_chunk_id;
     };
 
+    // Since shard list can be quite large and only need to be persisted once, we store it in a separate superblk
     struct snapshot_rcvr_info_superblk {
         shard_id_t shard_cursor;
         int64_t snp_lsn;
         pg_id_t pg_id;
+
+        uint32_t size() const { return sizeof(snapshot_rcvr_info_superblk); }
+        static auto name() -> string { return _snp_rcvr_meta_name; }
+    };
+
+    struct snapshot_rcvr_shard_list_superblk {
+        pg_id_t pg_id;
+        int64_t snp_lsn;
         uint64_t shard_cnt;       // count of shards
         shard_id_t shard_list[1]; // array of shard ids
 
         uint32_t size() const {
-            return sizeof(snapshot_rcvr_info_superblk) - sizeof(shard_id_t) + shard_cnt * sizeof(shard_id_t);
+            return sizeof(snapshot_rcvr_shard_list_superblk) - sizeof(shard_id_t) + shard_cnt * sizeof(shard_id_t);
         }
-        static auto name() -> string { return _snp_rcvr_meta_name; }
 
         std::vector< shard_id_t > get_shard_list() const { return std::vector(shard_list, shard_list + shard_cnt); }
+        static auto name() -> string { return _snp_rcvr_shard_list_meta_name; }
     };
 #pragma pack()
 
@@ -249,6 +259,7 @@ public:
         // Snapshot receiver progress info, used as a checkpoint for recovery
         // Placed within HS_PG since HomeObject is unable to locate the ReplicationStateMachine
         homestore::superblk< snapshot_rcvr_info_superblk > snp_rcvr_info_sb_;
+        homestore::superblk< snapshot_rcvr_shard_list_superblk > snp_rcvr_shard_list_sb_;
 
         HS_PG(PGInfo info, shared< homestore::ReplDev > rdev, shared< BlobIndexTable > index_table,
               std::shared_ptr< const std::vector< homestore::chunk_num_t > > pg_chunk_ids);
@@ -463,6 +474,8 @@ private:
     void on_shard_meta_blk_recover_completed(bool success);
     void on_snp_rcvr_meta_blk_found(homestore::meta_blk* mblk, sisl::byte_view buf);
     void on_snp_rcvr_meta_blk_recover_completed(bool success);
+    void on_snp_rcvr_shard_list_meta_blk_found(homestore::meta_blk* mblk, sisl::byte_view buf);
+    void on_snp_rcvr_shard_list_meta_blk_recover_completed(bool success);
 
     void persist_pg_sb();
 

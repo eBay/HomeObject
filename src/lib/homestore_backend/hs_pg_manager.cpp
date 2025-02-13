@@ -508,7 +508,8 @@ HSHomeObject::HS_PG::HS_PG(PGInfo info, shared< homestore::ReplDev > rdev, share
         repl_dev_{std::move(rdev)},
         index_table_{std::move(index_table)},
         metrics_{*this},
-        snp_rcvr_info_sb_{_snp_rcvr_meta_name} {
+        snp_rcvr_info_sb_{_snp_rcvr_meta_name},
+        snp_rcvr_shard_list_sb_{_snp_rcvr_shard_list_meta_name} {
     RELEASE_ASSERT(pg_chunk_ids != nullptr, "PG chunks null");
     const uint32_t num_chunks = pg_chunk_ids->size();
     pg_sb_.create(sizeof(pg_info_superblk) - sizeof(char) + pg_info_.members.size() * sizeof(pg_members) +
