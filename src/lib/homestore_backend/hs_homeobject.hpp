@@ -41,6 +41,8 @@ private:
     inline static auto const _svc_meta_name = std::string("HomeObject");
     inline static auto const _pg_meta_name = std::string("PGManager");
     inline static auto const _shard_meta_name = std::string("ShardManager");
+    inline static auto const _snp_rcvr_meta_name = std::string("SnapshotReceiver");
+    inline static auto const _snp_rcvr_shard_list_meta_name = std::string("SnapshotReceiverShardList");
     static constexpr uint64_t HS_CHUNK_SIZE = 2 * Gi;
     static constexpr uint32_t _data_block_size = 1024;
     static uint64_t _hs_chunk_size;
@@ -161,8 +163,30 @@ public:
         homestore::chunk_num_t p_chunk_id;
         homestore::chunk_num_t v_chunk_id;
     };
-    //TODO this blk is used to store snapshot metadata/status for recovery
-    struct snapshot_info_superblk {};
+
+    // Since shard list can be quite large and only need to be persisted once, we store it in a separate superblk
+    struct snapshot_rcvr_info_superblk {
+        shard_id_t shard_cursor;
+        int64_t snp_lsn;
+        pg_id_t pg_id;
+
+        uint32_t size() const { return sizeof(snapshot_rcvr_info_superblk); }
+        static auto name() -> string { return _snp_rcvr_meta_name; }
+    };
+
+    struct snapshot_rcvr_shard_list_superblk {
+        pg_id_t pg_id;
+        int64_t snp_lsn;
+        uint64_t shard_cnt;       // count of shards
+        shard_id_t shard_list[1]; // array of shard ids
+
+        uint32_t size() const {
+            return sizeof(snapshot_rcvr_shard_list_superblk) - sizeof(shard_id_t) + shard_cnt * sizeof(shard_id_t);
+        }
+
+        std::vector< shard_id_t > get_shard_list() const { return std::vector(shard_list, shard_list + shard_cnt); }
+        static auto name() -> string { return _snp_rcvr_shard_list_meta_name; }
+    };
 #pragma pack()
 
 public:
@@ -227,11 +251,15 @@ public:
             uint32_t blk_size;
         };
 
-    public:
         homestore::superblk< pg_info_superblk > pg_sb_;
         shared< homestore::ReplDev > repl_dev_;
         std::shared_ptr< BlobIndexTable > index_table_;
         PGMetrics metrics_;
+
+        // Snapshot receiver progress info, used as a checkpoint for recovery
+        // Placed within HS_PG since HomeObject is unable to locate the ReplicationStateMachine
+        homestore::superblk< snapshot_rcvr_info_superblk > snp_rcvr_info_sb_;
+        homestore::superblk< snapshot_rcvr_shard_list_superblk > snp_rcvr_shard_list_sb_;
 
         HS_PG(PGInfo info, shared< homestore::ReplDev > rdev, shared< BlobIndexTable > index_table,
               std::shared_ptr< const std::vector< homestore::chunk_num_t > > pg_chunk_ids);
@@ -369,7 +397,15 @@ public:
                                         bool is_last_batch);
 
         int64_t get_context_lsn() const;
+        pg_id_t get_context_pg_id() const;
+
+        // Try to load existing snapshot context info
+        bool load_prev_context();
+
+        // Reset the context for a new snapshot, should be called before each new snapshot transmission
         void reset_context(int64_t lsn, pg_id_t pg_id);
+        void destroy_context();
+
         shard_id_t get_shard_cursor() const;
         shard_id_t get_next_shard() const;
 
@@ -391,9 +427,10 @@ public:
 
         std::unique_ptr< SnapshotContext > ctx_;
 
-        // snapshot info, can be used as a checkpoint for recovery
-        snapshot_info_superblk snp_info_;
-        // other stats for snapshot transmission progress
+        // Update the snp_info superblock
+        void update_snp_info_sb(bool init = false);
+
+        HS_PG* get_hs_pg(pg_id_t pg_id);
     };
 
 private:
@@ -404,7 +441,6 @@ private:
     static constexpr size_t max_zpad_bufs = _data_block_size / io_align;
     std::array< sisl::io_blob_safe, max_zpad_bufs > zpad_bufs_; // Zero padded buffers for blob payload.
 
-private:
     static homestore::ReplicationService& hs_repl_service() { return homestore::hs()->repl_service(); }
 
     // blob related
@@ -436,6 +472,10 @@ private:
     void on_pg_meta_blk_recover_completed(bool success);
     void on_shard_meta_blk_found(homestore::meta_blk* mblk, sisl::byte_view buf);
     void on_shard_meta_blk_recover_completed(bool success);
+    void on_snp_rcvr_meta_blk_found(homestore::meta_blk* mblk, sisl::byte_view buf);
+    void on_snp_rcvr_meta_blk_recover_completed(bool success);
+    void on_snp_rcvr_shard_list_meta_blk_found(homestore::meta_blk* mblk, sisl::byte_view buf);
+    void on_snp_rcvr_shard_list_meta_blk_recover_completed(bool success);
 
     void persist_pg_sb();
 

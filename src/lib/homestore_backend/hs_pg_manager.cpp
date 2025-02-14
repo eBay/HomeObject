@@ -507,7 +507,9 @@ HSHomeObject::HS_PG::HS_PG(PGInfo info, shared< homestore::ReplDev > rdev, share
         pg_sb_{_pg_meta_name},
         repl_dev_{std::move(rdev)},
         index_table_{std::move(index_table)},
-        metrics_{*this} {
+        metrics_{*this},
+        snp_rcvr_info_sb_{_snp_rcvr_meta_name},
+        snp_rcvr_shard_list_sb_{_snp_rcvr_shard_list_meta_name} {
     RELEASE_ASSERT(pg_chunk_ids != nullptr, "PG chunks null");
     const uint32_t num_chunks = pg_chunk_ids->size();
     pg_sb_.create(sizeof(pg_info_superblk) - sizeof(char) + pg_info_.members.size() * sizeof(pg_members) +
@@ -538,8 +540,7 @@ HSHomeObject::HS_PG::HS_PG(PGInfo info, shared< homestore::ReplDev > rdev, share
     pg_sb_.write();
 }
 
-HSHomeObject::HS_PG::HS_PG(homestore::superblk< HSHomeObject::pg_info_superblk >&& sb,
-                           shared< homestore::ReplDev > rdev) :
+HSHomeObject::HS_PG::HS_PG(superblk< pg_info_superblk >&& sb, shared< ReplDev > rdev) :
         PG{pg_info_from_sb(sb)}, pg_sb_{std::move(sb)}, repl_dev_{std::move(rdev)}, metrics_{*this} {
     durable_entities_.blob_sequence_num = pg_sb_->blob_sequence_num;
     durable_entities_.active_blob_count = pg_sb_->active_blob_count;

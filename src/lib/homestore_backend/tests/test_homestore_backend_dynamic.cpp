@@ -149,37 +149,45 @@ TEST_F(HomeObjectFixture, ReplaceMember) {
     }
 }
 
-//Restart during baseline resync and timeout
+// Restart during baseline resync
+TEST_F(HomeObjectFixture, RestartFollowerDuringBaselineResync) {
+    RestartFollowerDuringBaselineResyncUsingSigKill(10000, 1000);
+}
+
+// Restart during baseline resync and timeout
 TEST_F(HomeObjectFixture, RestartFollowerDuringBaselineResyncAndTimeout) {
     RestartFollowerDuringBaselineResyncUsingSigKill(10000, 10000);
 }
 
-// Test case to restart new member during baseline resync, it will start 4 process to simulate the 4 replicas, let's say P0, P1, P2 and P3.
-// P0, P1, P2 are the original members of the pg, P3 is the spare replica.
-// After the replace_member happens, P3 will join the pg, and then kill itself(sigkill) to simulate the restart during baseline resync.
-// As P0 is the original process who spawn the other 3 processes, so P0 will also help to spawn a new process to simulate the new member restart.
-void HomeObjectFixture::RestartFollowerDuringBaselineResyncUsingSigKill(uint64_t flip_delay, uint64_t restart_interval) {
-   LOGINFO("HomeObject replica={} setup completed", g_helper->replica_num());
+// Test case to restart new member during baseline resync, it will start 4 process to simulate the 4 replicas, let's say
+// P0, P1, P2 and P3. P0, P1, P2 are the original members of the pg, P3 is the spare replica. After the replace_member
+// happens, P3 will join the pg, and then kill itself(sigkill) to simulate the restart during baseline resync. As P0 is
+// the original process who spawn the other 3 processes, so P0 will also help to spawn a new process to simulate the new
+// member restart.
+void HomeObjectFixture::RestartFollowerDuringBaselineResyncUsingSigKill(uint64_t flip_delay,
+                                                                        uint64_t restart_interval) {
+    LOGINFO("HomeObject replica={} setup completed", g_helper->replica_num());
     auto spare_num_replicas = SISL_OPTIONS["spare_replicas"].as< uint8_t >();
     ASSERT_TRUE(spare_num_replicas > 0) << "we need spare replicas for homestore backend dynamic tests";
 
-   auto is_restart = SISL_OPTIONS["is_restart"].as< bool >();
-   auto num_replicas = SISL_OPTIONS["replicas"].as< uint8_t >();
+    auto is_restart = g_helper->is_current_testcase_restarted();
+    auto num_replicas = SISL_OPTIONS["replicas"].as< uint8_t >();
     pg_id_t pg_id{1};
-    if(!is_restart) {
+
 #ifdef _PRERELEASE
-        //simulate delay in snapshot read data
+    if (!is_restart) {
+        // simulate delay in snapshot read data
         flip::FlipCondition cond;
         blob_id_t blob_id = 7;
-        m_fc.create_condition("blob id", flip::Operator::EQUAL, static_cast<long>(blob_id), &cond);
-        //This latency simulation is used to workaround the shutdown concurrency issue
-        // set_retval_flip("read_snapshot_load_blob_latency", static_cast<long>(flip_delay) /*ms*/, 10, 100, cond1);
-        //simulate delay in snapshot write data
-        set_retval_flip("write_snapshot_save_blob_latency", static_cast<long>(flip_delay) /*ms*/, 1, 100, cond);
-
-#endif
+        m_fc.create_condition("blob id", flip::Operator::EQUAL, static_cast< long >(blob_id), &cond);
+        // This latency simulation is used to workaround the shutdown concurrency issue
+        //  set_retval_flip("read_snapshot_load_blob_latency", static_cast<long>(flip_delay) /*ms*/, 10, 100, cond1);
+        // simulate delay in snapshot write data
+        set_retval_flip("write_snapshot_save_blob_latency", static_cast< long >(flip_delay) /*ms*/, 1, 100, cond);
     }
-    // ====================Stage 1:  Create a pg without spare replicas and put blobs.====================
+#endif
+
+    // ======== Stage 1: Create a pg without spare replicas and put blobs ========
 
     std::unordered_set< uint8_t > excluding_replicas_in_pg;
     for (size_t i = num_replicas; i < num_replicas + spare_num_replicas; i++)
@@ -202,7 +210,7 @@ void HomeObjectFixture::RestartFollowerDuringBaselineResyncUsingSigKill(uint64_t
         pg_shard_id_vec[pg_id].emplace_back(derived_shard_id);
     }
 
-    if(!is_restart) {
+    if (!is_restart) {
         for (uint64_t j = 0; j < num_shards_per_pg; j++)
             create_shard(pg_id, 64 * Mi);
 
@@ -215,7 +223,7 @@ void HomeObjectFixture::RestartFollowerDuringBaselineResyncUsingSigKill(uint64_t
         // all the replicas , including the spare ones, sync at this point
         g_helper->sync();
 
-        // ====================Stage 2: replace a member====================
+        // ======== Stage 2: replace a member ========
         auto out_member_id = g_helper->replica_id(num_replicas - 1);
         auto in_member_id = g_helper->replica_id(num_replicas); /*spare replica*/
 
@@ -226,7 +234,7 @@ void HomeObjectFixture::RestartFollowerDuringBaselineResyncUsingSigKill(uint64_t
             ASSERT_TRUE(r);
         });
 
-        // ====================Stage 3: the new member will kill itself to simulate restart, then P0 will help start it ====================
+        // ======== Stage 3: the new member will kill itself to simulate restart, then P0 will help start it ========
         if (in_member_id == g_helper->my_replica_id()) {
             while (!am_i_in_pg(pg_id)) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(1000));
@@ -244,13 +252,14 @@ void HomeObjectFixture::RestartFollowerDuringBaselineResyncUsingSigKill(uint64_t
         // SyncPoint 1(others): wait for the new member stop, then P0 will help start it.
         LOGINFO("waiting for new member stop")
         g_helper->sync();
-       if (g_helper->replica_num() == 0) {
-           //wait for kill
-           std::this_thread::sleep_for(std::chrono::milliseconds(restart_interval));
-           LOGINFO("going to restart new member")
-           g_helper->spawn_homeobject_process(num_replicas, true);
-       }
-        // SyncPoint 2(others): wait for restart completed, new member will call g_helper->sync() at setup func to end up this stage implicitly.
+        if (g_helper->replica_num() == 0) {
+            // wait for kill
+            std::this_thread::sleep_for(std::chrono::milliseconds(restart_interval));
+            LOGINFO("going to restart new member")
+            g_helper->spawn_homeobject_process(num_replicas, true);
+        }
+        // SyncPoint 2(others): wait for restart completed, new member will call g_helper->sync() at setup func to end
+        // up this stage implicitly.
         LOGINFO("waiting for new member start up")
         g_helper->sync();
         // SyncPoint 3: waiting for all the blobs are replicated to the new member
@@ -299,8 +308,9 @@ SISL_OPTION_GROUP(
     (num_pgs, "", "num_pgs", "number of pgs", ::cxxopts::value< uint64_t >()->default_value("2"), "number"),
     (num_shards, "", "num_shards", "number of shards", ::cxxopts::value< uint64_t >()->default_value("4"), "number"),
     (num_blobs, "", "num_blobs", "number of blobs", ::cxxopts::value< uint64_t >()->default_value("20"), "number"),
-    (is_restart, "", "is_restart", "the process is restart or the first start", ::cxxopts::value< bool >()->
-        default_value("false"), "true or false"));
+    (is_restart, "", "is_restart",
+     "(internal) the process is restart or the first start, only used for the first testcase",
+     ::cxxopts::value< bool >()->default_value("false"), "true or false"));
 
 SISL_LOGGING_INIT(homeobject)
 #define test_options logging, config, homeobject, test_homeobject_repl_common

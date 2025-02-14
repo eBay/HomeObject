@@ -39,6 +39,23 @@ bool HSHomeObject::PGBlobIterator::update_cursor(objId id) {
     if (id.value == LAST_OBJ_ID) { return true; }
     //resend batch
     if (id.value == cur_obj_id_.value) { return true; }
+
+    // If cur_obj_id_ == 0|0 (PG meta), this may be a request for resuming from specific shard
+    if (cur_obj_id_.shard_seq_num == 0 && id.shard_seq_num != 0 && id.batch_id == 0) {
+        bool found = false;
+        for (size_t i = 0; i < shard_list_.size(); i++) {
+            if (get_sequence_num_from_shard_id(shard_list_[i].info.id) == id.shard_seq_num) {
+                found = true;
+                cur_shard_idx_ = i;
+                cur_start_blob_idx_ = 0;
+                cur_batch_blob_count_ = 0;
+                break;
+            }
+        }
+        if (found) { cur_obj_id_ = id; }
+        return found;
+    }
+
     auto next_obj_id = expected_next_obj_id();
     if (id.value != next_obj_id.value) {
         LOGE("invalid objId, expected={}, actual={}", next_obj_id.to_string(), id.to_string());
