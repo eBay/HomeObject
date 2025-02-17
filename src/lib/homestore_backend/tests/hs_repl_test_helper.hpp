@@ -300,7 +300,7 @@ public:
     void teardown() { sisl::GrpcAsyncClientWorker::shutdown_all(); }
 
     void sync() {
-        LOGINFO("=== Syncing: replica={}(total {}), sync_point_num={} ===", replica_num_, total_replicas_nums_,
+        LOGINFO("=== Syncing: replica={}(total {}), sync_point_num={} ===", ipc_data_->homeobject_replica_count_, total_replicas_nums_,
                 sync_point_num);
         ipc_data_->sync(sync_point_num++, total_replicas_nums_);
     }

@@ -69,13 +69,29 @@ target_link_libraries(homestore_test_dynamic PUBLIC
     ${COMMON_TEST_DEPS}
 )
 
-add_test(NAME HomestoreTestDynamic
+add_test(NAME HomestoreTestReplaceMember
         COMMAND homestore_test_dynamic -csv error --executor immediate --config_path ./
-        --override_config homestore_config.consensus.snapshot_freq_distance:0)
+        --override_config homestore_config.consensus.snapshot_freq_distance:0
+        --gtest_filter=HomeObjectFixture.ReplaceMember)
 
 # To test both baseline & incremental resync functionality, we use 13 to minimize the likelihood of it being a divisor of the total LSN (currently 30)
-add_test(NAME HomestoreTestDynamicWithResync
+add_test(NAME HomestoreTestReplaceMemberWithBaselineResync
         COMMAND homestore_test_dynamic -csv error --executor immediate --config_path ./
         --override_config homestore_config.consensus.snapshot_freq_distance:13
         --override_config homestore_config.consensus.num_reserved_log_items=13
-        --override_config homestore_config.consensus.snapshot_sync_ctx_timeout_ms=5000)
+        --override_config homestore_config.consensus.snapshot_sync_ctx_timeout_ms=5000
+        --gtest_filter=HomeObjectFixture.ReplaceMember)
+
+add_test(NAME HomestoreResyncTestWithFollowerRestart
+        COMMAND homestore_test_dynamic -csv error --executor immediate --config_path ./
+        --override_config homestore_config.consensus.snapshot_freq_distance:13
+        --override_config homestore_config.consensus.num_reserved_log_items=13
+        --override_config homestore_config.consensus.snapshot_sync_ctx_timeout_ms=5000
+        --gtest_filter=HomeObjectFixture.RestartFollower*)
+
+add_test(NAME HomestoreResyncTestWithLeaderRestart
+        COMMAND homestore_test_dynamic -csv error --executor immediate --config_path ./
+        --override_config homestore_config.consensus.snapshot_freq_distance:13
+        --override_config homestore_config.consensus.num_reserved_log_items=13
+        --override_config homestore_config.consensus.snapshot_sync_ctx_timeout_ms=5000
+        --gtest_filter=HomeObjectFixture.RestartLeader*)
