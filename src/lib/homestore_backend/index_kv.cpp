@@ -107,28 +107,22 @@ BlobManager::Result< homestore::MultiBlkId > HSHomeObject::move_to_tombstone(sha
     return index_value_get.pbas();
 }
 
-void HSHomeObject::print_btree_index(pg_id_t pg_id) {
-    shared< BlobIndexTable > index_table;
-    {
-        std::shared_lock lock_guard(_pg_lock);
-        auto iter = _pg_map.find(pg_id);
-        RELEASE_ASSERT(iter != _pg_map.end(), "Unknown PG");
-        index_table = static_cast< HS_PG* >(iter->second.get())->index_table_;
-        RELEASE_ASSERT(index_table != nullptr, "Index table not intialized");
-    }
+void HSHomeObject::print_btree_index(pg_id_t pg_id) const {
+    auto hs_pg = get_hs_pg(pg_id);
+    RELEASE_ASSERT(hs_pg != nullptr, "Unknown PG");
+    auto index_table = hs_pg->index_table_;
+    RELEASE_ASSERT(index_table != nullptr, "Index table not intialized");
 
     LOGI("Index UUID {}", boost::uuids::to_string(index_table->uuid()));
     index_table->dump_tree_to_file();
 }
 
 shared< BlobIndexTable > HSHomeObject::get_index_table(pg_id_t pg_id) {
-    std::shared_lock lock_guard(_pg_lock);
-    auto iter = _pg_map.find(pg_id);
-    if (iter == _pg_map.end()) {
-        LOGW("PG not found for pg_id={} when getting inde table", pg_id);
+    auto hs_pg = get_hs_pg(pg_id);
+    if (hs_pg == nullptr) {
+        LOGW("PG not found for pg_id={} when getting index table", pg_id);
         return nullptr;
     }
-    auto hs_pg = static_cast< HSHomeObject::HS_PG* >(iter->second.get());
     RELEASE_ASSERT(hs_pg->index_table_ != nullptr, "Index table not found for PG");
     return hs_pg->index_table_;
 }
