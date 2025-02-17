@@ -86,12 +86,10 @@ BlobManager::AsyncResult< blob_id_t > HSHomeObject::_put_blob(ShardInfo const& s
     shared< homestore::ReplDev > repl_dev;
     blob_id_t new_blob_id;
     {
-        std::shared_lock lock_guard(_pg_lock);
-        auto iter = _pg_map.find(pg_id);
-        RELEASE_ASSERT(iter != _pg_map.end(), "PG not found");
-        auto hs_pg = static_cast< HS_PG* >(iter->second.get());
+        auto hs_pg = get_hs_pg(pg_id);
+        RELEASE_ASSERT(hs_pg, "PG not found");
         repl_dev = hs_pg->repl_dev_;
-        hs_pg->durable_entities_update(
+        const_cast< HS_PG* >(hs_pg)->durable_entities_update(
             [&new_blob_id](auto& de) { new_blob_id = de.blob_sequence_num.fetch_add(1, std::memory_order_relaxed); },
             false /* dirty */);
 
@@ -186,13 +184,8 @@ BlobManager::AsyncResult< blob_id_t > HSHomeObject::_put_blob(ShardInfo const& s
 }
 
 bool HSHomeObject::local_add_blob_info(pg_id_t const pg_id, BlobInfo const& blob_info) {
-    HS_PG* hs_pg{nullptr};
-    {
-        shared_lock lock_guard(_pg_lock);
-        const auto iter = _pg_map.find(pg_id);
-        RELEASE_ASSERT(iter != _pg_map.end(), "PG not found");
-        hs_pg = dynamic_cast< HS_PG* >(iter->second.get());
-    }
+    auto hs_pg = get_hs_pg(pg_id);
+    RELEASE_ASSERT(hs_pg != nullptr, "PG not found");
     shared< BlobIndexTable > index_table = hs_pg->index_table_;
     RELEASE_ASSERT(index_table != nullptr, "Index table not initialized");
 
@@ -213,7 +206,7 @@ bool HSHomeObject::local_add_blob_info(pg_id_t const pg_id, BlobInfo const& blob
 
         // Update the durable counters. We need to update the blob_sequence_num here only for replay case, as the
         // number is already updated in the put_blob call.
-        hs_pg->durable_entities_update([&blob_info](auto& de) {
+        const_cast< HS_PG* >(hs_pg)->durable_entities_update([&blob_info](auto& de) {
             auto existing_blob_id = de.blob_sequence_num.load();
             auto next_blob_id = blob_info.blob_id + 1;
             while (next_blob_id > existing_blob_id &&
@@ -265,15 +258,10 @@ void HSHomeObject::on_blob_put_commit(int64_t lsn, sisl::blob const& header, sis
 BlobManager::AsyncResult< Blob > HSHomeObject::_get_blob(ShardInfo const& shard, blob_id_t blob_id, uint64_t req_offset,
                                                          uint64_t req_len) const {
     auto& pg_id = shard.placement_group;
-    shared< BlobIndexTable > index_table;
-    shared< homestore::ReplDev > repl_dev;
-    {
-        std::shared_lock lock_guard(_pg_lock);
-        auto iter = _pg_map.find(pg_id);
-        RELEASE_ASSERT(iter != _pg_map.end(), "PG not found");
-        repl_dev = static_cast< HS_PG* >(iter->second.get())->repl_dev_;
-        index_table = static_cast< HS_PG* >(iter->second.get())->index_table_;
-    }
+    auto hs_pg = get_hs_pg(pg_id);
+    RELEASE_ASSERT(hs_pg, "PG not found");
+    auto repl_dev = hs_pg->repl_dev_;
+    auto index_table = hs_pg->index_table_;
 
     RELEASE_ASSERT(repl_dev != nullptr, "Repl dev instance null");
     RELEASE_ASSERT(index_table != nullptr, "Index table instance null");
@@ -370,8 +358,8 @@ HSHomeObject::blob_put_get_blk_alloc_hints(sisl::blob const& header, cintrusive<
         return folly::makeUnexpected(homestore::ReplServiceError::FAILED);
     }
 
-    auto pg_iter = _pg_map.find(msg_header->pg_id);
-    if (pg_iter == _pg_map.end()) {
+    auto hs_pg = get_hs_pg(msg_header->pg_id);
+    if (hs_pg == nullptr) {
         LOGW("Received a blob_put on an unknown pg:{}, underlying engine will retry this later",
              msg_header->pg_id);
         return folly::makeUnexpected(homestore::ReplServiceError::RESULT_NOT_EXIST_YET);
@@ -392,9 +380,8 @@ HSHomeObject::blob_put_get_blk_alloc_hints(sisl::blob const& header, cintrusive<
     hints.chunk_id_hint = hs_shard->sb_->p_chunk_id;
 
     if (msg_header->blob_id != 0) {
-        //check if the blob already exists, if yes, return the blk id
-        auto index_table = d_cast< HS_PG* >(pg_iter->second.get())->index_table_;
-        auto r = get_blob_from_index_table(index_table, msg_header->shard_id, msg_header->blob_id);
+        // check if the blob already exists, if yes, return the blk id
+        auto r = get_blob_from_index_table(hs_pg->index_table_, msg_header->shard_id, msg_header->blob_id);
         if (r.hasValue()) {
             LOGT("Blob has already been persisted, blob_id:{}, shard_id:{}", msg_header->blob_id, msg_header->shard_id);
             hints.committed_blk_id = r.value();
@@ -407,13 +394,9 @@ HSHomeObject::blob_put_get_blk_alloc_hints(sisl::blob const& header, cintrusive<
 BlobManager::NullAsyncResult HSHomeObject::_del_blob(ShardInfo const& shard, blob_id_t blob_id) {
     BLOGT(shard.id, blob_id, "deleting blob");
     auto& pg_id = shard.placement_group;
-    shared< homestore::ReplDev > repl_dev;
-    {
-        std::shared_lock lock_guard(_pg_lock);
-        auto iter = _pg_map.find(pg_id);
-        RELEASE_ASSERT(iter != _pg_map.end(), "PG not found");
-        repl_dev = static_cast< HS_PG* >(iter->second.get())->repl_dev_;
-    }
+    auto hs_pg = get_hs_pg(pg_id);
+    RELEASE_ASSERT(hs_pg, "PG not found");
+    auto repl_dev = hs_pg->repl_dev_;
 
     RELEASE_ASSERT(repl_dev != nullptr, "Repl dev instance null");
 
@@ -469,19 +452,12 @@ void HSHomeObject::on_blob_del_commit(int64_t lsn, sisl::blob const& header, sis
         return;
     }
 
-    shared< BlobIndexTable > index_table;
-    shared< homestore::ReplDev > repl_dev;
-    HSHomeObject::HS_PG* hs_pg{nullptr};
-    {
-        std::shared_lock lock_guard(_pg_lock);
-        auto iter = _pg_map.find(msg_header->pg_id);
-        RELEASE_ASSERT(iter != _pg_map.end(), "PG not found");
-        hs_pg = static_cast< HSHomeObject::HS_PG* >(iter->second.get());
-        index_table = hs_pg->index_table_;
-        repl_dev = hs_pg->repl_dev_;
-        RELEASE_ASSERT(index_table != nullptr, "Index table not intialized");
-        RELEASE_ASSERT(repl_dev != nullptr, "Repl dev instance null");
-    }
+    auto hs_pg = get_hs_pg(msg_header->pg_id);
+    RELEASE_ASSERT(hs_pg, "PG not found");
+    auto index_table = hs_pg->index_table_;
+    auto repl_dev = hs_pg->repl_dev_;
+    RELEASE_ASSERT(index_table != nullptr, "Index table not intialized");
+    RELEASE_ASSERT(repl_dev != nullptr, "Repl dev instance null");
 
     BlobInfo blob_info;
     blob_info.shard_id = msg_header->shard_id;
@@ -502,7 +478,7 @@ void HSHomeObject::on_blob_del_commit(int64_t lsn, sisl::blob const& header, sis
     auto& multiBlks = r.value();
     if (multiBlks != tombstone_pbas) {
         repl_dev->async_free_blks(lsn, multiBlks);
-        hs_pg->durable_entities_update([](auto& de) {
+        const_cast< HS_PG* >(hs_pg)->durable_entities_update([](auto& de) {
             de.active_blob_count.fetch_sub(1, std::memory_order_relaxed);
             de.tombstone_blob_count.fetch_add(1, std::memory_order_relaxed);
         });

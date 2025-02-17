@@ -258,8 +258,8 @@ public:
 
         // Snapshot receiver progress info, used as a checkpoint for recovery
         // Placed within HS_PG since HomeObject is unable to locate the ReplicationStateMachine
-        homestore::superblk< snapshot_rcvr_info_superblk > snp_rcvr_info_sb_;
-        homestore::superblk< snapshot_rcvr_shard_list_superblk > snp_rcvr_shard_list_sb_;
+        mutable homestore::superblk< snapshot_rcvr_info_superblk > snp_rcvr_info_sb_;
+        mutable homestore::superblk< snapshot_rcvr_shard_list_superblk > snp_rcvr_shard_list_sb_;
 
         HS_PG(PGInfo info, shared< homestore::ReplDev > rdev, shared< BlobIndexTable > index_table,
               std::shared_ptr< const std::vector< homestore::chunk_num_t > > pg_chunk_ids);
@@ -430,8 +430,6 @@ public:
 
         // Update the snp_info superblock
         void update_snp_info_sb(bool init = false);
-
-        HS_PG* get_hs_pg(pg_id_t pg_id);
     };
 
 private:
@@ -456,6 +454,7 @@ private:
     static std::string serialize_pg_info(const PGInfo& info);
     static PGInfo deserialize_pg_info(const unsigned char* pg_info_str, size_t size);
     void add_pg_to_map(unique< HS_PG > hs_pg);
+    const HS_PG* _get_hs_pg_unlocked(pg_id_t pg_id) const;
 
     // create shard related
     shard_id_t generate_new_shard_id(pg_id_t pg);
@@ -541,6 +540,13 @@ public:
      * @param pg_id The ID of the PG to be destroyed.
      */
     void pg_destroy(pg_id_t pg_id);
+
+    /**
+     * @brief Get HS_PG object from given pg_id.
+     * @param pg_id The ID of the PG.
+     * @return The HS_PG object matching the given pg_id, otherwise nullptr.
+     */
+    const HS_PG* get_hs_pg(pg_id_t pg_id) const;
 
     /**
      * @brief Callback function invoked when a message is committed on a shard.
@@ -641,7 +647,7 @@ private:
 
     BlobManager::Result< homestore::MultiBlkId > move_to_tombstone(shared< BlobIndexTable > index_table,
                                                                    const BlobInfo& blob_info);
-    void print_btree_index(pg_id_t pg_id);
+    void print_btree_index(pg_id_t pg_id) const;
 
     shared< BlobIndexTable > get_index_table(pg_id_t pg_id);
 

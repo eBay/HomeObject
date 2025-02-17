@@ -104,13 +104,9 @@ TEST_F(HomeObjectFixture, BasicPutGetDelBlobWRestart) {
 
     // all the deleted blobs should be tombstone in index table
     for (const auto& [pg_id, shard_vec] : pg_shard_id_vec) {
-        shared< BlobIndexTable > index_table;
-        {
-            std::shared_lock lock_guard(_obj_inst->_pg_lock);
-            auto iter = _obj_inst->_pg_map.find(pg_id);
-            ASSERT_TRUE(iter != _obj_inst->_pg_map.end());
-            index_table = static_cast< HSHomeObject::HS_PG* >(iter->second.get())->index_table_;
-        }
+        auto hs_pg = _obj_inst->get_hs_pg(pg_id);
+        ASSERT_TRUE(hs_pg != nullptr);
+        auto index_table = hs_pg->index_table_;
         blob_id_t blob_id{0};
         for (; blob_id != pg_blob_id[pg_id];) {
             for (const auto& shard_id : shard_vec) {
@@ -161,15 +157,10 @@ TEST_F(HomeObjectFixture, PGBlobIterator) {
     }
     put_blobs(pg_shard_id_vec, num_blobs_per_shard, pg_blob_id);
 
-    PG* pg;
-    {
-        auto lg = std::shared_lock(_obj_inst->_pg_lock);
-        auto iter = _obj_inst->_pg_map.find(pg_id);
-        ASSERT_TRUE(iter != _obj_inst->_pg_map.end());
-        pg = iter->second.get();
-    }
+    auto pg = _obj_inst->get_hs_pg(pg_id);
+    ASSERT_TRUE(pg != nullptr);
 
-    //Construct shards as [sealed, open, filtered]
+    // Construct shards as [sealed, open, filtered]
     seal_shard(pg->shards_.front()->info.id);
     ASSERT_EQ(pg->shards_.front()->info.state, homeobject::ShardInfo::State::SEALED);
     //Filter out the last shard
@@ -304,9 +295,8 @@ TEST_F(HomeObjectFixture, SnapshotReceiveHandler) {
     // We have to create a PG first to init repl_dev
     constexpr pg_id_t pg_id = 1;
     create_pg(pg_id); // to create repl dev
-    auto iter = _obj_inst->_pg_map.find(pg_id);
-    ASSERT_TRUE(iter != _obj_inst->_pg_map.end());
-    auto pg = iter->second.get();
+    auto pg = _obj_inst->get_hs_pg(pg_id);
+    ASSERT_TRUE(pg != nullptr);
     PGStats stats;
     ASSERT_TRUE(_obj_inst->pg_manager()->get_stats(pg_id, stats));
     auto r_dev = homestore::HomeStore::instance()->repl_service().get_repl_dev(stats.replica_set_uuid);

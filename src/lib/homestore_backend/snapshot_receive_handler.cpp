@@ -159,7 +159,7 @@ int HSHomeObject::SnapshotReceiveHandler::process_blobs_snapshot_data(ResyncBlob
 
         // Check duplication to avoid reprocessing. This may happen on resent blob batches.
         if (!ctx_->index_table) {
-            auto hs_pg = get_hs_pg(ctx_->pg_id);
+            auto hs_pg = home_obj_.get_hs_pg(ctx_->pg_id);
             RELEASE_ASSERT(hs_pg != nullptr, "PG not found for pg_id:{}", ctx_->pg_id);
             ctx_->index_table = hs_pg->index_table_;
         }
@@ -311,7 +311,7 @@ void HSHomeObject::SnapshotReceiveHandler::reset_context(int64_t lsn, pg_id_t pg
 }
 
 void HSHomeObject::SnapshotReceiveHandler::destroy_context() {
-    auto hs_pg = get_hs_pg(ctx_->pg_id);
+    auto hs_pg = home_obj_.get_hs_pg(ctx_->pg_id);
     if (hs_pg == nullptr) { return; }
     hs_pg->snp_rcvr_info_sb_.destroy();
     hs_pg->snp_rcvr_shard_list_sb_.destroy();
@@ -334,15 +334,8 @@ shard_id_t HSHomeObject::SnapshotReceiveHandler::get_next_shard() const {
     return invalid_shard_id;
 }
 
-// TODO: extract a more common function at HomeObject level
-HSHomeObject::HS_PG* HSHomeObject::SnapshotReceiveHandler::get_hs_pg(pg_id_t pg_id) {
-    std::shared_lock lck(home_obj_._pg_lock);
-    auto iter = home_obj_._pg_map.find(pg_id);
-    return iter == home_obj_._pg_map.end() ? nullptr : dynamic_cast< HS_PG* >(iter->second.get());
-}
-
 void HSHomeObject::SnapshotReceiveHandler::update_snp_info_sb(bool init) {
-    auto hs_pg = get_hs_pg(ctx_->pg_id);
+    auto hs_pg = home_obj_.get_hs_pg(ctx_->pg_id);
     RELEASE_ASSERT(hs_pg != nullptr, "PG not found");
 
     auto* sb = hs_pg->snp_rcvr_info_sb_.get();
@@ -375,14 +368,11 @@ void HSHomeObject::on_snp_rcvr_meta_blk_found(homestore::meta_blk* mblk, sisl::b
     homestore::superblk< snapshot_rcvr_info_superblk > sb(_snp_rcvr_meta_name);
     sb.load(buf, mblk);
 
-    {
-        std::shared_lock lock_guard(_pg_lock);
-        auto iter = _pg_map.find(sb->pg_id);
-        RELEASE_ASSERT(iter != _pg_map.end(), "PG not found");
-        auto hs_pg = dynamic_cast< HS_PG* >(iter->second.get());
-        if (!hs_pg->snp_rcvr_info_sb_.is_empty()) { hs_pg->snp_rcvr_info_sb_.destroy(); }
-        hs_pg->snp_rcvr_info_sb_ = std::move(sb);
-    }
+    auto hs_pg = get_hs_pg(sb->pg_id);
+    RELEASE_ASSERT(hs_pg != nullptr, "PG not found");
+    if (!hs_pg->snp_rcvr_info_sb_.is_empty()) { hs_pg->snp_rcvr_info_sb_.destroy(); }
+    hs_pg->snp_rcvr_info_sb_ = std::move(sb);
+
 }
 
 void HSHomeObject::on_snp_rcvr_meta_blk_recover_completed(bool success) {
@@ -394,14 +384,11 @@ void HSHomeObject::on_snp_rcvr_shard_list_meta_blk_found(homestore::meta_blk* mb
     homestore::superblk< snapshot_rcvr_shard_list_superblk > sb(_snp_rcvr_shard_list_meta_name);
     sb.load(buf, mblk);
 
-    {
-        std::shared_lock lock_guard(_pg_lock);
-        auto iter = _pg_map.find(sb->pg_id);
-        RELEASE_ASSERT(iter != _pg_map.end(), "PG not found");
-        auto hs_pg = dynamic_cast< HS_PG* >(iter->second.get());
-        if (!hs_pg->snp_rcvr_shard_list_sb_.is_empty()) { hs_pg->snp_rcvr_shard_list_sb_.destroy(); }
-        hs_pg->snp_rcvr_shard_list_sb_ = std::move(sb);
-    }
+    auto hs_pg = get_hs_pg(sb->pg_id);
+    RELEASE_ASSERT(hs_pg != nullptr, "PG not found");
+    if (!hs_pg->snp_rcvr_shard_list_sb_.is_empty()) { hs_pg->snp_rcvr_shard_list_sb_.destroy(); }
+    hs_pg->snp_rcvr_shard_list_sb_ = std::move(sb);
+
 }
 
 void HSHomeObject::on_snp_rcvr_shard_list_meta_blk_recover_completed(bool success) {
