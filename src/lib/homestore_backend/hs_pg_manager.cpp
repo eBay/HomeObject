@@ -62,7 +62,7 @@ PGError toPgError(ReplServiceError const& e) {
 
 PGManager::NullAsyncResult HSHomeObject::_create_pg(PGInfo&& pg_info, std::set< peer_id_t > const& peers) {
     auto pg_id = pg_info.id;
-    if (auto lg = std::shared_lock(_pg_lock); _pg_map.end() != _pg_map.find(pg_id)) return folly::Unit();
+    if (pg_exists(pg_id)) return folly::Unit();
 
     const auto chunk_size = chunk_selector()->get_chunk_size();
     if (pg_info.size < chunk_size) {
@@ -148,12 +148,9 @@ PGManager::NullAsyncResult HSHomeObject::do_create_pg(cshared< homestore::ReplDe
 folly::Expected< HSHomeObject::HS_PG*, PGError > HSHomeObject::local_create_pg(shared< ReplDev > repl_dev,
                                                                                PGInfo pg_info) {
     auto pg_id = pg_info.id;
-    {
-        auto lg = shared_lock(_pg_lock);
-        if (auto it = _pg_map.find(pg_id); it != _pg_map.end()) {
-            LOGW("PG already exists, pg_id {}", pg_id);
-            return dynamic_cast< HS_PG* >(it->second.get());
-        }
+    if (auto hs_pg = get_hs_pg(pg_id); hs_pg) {
+        LOGW("PG already exists, pg_id {}", pg_id);
+        return const_cast< HS_PG* >(hs_pg);
     }
 
     auto local_chunk_size = chunk_selector()->get_chunk_size();
@@ -235,25 +232,19 @@ void HSHomeObject::on_create_pg_message_commit(int64_t lsn, sisl::blob const& he
 
 PGManager::NullAsyncResult HSHomeObject::_replace_member(pg_id_t pg_id, peer_id_t const& old_member_id,
                                                          PGMember const& new_member, uint32_t commit_quorum) {
-
-    group_id_t group_id;
-    {
-        auto lg = std::shared_lock(_pg_lock);
-        auto iter = _pg_map.find(pg_id);
-        if (iter == _pg_map.end()) return folly::makeUnexpected(PGError::UNKNOWN_PG);
-        auto& repl_dev = pg_repl_dev(*iter->second);
-
-        if (!repl_dev.is_leader() && commit_quorum == 0) {
-            // Only leader can replace a member
-            return folly::makeUnexpected(PGError::NOT_LEADER);
-        }
-        group_id = repl_dev.group_id();
+    auto hs_pg = get_hs_pg(pg_id);
+    if (hs_pg == nullptr) return folly::makeUnexpected(PGError::UNKNOWN_PG);
+    auto& repl_dev = pg_repl_dev(*hs_pg);
+    if (!repl_dev.is_leader() && commit_quorum == 0) {
+        // Only leader can replace a member
+        return folly::makeUnexpected(PGError::NOT_LEADER);
     }
+    auto group_id = repl_dev.group_id();
 
     LOGI("PG replace member initated member_out={} member_in={}", boost::uuids::to_string(old_member_id),
          boost::uuids::to_string(new_member.id));
 
-    homestore::replica_member_info in_replica, out_replica;
+    replica_member_info in_replica, out_replica;
     out_replica.id = old_member_id;
     in_replica.id = new_member.id;
     in_replica.priority = new_member.priority;
@@ -327,15 +318,14 @@ void HSHomeObject::pg_destroy(pg_id_t pg_id) {
 
     LOGI("pg {} is destroyed", pg_id);
 }
+
 void HSHomeObject::mark_pg_destroyed(pg_id_t pg_id) {
     auto lg = std::scoped_lock(_pg_lock);
-    auto iter = _pg_map.find(pg_id);
-    if (iter == _pg_map.end()) {
+    auto hs_pg = const_cast< HS_PG* >(_get_hs_pg_unlocked(pg_id));
+    if (hs_pg == nullptr) {
         LOGW("mark pg destroyed with unknown pg_id {}", pg_id);
         return;
     }
-    auto& pg = iter->second;
-    auto hs_pg = s_cast< HS_PG* >(pg.get());
     hs_pg->pg_sb_->state = PGState::DESTROYED;
     hs_pg->pg_sb_.write();
 }
@@ -343,14 +333,13 @@ void HSHomeObject::mark_pg_destroyed(pg_id_t pg_id) {
 void HSHomeObject::destroy_hs_resources(pg_id_t pg_id) {
     // Step 1: purge on repl dev
     auto lg = std::scoped_lock(_pg_lock);
-    auto iter = _pg_map.find(pg_id);
-    if (iter == _pg_map.end()) {
+    auto hs_pg = _get_hs_pg_unlocked(pg_id);
+    if (hs_pg == nullptr) {
         LOGW("destroy repl dev with unknown pg_id {}", pg_id);
         return;
     }
 
-    auto& pg = iter->second;
-    auto group_id = pg->pg_info_.replica_set_uuid;
+    auto group_id = hs_pg->pg_info_.replica_set_uuid;
     auto v = hs_repl_service().get_repl_dev(group_id);
     if (v.hasError()) {
         LOGW("get repl dev for group_id={} has failed", boost::uuids::to_string(group_id));
@@ -364,14 +353,12 @@ void HSHomeObject::destroy_hs_resources(pg_id_t pg_id) {
 
 void HSHomeObject::destroy_pg_index_table(pg_id_t pg_id) {
     auto lg = std::scoped_lock(_pg_lock);
-    auto iter = _pg_map.find(pg_id);
-    if (iter == _pg_map.end()) {
+    auto hs_pg = _get_hs_pg_unlocked(pg_id);
+    if (hs_pg == nullptr) {
         LOGW("destroy pg index table with unknown pg_id {}", pg_id);
         return;
     }
 
-    auto& pg = iter->second;
-    auto hs_pg = s_cast< HS_PG* >(pg.get());
     if (nullptr != hs_pg->index_table_) {
         auto uuid_str = boost::uuids::to_string(hs_pg->index_table_->uuid());
         index_table_pg_map_.erase(uuid_str);
@@ -392,18 +379,16 @@ void HSHomeObject::destroy_pg_superblk(pg_id_t pg_id) {
 
     {
         auto lg = std::scoped_lock(_pg_lock);
-        auto iter = _pg_map.find(pg_id);
-        if (iter == _pg_map.end()) {
+        auto hs_pg = const_cast< HS_PG* >(_get_hs_pg_unlocked(pg_id));
+        if (hs_pg == nullptr) {
             LOGW("destroy pg superblk with unknown pg_id {}", pg_id);
             return;
         }
 
-        // destroy pg super blk
-        auto& pg = iter->second;
-        auto hs_pg = s_cast< HS_PG* >(pg.get());
         hs_pg->pg_sb_.destroy();
 
         // erase pg in pg map
+        auto iter = _pg_map.find(pg_id);
         _pg_map.erase(iter);
     }
 }
@@ -554,12 +539,20 @@ uint32_t HSHomeObject::HS_PG::open_shards() const {
     return std::count_if(shards_.begin(), shards_.end(), [](auto const& s) { return s->is_open(); });
 }
 
+// NOTE: caller should hold the _pg_lock
+const HSHomeObject::HS_PG* HSHomeObject::_get_hs_pg_unlocked(pg_id_t pg_id) const {
+    auto iter = _pg_map.find(pg_id);
+    return iter == _pg_map.end() ? nullptr : dynamic_cast< HS_PG* >(iter->second.get());
+}
+
+const HSHomeObject::HS_PG* HSHomeObject::get_hs_pg(pg_id_t pg_id) const {
+    std::shared_lock lck(_pg_lock);
+    return _get_hs_pg_unlocked(pg_id);
+}
+
 bool HSHomeObject::_get_stats(pg_id_t id, PGStats& stats) const {
-    auto lg = std::shared_lock(_pg_lock);
-    auto it = _pg_map.find(id);
-    if (_pg_map.end() == it) { return false; }
-    auto const& pg = it->second;
-    auto hs_pg = static_cast< HS_PG* >(pg.get());
+    auto hs_pg = get_hs_pg(id);
+    if (hs_pg == nullptr) return false;
     auto const blk_size = hs_pg->repl_dev_->get_blk_size();
 
     stats.id = hs_pg->pg_info_.id;
