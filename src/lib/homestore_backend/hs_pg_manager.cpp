@@ -386,6 +386,9 @@ void HSHomeObject::destroy_pg_superblk(pg_id_t pg_id) {
         }
 
         hs_pg->pg_sb_.destroy();
+        destroy_snapshot_sb(hs_pg->repl_dev_->group_id());
+        hs_pg->snp_rcvr_info_sb_.destroy();
+        hs_pg->snp_rcvr_shard_list_sb_.destroy();
 
         // erase pg in pg map
         auto iter = _pg_map.find(pg_id);

@@ -372,7 +372,6 @@ void HSHomeObject::on_snp_rcvr_meta_blk_found(homestore::meta_blk* mblk, sisl::b
     RELEASE_ASSERT(hs_pg != nullptr, "PG not found");
     if (!hs_pg->snp_rcvr_info_sb_.is_empty()) { hs_pg->snp_rcvr_info_sb_.destroy(); }
     hs_pg->snp_rcvr_info_sb_ = std::move(sb);
-
 }
 
 void HSHomeObject::on_snp_rcvr_meta_blk_recover_completed(bool success) {
@@ -388,7 +387,6 @@ void HSHomeObject::on_snp_rcvr_shard_list_meta_blk_found(homestore::meta_blk* mb
     RELEASE_ASSERT(hs_pg != nullptr, "PG not found");
     if (!hs_pg->snp_rcvr_shard_list_sb_.is_empty()) { hs_pg->snp_rcvr_shard_list_sb_.destroy(); }
     hs_pg->snp_rcvr_shard_list_sb_ = std::move(sb);
-
 }
 
 void HSHomeObject::on_snp_rcvr_shard_list_meta_blk_recover_completed(bool success) {
