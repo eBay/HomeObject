@@ -148,8 +148,9 @@ int HSHomeObject::SnapshotReceiveHandler::process_blobs_snapshot_data(ResyncBlob
         }
 
 #ifdef _PRERELEASE
-        auto delay = iomgr_flip::instance()->get_test_flip< long >("write_snapshot_save_blob_latency",
+        auto delay = iomgr_flip::instance()->get_test_flip< long >("simulate_write_snapshot_save_blob_delay",
                                                                    static_cast< long >(blob->blob_id()));
+        LOGD("simulate_write_snapshot_save_blob_delay flip, triggered: {}, blob: {}", delay.has_value(), blob->blob_id());
         if (delay) {
             LOGI("Simulating pg snapshot receive data with delay, delay:{}, blob_id:{}", delay.get(), blob->blob_id());
             std::this_thread::sleep_for(std::chrono::milliseconds(delay.get()));
@@ -235,6 +236,11 @@ int HSHomeObject::SnapshotReceiveHandler::process_blobs_snapshot_data(ResyncBlob
             LOGE("Failed to write blob info of blob_id {} to blk_id:{}", blob->blob_id(), blk_id.to_string());
             free_allocated_blks();
             return WRITE_DATA_ERR;
+        }
+        if (homestore::data_service().commit_blk(blk_id) != homestore::BlkAllocStatus::SUCCESS) {
+            LOGE("Failed to commit blk_id:{} for blob_id: {}", blk_id.to_string(), blob->blob_id());
+            free_allocated_blks();
+            return COMMIT_BLK_ERR;
         }
 
         // Add local blob info to index & PG

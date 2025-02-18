@@ -380,6 +380,7 @@ public:
         enum ErrorCode {
             ALLOC_BLK_ERR = 1,
             WRITE_DATA_ERR,
+            COMMIT_BLK_ERR,
             INVALID_BLOB_HEADER,
             BLOB_DATA_CORRUPTED,
             ADD_BLOB_INDEX_ERR,

@@ -225,6 +225,14 @@ ReplicationStateMachine::create_snapshot(std::shared_ptr< homestore::snapshot_co
 }
 
 bool ReplicationStateMachine::apply_snapshot(std::shared_ptr< homestore::snapshot_context > context) {
+    #ifdef _PRERELEASE
+        auto delay = iomgr_flip::instance()->get_test_flip< long >("simulate_apply_snapshot_delay");
+        LOGD("simulate_apply_snapshot_delay flip, triggered: {}", delay.has_value());
+        if (delay) {
+            LOGI("Simulating apply snapshot with delay, delay:{}", delay.get());
+            std::this_thread::sleep_for(std::chrono::milliseconds(delay.get()));
+        }
+    #endif
     // TODO persist snapshot
     m_snp_rcv_handler->destroy_context();
 
@@ -326,7 +334,7 @@ void ReplicationStateMachine::write_snapshot_obj(std::shared_ptr< homestore::sna
     if (!m_snp_rcv_handler) {
         m_snp_rcv_handler = std::make_unique< HSHomeObject::SnapshotReceiveHandler >(*home_object_, r_dev);
         if (m_snp_rcv_handler->load_prev_context()) {
-            LOGI("Reloaded previous snapshot context, lsn:{} pg_id:{} shard:{}", context->get_lsn(),
+            LOGI("Reloaded previous snapshot context, lsn:{} pg_id:{} next_shard:{}", context->get_lsn(),
                  m_snp_rcv_handler->get_context_pg_id(), m_snp_rcv_handler->get_next_shard());
         }
     }
@@ -375,8 +383,8 @@ void ReplicationStateMachine::write_snapshot_obj(std::shared_ptr< homestore::sna
                 m_snp_rcv_handler->get_shard_cursor() == HSHomeObject::SnapshotReceiveHandler::shard_list_end_marker
                 ? LAST_OBJ_ID
                 : objId(HSHomeObject::get_sequence_num_from_shard_id(m_snp_rcv_handler->get_shard_cursor()), 0).value;
-            LOGI("Resume from previous context breakpoint, lsn:{} pg_id:{} shard:{}", context->get_lsn(),
-                 pg_data->pg_id(), m_snp_rcv_handler->get_next_shard());
+            LOGI("Resume from previous context breakpoint, lsn:{} pg_id:{} next_shard:{}, shard_cursor:{}", context->get_lsn(),
+                 pg_data->pg_id(), m_snp_rcv_handler->get_next_shard(), m_snp_rcv_handler->get_shard_cursor());
             return;
         }
 

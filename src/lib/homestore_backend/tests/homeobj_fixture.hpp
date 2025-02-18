@@ -302,6 +302,7 @@ public:
     // TODO:make this run in parallel
     void verify_get_blob(std::map< pg_id_t, std::vector< shard_id_t > > const& pg_shard_id_vec,
                          uint64_t const num_blobs_per_shard, bool const use_random_offset = false,
+                         bool const wait_when_not_exist = false,
                          std::map<pg_id_t, blob_id_t> pg_start_blob_id = std::map<pg_id_t, blob_id_t>()) {
         uint32_t off = 0, len = 0;
 
@@ -324,6 +325,11 @@ public:
                     }
 
                     auto g = _obj_inst->blob_manager()->get(shard_id, current_blob_id, off, len).get();
+                    while (wait_when_not_exist && g.hasError() && g.error().code == BlobErrorCode::UNKNOWN_BLOB) {
+                        LOGDEBUG("blob not exist at the moment, waiting for sync, shard {} blob {}", shard_id, current_blob_id);
+                        wait_for_blob(shard_id, current_blob_id);
+                        g = _obj_inst->blob_manager()->get(shard_id, current_blob_id, off, len).get();
+                    }
                     ASSERT_TRUE(!!g) << "get blob fail, shard_id " << shard_id << " blob_id " << current_blob_id
                                      << " replica number " << g_helper->replica_num();
                     auto result = std::move(g.value());
@@ -433,6 +439,30 @@ public:
         // TODO: add logic for check and retry of leader change if necessary
     }
 
+    peer_id_t get_leader_id(pg_id_t pg_id) {
+        if (!am_i_in_pg(pg_id)) return uuids::nil_uuid();
+        while(true) {
+            PGStats pg_stats;
+            auto res = _obj_inst->pg_manager()->get_stats(pg_id, pg_stats);
+            if (!res || pg_stats.leader_id.is_nil()) {
+                LOGINFO("fail to get leader, retry later");
+                std::this_thread::sleep_for(std::chrono::milliseconds(500));
+                continue;
+            }
+            return pg_stats.leader_id;
+        }
+    }
+
+    bool wait_for_leader_change(pg_id_t pg_id, peer_id_t old_leader) {
+        if (old_leader.is_nil())return false;
+        while (true) {
+            auto leader = get_leader_id(pg_id);
+            if (old_leader != leader) { return true; }
+            LOGDEBUG("leader not change, leader_id={}", leader);
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        }
+    }
+
     void run_if_in_pg(pg_id_t pg_id, auto&& lambda) {
         if (am_i_in_pg(pg_id)) lambda();
     }
@@ -448,9 +478,13 @@ public:
     }
 
     // wait for the last blob to be created locally, which means all the blob before this blob are created
-    void wait_for_all(shard_id_t shard_id, blob_id_t blob_id) {
+    void wait_for_blob(shard_id_t shard_id, blob_id_t blob_id) {
         while (true) {
-            if (blob_exist(shard_id, blob_id)) return;
+            if (blob_exist(shard_id, blob_id)) {
+                LOGINFO("shard {} blob {} is created locally, which means all the blob before {} are created", shard_id,
+                        blob_id, blob_id);
+                return;
+            }
             std::this_thread::sleep_for(1s);
         }
     }
@@ -539,7 +573,8 @@ void set_retval_flip(const std::string flip_name, const T retval,
         LOGINFO("Flip {} removed", flip_name);
     }
 #endif
-    void RestartFollowerDuringBaselineResyncUsingSigKill(uint64_t flip_delay, uint64_t restart_interval);
+    void RestartFollowerDuringBaselineResyncUsingSigKill(uint64_t flip_delay, uint64_t restart_interval, string restart_phase);
+    void RestartLeaderDuringBaselineResyncUsingSigKill(uint64_t flip_delay, uint64_t restart_interval, string restart_phase);
 private:
     std::random_device rnd{};
     std::default_random_engine rnd_engine{rnd()};
