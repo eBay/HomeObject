@@ -135,9 +135,8 @@ TEST_F(HomeObjectFixture, ShardManagerRecovery) {
 
     // check PG after recovery.
     EXPECT_TRUE(_obj_inst->_pg_map.size() == 1);
-    auto pg_iter = _obj_inst->_pg_map.find(pg_id);
-    EXPECT_TRUE(pg_iter != _obj_inst->_pg_map.end());
-    auto& pg_result = pg_iter->second;
+    auto pg_result = _obj_inst->get_hs_pg(pg_id);
+    EXPECT_TRUE(pg_result != nullptr);
     EXPECT_EQ(1, pg_result->shards_.size());
     // verify the sequence number is correct after recovery.
     EXPECT_EQ(1, pg_result->shard_sequence_num_);
@@ -157,17 +156,18 @@ TEST_F(HomeObjectFixture, ShardManagerRecovery) {
     ASSERT_TRUE(!!s);
 
     EXPECT_EQ(ShardInfo::State::SEALED, s.value().state);
-    pg_iter = _obj_inst->_pg_map.find(pg_id);
+    pg_result = _obj_inst->get_hs_pg(pg_id);
+    EXPECT_TRUE(pg_result != nullptr);
     // verify the sequence number is correct after recovery.
 
-    EXPECT_EQ(1, pg_iter->second->shard_sequence_num_);
+    EXPECT_EQ(1, pg_result->shard_sequence_num_);
 
     // re-create new shards on this pg works too even homeobject is restarted twice.
     auto new_shard_info = create_shard(pg_id, Mi);
     EXPECT_NE(shard_id, new_shard_info.id);
 
     EXPECT_EQ(ShardInfo::State::OPEN, new_shard_info.state);
-    EXPECT_EQ(2, pg_iter->second->shard_sequence_num_);
+    EXPECT_EQ(2, pg_result->shard_sequence_num_);
 }
 
 TEST_F(HomeObjectFixture, SealedShardRecovery) {
@@ -184,9 +184,8 @@ TEST_F(HomeObjectFixture, SealedShardRecovery) {
     EXPECT_EQ(ShardInfo::State::SEALED, shard_info.state);
 
     // check the shard info from ShardManager to make sure on_commit() is successfully.
-    auto pg_iter = _obj_inst->_pg_map.find(pg_id);
-    EXPECT_TRUE(pg_iter != _obj_inst->_pg_map.end());
-    auto& pg_result = pg_iter->second;
+    auto pg_result = _obj_inst->get_hs_pg(pg_id);
+    EXPECT_TRUE(pg_result != nullptr);
     EXPECT_EQ(1, pg_result->shards_.size());
     auto hs_shard = d_cast< homeobject::HSHomeObject::HS_Shard* >(pg_result->shards_.front().get());
     EXPECT_EQ(ShardInfo::State::SEALED, hs_shard->info.state);
@@ -198,10 +197,10 @@ TEST_F(HomeObjectFixture, SealedShardRecovery) {
     // re-create the homeobject and pg infos and shard infos will be recover automatically.
     EXPECT_TRUE(_obj_inst->_pg_map.size() == 1);
     // check shard internal state;
-    pg_iter = _obj_inst->_pg_map.find(pg_id);
-    EXPECT_TRUE(pg_iter != _obj_inst->_pg_map.end());
-    EXPECT_EQ(1, pg_iter->second->shards_.size());
-    hs_shard = d_cast< homeobject::HSHomeObject::HS_Shard* >(pg_iter->second->shards_.front().get());
+    pg_result = _obj_inst->get_hs_pg(pg_id);
+    EXPECT_TRUE(pg_result != nullptr);
+    EXPECT_EQ(1, pg_result->shards_.size());
+    hs_shard = d_cast< homeobject::HSHomeObject::HS_Shard* >(pg_result->shards_.front().get());
     auto& recovered_shard_info = hs_shard->info;
     verify_hs_shard(recovered_shard_info, shard_info);
 }

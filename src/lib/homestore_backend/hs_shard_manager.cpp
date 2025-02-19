@@ -51,9 +51,10 @@ uint64_t ShardManager::max_shard_num_in_pg() { return ((uint64_t)0x01) << shard_
 
 shard_id_t HSHomeObject::generate_new_shard_id(pg_id_t pgid) {
     std::scoped_lock lock_guard(_pg_lock);
-    auto iter = _pg_map.find(pgid);
-    RELEASE_ASSERT(iter != _pg_map.end(), "Missing pg info");
-    auto new_sequence_num = ++(iter->second->shard_sequence_num_);
+    auto hs_pg = const_cast< HS_PG* >(_get_hs_pg_unlocked(pgid));
+    RELEASE_ASSERT(hs_pg, "Missing pg info");
+
+    auto new_sequence_num = ++hs_pg->shard_sequence_num_;
     RELEASE_ASSERT(new_sequence_num < ShardManager::max_shard_num_in_pg(),
                    "new shard id must be less than ShardManager::max_shard_num_in_pg()");
     return make_new_shard_id(pgid, new_sequence_num);
@@ -93,16 +94,12 @@ ShardInfo HSHomeObject::deserialize_shard_info(const char* json_str, size_t str_
 }
 
 ShardManager::AsyncResult< ShardInfo > HSHomeObject::_create_shard(pg_id_t pg_owner, uint64_t size_bytes) {
-    shared< homestore::ReplDev > repl_dev;
-    {
-        std::shared_lock lock_guard(_pg_lock);
-        auto iter = _pg_map.find(pg_owner);
-        if (iter == _pg_map.end()) {
-            LOGW("failed to create shard with non-exist pg [{}]", pg_owner);
-            return folly::makeUnexpected(ShardError::UNKNOWN_PG);
-        }
-        repl_dev = static_cast< HS_PG* >(iter->second.get())->repl_dev_;
+    auto hs_pg = get_hs_pg(pg_owner);
+    if (!hs_pg) {
+        LOGW("failed to create shard with non-exist pg [{}]", pg_owner);
+        return folly::makeUnexpected(ShardError::UNKNOWN_PG);
     }
+    auto repl_dev = hs_pg->repl_dev_;
 
     if (!repl_dev) {
         LOGW("failed to get repl dev instance for pg [{}]", pg_owner);
@@ -174,14 +171,10 @@ ShardManager::AsyncResult< ShardInfo > HSHomeObject::_seal_shard(ShardInfo const
     auto pg_id = info.placement_group;
     auto shard_id = info.id;
 
-    shared< homestore::ReplDev > repl_dev;
-    {
-        std::shared_lock lock_guard(_pg_lock);
-        auto iter = _pg_map.find(pg_id);
-        RELEASE_ASSERT(iter != _pg_map.end(), "PG not found");
-        repl_dev = static_cast< HS_PG* >(iter->second.get())->repl_dev_;
-        RELEASE_ASSERT(repl_dev != nullptr, "Repl dev null");
-    }
+    auto hs_pg = get_hs_pg(pg_id);
+    RELEASE_ASSERT(hs_pg, "PG not found");
+    auto repl_dev = hs_pg->repl_dev_;
+    RELEASE_ASSERT(repl_dev != nullptr, "Repl dev null");
 
     if (!repl_dev->is_leader()) {
         LOGW("failed to seal shard for shard [{}], not leader", shard_id);
@@ -331,14 +324,9 @@ void HSHomeObject::local_create_shard(ShardInfo shard_info, homestore::chunk_num
     } else { LOGD("shard {} already exist, skip creating shard", shard_info.id); }
 
     // update pg's total_occupied_blk_count
-    HS_PG* hs_pg{nullptr};
-    {
-        shared_lock lock_guard(_pg_lock);
-        auto iter = _pg_map.find(shard_info.placement_group);
-        RELEASE_ASSERT(iter != _pg_map.end(), "PG not found");
-        hs_pg = static_cast< HS_PG* >(iter->second.get());
-    }
-    hs_pg->durable_entities_update(
+    auto hs_pg = get_hs_pg(shard_info.placement_group);
+    RELEASE_ASSERT(hs_pg != nullptr, "PG not found");
+    const_cast< HS_PG* >(hs_pg)->durable_entities_update(
         [blk_count](auto& de) { de.total_occupied_blk_count.fetch_add(blk_count, std::memory_order_relaxed); });
 }
 
@@ -450,9 +438,10 @@ void HSHomeObject::add_new_shard_to_map(ShardPtr&& shard) {
     // TODO: We are taking a global lock for all pgs to create shard. Is it really needed??
     // We need to have fine grained per PG lock and take only that.
     std::scoped_lock lock_guard(_pg_lock, _shard_lock);
-    auto pg_iter = _pg_map.find(shard->info.placement_group);
-    RELEASE_ASSERT(pg_iter != _pg_map.end(), "Missing PG info");
-    auto& shards = pg_iter->second->shards_;
+    auto hs_pg = const_cast< HS_PG* >(_get_hs_pg_unlocked(shard->info.placement_group));
+    RELEASE_ASSERT(hs_pg, "Missing pg info");
+
+    auto& shards = hs_pg->shards_;
     auto shard_id = shard->info.id;
     auto iter = shards.emplace(shards.end(), std::move(shard));
     auto [_, happened] = _shard_map.emplace(shard_id, iter);
@@ -460,7 +449,7 @@ void HSHomeObject::add_new_shard_to_map(ShardPtr&& shard) {
 
     // following part gives follower members a chance to catch up shard sequence num;
     auto sequence_num = get_sequence_num_from_shard_id(shard_id);
-    if (sequence_num > pg_iter->second->shard_sequence_num_) { pg_iter->second->shard_sequence_num_ = sequence_num; }
+    if (sequence_num > hs_pg->shard_sequence_num_) { hs_pg->shard_sequence_num_ = sequence_num; }
 }
 
 void HSHomeObject::update_shard_in_map(const ShardInfo& shard_info) {
@@ -497,9 +486,7 @@ std::optional< homestore::chunk_num_t > HSHomeObject::resolve_v_chunk_id_from_ms
     switch (msg_header->msg_type) {
     case ReplicationMessageType::CREATE_SHARD_MSG: {
         const pg_id_t pg_id = msg_header->pg_id;
-        std::scoped_lock lock_guard(_pg_lock);
-        auto pg_iter = _pg_map.find(pg_id);
-        if (pg_iter == _pg_map.end()) {
+        if (!pg_exists(pg_id)) {
             LOGW("Requesting a chunk for an unknown pg={}", pg_id);
             return std::nullopt;
         }
@@ -524,9 +511,7 @@ bool HSHomeObject::release_chunk_based_on_create_shard_message(sisl::blob const&
     switch (msg_header->msg_type) {
     case ReplicationMessageType::CREATE_SHARD_MSG: {
         const pg_id_t pg_id = msg_header->pg_id;
-        std::scoped_lock lock_guard(_pg_lock);
-        auto pg_iter = _pg_map.find(pg_id);
-        if (pg_iter == _pg_map.end()) {
+        if (!pg_exists(pg_id)) {
             LOGW("Requesting a chunk for an unknown pg={}", pg_id);
             return false;
         }
@@ -545,14 +530,13 @@ bool HSHomeObject::release_chunk_based_on_create_shard_message(sisl::blob const&
 
 void HSHomeObject::destroy_shards(pg_id_t pg_id) {
     auto lg = std::scoped_lock(_pg_lock, _shard_lock);
-    auto iter = _pg_map.find(pg_id);
-    if (iter == _pg_map.end()) {
+    auto hs_pg = _get_hs_pg_unlocked(pg_id);
+    if (hs_pg == nullptr) {
         LOGW("on shards destroy with unknown pg_id {}", pg_id);
         return;
     }
 
-    auto& pg = iter->second;
-    for (auto& shard : pg->shards_) {
+    for (auto& shard : hs_pg->shards_) {
         auto hs_shard = s_cast< HS_Shard* >(shard.get());
         // destroy shard super blk
         hs_shard->sb_.destroy();

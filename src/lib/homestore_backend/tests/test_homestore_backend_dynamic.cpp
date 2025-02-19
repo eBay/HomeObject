@@ -74,10 +74,9 @@ TEST_F(HomeObjectFixture, ReplaceMember) {
     // get out_member's index_table_uuid with pg_id
     string index_table_uuid_str;
     if (out_member_id == g_helper->my_replica_id()) {
-        auto iter = _obj_inst->_pg_map.find(pg_id);
-        RELEASE_ASSERT(iter != _obj_inst->_pg_map.end(), "PG not found");
-        auto hs_pg = static_cast< homeobject::HSHomeObject::HS_PG* >(iter->second.get());
-        index_table_uuid_str = boost::uuids::to_string(hs_pg->pg_sb_->index_table_uuid);
+        auto hs_pg = _obj_inst->get_hs_pg(pg_id);
+        RELEASE_ASSERT(hs_pg, "PG not found");
+        index_table_uuid_str = uuids::to_string(hs_pg->pg_sb_->index_table_uuid);
     }
 
 #ifdef _PRERELEASE
