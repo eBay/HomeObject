@@ -51,6 +51,8 @@ protected:
     struct IPCData {
         void sync(uint64_t sync_point, uint32_t max_count) {
             std::unique_lock< bip::interprocess_mutex > lg(mtx_);
+            LOGINFO("=== Syncing: replica={}(total {}), sync_point_num={} ===", homeobject_replica_count_, max_count,
+                    sync_point);
             ++homeobject_replica_count_;
             if (homeobject_replica_count_ == max_count) {
                 sync_point_num_ = sync_point;
@@ -300,8 +302,6 @@ public:
     void teardown() { sisl::GrpcAsyncClientWorker::shutdown_all(); }
 
     void sync() {
-        LOGINFO("=== Syncing: replica={}(total {}), sync_point_num={} ===", ipc_data_->homeobject_replica_count_, total_replicas_nums_,
-                sync_point_num);
         ipc_data_->sync(sync_point_num++, total_replicas_nums_);
     }
 

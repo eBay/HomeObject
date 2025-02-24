@@ -192,6 +192,9 @@ private:
     std::mutex m_snapshot_lock;
 
     std::unique_ptr<HSHomeObject::SnapshotReceiveHandler> m_snp_rcv_handler;
+
+    std::shared_ptr< homestore::snapshot_context > get_snapshot_context();
+    void set_snapshot_context(std::shared_ptr< homestore::snapshot_context > context);
 };
 
 } // namespace homeobject

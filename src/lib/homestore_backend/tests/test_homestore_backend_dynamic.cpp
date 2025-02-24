@@ -173,10 +173,9 @@ TEST_F(HomeObjectFixture, RestartFollowerDuringBaselineResyncAndTimeout) {
 }
 
 // Restart follower when applying snapshot and timeout
-// FIXME Currently, incremental resync will fail due to bad term when append log entries(root cause is lack of last snapshot metadata)
-// TEST_F(HomeObjectFixture, RestartFollowerWhenApplyingSnapshot) {
-//     RestartFollowerDuringBaselineResyncUsingSigKill(10000, 10000, APPLYING_SNAPSHOT);
-// }
+TEST_F(HomeObjectFixture, RestartFollowerWhenApplyingSnapshot) {
+    RestartFollowerDuringBaselineResyncUsingSigKill(10000, 10000, APPLYING_SNAPSHOT);
+}
 
 // Restart follower during baseline resync and timeout
 TEST_F(HomeObjectFixture, RestartFollowerAfterBaselineResync) {

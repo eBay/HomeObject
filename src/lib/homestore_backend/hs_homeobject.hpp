@@ -41,6 +41,7 @@ private:
     inline static auto const _svc_meta_name = std::string("HomeObject");
     inline static auto const _pg_meta_name = std::string("PGManager");
     inline static auto const _shard_meta_name = std::string("ShardManager");
+    inline static auto const _snp_ctx_meta_name = std::string("SnapshotContext");
     inline static auto const _snp_rcvr_meta_name = std::string("SnapshotReceiver");
     inline static auto const _snp_rcvr_shard_list_meta_name = std::string("SnapshotReceiverShardList");
     static constexpr uint64_t HS_CHUNK_SIZE = 2 * Gi;
@@ -149,10 +150,8 @@ public:
 
         enum class data_type_t : uint32_t { SHARD_INFO = 1, BLOB_INFO = 2 };
 
-    public:
         bool valid() const { return ((magic == data_header_magic) && (version <= data_header_version)); }
 
-    public:
         uint64_t magic{data_header_magic};
         uint8_t version{data_header_version};
         data_type_t type{data_type_t::BLOB_INFO};
@@ -162,6 +161,13 @@ public:
         ShardInfo info;
         homestore::chunk_num_t p_chunk_id;
         homestore::chunk_num_t v_chunk_id;
+    };
+
+    struct snapshot_ctx_superblk {
+        homestore::group_id_t group_id;
+        int64_t lsn;
+        uint64_t data_size;
+        char data[1];
     };
 
     // Since shard list can be quite large and only need to be persisted once, we store it in a separate superblk
@@ -433,6 +439,8 @@ public:
     };
 
 private:
+    std::unordered_map< homestore::group_id_t, homestore::superblk< snapshot_ctx_superblk > > snp_ctx_sbs_;
+    mutable std::shared_mutex snp_sbs_lock_;
     shared< HeapChunkSelector > chunk_selector_;
     unique< HttpManager > http_mgr_;
     bool recovery_done_{false};
@@ -472,6 +480,8 @@ private:
     void on_pg_meta_blk_recover_completed(bool success);
     void on_shard_meta_blk_found(homestore::meta_blk* mblk, sisl::byte_view buf);
     void on_shard_meta_blk_recover_completed(bool success);
+    void on_snp_ctx_meta_blk_found(homestore::meta_blk* mblk, sisl::byte_view buf);
+    void on_snp_ctx_meta_blk_recover_completed(bool success);
     void on_snp_rcvr_meta_blk_found(homestore::meta_blk* mblk, sisl::byte_view buf);
     void on_snp_rcvr_meta_blk_recover_completed(bool success);
     void on_snp_rcvr_shard_list_meta_blk_found(homestore::meta_blk* mblk, sisl::byte_view buf);
@@ -615,8 +625,8 @@ public:
      * extracting and mapping the chunk ID.
      * @return Returns true if the chunk was successfully released, false otherwise.
      */
-
     bool release_chunk_based_on_create_shard_message(sisl::blob const& header);
+
     bool pg_exists(pg_id_t pg_id) const;
 
     cshared< HeapChunkSelector > chunk_selector() const { return chunk_selector_; }
@@ -635,6 +645,11 @@ public:
 
     std::shared_ptr< BlobIndexTable > recover_index_table(homestore::superblk< homestore::index_table_sb >&& sb);
     std::optional< pg_id_t > get_pg_id_with_group_id(homestore::group_id_t group_id) const;
+
+    // Snapshot persistence related
+    sisl::io_blob_safe get_snapshot_sb_data(homestore::group_id_t group_id);
+    void update_snapshot_sb(homestore::group_id_t group_id, std::shared_ptr< homestore::snapshot_context > ctx);
+    void destroy_snapshot_sb(homestore::group_id_t group_id);
 
 private:
     std::shared_ptr< BlobIndexTable > create_index_table();

@@ -92,7 +92,7 @@ void ReplicationStateMachine::on_rollback(int64_t lsn, sisl::blob const& header,
     }
 }
 
-void ReplicationStateMachine::on_restart() { LOGD("ReplicationStateMachine::on_restart");}
+void ReplicationStateMachine::on_restart() { LOGD("ReplicationStateMachine::on_restart"); }
 
 void ReplicationStateMachine::on_error(ReplServiceError error, const sisl::blob& header, const sisl::blob& key,
                                        cintrusive< repl_req_ctx >& ctx) {
@@ -205,59 +205,49 @@ void ReplicationStateMachine::on_destroy(const homestore::group_id_t& group_id) 
 
 homestore::AsyncReplResult<>
 ReplicationStateMachine::create_snapshot(std::shared_ptr< homestore::snapshot_context > context) {
-    // TODO::add create snapshot logic
-    auto ctx = dynamic_pointer_cast< homestore::nuraft_snapshot_context >(context);
-    auto s = ctx->nuraft_snapshot();
-
     std::lock_guard lk(m_snapshot_lock);
-    if (m_snapshot_context != nullptr) {
-        auto current = dynamic_pointer_cast< homestore::nuraft_snapshot_context >(m_snapshot_context)->nuraft_snapshot();
-        if (s->get_last_log_idx() < current->get_last_log_idx()) {
-            LOGI("Skipping create snapshot new idx/term: {}/{}  current idx/term: {}/{}", s->get_last_log_idx(),
-                 s->get_last_log_term(), current->get_last_log_idx(), current->get_last_log_term());
-            return folly::makeSemiFuture< homestore::ReplResult< folly::Unit > >(folly::Unit{});
-        }
+    if (get_snapshot_context() != nullptr && context->get_lsn() < m_snapshot_context->get_lsn()) {
+        LOGI("Skipping create snapshot, new snapshot lsn: {} is less than current snapshot lsn: {}", context->get_lsn(),
+             m_snapshot_context->get_lsn());
+        return folly::makeSemiFuture< homestore::ReplResult< folly::Unit > >(folly::Unit{});
     }
 
-    LOGI("create snapshot last_log_idx: {} last_log_term: {}", s->get_last_log_idx(), s->get_last_log_term());
-    m_snapshot_context = context;
+    LOGI("create snapshot with lsn: {}", context->get_lsn());
+    set_snapshot_context(context);
     return folly::makeSemiFuture< homestore::ReplResult< folly::Unit > >(folly::Unit{});
 }
 
 bool ReplicationStateMachine::apply_snapshot(std::shared_ptr< homestore::snapshot_context > context) {
-    #ifdef _PRERELEASE
-        auto delay = iomgr_flip::instance()->get_test_flip< long >("simulate_apply_snapshot_delay");
-        LOGD("simulate_apply_snapshot_delay flip, triggered: {}", delay.has_value());
-        if (delay) {
-            LOGI("Simulating apply snapshot with delay, delay:{}", delay.get());
-            std::this_thread::sleep_for(std::chrono::milliseconds(delay.get()));
-        }
-    #endif
-    // TODO persist snapshot
+#ifdef _PRERELEASE
+    auto delay = iomgr_flip::instance()->get_test_flip< long >("simulate_apply_snapshot_delay");
+    LOGD("simulate_apply_snapshot_delay flip, triggered: {}", delay.has_value());
+    if (delay) {
+        LOGI("Simulating apply snapshot with delay, delay:{}", delay.get());
+        std::this_thread::sleep_for(std::chrono::milliseconds(delay.get()));
+    }
+#endif
     m_snp_rcv_handler->destroy_context();
 
     std::lock_guard lk(m_snapshot_lock);
-    m_snapshot_context = context;
+    set_snapshot_context(context);
     return true;
 }
 
 std::shared_ptr< homestore::snapshot_context > ReplicationStateMachine::last_snapshot() {
     std::lock_guard lk(m_snapshot_lock);
-    auto snp = m_snapshot_context;
-    return snp;
+    return get_snapshot_context();
 }
 
 int ReplicationStateMachine::read_snapshot_obj(std::shared_ptr< homestore::snapshot_context > context,
                                                std::shared_ptr< homestore::snapshot_obj > snp_obj) {
     HSHomeObject::PGBlobIterator* pg_iter = nullptr;
-    auto s = dynamic_pointer_cast< homestore::nuraft_snapshot_context >(context)->nuraft_snapshot();
 
     if (snp_obj->user_ctx == nullptr) {
         // Create the pg blob iterator for the first time.
         pg_iter = new HSHomeObject::PGBlobIterator(*home_object_, repl_dev()->group_id(), context->get_lsn());
         snp_obj->user_ctx = (void*)pg_iter;
         LOGD("Allocated new pg blob iterator {}, group={}, lsn={}", static_cast< void* >(pg_iter),
-             boost::uuids::to_string(repl_dev()->group_id()), s->get_last_log_idx());
+             boost::uuids::to_string(repl_dev()->group_id()), context->get_lsn());
     } else {
         pg_iter = r_cast< HSHomeObject::PGBlobIterator* >(snp_obj->user_ctx);
     }
@@ -274,9 +264,7 @@ int ReplicationStateMachine::read_snapshot_obj(std::shared_ptr< homestore::snaps
     // We use pg blob iterator to go over all the blobs in all the shards in that PG.
     // Once all the shards are done, follower will return next obj Id = LAST_OBJ_ID(ULLONG_MAX) as a end marker,
     // leader will stop sending the snapshot data.
-    auto log_str = fmt::format("group={}, term={}, lsn={},",
-                               boost::uuids::to_string(repl_dev()->group_id()), s->get_last_log_term(),
-                               s->get_last_log_idx());
+    auto log_str = fmt::format("group={}, lsn={},", uuids::to_string(repl_dev()->group_id()), context->get_lsn());
     if (snp_obj->offset == LAST_OBJ_ID) {
         // No more shards to read, baseline resync is finished after this.
         snp_obj->is_last_obj = true;
@@ -339,34 +327,33 @@ void ReplicationStateMachine::write_snapshot_obj(std::shared_ptr< homestore::sna
         }
     }
 
-    auto s = dynamic_pointer_cast< homestore::nuraft_snapshot_context >(context)->nuraft_snapshot();
     auto obj_id = objId(snp_obj->offset);
-    auto log_suffix = fmt::format("group={} term={} lsn={} shard={} batch_num={} size={}",
-                                  uuids::to_string(r_dev->group_id()), s->get_last_log_term(), s->get_last_log_idx(),
-                                  obj_id.shard_seq_num, obj_id.batch_id, snp_obj->blob.size());
+    auto log_suffix = fmt::format("group={} lsn={} shard={} batch_num={} size={}", uuids::to_string(r_dev->group_id()),
+                                  context->get_lsn(), obj_id.shard_seq_num, obj_id.batch_id, snp_obj->blob.size());
 
     if (snp_obj->is_last_obj) {
         LOGD("Write snapshot reached is_last_obj true {}", log_suffix);
+        set_snapshot_context(context); // Update the snapshot context in case apply_snapshot is not called
         return;
     }
 
     // Check message integrity
 #ifdef _PRERELEASE
     if (iomgr_flip::instance()->test_flip("state_machine_write_corrupted_data")) {
-        LOGW("Simulating writing corrupted snapshot data, lsn:{}, obj_id {} shard {} batch {}", s->get_last_log_idx(),
+        LOGW("Simulating writing corrupted snapshot data, lsn:{}, obj_id {} shard {} batch {}", context->get_lsn(),
              obj_id.value, obj_id.shard_seq_num, obj_id.batch_id);
         return;
     }
 #endif
     auto header = r_cast< const SyncMessageHeader* >(snp_obj->blob.cbytes());
     if (header->corrupted()) {
-        LOGE("corrupted message in write_snapshot_data, lsn:{}, obj_id {} shard {} batch {}", s->get_last_log_idx(),
+        LOGE("corrupted message in write_snapshot_data, lsn:{}, obj_id {} shard {} batch {}", context->get_lsn(),
              obj_id.value, obj_id.shard_seq_num, obj_id.batch_id);
         return;
     }
     if (auto payload_size = snp_obj->blob.size() - sizeof(SyncMessageHeader); payload_size != header->payload_size) {
         LOGE("payload size mismatch in write_snapshot_data {} != {}, lsn:{}, obj_id {} shard {} batch {}", payload_size,
-             header->payload_size, s->get_last_log_idx(), obj_id.value, obj_id.shard_seq_num, obj_id.batch_id);
+             header->payload_size, context->get_lsn(), obj_id.value, obj_id.shard_seq_num, obj_id.batch_id);
         return;
     }
     auto data_buf = snp_obj->blob.cbytes() + sizeof(SyncMessageHeader);
@@ -400,7 +387,7 @@ void ReplicationStateMachine::write_snapshot_obj(std::shared_ptr< homestore::sna
         auto ret = m_snp_rcv_handler->process_pg_snapshot_data(*pg_data);
         if (ret) {
             // Do not proceed, will request for resending the PG data
-            LOGE("Failed to process PG snapshot data lsn:{} obj_id {} shard {} batch {}, err {}", s->get_last_log_idx(),
+            LOGE("Failed to process PG snapshot data lsn:{} obj_id {} shard {} batch {}, err {}", context->get_lsn(),
                  obj_id.value, obj_id.shard_seq_num, obj_id.batch_id, ret);
             return;
         }
@@ -420,8 +407,8 @@ void ReplicationStateMachine::write_snapshot_obj(std::shared_ptr< homestore::sna
         auto ret = m_snp_rcv_handler->process_shard_snapshot_data(*shard_data);
         if (ret) {
             // Do not proceed, will request for resending the shard data
-            LOGE("Failed to process shard snapshot data lsn:{} obj_id {} shard {} batch {}, err {}",
-                 s->get_last_log_idx(), obj_id.value, obj_id.shard_seq_num, obj_id.batch_id, ret);
+            LOGE("Failed to process shard snapshot data lsn:{} obj_id {} shard {} batch {}, err {}", context->get_lsn(),
+                 obj_id.value, obj_id.shard_seq_num, obj_id.batch_id, ret);
             return;
         }
         // Request for the next batch
@@ -440,7 +427,7 @@ void ReplicationStateMachine::write_snapshot_obj(std::shared_ptr< homestore::sna
         m_snp_rcv_handler->process_blobs_snapshot_data(*blob_batch, obj_id.batch_id, blob_batch->is_last_batch());
     if (ret) {
         // Do not proceed, will request for resending the current blob batch
-        LOGE("Failed to process blob snapshot data lsn:{} obj_id {} shard {} batch {}, err {}", s->get_last_log_idx(),
+        LOGE("Failed to process blob snapshot data lsn:{} obj_id {} shard {} batch {}, err {}", context->get_lsn(),
              obj_id.value, obj_id.shard_seq_num, obj_id.batch_id, ret);
         return;
     }
@@ -471,5 +458,92 @@ void ReplicationStateMachine::free_user_snp_ctx(void*& user_snp_ctx) {
          boost::uuids::to_string(pg_iter->group_id_));
     delete pg_iter;
     user_snp_ctx = nullptr;
+}
+
+std::shared_ptr< homestore::snapshot_context > ReplicationStateMachine::get_snapshot_context() {
+    if (m_snapshot_context == nullptr) {
+        // Try to load from snapshot superblk first
+        auto sb_data = home_object_->get_snapshot_sb_data(repl_dev()->group_id());
+        if (sb_data.size() > 0) {
+            m_snapshot_context = repl_dev()->deserialize_snapshot_context(sb_data);
+            LOGI("Loaded previous snapshot from superblk, lsn:{}", m_snapshot_context->get_lsn());
+        }
+    }
+    return m_snapshot_context;
+}
+
+void ReplicationStateMachine::set_snapshot_context(std::shared_ptr< homestore::snapshot_context > context) {
+    home_object_->update_snapshot_sb(repl_dev()->group_id(), context);
+    m_snapshot_context = context;
+}
+
+sisl::io_blob_safe HSHomeObject::get_snapshot_sb_data(homestore::group_id_t group_id) {
+    std::shared_lock lk(snp_sbs_lock_);
+    auto it = snp_ctx_sbs_.find(group_id);
+    if (it == snp_ctx_sbs_.end()) {
+        LOGD("Snapshot context superblk not found for group_id {}", group_id);
+        return {};
+    }
+
+    auto sb_data = sisl::io_blob_safe(it->second->data_size);
+    std::copy_n(it->second->data, it->second->data_size, reinterpret_cast< char* >(sb_data.bytes()));
+    return sb_data;
+}
+
+void HSHomeObject::update_snapshot_sb(homestore::group_id_t group_id,
+                                      std::shared_ptr< homestore::snapshot_context > ctx) {
+    std::unique_lock lk(snp_sbs_lock_);
+    auto it = snp_ctx_sbs_.find(group_id);
+    if (it != snp_ctx_sbs_.end()) {
+        LOGD("Existing snapshot context superblk destroyed for group_id {}, lsn {}", group_id, it->second->lsn);
+        it->second.destroy();
+    } else {
+        it = snp_ctx_sbs_.insert({group_id, homestore::superblk< snapshot_ctx_superblk >(_snp_ctx_meta_name)}).first;
+    }
+    auto data = ctx->serialize();
+    it->second.create(sizeof(snapshot_ctx_superblk) - sizeof(char) + data.size());
+    it->second->group_id = group_id;
+    it->second->lsn = ctx->get_lsn();
+    it->second->data_size = data.size();
+    std::copy_n(data.cbytes(), data.size(), it->second->data);
+    it->second.write();
+    LOGI("Snapshot context superblk updated for group_id {}, lsn {}", group_id, ctx->get_lsn());
+}
+
+void HSHomeObject::destroy_snapshot_sb(homestore::group_id_t group_id) {
+    std::unique_lock lk(snp_sbs_lock_);
+    auto it = snp_ctx_sbs_.find(group_id);
+    if (it == snp_ctx_sbs_.end()) {
+        LOGI("Snapshot context superblk not found for group_id {}", group_id);
+        return;
+    }
+
+    it->second.destroy();
+    snp_ctx_sbs_.erase(it);
+    LOGI("Snapshot context superblk destroyed for group_id {}", group_id);
+}
+
+void HSHomeObject::on_snp_ctx_meta_blk_found(homestore::meta_blk* mblk, sisl::byte_view buf) {
+    LOGI("Found snapshot context meta blk");
+    homestore::superblk< snapshot_ctx_superblk > sb(_snp_ctx_meta_name);
+    sb.load(buf, mblk);
+
+    std::unique_lock lk(snp_sbs_lock_);
+    if (auto it = snp_ctx_sbs_.find(sb->group_id); it != snp_ctx_sbs_.end()) {
+        LOGWARN("Found duplicate snapshot context superblk for group_id {}, current lsn {}, existing lsn {}",
+                sb->group_id, sb->lsn, it->second->lsn);
+        if (it->second->lsn <= sb->lsn) {
+            LOGI("Replacing existing snapshot context superblk with new one");
+            it->second.destroy();
+        } else {
+            LOGI("Keeping existing snapshot context superblk");
+            return;
+        }
+    }
+    snp_ctx_sbs_[sb->group_id] = std::move(sb);
+}
+
+void HSHomeObject::on_snp_ctx_meta_blk_recover_completed(bool success) {
+    LOGI("Snapshot context meta blk recover completed");
 }
 } // namespace homeobject
