@@ -47,33 +47,42 @@ settings_gen_cpp(
     resync_blob_data.fbs
   )
 
+# Unit test objects
 add_subdirectory(tests)
 
-add_executable (homestore_test)
-target_sources(homestore_test PRIVATE
-    $<TARGET_OBJECTS:homestore_tests>
-)
-target_link_libraries(homestore_test PUBLIC
-    homeobject_homestore
-    ${COMMON_TEST_DEPS}
-)
-add_test(NAME HomestoreTest COMMAND homestore_test -csv error --executor immediate --config_path ./ --override_config homestore_config.consensus.snapshot_freq_distance:0)
-set_property(TEST HomestoreTest PROPERTY RUN_SERIAL 1)
+# Basic tests
+add_executable(homestore_test_pg)
+target_sources(homestore_test_pg PRIVATE $<TARGET_OBJECTS:homestore_tests_pg>)
+target_link_libraries(homestore_test_pg PUBLIC homeobject_homestore ${COMMON_TEST_DEPS})
+add_test(NAME HomestoreTestPg COMMAND homestore_test_pg -csv error --executor immediate --config_path ./
+        --override_config homestore_config.consensus.snapshot_freq_distance:0)
 
-add_executable (homestore_test_dynamic)
-target_sources(homestore_test_dynamic PRIVATE
-    $<TARGET_OBJECTS:homestore_tests_dynamic>
-)
-target_link_libraries(homestore_test_dynamic PUBLIC
-    homeobject_homestore
-    ${COMMON_TEST_DEPS}
-)
+add_executable(homestore_test_shard)
+target_sources(homestore_test_shard PRIVATE $<TARGET_OBJECTS:homestore_tests_shard>)
+target_link_libraries(homestore_test_shard PUBLIC homeobject_homestore ${COMMON_TEST_DEPS})
+add_test(NAME HomestoreTestShard COMMAND homestore_test_shard -csv error --executor immediate --config_path ./
+        --override_config homestore_config.consensus.snapshot_freq_distance:0)
 
+add_executable(homestore_test_blob)
+target_sources(homestore_test_blob PRIVATE $<TARGET_OBJECTS:homestore_tests_blob>)
+target_link_libraries(homestore_test_blob PUBLIC homeobject_homestore ${COMMON_TEST_DEPS})
+add_test(NAME HomestoreTestBlob COMMAND homestore_test_blob -csv error --executor immediate --config_path ./
+        --override_config homestore_config.consensus.snapshot_freq_distance:0)
+
+add_executable(homestore_test_misc)
+target_sources(homestore_test_misc PRIVATE $<TARGET_OBJECTS:homestore_tests_misc>)
+target_link_libraries(homestore_test_misc PUBLIC homeobject_homestore ${COMMON_TEST_DEPS})
+add_test(NAME HomestoreTestMisc COMMAND homestore_test_misc -csv error --executor immediate --config_path ./
+        --override_config homestore_config.consensus.snapshot_freq_distance:0)
+
+# Dynamic tests
+add_executable(homestore_test_dynamic)
+target_sources(homestore_test_dynamic PRIVATE $<TARGET_OBJECTS:homestore_tests_dynamic>)
+target_link_libraries(homestore_test_dynamic PUBLIC homeobject_homestore ${COMMON_TEST_DEPS})
 add_test(NAME HomestoreTestReplaceMember
         COMMAND homestore_test_dynamic -csv error --executor immediate --config_path ./
         --override_config homestore_config.consensus.snapshot_freq_distance:0
         --gtest_filter=HomeObjectFixture.ReplaceMember)
-
 # To test both baseline & incremental resync functionality, we use 13 to minimize the likelihood of it being a divisor of the total LSN (currently 30)
 add_test(NAME HomestoreTestReplaceMemberWithBaselineResync
         COMMAND homestore_test_dynamic -csv error --executor immediate --config_path ./
@@ -81,14 +90,12 @@ add_test(NAME HomestoreTestReplaceMemberWithBaselineResync
         --override_config homestore_config.consensus.num_reserved_log_items=13
         --override_config homestore_config.consensus.snapshot_sync_ctx_timeout_ms=5000
         --gtest_filter=HomeObjectFixture.ReplaceMember)
-
 add_test(NAME HomestoreResyncTestWithFollowerRestart
         COMMAND homestore_test_dynamic -csv error --executor immediate --config_path ./
         --override_config homestore_config.consensus.snapshot_freq_distance:13
         --override_config homestore_config.consensus.num_reserved_log_items=13
         --override_config homestore_config.consensus.snapshot_sync_ctx_timeout_ms=5000
         --gtest_filter=HomeObjectFixture.RestartFollower*)
-
 add_test(NAME HomestoreResyncTestWithLeaderRestart
         COMMAND homestore_test_dynamic -csv error --executor immediate --config_path ./
         --override_config homestore_config.consensus.snapshot_freq_distance:13
