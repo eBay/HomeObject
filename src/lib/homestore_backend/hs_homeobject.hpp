@@ -79,9 +79,9 @@ private:
 public:
 #pragma pack(1)
     struct pg_members {
-        static constexpr uint64_t max_name_len = 32;
         peer_id_t id;
-        char name[max_name_len];
+        // PGMember::max_name_len is the actual maximum string length, adding 1 for the null terminator.
+        char name[PGMember::max_name_len + 1];
         int32_t priority{0};
     };
 
