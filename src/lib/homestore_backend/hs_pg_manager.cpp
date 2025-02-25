@@ -275,7 +275,10 @@ void HSHomeObject::on_pg_replace_member(homestore::group_id_t group_id, const re
             pg_members* sb_members = hs_pg->pg_sb_->get_pg_members_mutable();
             for (auto const& m : pg->pg_info_.members) {
                 sb_members[i].id = m.id;
-                std::strncpy(sb_members[i].name, m.name.c_str(), std::min(m.name.size(), pg_members::max_name_len));
+                DEBUG_ASSERT(m.name.size() <= PGMember::max_name_len, "member name exceeds max len, name={}", m.name);
+                auto name_len = std::min(m.name.size(), PGMember::max_name_len);
+                std::strncpy(sb_members[i].name, m.name.c_str(), name_len);
+                sb_members[i].name[name_len] = '\0';
                 sb_members[i].priority = m.priority;
                 ++i;
             }
@@ -517,7 +520,10 @@ HSHomeObject::HS_PG::HS_PG(PGInfo info, shared< homestore::ReplDev > rdev, share
     pg_members* pg_sb_members = pg_sb_->get_pg_members_mutable();
     for (auto const& m : pg_info_.members) {
         pg_sb_members[i].id = m.id;
-        std::strncpy(pg_sb_members[i].name, m.name.c_str(), std::min(m.name.size(), pg_members::max_name_len));
+        DEBUG_ASSERT(m.name.size() <= PGMember::max_name_len, "member name exceeds max len, name={}", m.name);
+        auto name_len = std::min(m.name.size(), PGMember::max_name_len);
+        std::strncpy(pg_sb_members[i].name, m.name.c_str(), name_len);
+        pg_sb_members[i].name[name_len] = '\0';
         pg_sb_members[i].priority = m.priority;
         ++i;
     }
