@@ -157,7 +157,7 @@ public:
         data_type_t type{data_type_t::BLOB_INFO};
     };
 
-    struct shard_info_superblk : public DataHeader {
+    struct shard_info_superblk : DataHeader {
         ShardInfo info;
         homestore::chunk_num_t p_chunk_id;
         homestore::chunk_num_t v_chunk_id;
@@ -301,7 +301,7 @@ public:
 #pragma pack(1)
     // Every blob payload stored in disk as blob header | blob data | blob metadata(optional) | padding.
     // Padding of zeroes is added to make sure the whole payload be aligned to device block size.
-    struct BlobHeader : public DataHeader {
+    struct BlobHeader : DataHeader {
         static constexpr uint64_t blob_max_hash_len = 32;
 
         enum class HashAlgorithm : uint8_t {
@@ -312,6 +312,7 @@ public:
         };
 
         HashAlgorithm hash_algorithm;
+        mutable uint8_t header_hash[blob_max_hash_len]{};
         uint8_t hash[blob_max_hash_len]{};
         shard_id_t shard_id;
         blob_id_t blob_id;
@@ -324,6 +325,46 @@ public:
             return fmt::format("magic={:#x} version={} shard={:#x} blob_size={} user_size={} algo={} hash={:np}\n",
                                magic, version, shard_id, blob_size, user_key_size, (uint8_t)hash_algorithm,
                                spdlog::to_hex(hash, hash + blob_max_hash_len));
+        }
+
+        bool valid() const {
+            if (!DataHeader::valid()) { return false; }
+
+            uint8_t hash_arr[blob_max_hash_len];
+            std::memcpy(hash_arr, header_hash, blob_max_hash_len);
+            if (!_do_seal()) {
+                std::memcpy(header_hash, hash_arr, blob_max_hash_len);
+                return false;
+            }
+
+            bool hash_valid = std::memcmp(header_hash, hash_arr, blob_max_hash_len) == 0;
+            std::memcpy(header_hash, hash_arr, blob_max_hash_len);
+            return hash_valid;
+        }
+
+        void seal() const {
+            if (!_do_seal()) {
+                DEBUG_ASSERT(false, "Invalid hash algorithm"); // Not implemented
+            }
+        }
+
+    private:
+        bool _do_seal() const {
+            switch (hash_algorithm) {
+            case HashAlgorithm::NONE:
+                return true;
+            case HashAlgorithm::CRC32: {
+                std::memset(header_hash, 0, blob_max_hash_len);
+                uint32_t computed_hash = crc32_ieee(0, (uint8_t*)this, sizeof(BlobHeader));
+                std::memcpy(header_hash, &computed_hash, sizeof(uint32_t));
+                return true;
+            }
+            case HashAlgorithm::MD5:
+            case HashAlgorithm::SHA1:
+            default:
+                break; // Not implemented
+            }
+            return false;
         }
     };
 #pragma pack()

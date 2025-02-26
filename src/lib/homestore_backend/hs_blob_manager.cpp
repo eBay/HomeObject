@@ -156,6 +156,7 @@ BlobManager::AsyncResult< blob_id_t > HSHomeObject::_put_blob(ShardInfo const& s
     compute_blob_payload_hash(req->blob_header()->hash_algorithm, blob.body.cbytes(), blob_size,
                               (uint8_t*)blob.user_key.data(), blob.user_key.size(), req->blob_header()->hash,
                               BlobHeader::blob_max_hash_len);
+    req->blob_header()->seal();
 
     // Add blob body to the request
     req->add_data_sg(std::move(blob.body));
@@ -360,8 +361,7 @@ HSHomeObject::blob_put_get_blk_alloc_hints(sisl::blob const& header, cintrusive<
 
     auto hs_pg = get_hs_pg(msg_header->pg_id);
     if (hs_pg == nullptr) {
-        LOGW("Received a blob_put on an unknown pg:{}, underlying engine will retry this later",
-             msg_header->pg_id);
+        LOGW("Received a blob_put on an unknown pg:{}, underlying engine will retry this later", msg_header->pg_id);
         return folly::makeUnexpected(homestore::ReplServiceError::RESULT_NOT_EXIST_YET);
     }
 

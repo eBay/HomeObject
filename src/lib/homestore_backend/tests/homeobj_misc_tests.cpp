@@ -303,6 +303,7 @@ TEST_F(HomeObjectFixture, SnapshotReceiveHandler) {
                                                      reinterpret_cast< uint8_t* >(blob.user_key.data()),
                                                      blob.user_key.size(), hdr.hash,
                                                      HSHomeObject::BlobHeader::blob_max_hash_len);
+                hdr.seal();
 
                 std::memcpy(blob_raw.bytes(), &hdr, sizeof(HSHomeObject::BlobHeader));
                 if (!blob.user_key.empty()) {
