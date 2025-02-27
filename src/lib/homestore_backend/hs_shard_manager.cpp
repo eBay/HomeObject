@@ -543,6 +543,7 @@ void HSHomeObject::destroy_shards(pg_id_t pg_id) {
         // erase shard in shard map
         _shard_map.erase(shard->info.id);
     }
+    LOGD("Shards in pg {} have all been destroyed", pg_id);
 }
 
 HSHomeObject::HS_Shard::HS_Shard(ShardInfo shard_info, homestore::chunk_num_t p_chunk_id,

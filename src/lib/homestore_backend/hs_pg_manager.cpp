@@ -308,6 +308,7 @@ std::optional< pg_id_t > HSHomeObject::get_pg_id_with_group_id(homestore::group_
 }
 
 void HSHomeObject::pg_destroy(pg_id_t pg_id) {
+    LOGI("Destroying pg {}", pg_id);
     mark_pg_destroyed(pg_id);
     destroy_shards(pg_id);
     destroy_hs_resources(pg_id);
@@ -331,6 +332,7 @@ void HSHomeObject::mark_pg_destroyed(pg_id_t pg_id) {
     }
     hs_pg->pg_sb_->state = PGState::DESTROYED;
     hs_pg->pg_sb_.write();
+    LOGD("PG {} is marked as destroyed", pg_id);
 }
 
 void HSHomeObject::destroy_hs_resources(pg_id_t pg_id) {
@@ -367,6 +369,9 @@ void HSHomeObject::destroy_pg_index_table(pg_id_t pg_id) {
         index_table_pg_map_.erase(uuid_str);
         hs()->index_service().remove_index_table(hs_pg->index_table_);
         hs_pg->index_table_->destroy();
+        LOGD("PG {} index table is destroyed", pg_id);
+    } else {
+        LOGD("PG {} index table is not found, skip destroy", pg_id);
     }
 }
 

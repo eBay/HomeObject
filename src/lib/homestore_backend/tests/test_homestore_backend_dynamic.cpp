@@ -292,6 +292,12 @@ void HomeObjectFixture::RestartFollowerDuringBaselineResyncUsingSigKill(uint64_t
             // SyncPoint 1(new member): kill itself.
             g_helper->sync();
             kill();
+        } else if (out_member_id == g_helper->my_replica_id()) {
+            LOGINFO("Destroying PG on removed member");
+            while (am_i_in_pg(pg_id)) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(500));
+                LOGINFO("Old member is waiting to leave pg {}", pg_id);
+            }
         }
 
         // SyncPoint 1(others): wait for the new member stop, then P0 will help start it.
@@ -449,6 +455,12 @@ void HomeObjectFixture::RestartLeaderDuringBaselineResyncUsingSigKill(uint64_t f
             g_helper->sync();
             LOGINFO("going to kill leader");
             kill();
+        } else if (out_member_id == g_helper->my_replica_id()) {
+            LOGINFO("Destroying PG on removed member");
+            while (am_i_in_pg(pg_id)) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(500));
+                LOGINFO("Old member is waiting to leave pg {}", pg_id);
+            }
         }
         // SyncPoint 1: tell leader to kill
         g_helper->sync();

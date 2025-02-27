@@ -50,7 +50,7 @@ class HSReplTestHelper {
 protected:
     struct IPCData {
         void sync(uint64_t sync_point, uint32_t max_count) {
-            std::unique_lock< bip::interprocess_mutex > lg(mtx_);
+            std::unique_lock lg(mtx_);
             LOGINFO("=== Syncing: replica={}(total {}), sync_point_num={} ===", homeobject_replica_count_, max_count,
                     sync_point);
             ++homeobject_replica_count_;
@@ -66,21 +66,21 @@ protected:
         }
 
         void set_uint64_id(uint64_t input_uint64_id) {
-            std::unique_lock< bip::interprocess_mutex > lg(mtx_);
+            std::unique_lock lg(mtx_);
             uint64_id_ = input_uint64_id;
         }
 
         uint64_t get_uint64_id() {
-            std::unique_lock< bip::interprocess_mutex > lg(mtx_);
+            std::unique_lock lg(mtx_);
             return uint64_id_;
         }
 
         void set_auxiliary_uint64_id(uint64_t input_auxiliary_uint64_id) {
-            std::unique_lock< bip::interprocess_mutex > lg(mtx_);
+            std::unique_lock lg(mtx_);
             auxiliary_uint64_id_ = input_auxiliary_uint64_id;
         }
         uint64_t get_auxiliary_uint64_id() {
-            std::unique_lock< bip::interprocess_mutex > lg(mtx_);
+            std::unique_lock lg(mtx_);
             return auxiliary_uint64_id_;
         }
 
@@ -201,6 +201,7 @@ public:
 
             for (uint32_t i{1}; i < num_replicas; ++i) {
                 spawn_homeobject_process(i, false);
+                sleep(1); // Don't spawn processes at the same time to avoid conflict on updating config files
             }
         } else {
             shm_ = std::make_unique< bip::shared_memory_object >(bip::open_only, "HO_repl_test_shmem", bip::read_write);
@@ -243,6 +244,9 @@ public:
             if ("" != pattern) { fmt::format_to(std::back_inserter(cmd_line), " --gtest_filter={}", pattern); }
         }
         for (int j{1}; j < (int)args_.size(); ++j) {
+            if (is_restart && args_[j].find("--gtest_filter") != std::string::npos) {
+                continue; // Ignore existing gtest_filter
+            }
             fmt::format_to(std::back_inserter(cmd_line), " {}", args_[j]);
         }
         LOGINFO("Spawning Homeobject cmd: {}", cmd_line);
@@ -303,6 +307,13 @@ public:
 
     void sync() {
         ipc_data_->sync(sync_point_num++, total_replicas_nums_);
+    }
+
+    // Bump sync point to avoid interference across different test cases
+    void bump_sync_point_and_sync() {
+        static constexpr uint64_t sync_point_gap_per_test = 1000;
+        sync_point_num = (sync_point_num / sync_point_gap_per_test + 1) * sync_point_gap_per_test;
+        sync();
     }
 
     void set_uint64_id(uint64_t uint64_id) { ipc_data_->set_uint64_id(uint64_id); }
