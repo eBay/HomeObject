@@ -38,7 +38,11 @@ public:
     void SetUp() override {
         HSHomeObject::_hs_chunk_size = 20 * Mi;
         _obj_inst = std::dynamic_pointer_cast< HSHomeObject >(g_helper->build_new_homeobject());
-        g_helper->sync();
+        if (!g_helper->is_current_testcase_restarted()) {
+            g_helper->bump_sync_point_and_sync();
+        } else {
+            g_helper->sync();
+        }
     }
 
     void TearDown() override {
