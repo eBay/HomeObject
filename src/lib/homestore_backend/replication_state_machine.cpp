@@ -226,7 +226,7 @@ bool ReplicationStateMachine::apply_snapshot(std::shared_ptr< homestore::snapsho
         std::this_thread::sleep_for(std::chrono::milliseconds(delay.get()));
     }
 #endif
-    m_snp_rcv_handler->destroy_context();
+    m_snp_rcv_handler->destroy_context_and_metrics();
 
     std::lock_guard lk(m_snapshot_lock);
     set_snapshot_context(context);
@@ -321,7 +321,7 @@ void ReplicationStateMachine::write_snapshot_obj(std::shared_ptr< homestore::sna
     auto r_dev = repl_dev();
     if (!m_snp_rcv_handler) {
         m_snp_rcv_handler = std::make_unique< HSHomeObject::SnapshotReceiveHandler >(*home_object_, r_dev);
-        if (m_snp_rcv_handler->load_prev_context()) {
+        if (m_snp_rcv_handler->load_prev_context_and_metrics()) {
             LOGI("Reloaded previous snapshot context, lsn:{} pg_id:{} next_shard:{}", context->get_lsn(),
                  m_snp_rcv_handler->get_context_pg_id(), m_snp_rcv_handler->get_next_shard());
         }
@@ -330,6 +330,7 @@ void ReplicationStateMachine::write_snapshot_obj(std::shared_ptr< homestore::sna
     auto obj_id = objId(snp_obj->offset);
     auto log_suffix = fmt::format("group={} lsn={} shard={} batch_num={} size={}", uuids::to_string(r_dev->group_id()),
                                   context->get_lsn(), obj_id.shard_seq_num, obj_id.batch_id, snp_obj->blob.size());
+    LOGI("received snapshot obj, {}", log_suffix);
 
     if (snp_obj->is_last_obj) {
         LOGD("Write snapshot reached is_last_obj true {}", log_suffix);
@@ -382,7 +383,7 @@ void ReplicationStateMachine::write_snapshot_obj(std::shared_ptr< homestore::sna
             home_object_->pg_destroy(pg_data->pg_id());
         }
         LOGI("reset context from lsn:{} to lsn:{}", m_snp_rcv_handler->get_context_lsn(), context->get_lsn());
-        m_snp_rcv_handler->reset_context(context->get_lsn(), pg_data->pg_id());
+        m_snp_rcv_handler->reset_context_and_metrics(context->get_lsn(), pg_data->pg_id());
 
         auto ret = m_snp_rcv_handler->process_pg_snapshot_data(*pg_data);
         if (ret) {

@@ -14,6 +14,12 @@
 #include "lib/homestore_backend/hs_homeobject.hpp"
 #include "bits_generator.hpp"
 #include "hs_repl_test_helper.hpp"
+#include <iomgr/iomgr_config_generated.h>
+#include <iomgr/http_server.hpp>
+#include <sisl/settings/settings.hpp>
+
+SETTINGS_INIT(iomgrcfg::IomgrSettings, iomgr_config);
+#define IM_SETTINGS_FACTORY() SETTINGS_FACTORY(iomgr_config)
 
 using namespace std::chrono_literals;
 
@@ -36,8 +42,14 @@ public:
     HomeObjectFixture() : rand_blob_size{1u, 16 * 1024}, rand_user_key_size{1u, 1024} {}
 
     void SetUp() override {
+        IM_SETTINGS_FACTORY().modifiable_settings([](auto& s) {
+            s.io_env.http_port = 5000 + g_helper->replica_num();
+            LOGD("setup http port to {}", s.io_env.http_port);
+        });
         HSHomeObject::_hs_chunk_size = 20 * Mi;
         _obj_inst = std::dynamic_pointer_cast< HSHomeObject >(g_helper->build_new_homeobject());
+        //Used to export metrics, it should be called after init_homeobject
+        if (SISL_OPTIONS["enable_http"].as<bool>()) { g_helper->app->start_http_server(); }
         if (!g_helper->is_current_testcase_restarted()) {
             g_helper->bump_sync_point_and_sync();
         } else {
@@ -47,6 +59,7 @@ public:
 
     void TearDown() override {
         g_helper->sync();
+        g_helper->app->stop_http_server();
         _obj_inst.reset();
         g_helper->delete_homeobject();
     }

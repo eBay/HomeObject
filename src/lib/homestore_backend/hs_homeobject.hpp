@@ -170,11 +170,54 @@ public:
         char data[1];
     };
 
+    struct durable_snapshot_progress {
+        uint64_t start_time{0};
+        uint64_t total_blobs{0};
+        uint64_t total_bytes{0};
+        uint64_t total_shards{0};
+        uint64_t complete_blobs{0};
+        uint64_t complete_bytes{0};
+        uint64_t complete_shards{0};
+        uint64_t corrupted_blobs{0};
+    };
+
+    struct snapshot_progress {
+        uint64_t start_time{0};
+        uint64_t total_blobs{0};
+        uint64_t total_bytes{0};
+        uint64_t total_shards{0};
+        uint64_t complete_blobs{0};
+        uint64_t complete_bytes{0};
+        uint64_t complete_shards{0};
+        // The count of the blobs which have been corrupted on the leader side.
+        uint64_t corrupted_blobs{0};
+        // Record the stats of the current batch to avoid double counting.
+        uint64_t cur_shard_total_blobs{0};
+        uint64_t cur_shard_complete_blobs{0};
+        // Used to handle the retried batch message.
+        uint64_t cur_batch_blobs{0};
+        uint64_t cur_batch_bytes{0};
+        uint64_t error_count{0};
+
+        snapshot_progress() = default;
+        explicit snapshot_progress(durable_snapshot_progress p) {
+            start_time = p.start_time;
+            total_blobs = p.total_blobs;
+            total_bytes = p.total_bytes;
+            total_shards = p.total_shards;
+            complete_blobs = p.complete_blobs;
+            complete_bytes = p.complete_bytes;
+            complete_shards = p.complete_shards;
+            corrupted_blobs = p.corrupted_blobs;
+        }
+    };
+
     // Since shard list can be quite large and only need to be persisted once, we store it in a separate superblk
     struct snapshot_rcvr_info_superblk {
         shard_id_t shard_cursor;
         int64_t snp_lsn;
         pg_id_t pg_id;
+        durable_snapshot_progress progress;
 
         uint32_t size() const { return sizeof(snapshot_rcvr_info_superblk); }
         static auto name() -> string { return _snp_rcvr_meta_name; }
@@ -286,6 +329,11 @@ public:
          * Returns the number of open shards on this PG.
          */
         uint32_t open_shards() const;
+
+        /**
+         * Returns the progress of the baseline resync.
+         */
+        uint32_t get_snp_progress() const;
     };
 
     struct HS_Shard : public Shard {
@@ -401,6 +449,25 @@ public:
         void pack_resync_message(sisl::io_blob_safe& dest_blob, SyncMessageType type);
         bool end_of_scan() const;
 
+        // All of the leader's metrics are in-memory
+        struct DonerSnapshotMetrics : sisl::MetricsGroup {
+            explicit DonerSnapshotMetrics(pg_id_t pg_id) : sisl::MetricsGroup("snapshot_doner", std::to_string(pg_id)) {
+                REGISTER_COUNTER(snp_dnr_load_blob, "Loaded blobs in baseline resync");
+                REGISTER_COUNTER(snp_dnr_load_bytes, "Loaded bytes in baseline resync");
+                REGISTER_COUNTER(snp_dnr_resend_count, "Mesg resend times in baseline resync");
+                REGISTER_COUNTER(snp_dnr_error_count, "Error times when reading blobs in baseline resync");
+                REGISTER_HISTOGRAM(snp_dnr_blob_process_time, "Time cost of successfully process a blob in baseline resync",
+                   HistogramBucketsType(DefaultBuckets));
+                register_me_to_farm();
+            }
+
+            ~DonerSnapshotMetrics() { deregister_me_from_farm(); }
+            DonerSnapshotMetrics(const DonerSnapshotMetrics&) = delete;
+            DonerSnapshotMetrics(DonerSnapshotMetrics&&) noexcept = delete;
+            DonerSnapshotMetrics& operator=(const DonerSnapshotMetrics&) = delete;
+            DonerSnapshotMetrics& operator=(DonerSnapshotMetrics&&) noexcept = delete;
+        };
+
         struct ShardEntry {
             ShardInfo info;
             homestore::chunk_num_t v_chunk_num;
@@ -421,6 +488,7 @@ public:
         pg_id_t pg_id_;
         shared< homestore::ReplDev > repl_dev_;
         uint64_t max_batch_size_;
+        std::unique_ptr<DonerSnapshotMetrics> metrics_;
     };
 
     class SnapshotReceiveHandler {
@@ -449,11 +517,11 @@ public:
         pg_id_t get_context_pg_id() const;
 
         // Try to load existing snapshot context info
-        bool load_prev_context();
+        bool load_prev_context_and_metrics();
 
         // Reset the context for a new snapshot, should be called before each new snapshot transmission
-        void reset_context(int64_t lsn, pg_id_t pg_id);
-        void destroy_context();
+        void reset_context_and_metrics(int64_t lsn, pg_id_t pg_id);
+        void destroy_context_and_metrics();
 
         shard_id_t get_shard_cursor() const;
         shard_id_t get_next_shard() const;
@@ -467,14 +535,66 @@ public:
             const int64_t snp_lsn;
             const pg_id_t pg_id;
             shared< BlobIndexTable > index_table;
-
+            std::shared_mutex progress_lock;
+            snapshot_progress progress;
             SnapshotContext(int64_t lsn, pg_id_t pg_id) : snp_lsn{lsn}, pg_id{pg_id} {}
+        };
+
+        struct ReceiverSnapshotMetrics: sisl::MetricsGroup {
+            ReceiverSnapshotMetrics(std::shared_ptr<SnapshotContext> ctx) : sisl::MetricsGroup("snapshot_receiver", std::to_string(ctx->pg_id)),
+                    ctx_{ctx} {
+                REGISTER_GAUGE(snp_rcvr_total_blob, "Total blobs in baseline resync");
+                REGISTER_GAUGE(snp_rcvr_total_bytes, "Total bytes in baseline resync")
+                REGISTER_GAUGE(snp_rcvr_total_shards, "Total shards in baseline resync")
+                REGISTER_GAUGE(snp_rcvr_complete_blob, "Complete blob in baseline resync")
+                REGISTER_GAUGE(snp_rcvr_complete_bytes, "Complete bytes in baseline resync")
+                REGISTER_GAUGE(snp_rcvr_complete_shards, "Complete shards in baseline resync")
+                REGISTER_GAUGE(snp_rcvr_current_shard_total_blobs,
+                               "Total blob of the current shard in baseline resync")
+                REGISTER_GAUGE(snp_rcvr_current_shard_complete_blobs,
+                               "Compelete blob of the current blob in baseline resync");
+                REGISTER_GAUGE(snp_rcvr_corrupted_blobs, "Corrupted blobs in baseline resync");
+                REGISTER_GAUGE(snp_rcvr_elapsed_time_sec, "Time cost(seconds) of baseline resync");
+                REGISTER_GAUGE(snp_rcvr_error_count, "Error count in baseline resync");
+                REGISTER_HISTOGRAM(snp_rcvr_blob_process_time, "Time cost of successfully process a blob in baseline resync",
+                   HistogramBucketsType(DefaultBuckets));
+
+
+                attach_gather_cb(std::bind(&ReceiverSnapshotMetrics::on_gather, this));
+                register_me_to_farm();
+            }
+            ~ReceiverSnapshotMetrics() { deregister_me_from_farm(); }
+            ReceiverSnapshotMetrics(const ReceiverSnapshotMetrics&) = delete;
+            ReceiverSnapshotMetrics(ReceiverSnapshotMetrics&&) noexcept = delete;
+            ReceiverSnapshotMetrics& operator=(const ReceiverSnapshotMetrics&) = delete;
+            ReceiverSnapshotMetrics& operator=(ReceiverSnapshotMetrics&&) noexcept = delete;
+
+            void on_gather() {
+                if (ctx_) {
+                    std::shared_lock<std::shared_mutex> lock(ctx_->progress_lock);
+                    GAUGE_UPDATE(*this, snp_rcvr_total_blob, ctx_->progress.total_blobs);
+                    GAUGE_UPDATE(*this, snp_rcvr_total_bytes, ctx_->progress.total_bytes);
+                    GAUGE_UPDATE(*this, snp_rcvr_total_shards, ctx_->progress.total_shards);
+                    GAUGE_UPDATE(*this, snp_rcvr_complete_blob, ctx_->progress.complete_blobs);
+                    GAUGE_UPDATE(*this, snp_rcvr_complete_bytes, ctx_->progress.complete_bytes);
+                    GAUGE_UPDATE(*this, snp_rcvr_complete_shards, ctx_->progress.complete_shards);
+                    GAUGE_UPDATE(*this, snp_rcvr_current_shard_total_blobs, ctx_->progress.cur_shard_total_blobs);
+                    GAUGE_UPDATE(*this, snp_rcvr_current_shard_complete_blobs, ctx_->progress.cur_shard_complete_blobs);
+                    GAUGE_UPDATE(*this, snp_rcvr_corrupted_blobs, ctx_->progress.corrupted_blobs);
+                    GAUGE_UPDATE(*this, snp_rcvr_error_count, ctx_->progress.error_count);
+                    auto duration = get_elapsed_time_ms(ctx_->progress.start_time * 1000) / 1000;
+                    GAUGE_UPDATE(*this, snp_rcvr_elapsed_time_sec, duration);
+                }
+            }
+            private:
+                std::shared_ptr<SnapshotContext> ctx_;
         };
 
         HSHomeObject& home_obj_;
         const shared< homestore::ReplDev > repl_dev_;
 
-        std::unique_ptr< SnapshotContext > ctx_;
+        std::shared_ptr< SnapshotContext > ctx_;
+        std::unique_ptr< ReceiverSnapshotMetrics > metrics_;
 
         // Update the snp_info superblock
         void update_snp_info_sb(bool init = false);
