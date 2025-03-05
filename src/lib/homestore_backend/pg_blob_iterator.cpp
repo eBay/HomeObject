@@ -2,6 +2,7 @@
 #include <sisl/logging/logging.h>
 #include <sisl/options/options.h>
 #include <sisl/settings/settings.hpp>
+#include <sisl/metrics/metrics.hpp>
 #include "generated/resync_blob_data_generated.h"
 #include "generated/resync_pg_data_generated.h"
 #include "generated/resync_shard_data_generated.h"
@@ -16,6 +17,7 @@ HSHomeObject::PGBlobIterator::PGBlobIterator(HSHomeObject& home_obj, homestore::
     auto pg = get_pg_metadata();
     pg_id_ = pg->pg_info_.id;
     repl_dev_ = static_cast< HS_PG* >(pg)->repl_dev_;
+    metrics_ = make_unique< DonerSnapshotMetrics >(pg_id_);
     max_batch_size_ = HS_BACKEND_DYNAMIC_CONFIG(max_snapshot_batch_size_mb) * Mi;
     if (max_batch_size_ == 0) { max_batch_size_ = DEFAULT_MAX_BATCH_SIZE_MB * Mi; }
 
@@ -38,7 +40,11 @@ HSHomeObject::PGBlobIterator::PGBlobIterator(HSHomeObject& home_obj, homestore::
 bool HSHomeObject::PGBlobIterator::update_cursor(objId id) {
     if (id.value == LAST_OBJ_ID) { return true; }
     //resend batch
-    if (id.value == cur_obj_id_.value) { return true; }
+    if (id.value == cur_obj_id_.value) {
+        LOGT("resend the same batch, objId:{}, cur_obj_id:{}", id.to_string(), cur_obj_id_.to_string());
+        COUNTER_INCREMENT(*metrics_, snp_dnr_resend_count, 1);
+        return true;
+    }
 
     // If cur_obj_id_ == 0|0 (PG meta), this may be a request for resuming from specific shard
     if (cur_obj_id_.shard_seq_num == 0 && id.shard_seq_num != 0 && id.batch_id == 0) {
@@ -122,12 +128,15 @@ bool HSHomeObject::PGBlobIterator::create_pg_snapshot_data(sisl::io_blob_safe& m
         members.push_back(CreateMemberDirect(builder_, &id, member.name.c_str(), member.priority));
     }
     std::vector< uint64_t > shard_ids;
+    auto total_bytes = pg->durable_entities().total_occupied_blk_count.load(std::memory_order_relaxed) * repl_dev_->
+        get_blk_size();
+    auto total_blobs = pg->durable_entities().active_blob_count.load(std::memory_order_relaxed);
     for (auto& shard : shard_list_) {
         shard_ids.push_back(shard.info.id);
     }
 
     auto pg_entry = CreateResyncPGMetaDataDirect(builder_, pg_info.id, &uuid, pg_info.size, pg_info.chunk_size, pg->durable_entities().blob_sequence_num,
-                                                 pg->shard_sequence_num_, &members, &shard_ids);
+                                                 pg->shard_sequence_num_, &members, &shard_ids, total_blobs, total_bytes);
     builder_.FinishSizePrefixed(pg_entry);
 
     pack_resync_message(meta_blob, SyncMessageType::PG_META);
@@ -151,7 +160,8 @@ bool HSHomeObject::PGBlobIterator::create_shard_snapshot_data(sisl::io_blob_safe
     auto shard = shard_list_[cur_shard_idx_];
     auto shard_entry = CreateResyncShardMetaData(
         builder_, shard.info.id, pg_id_, static_cast< uint8_t >(shard.info.state), shard.info.lsn,
-        shard.info.created_time, shard.info.last_modified_time, shard.info.total_capacity_bytes, shard.v_chunk_num);
+        shard.info.created_time, shard.info.last_modified_time, shard.info.total_capacity_bytes, cur_blob_list_.size(),
+        shard.v_chunk_num);
 
     builder_.FinishSizePrefixed(shard_entry);
 
@@ -183,7 +193,7 @@ BlobManager::AsyncResult< sisl::io_blob_safe > HSHomeObject::PGBlobIterator::loa
 
                             BlobHeader const* header = r_cast< BlobHeader const* >(read_buf.cbytes());
                             if (!header->valid()) {
-                                //TODO add metrics
+                                //The metrics for corrupted blob is handled on the follower side.
                                 LOGE("Invalid header found, shard_id={}, blob_id={}, [header={}]", shard_id, blob_id,
                                      header->to_string());
                                 state = ResyncBlobState::CORRUPTED;
@@ -191,7 +201,7 @@ BlobManager::AsyncResult< sisl::io_blob_safe > HSHomeObject::PGBlobIterator::loa
                             }
 
                             if (header->shard_id != shard_id) {
-                                //TODO add metrics
+                                //The metrics for corrupted blob is handled on the follower side.
                                 LOGE("Invalid shard_id in header, shard_id={}, blob_id={}, [header={}]", shard_id,
                                      blob_id, header->to_string());
                                 state = ResyncBlobState::CORRUPTED;
@@ -240,6 +250,8 @@ bool HSHomeObject::PGBlobIterator::create_blobs_snapshot_data(sisl::io_blob_safe
             continue;
         }
 
+        auto start = Clock::now();
+
 #ifdef _PRERELEASE
         if (iomgr_flip::instance()->test_flip("pg_blob_iterator_load_blob_data_error")) {
             LOGW("Simulating loading blob data error");
@@ -269,10 +281,12 @@ bool HSHomeObject::PGBlobIterator::create_blobs_snapshot_data(sisl::io_blob_safe
         if (blob.size() == 0) {
             LOGE("Failed to retrieve blob for shard={} blob={} pbas={}", info.shard_id, info.blob_id,
                  info.pbas.to_string());
-            //TODO add metrics
+            COUNTER_INCREMENT(*metrics_, snp_dnr_error_count, 1);
             return false;
         }
 
+        auto duration = get_elapsed_time_us(start);
+        HISTOGRAM_OBSERVE(*metrics_, snp_dnr_blob_process_time, duration);
         std::vector< uint8_t > data(blob.cbytes(), blob.cbytes() + blob.size());
         blob_entries.push_back(CreateResyncBlobDataDirect(builder_, info.blob_id, (uint8_t)state, &data));
         total_bytes += blob.size();
@@ -286,6 +300,8 @@ bool HSHomeObject::PGBlobIterator::create_blobs_snapshot_data(sisl::io_blob_safe
     LOGD("create blobs snapshot data batch: shard_seq_num={}, batch_num={}, total_bytes={}, blob_num={}, end_of_shard={}",
          cur_obj_id_.shard_seq_num, cur_obj_id_.batch_id, total_bytes, blob_entries.size(), end_of_shard);
 
+    COUNTER_INCREMENT(*metrics_, snp_dnr_load_blob, blob_entries.size());
+    COUNTER_INCREMENT(*metrics_, snp_dnr_load_bytes, total_bytes);
     pack_resync_message(data_blob, SyncMessageType::SHARD_BATCH);
     return true;
 }

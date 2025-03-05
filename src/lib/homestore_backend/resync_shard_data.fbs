@@ -10,6 +10,7 @@ table ResyncShardMetaData {
     created_time : uint64;               // shard creation time
     last_modified_time : ulong;       // shard last modify time
     total_capacity_bytes : ulong;    // total capacity of the shard
+    total_active_blobs : ulong;        // total blobs in the shard
     vchunk_id : uint16;                     // vchunk id
 }
 
