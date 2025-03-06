@@ -10,7 +10,8 @@
 namespace homeobject {
 
 ENUM(BlobErrorCode, uint16_t, UNKNOWN = 1, TIMEOUT, INVALID_ARG, UNSUPPORTED_OP, NOT_LEADER, REPLICATION_ERROR,
-     UNKNOWN_SHARD, UNKNOWN_BLOB, CHECKSUM_MISMATCH, READ_FAILED, INDEX_ERROR, SEALED_SHARD, RETRY_REQUEST);
+     UNKNOWN_SHARD, UNKNOWN_BLOB, UNKNOWN_PG, CHECKSUM_MISMATCH, READ_FAILED, INDEX_ERROR, SEALED_SHARD, RETRY_REQUEST,
+     SHUTTING_DOWN);
 struct BlobError {
     BlobErrorCode code;
     // set when we are not the current leader of the PG.
@@ -27,7 +28,8 @@ struct BlobError {
 struct Blob {
     Blob() = default;
     Blob(sisl::io_blob_safe b, std::string const& u, uint64_t o) : body(std::move(b)), user_key(u), object_off(o) {}
-    Blob(sisl::io_blob_safe b, std::string const& u, uint64_t o, peer_id_t l) : body(std::move(b)), user_key(u), object_off(o), current_leader(l) {}
+    Blob(sisl::io_blob_safe b, std::string const& u, uint64_t o, peer_id_t l) :
+            body(std::move(b)), user_key(u), object_off(o), current_leader(l) {}
 
     Blob clone() const;
 

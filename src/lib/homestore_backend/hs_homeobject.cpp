@@ -60,9 +60,7 @@ public:
         return it->second;
     }
 
-    void on_repl_devs_init_completed() override {
-        _home_object->on_replica_restart();
-    }
+    void on_repl_devs_init_completed() override { _home_object->on_replica_restart(); }
 
     std::pair< std::string, uint16_t > lookup_peer(homestore::replica_id_t uuid) const override {
         std::string endpoint;
@@ -320,9 +318,22 @@ HSHomeObject::~HSHomeObject() {
     }
     trigger_timed_events();
 #endif
+
+    start_shutting_down();
+    // Wait for all pending requests to complete
+    while (true) {
+        auto pending_reqs = get_pending_request_num();
+        if (0 == pending_reqs) break;
+        LOGI("waiting for {} pending requests to complete", pending_reqs);
+        std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+    }
+    LOGI("start shutting down HomeStore");
+
     homestore::HomeStore::instance()->shutdown();
     homestore::HomeStore::reset_instance();
     iomanager.stop();
+
+    LOGI("complete shutting down HomeStore");
 }
 
 HomeObjectStats HSHomeObject::_get_stats() const {
@@ -340,7 +351,7 @@ HomeObjectStats HSHomeObject::_get_stats() const {
 
     stats.num_open_shards = num_open_shards;
     stats.avail_open_shards = chunk_selector()->total_chunks() - num_open_shards;
-    stats.num_disks =  chunk_selector()->total_disks();
+    stats.num_disks = chunk_selector()->total_disks();
     return stats;
 }
 
