@@ -102,10 +102,7 @@ PGManager::NullAsyncResult HSHomeObject::_create_pg(PGInfo&& pg_info, std::set< 
             }
 #endif
 
-            if (v.hasError()) {
-                decr_pending_request_num();
-                return folly::makeUnexpected(toPgError(v.error()));
-            }
+            if (v.hasError()) { return folly::makeUnexpected(toPgError(v.error())); }
             // we will write a PGHeader across the raft group and when it is committed
             // all raft members will create PGinfo and index table for this PG.
 
