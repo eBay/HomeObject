@@ -38,6 +38,11 @@ HSHomeObject::PGBlobIterator::PGBlobIterator(HSHomeObject& home_obj, homestore::
 
 //result represents if the objId is valid and the cursors are updated
 bool HSHomeObject::PGBlobIterator::update_cursor(objId id) {
+    if (cur_batch_start_time_ != Clock::time_point{}) {
+        HISTOGRAM_OBSERVE(*metrics_, snp_dnr_batch_e2e_time, get_elapsed_time_us(cur_batch_start_time_));
+    }
+    cur_batch_start_time_ = Clock::now();
+
     if (id.value == LAST_OBJ_ID) { return true; }
     //resend batch
     if (id.value == cur_obj_id_.value) {
@@ -160,8 +165,7 @@ bool HSHomeObject::PGBlobIterator::create_shard_snapshot_data(sisl::io_blob_safe
     auto shard = shard_list_[cur_shard_idx_];
     auto shard_entry = CreateResyncShardMetaData(
         builder_, shard.info.id, pg_id_, static_cast< uint8_t >(shard.info.state), shard.info.lsn,
-        shard.info.created_time, shard.info.last_modified_time, shard.info.total_capacity_bytes, cur_blob_list_.size(),
-        shard.v_chunk_num);
+        shard.info.created_time, shard.info.last_modified_time, shard.info.total_capacity_bytes, shard.v_chunk_num);
 
     builder_.FinishSizePrefixed(shard_entry);
 
@@ -233,6 +237,7 @@ BlobManager::AsyncResult< sisl::io_blob_safe > HSHomeObject::PGBlobIterator::loa
 }
 
 bool HSHomeObject::PGBlobIterator::create_blobs_snapshot_data(sisl::io_blob_safe& data_blob) {
+    auto batch_start = Clock::now();
     std::vector< ::flatbuffers::Offset< ResyncBlobData > > blob_entries;
 
     bool end_of_shard = false;
@@ -250,7 +255,7 @@ bool HSHomeObject::PGBlobIterator::create_blobs_snapshot_data(sisl::io_blob_safe
             continue;
         }
 
-        auto start = Clock::now();
+        auto blob_start = Clock::now();
 
 #ifdef _PRERELEASE
         if (iomgr_flip::instance()->test_flip("pg_blob_iterator_load_blob_data_error")) {
@@ -285,8 +290,7 @@ bool HSHomeObject::PGBlobIterator::create_blobs_snapshot_data(sisl::io_blob_safe
             return false;
         }
 
-        auto duration = get_elapsed_time_us(start);
-        HISTOGRAM_OBSERVE(*metrics_, snp_dnr_blob_process_time, duration);
+        HISTOGRAM_OBSERVE(*metrics_, snp_dnr_blob_process_time, get_elapsed_time_us(blob_start));
         std::vector< uint8_t > data(blob.cbytes(), blob.cbytes() + blob.size());
         blob_entries.push_back(CreateResyncBlobDataDirect(builder_, info.blob_id, (uint8_t)state, &data));
         total_bytes += blob.size();
@@ -303,6 +307,7 @@ bool HSHomeObject::PGBlobIterator::create_blobs_snapshot_data(sisl::io_blob_safe
     COUNTER_INCREMENT(*metrics_, snp_dnr_load_blob, blob_entries.size());
     COUNTER_INCREMENT(*metrics_, snp_dnr_load_bytes, total_bytes);
     pack_resync_message(data_blob, SyncMessageType::SHARD_BATCH);
+    HISTOGRAM_OBSERVE(*metrics_, snp_dnr_batch_process_time, get_elapsed_time_us(batch_start));
     return true;
 }
 
