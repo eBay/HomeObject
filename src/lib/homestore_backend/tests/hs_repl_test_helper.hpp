@@ -34,6 +34,8 @@
 #include <sisl/options/options.h>
 #include <sisl/settings/settings.hpp>
 #include <sisl/grpc/rpc_client.hpp>
+#include <iomgr/io_environment.hpp>
+#include <iomgr/http_server.hpp>
 
 #include <folly/init/Init.h>
 
@@ -138,7 +140,39 @@ public:
 
             return std::string("127.0.0.1:") + std::to_string(port);
         }
+
+        void get_prometheus_metrics(const Pistache::Rest::Request&, Pistache::Http::ResponseWriter response) {
+            response.send(Pistache::Http::Code::Ok, sisl::MetricsFarm::getInstance().report(sisl::ReportFormat::kTextFormat));
+        }
+
+        void start_http_server() {
+            std::vector< iomgr::http_route > routes = {
+                {Pistache::Http::Method::Get, "/metrics",
+                    Pistache::Rest::Routes::bind(&TestReplApplication::get_prometheus_metrics, this)},
+            };
+
+            auto http_server = ioenvironment.get_http_server();
+            if (!http_server) {
+                LOGERROR("http server not available");
+                return;
+            }
+            try {
+                http_server->setup_routes(routes);
+            } catch (std::runtime_error const& e) { LOGERROR("setup routes failed, {}", e.what()); }
+            http_server->start();
+            LOGD("http server is running");
+        }
+
+        void stop_http_server() {
+            auto http_server = ioenvironment.get_http_server();
+            if (!http_server) {
+                LOGWARN("http server not available");
+                return;
+            }
+            http_server->stop();
+        }
     };
+
 
 public:
     friend class TestReplApplication;

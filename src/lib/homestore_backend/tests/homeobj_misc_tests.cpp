@@ -201,7 +201,7 @@ TEST_F(HomeObjectFixture, SnapshotReceiveHandler) {
     ASSERT_TRUE(r_dev.hasValue());
 
     auto handler = std::make_unique< homeobject::HSHomeObject::SnapshotReceiveHandler >(*_obj_inst, r_dev.value());
-    handler->reset_context(snp_lsn, pg_id);
+    handler->reset_context_and_metrics(snp_lsn, pg_id);
 
     // Step 1: Test write pg meta - cannot test full logic since the PG already exists
     // Generate ResyncPGMetaData message

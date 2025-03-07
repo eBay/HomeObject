@@ -578,6 +578,10 @@ uint32_t HSHomeObject::HS_PG::open_shards() const {
     return std::count_if(shards_.begin(), shards_.end(), [](auto const& s) { return s->is_open(); });
 }
 
+uint32_t HSHomeObject::HS_PG::get_snp_progress() const {
+    return snp_rcvr_info_sb_->progress.complete_bytes / snp_rcvr_info_sb_->progress.total_bytes;
+}
+
 // NOTE: caller should hold the _pg_lock
 const HSHomeObject::HS_PG* HSHomeObject::_get_hs_pg_unlocked(pg_id_t pg_id) const {
     auto iter = _pg_map.find(pg_id);

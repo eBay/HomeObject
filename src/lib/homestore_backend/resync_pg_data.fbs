@@ -17,6 +17,8 @@ table ResyncPGMetaData {
     shard_seq_num: uint64;       // shard sequence number, used to assign next shard id;
     members : [Member];           // peers;
     shard_ids : [uint64];              // shard ids to transmit;
+    total_blobs_to_transfer : uint64;      // total used bytes of the pg
+    total_bytes_to_transfer : uint64;      // total capacity of the pg
 }
 
 // ResyncPGMetaData schema is the first message(ObjID=0) in the resync data stream

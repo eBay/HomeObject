@@ -531,7 +531,9 @@ SISL_OPTION_GROUP(
     (num_blobs, "", "num_blobs", "number of blobs", ::cxxopts::value< uint64_t >()->default_value("20"), "number"),
     (is_restart, "", "is_restart",
      "(internal) the process is restart or the first start, only used for the first testcase",
-     ::cxxopts::value< bool >()->default_value("false"), "true or false"));
+     ::cxxopts::value< bool >()->default_value("false"), "true or false"),
+    (enable_http, "", "enable_http", "enable http server or not",
+        ::cxxopts::value< bool >()->default_value("false"), "true or false"));
 
 SISL_LOGGING_INIT(homeobject)
 #define test_options logging, config, homeobject, test_homeobject_repl_common
