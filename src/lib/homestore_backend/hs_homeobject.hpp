@@ -191,9 +191,6 @@ public:
         uint64_t complete_shards{0};
         // The count of the blobs which have been corrupted on the leader side.
         uint64_t corrupted_blobs{0};
-        // Record the stats of the current batch to avoid double counting.
-        uint64_t cur_shard_total_blobs{0};
-        uint64_t cur_shard_complete_blobs{0};
         // Used to handle the retried batch message.
         uint64_t cur_batch_blobs{0};
         uint64_t cur_batch_bytes{0};
@@ -456,8 +453,12 @@ public:
                 REGISTER_COUNTER(snp_dnr_load_bytes, "Loaded bytes in baseline resync");
                 REGISTER_COUNTER(snp_dnr_resend_count, "Mesg resend times in baseline resync");
                 REGISTER_COUNTER(snp_dnr_error_count, "Error times when reading blobs in baseline resync");
-                REGISTER_HISTOGRAM(snp_dnr_blob_process_time, "Time cost of successfully process a blob in baseline resync",
+                REGISTER_HISTOGRAM(snp_dnr_blob_process_time, "Time cost(us) of successfully process a blob in baseline resync",
                    HistogramBucketsType(DefaultBuckets));
+                REGISTER_HISTOGRAM(snp_dnr_batch_process_time,
+                                   "Time cost(ms) of successfully process a batch in baseline resync", HistogramBucketsType(DefaultBuckets));
+                REGISTER_HISTOGRAM(snp_dnr_batch_e2e_time,
+                                   "Time cost(ms) of a batch end-to-end round trip in baseline resync", HistogramBucketsType(DefaultBuckets));
                 register_me_to_farm();
             }
 
@@ -480,6 +481,7 @@ public:
         std::vector< BlobInfo > cur_blob_list_{0};
         uint64_t cur_start_blob_idx_{0};
         uint64_t cur_batch_blob_count_{0};
+        Clock::time_point cur_batch_start_time_;
         flatbuffers::FlatBufferBuilder builder_;
 
         HSHomeObject& home_obj_;
@@ -549,14 +551,10 @@ public:
                 REGISTER_GAUGE(snp_rcvr_complete_blob, "Complete blob in baseline resync")
                 REGISTER_GAUGE(snp_rcvr_complete_bytes, "Complete bytes in baseline resync")
                 REGISTER_GAUGE(snp_rcvr_complete_shards, "Complete shards in baseline resync")
-                REGISTER_GAUGE(snp_rcvr_current_shard_total_blobs,
-                               "Total blob of the current shard in baseline resync")
-                REGISTER_GAUGE(snp_rcvr_current_shard_complete_blobs,
-                               "Compelete blob of the current blob in baseline resync");
                 REGISTER_GAUGE(snp_rcvr_corrupted_blobs, "Corrupted blobs in baseline resync");
                 REGISTER_GAUGE(snp_rcvr_elapsed_time_sec, "Time cost(seconds) of baseline resync");
                 REGISTER_GAUGE(snp_rcvr_error_count, "Error count in baseline resync");
-                REGISTER_HISTOGRAM(snp_rcvr_blob_process_time, "Time cost of successfully process a blob in baseline resync",
+                REGISTER_HISTOGRAM(snp_rcvr_blob_process_time, "Time cost(us) of successfully process a blob in baseline resync",
                    HistogramBucketsType(DefaultBuckets));
 
 
@@ -578,8 +576,6 @@ public:
                     GAUGE_UPDATE(*this, snp_rcvr_complete_blob, ctx_->progress.complete_blobs);
                     GAUGE_UPDATE(*this, snp_rcvr_complete_bytes, ctx_->progress.complete_bytes);
                     GAUGE_UPDATE(*this, snp_rcvr_complete_shards, ctx_->progress.complete_shards);
-                    GAUGE_UPDATE(*this, snp_rcvr_current_shard_total_blobs, ctx_->progress.cur_shard_total_blobs);
-                    GAUGE_UPDATE(*this, snp_rcvr_current_shard_complete_blobs, ctx_->progress.cur_shard_complete_blobs);
                     GAUGE_UPDATE(*this, snp_rcvr_corrupted_blobs, ctx_->progress.corrupted_blobs);
                     GAUGE_UPDATE(*this, snp_rcvr_error_count, ctx_->progress.error_count);
                     auto duration = get_elapsed_time_ms(ctx_->progress.start_time * 1000) / 1000;

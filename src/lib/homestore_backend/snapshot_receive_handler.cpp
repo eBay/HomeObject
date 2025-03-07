@@ -132,8 +132,6 @@ int HSHomeObject::SnapshotReceiveHandler::process_shard_snapshot_data(ResyncShar
     ctx_->shard_cursor = shard_meta.shard_id();
     ctx_->cur_batch_num = 0;
     std::unique_lock<std::shared_mutex> lock(mutex);
-    ctx_->progress.cur_shard_total_blobs = shard_meta.total_active_blobs();
-    ctx_->progress.cur_shard_complete_blobs = 0;
     return 0;
 }
 
@@ -143,7 +141,6 @@ int HSHomeObject::SnapshotReceiveHandler::process_blobs_snapshot_data(ResyncBlob
     //retry mesg, need to handle duplicate batch, reset progress
     if (ctx_->cur_batch_num == batch_num) {
         std::unique_lock<std::shared_mutex> lock(mutex);
-        ctx_->progress.cur_shard_complete_blobs -= ctx_->progress.cur_batch_blobs;
         ctx_->progress.complete_blobs -= ctx_->progress.cur_batch_blobs;
         ctx_->progress.complete_bytes -= ctx_->progress.cur_batch_bytes;
         ctx_->progress.cur_batch_blobs = 0;
@@ -303,7 +300,6 @@ int HSHomeObject::SnapshotReceiveHandler::process_blobs_snapshot_data(ResyncBlob
         std::unique_lock<std::shared_mutex> lock(mutex);
         ctx_->progress.cur_batch_blobs = data_blobs.blob_list()->size();
         ctx_->progress.cur_batch_bytes = total_bytes;
-        ctx_->progress.cur_shard_complete_blobs += ctx_->progress.cur_batch_blobs;
         ctx_->progress.complete_blobs += ctx_->progress.cur_batch_blobs;
         ctx_->progress.complete_bytes += ctx_->progress.cur_batch_bytes;
     }
