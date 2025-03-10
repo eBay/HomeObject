@@ -403,7 +403,8 @@ void HSHomeObject::destroy_pg_index_table(pg_id_t pg_id) {
 void HSHomeObject::destroy_pg_superblk(pg_id_t pg_id) {
     // pay attention: cp_flush will try get '_pg_lock' to flush all pg ops.
     // before destroy pg superblk, we must ensure all ops on this pg are persisted
-    auto fut = homestore::hs()->cp_mgr().trigger_cp_flush(false /* force */);
+    // set force=true to ensure cp flush is triggered
+    auto fut = homestore::hs()->cp_mgr().trigger_cp_flush(true /* force */);
     auto on_complete = [&](auto success) {
         RELEASE_ASSERT(success, "Failed to trigger CP flush");
         LOGI("CP Flush trigged by pg_destroy completed, pg_id={}", pg_id);
