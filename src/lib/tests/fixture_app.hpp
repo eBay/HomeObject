@@ -46,6 +46,8 @@ public:
         return device_info;
     }
 
+    uint64_t mem_size() const override { return 2 * Gi; }
+
     homeobject::peer_id_t discover_svcid(std::optional< homeobject::peer_id_t > const& p) const override;
     std::string lookup_peer(homeobject::peer_id_t const&) const override { return "127.0.0.1:4000"; }
 };
