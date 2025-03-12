@@ -532,14 +532,13 @@ void HomeObjectFixture::RestartLeaderDuringBaselineResyncUsingSigKill(uint64_t f
                               .get();
             ASSERT_TRUE(r);
         });
-
+        initial_leader_replica_id = get_leader_id(pg_id);
         // ========Stage 3: kill leader, no need to restart it again ========
         if (in_member_id == g_helper->my_replica_id()) {
             while (!am_i_in_pg(pg_id)) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(500));
                 LOGINFO("new member is waiting to become a member of pg {}", pg_id);
             }
-            initial_leader_replica_id = get_leader_id(pg_id);
             LOGDEBUG("wait for the data[shard:{}, blob:{}] replicated to the new member", kill_until_shard,
                      kill_until_blob);
             wait_for_blob(kill_until_shard, kill_until_blob);
@@ -558,13 +557,8 @@ void HomeObjectFixture::RestartLeaderDuringBaselineResyncUsingSigKill(uint64_t f
         // SyncPoint 1: tell leader to kill
         g_helper->sync();
 
-        if (out_member_id != g_helper->my_replica_id()) {
-            //SyncPoint 2: wait for leader ready for traffic.
-            wait_for_leader_change(pg_id, initial_leader_replica_id);
-        }
-        //start a new thread to spawn process, help write
-
-        if (g_helper->replica_num() == 0) {
+        //out member helps to spawn a new process to simulate the leader restart
+        if(out_member_id == g_helper->my_replica_id()) {
             std::thread spawn_thread([restart_interval, initial_leader_replica_num]() {
                 std::this_thread::sleep_for(std::chrono::milliseconds(restart_interval));
                 LOGINFO("going to restart replica {}", initial_leader_replica_num)
@@ -572,7 +566,12 @@ void HomeObjectFixture::RestartLeaderDuringBaselineResyncUsingSigKill(uint64_t f
             });
             spawn_thread.detach();
         }
-        // g_helper->sync();
+        LOGINFO("wait for new member restart")
+        g_helper->sync();
+        if(out_member_id != g_helper->my_replica_id()) {
+            //make sure there is a leader
+            get_leader_id(pg_id);
+        }
         LOGINFO("going to put more blobs")
         pg_blob_id[pg_id] = num_blobs_per_shard * num_shards_per_pg;
         put_blobs(pg_shard_id_vec, 1, pg_blob_id);
@@ -589,6 +588,9 @@ void HomeObjectFixture::RestartLeaderDuringBaselineResyncUsingSigKill(uint64_t f
                 verify_obj_count(1, num_shards_per_pg, num_blobs_per_shard + 1, false);
             });
         }
+    } else {
+        //sync for putting blobs
+        g_helper->sync();
     }
     LOGINFO("wait for all blobs replicated to the new member")
     // SyncPoint 3: waiting for all the blobs replicated to the new member
