@@ -339,6 +339,100 @@ void HomeObjectFixture::RestartFollowerDuringBaselineResyncUsingSigKill(uint64_t
     }
 }
 
+    TEST_F(HomeObjectFixture, RestartFollowerDuringBaselineResyncUsingGracefulShutdown) {
+    LOGINFO("HomeObject replica={} setup completed", g_helper->replica_num());
+    auto spare_num_replicas = SISL_OPTIONS["spare_replicas"].as< uint8_t >();
+    ASSERT_TRUE(spare_num_replicas > 0) << "we need spare replicas for homestore backend dynamic tests";
+
+    auto num_replicas = SISL_OPTIONS["replicas"].as< uint8_t >();
+    auto num_shards_per_pg = SISL_OPTIONS["num_shards"].as< uint64_t >();
+    auto num_blobs_per_shard = SISL_OPTIONS["num_blobs"].as< uint64_t >() / num_shards_per_pg;
+    pg_id_t pg_id{1};
+    auto out_member_id = g_helper->replica_id(num_replicas - 1);
+    auto in_member_id = g_helper->replica_id(num_replicas); /*spare replica*/
+
+    // ======== Stage 1: Create a pg without spare replicas and put blobs ========
+    std::unordered_set< uint8_t > excluding_replicas_in_pg;
+    for (size_t i = num_replicas; i < num_replicas + spare_num_replicas; i++)
+        excluding_replicas_in_pg.insert(i);
+
+    create_pg(pg_id, 0 /* pg_leader */, excluding_replicas_in_pg);
+
+    // we can not share all the shard_id and blob_id among all the replicas including the spare ones, so we need to
+    // derive them by calculating.
+    // since shard_id = pg_id + shard_sequence_num, so we can derive shard_ids for all the shards in this pg, and these
+    // derived info is used by all replicas(including the newly added member) to verify the blobs.
+    std::map< pg_id_t, std::vector< shard_id_t > > pg_shard_id_vec;
+    std::map< pg_id_t, blob_id_t > pg_blob_id;
+    pg_blob_id[pg_id] = 0;
+    for (shard_id_t shard_id = 1; shard_id <= num_shards_per_pg; shard_id++) {
+        auto derived_shard_id = make_new_shard_id(pg_id, shard_id);
+        pg_shard_id_vec[pg_id].emplace_back(derived_shard_id);
+    }
+    auto last_shard = pg_shard_id_vec[pg_id].back();
+    //put one more blob in every shard to test incremental resync.
+    auto last_blob = num_blobs_per_shard * num_shards_per_pg - 1;
+
+    auto kill_until_shard = pg_shard_id_vec[pg_id].back();
+    auto kill_until_blob = num_blobs_per_shard * num_shards_per_pg - 1;
+#ifdef _PRERELEASE
+    flip::FlipCondition cond;
+    // will only delay the snapshot with blob id 11 during which restart will happen
+    m_fc.create_condition("blob_id", flip::Operator::EQUAL, static_cast< long >(7), &cond);
+    set_retval_flip("simulate_write_snapshot_save_blob_delay", static_cast< long >(10000) /*ms*/, 1, 100, cond);
+    //kill after the last blob in the first shard is replicated
+    kill_until_shard = pg_shard_id_vec[pg_id].front();
+    kill_until_blob = num_blobs_per_shard - 1;
+#endif
+
+    for (uint64_t j = 0; j < num_shards_per_pg; j++)
+        create_shard(pg_id, 64 * Mi);
+
+    // put and verify blobs in the pg, excluding the spare replicas
+    put_blobs(pg_shard_id_vec, num_blobs_per_shard, pg_blob_id);
+
+    verify_get_blob(pg_shard_id_vec, num_blobs_per_shard);
+    verify_obj_count(1, num_shards_per_pg, num_blobs_per_shard, false);
+
+    // all the replicas , including the spare ones, sync at this point
+    g_helper->sync();
+
+    // ======== Stage 2: replace a member ========
+
+    run_on_pg_leader(pg_id, [&]() {
+        auto r = _obj_inst->pg_manager()
+                     ->replace_member(pg_id, out_member_id, PGMember{in_member_id, "new_member", 0})
+                     .get();
+        ASSERT_TRUE(r);
+    });
+
+    // ======== Stage 3: the new member will kill itself to simulate restart, then P0 will help start it ========
+    if (in_member_id == g_helper->my_replica_id()) {
+        while (!am_i_in_pg(pg_id)) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+            LOGINFO("new member is waiting to become a member of pg {}", pg_id);
+        }
+        LOGDEBUG("wait for the data[shard:{}, blob:{}] replicated to the new member",
+                 kill_until_shard, kill_until_blob);
+        wait_for_blob(kill_until_shard, kill_until_blob);
+        LOGINFO("about to restart new member")
+        restart();
+        LOGINFO("restart, wait for data replication")
+        if (in_member_id == g_helper->my_replica_id()) {
+            wait_for_blob(last_shard, last_blob);
+            verify_get_blob(pg_shard_id_vec, num_blobs_per_shard);
+            verify_obj_count(1, num_shards_per_pg, num_blobs_per_shard, false);
+        }
+    } else if (out_member_id == g_helper->my_replica_id()) {
+        LOGINFO("Destroying PG on removed member");
+        while (am_i_in_pg(pg_id)) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+            LOGINFO("Old member is waiting to leave pg {}", pg_id);
+        }
+    }
+    g_helper->sync();
+}
+
 TEST_F(HomeObjectFixture, RestartLeaderDuringBaselineResync) {
     RestartLeaderDuringBaselineResyncUsingSigKill(10000, 1000, RECEIVING_SNAPSHOT);
 }
