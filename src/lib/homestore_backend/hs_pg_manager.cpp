@@ -368,14 +368,7 @@ void HSHomeObject::destroy_hs_resources(pg_id_t pg_id) {
         LOGW("destroy repl dev with unknown pg_id {}", pg_id);
         return;
     }
-
-    auto group_id = hs_pg->pg_info_.replica_set_uuid;
-    auto v = hs_repl_service().get_repl_dev(group_id);
-    if (v.hasError()) {
-        LOGW("get repl dev for group_id={} has failed", boost::uuids::to_string(group_id));
-        return;
-    }
-    v.value()->purge();
+    hs_pg->repl_dev_->purge();
 
     // Step 2: reset pg chunks
     chunk_selector_->reset_pg_chunks(pg_id);
@@ -403,7 +396,8 @@ void HSHomeObject::destroy_pg_index_table(pg_id_t pg_id) {
 void HSHomeObject::destroy_pg_superblk(pg_id_t pg_id) {
     // pay attention: cp_flush will try get '_pg_lock' to flush all pg ops.
     // before destroy pg superblk, we must ensure all ops on this pg are persisted
-    auto fut = homestore::hs()->cp_mgr().trigger_cp_flush(false /* force */);
+    // set force=true to ensure cp flush is triggered
+    auto fut = homestore::hs()->cp_mgr().trigger_cp_flush(true /* force */);
     auto on_complete = [&](auto success) {
         RELEASE_ASSERT(success, "Failed to trigger CP flush");
         LOGI("CP Flush trigged by pg_destroy completed, pg_id={}", pg_id);
