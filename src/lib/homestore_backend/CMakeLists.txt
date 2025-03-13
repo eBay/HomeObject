@@ -82,7 +82,8 @@ target_link_libraries(homestore_test_dynamic PUBLIC homeobject_homestore ${COMMO
 add_test(NAME HomestoreTestReplaceMember
         COMMAND homestore_test_dynamic -csv error --executor immediate --config_path ./
         --override_config homestore_config.consensus.snapshot_freq_distance:0
-        --gtest_filter=HomeObjectFixture.ReplaceMember)
+        --gtest_filter=HomeObjectFixture.ReplaceMember
+        --override_config homestore_config.generic.repl_dev_cleanup_interval_sec=5)
 # To test both baseline & incremental resync functionality, we use 13 to minimize the likelihood of it being a divisor of the total LSN (currently 30)
 add_test(NAME HomestoreTestReplaceMemberWithBaselineResync
         COMMAND homestore_test_dynamic -csv error --executor immediate --config_path ./

@@ -124,8 +124,7 @@ TEST_F(HomeObjectFixture, ReplaceMember) {
             std::this_thread::sleep_for(std::chrono::milliseconds(1000));
             LOGINFO("old member is waiting to leave pg {}", pg_id);
         }
-
-        verify_pg_destroy(pg_id, index_table_uuid_str, pg_shard_id_vec[pg_id]);
+        verify_pg_destroy(pg_id, index_table_uuid_str, pg_shard_id_vec[pg_id], true);
         // since this case out_member don't have any pg, so we can check each chunk.
         for (const auto& [_, chunk] : _obj_inst->chunk_selector()->m_chunks) {
             ASSERT_EQ(chunk->m_state, ChunkState::AVAILABLE);

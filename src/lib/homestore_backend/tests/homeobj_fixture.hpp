@@ -379,8 +379,14 @@ public:
     }
 
     void verify_pg_destroy(pg_id_t pg_id, const string& index_table_uuid_str,
-                           const std::vector< shard_id_t >& shard_id_vec) {
+                           const std::vector<shard_id_t>& shard_id_vec, bool wait_for_destroy = false) {
         // check pg
+        if (wait_for_destroy) {
+            while (pg_exist(pg_id)) {
+                LOGD("pg still exists, wait for gc to destroy");
+                std::this_thread::sleep_for(std::chrono::milliseconds(500));
+            }
+        }
         ASSERT_FALSE(pg_exist(pg_id));
         ASSERT_EQ(_obj_inst->index_table_pg_map_.find(index_table_uuid_str), _obj_inst->index_table_pg_map_.end());
         // check shards
@@ -524,7 +530,7 @@ private:
     }
 
     void trigger_cp(bool wait) {
-        auto fut = homestore::hs()->cp_mgr().trigger_cp_flush(false /* force */);
+        auto fut = homestore::hs()->cp_mgr().trigger_cp_flush(true /* force */);
         auto on_complete = [&](auto success) {
             EXPECT_EQ(success, true);
             LOGINFO("CP Flush completed");
