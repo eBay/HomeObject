@@ -44,6 +44,8 @@ public:
     virtual bool spdk_mode() const = 0;
     virtual uint32_t threads() const = 0;
     virtual std::list< device_info_t > devices() const = 0;
+    // Memory size in bytes
+    virtual uint64_t mem_size() const = 0;
 
     // Callback made after determining if a SvcId exists or not during initialization, will consume response
     virtual peer_id_t discover_svcid(std::optional< peer_id_t > const& found) const = 0;

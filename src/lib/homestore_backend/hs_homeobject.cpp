@@ -119,8 +119,8 @@ void HSHomeObject::init_homestore() {
 
     http_mgr_ = std::make_unique< HttpManager >(*this);
 
-    /// TODO Where should this come from?
-    const uint64_t app_mem_size = 2 * Gi;
+    const uint64_t app_mem_size = app->mem_size();
+    RELEASE_ASSERT(app_mem_size > 0, "Invalid app_mem_size");
     LOGI("Initialize and start HomeStore with app_mem_size = {}", homestore::in_bytes(app_mem_size));
 
     std::vector< homestore::dev_info > device_info;

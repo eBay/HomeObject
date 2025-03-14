@@ -18,6 +18,7 @@ public:
         return boost::uuids::random_generator()();
     }
     std::string lookup_peer(homeobject::peer_id_t const&) const override { return "test_package.com"; }
+    uint64_t mem_size() const override { return 2 * Gi; }
 };
 
 int main(int argc, char** argv) {
