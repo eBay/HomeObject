@@ -281,8 +281,15 @@ public:
             if (is_restart && args_[j].find("--gtest_filter") != std::string::npos) {
                 continue; // Ignore existing gtest_filter
             }
+            if (is_restart && args_[j].find("--replica_num") != std::string::npos) {
+                continue; // Ignore existing replica_num
+            }
+            if (is_restart && args_[j].find("--is_restart") != std::string::npos) {
+                continue; // Ignore existing is_restart
+            }
             fmt::format_to(std::back_inserter(cmd_line), " {}", args_[j]);
         }
+
         LOGINFO("Spawning Homeobject cmd: {}", cmd_line);
         boost::process::child c(boost::process::cmd = cmd_line, proc_grp_);
         c.detach();
