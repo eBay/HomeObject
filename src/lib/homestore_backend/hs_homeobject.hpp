@@ -453,12 +453,15 @@ public:
                 REGISTER_COUNTER(snp_dnr_load_bytes, "Loaded bytes in baseline resync");
                 REGISTER_COUNTER(snp_dnr_resend_count, "Mesg resend times in baseline resync");
                 REGISTER_COUNTER(snp_dnr_error_count, "Error times when reading blobs in baseline resync");
-                REGISTER_HISTOGRAM(snp_dnr_blob_process_time, "Time cost(us) of successfully process a blob in baseline resync",
-                   HistogramBucketsType(DefaultBuckets));
+                REGISTER_HISTOGRAM(snp_dnr_blob_process_time,
+                                   "Time cost(us) of successfully process a blob in baseline resync",
+                                   HistogramBucketsType(DefaultBuckets));
                 REGISTER_HISTOGRAM(snp_dnr_batch_process_time,
-                                   "Time cost(ms) of successfully process a batch in baseline resync", HistogramBucketsType(DefaultBuckets));
+                                   "Time cost(ms) of successfully process a batch in baseline resync",
+                                   HistogramBucketsType(DefaultBuckets));
                 REGISTER_HISTOGRAM(snp_dnr_batch_e2e_time,
-                                   "Time cost(ms) of a batch end-to-end round trip in baseline resync", HistogramBucketsType(DefaultBuckets));
+                                   "Time cost(ms) of a batch end-to-end round trip in baseline resync",
+                                   HistogramBucketsType(DefaultBuckets));
                 register_me_to_farm();
             }
 
@@ -490,7 +493,7 @@ public:
         pg_id_t pg_id_;
         shared< homestore::ReplDev > repl_dev_;
         uint64_t max_batch_size_;
-        std::unique_ptr<DonerSnapshotMetrics> metrics_;
+        std::unique_ptr< DonerSnapshotMetrics > metrics_;
     };
 
     class SnapshotReceiveHandler {
@@ -542,9 +545,9 @@ public:
             SnapshotContext(int64_t lsn, pg_id_t pg_id) : snp_lsn{lsn}, pg_id{pg_id} {}
         };
 
-        struct ReceiverSnapshotMetrics: sisl::MetricsGroup {
-            ReceiverSnapshotMetrics(std::shared_ptr<SnapshotContext> ctx) : sisl::MetricsGroup("snapshot_receiver", std::to_string(ctx->pg_id)),
-                    ctx_{ctx} {
+        struct ReceiverSnapshotMetrics : sisl::MetricsGroup {
+            ReceiverSnapshotMetrics(std::shared_ptr< SnapshotContext > ctx) :
+                    sisl::MetricsGroup("snapshot_receiver", std::to_string(ctx->pg_id)), ctx_{ctx} {
                 REGISTER_GAUGE(snp_rcvr_total_blob, "Total blobs in baseline resync");
                 REGISTER_GAUGE(snp_rcvr_total_bytes, "Total bytes in baseline resync")
                 REGISTER_GAUGE(snp_rcvr_total_shards, "Total shards in baseline resync")
@@ -554,9 +557,9 @@ public:
                 REGISTER_GAUGE(snp_rcvr_corrupted_blobs, "Corrupted blobs in baseline resync");
                 REGISTER_GAUGE(snp_rcvr_elapsed_time_sec, "Time cost(seconds) of baseline resync");
                 REGISTER_GAUGE(snp_rcvr_error_count, "Error count in baseline resync");
-                REGISTER_HISTOGRAM(snp_rcvr_blob_process_time, "Time cost(us) of successfully process a blob in baseline resync",
-                   HistogramBucketsType(DefaultBuckets));
-
+                REGISTER_HISTOGRAM(snp_rcvr_blob_process_time,
+                                   "Time cost(us) of successfully process a blob in baseline resync",
+                                   HistogramBucketsType(DefaultBuckets));
 
                 attach_gather_cb(std::bind(&ReceiverSnapshotMetrics::on_gather, this));
                 register_me_to_farm();
@@ -569,7 +572,7 @@ public:
 
             void on_gather() {
                 if (ctx_) {
-                    std::shared_lock<std::shared_mutex> lock(ctx_->progress_lock);
+                    std::shared_lock< std::shared_mutex > lock(ctx_->progress_lock);
                     GAUGE_UPDATE(*this, snp_rcvr_total_blob, ctx_->progress.total_blobs);
                     GAUGE_UPDATE(*this, snp_rcvr_total_bytes, ctx_->progress.total_bytes);
                     GAUGE_UPDATE(*this, snp_rcvr_total_shards, ctx_->progress.total_shards);
@@ -582,8 +585,9 @@ public:
                     GAUGE_UPDATE(*this, snp_rcvr_elapsed_time_sec, duration);
                 }
             }
-            private:
-                std::shared_ptr<SnapshotContext> ctx_;
+
+        private:
+            std::shared_ptr< SnapshotContext > ctx_;
         };
 
         HSHomeObject& home_obj_;
