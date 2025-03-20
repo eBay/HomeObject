@@ -185,16 +185,22 @@ public:
                             std::shared_ptr< homestore::snapshot_obj > snp_obj) override;
     void free_user_snp_ctx(void*& user_snp_ctx) override;
 
+    folly::Future< std::error_code > on_fetch_data(const int64_t lsn, const sisl::blob& header,
+                                                   const homestore::MultiBlkId& local_blk_id,
+                                                   sisl::sg_list& sgs) override;
+
 private:
     HSHomeObject* home_object_{nullptr};
 
     std::shared_ptr< homestore::snapshot_context > m_snapshot_context;
     std::mutex m_snapshot_lock;
 
-    std::unique_ptr<HSHomeObject::SnapshotReceiveHandler> m_snp_rcv_handler;
+    std::unique_ptr< HSHomeObject::SnapshotReceiveHandler > m_snp_rcv_handler;
 
     std::shared_ptr< homestore::snapshot_context > get_snapshot_context();
     void set_snapshot_context(std::shared_ptr< homestore::snapshot_context > context);
+
+    bool validate_blob(shard_id_t shard_id, blob_id_t blob_id, void* data, size_t size);
 };
 
 } // namespace homeobject
