@@ -504,13 +504,13 @@ folly::Future< std::error_code > ReplicationStateMachine::on_fetch_data(const in
 
     auto given_buffer = (uint8_t*)(sgs.iovs[0].iov_base);
 
-    // in homeobject, we have three kinds of requests that will write user data(thus fetch_data might happen) to a
+    // in homeobject, we have three kinds of requests that will write data(thus fetch_data might happen) to a
     // chunk:
     // 1 create_shard : will write a shard header to a chunk
     // 2 seal_shard : will write a shard footer to a chunk
     // 3 put_blob: will write user data to a chunk
 
-    // for any type that writes user data to a chunk, we need to handle the fetch_data request for it.
+    // for any type that writes data to a chunk, we need to handle the fetch_data request for it.
 
     switch (msg_header->msg_type) {
     case ReplicationMessageType::CREATE_SHARD_MSG:
