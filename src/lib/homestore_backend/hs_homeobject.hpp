@@ -453,13 +453,13 @@ public:
                 REGISTER_COUNTER(snp_dnr_load_bytes, "Loaded bytes in baseline resync");
                 REGISTER_COUNTER(snp_dnr_resend_count, "Mesg resend times in baseline resync");
                 REGISTER_COUNTER(snp_dnr_error_count, "Error times when reading blobs in baseline resync");
-                REGISTER_HISTOGRAM(snp_dnr_blob_process_time,
+                REGISTER_HISTOGRAM(snp_dnr_blob_process_latency,
                                    "Time cost(us) of successfully process a blob in baseline resync",
                                    HistogramBucketsType(DefaultBuckets));
-                REGISTER_HISTOGRAM(snp_dnr_batch_process_time,
+                REGISTER_HISTOGRAM(snp_dnr_batch_process_latency,
                                    "Time cost(ms) of successfully process a batch in baseline resync",
                                    HistogramBucketsType(DefaultBuckets));
-                REGISTER_HISTOGRAM(snp_dnr_batch_e2e_time,
+                REGISTER_HISTOGRAM(snp_dnr_batch_e2e_latency,
                                    "Time cost(ms) of a batch end-to-end round trip in baseline resync",
                                    HistogramBucketsType(DefaultBuckets));
                 register_me_to_farm();
