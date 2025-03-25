@@ -46,10 +46,10 @@ public:
             s.io_env.http_port = 5000 + g_helper->replica_num();
             LOGD("setup http port to {}", s.io_env.http_port);
         });
-        HSHomeObject::_hs_chunk_size = 20 * Mi;
+        HSHomeObject::_hs_chunk_size = SISL_OPTIONS["chunk_size"].as< uint64_t >() * Mi;
         _obj_inst = std::dynamic_pointer_cast< HSHomeObject >(g_helper->build_new_homeobject());
-        //Used to export metrics, it should be called after init_homeobject
-        if (SISL_OPTIONS["enable_http"].as<bool>()) { g_helper->app->start_http_server(); }
+        // Used to export metrics, it should be called after init_homeobject
+        if (SISL_OPTIONS["enable_http"].as< bool >()) { g_helper->app->start_http_server(); }
         if (!g_helper->is_current_testcase_restarted()) {
             g_helper->bump_sync_point_and_sync();
         } else {
@@ -59,6 +59,8 @@ public:
 
     void TearDown() override {
         g_helper->sync();
+        LOGINFO("Tearing down homeobject replica={}", g_helper->my_replica_id());
+        LOGINFO("Metrics: {}", sisl::MetricsFarm::getInstance().get_result_in_json().dump(2));
         g_helper->app->stop_http_server();
         _obj_inst.reset();
         g_helper->delete_homeobject();
@@ -66,15 +68,19 @@ public:
 
     void restart(uint32_t shutdown_delay_secs = 0u, uint32_t restart_delay_secs = 0u) {
         g_helper->sync();
+        LOGINFO("Restarting homeobject replica={}", g_helper->my_replica_id());
+        LOGINFO("Metrics: {}", sisl::MetricsFarm::getInstance().get_result_in_json().dump(2));
         trigger_cp(true);
         _obj_inst.reset();
-        _obj_inst = std::dynamic_pointer_cast< HSHomeObject >(g_helper->restart(shutdown_delay_secs, restart_delay_secs));
+        _obj_inst =
+            std::dynamic_pointer_cast< HSHomeObject >(g_helper->restart(shutdown_delay_secs, restart_delay_secs));
         // wait for leader to be elected
         std::this_thread::sleep_for(std::chrono::seconds(5));
     }
 
     void stop() {
         LOGINFO("Stoping homeobject replica={}", g_helper->my_replica_id());
+        LOGINFO("Metrics: {}", sisl::MetricsFarm::getInstance().get_result_in_json().dump(2));
         _obj_inst.reset();
         g_helper->homeobj_.reset();
         sleep(120);
@@ -111,7 +117,8 @@ public:
         auto my_replica_num = g_helper->replica_num();
         if (excluding_pg_replicas.contains(my_replica_num)) return;
 
-        auto pg_size = SISL_OPTIONS["pg_size"].as< uint64_t >() * Mi;
+        auto pg_size =
+            SISL_OPTIONS["chunks_per_pg"].as< uint64_t >() * SISL_OPTIONS["chunk_size"].as< uint64_t >() * Mi;
         auto name = g_helper->test_name();
 
         if (leader_replica_num == my_replica_num) {
@@ -276,8 +283,7 @@ public:
 
     void del_blob(pg_id_t pg_id, shard_id_t shard_id, blob_id_t blob_id) {
         g_helper->sync();
-        run_on_pg_leader(pg_id, [&]()
-        {
+        run_on_pg_leader(pg_id, [&]() {
             auto g = _obj_inst->blob_manager()->del(shard_id, blob_id).get();
             ASSERT_TRUE(g);
             LOGINFO("delete blob, pg {} shard {} blob {}", pg_id, shard_id, blob_id);
@@ -320,7 +326,7 @@ public:
     void verify_get_blob(std::map< pg_id_t, std::vector< shard_id_t > > const& pg_shard_id_vec,
                          uint64_t const num_blobs_per_shard, bool const use_random_offset = false,
                          bool const wait_when_not_exist = false,
-                         std::map<pg_id_t, blob_id_t> pg_start_blob_id = std::map<pg_id_t, blob_id_t>()) {
+                         std::map< pg_id_t, blob_id_t > pg_start_blob_id = std::map< pg_id_t, blob_id_t >()) {
         uint32_t off = 0, len = 0;
 
         for (const auto& [pg_id, shard_vec] : pg_shard_id_vec) {
@@ -343,7 +349,8 @@ public:
 
                     auto g = _obj_inst->blob_manager()->get(shard_id, current_blob_id, off, len).get();
                     while (wait_when_not_exist && g.hasError() && g.error().code == BlobErrorCode::UNKNOWN_BLOB) {
-                        LOGDEBUG("blob not exist at the moment, waiting for sync, shard {} blob {}", shard_id, current_blob_id);
+                        LOGDEBUG("blob not exist at the moment, waiting for sync, shard {} blob {}", shard_id,
+                                 current_blob_id);
                         wait_for_blob(shard_id, current_blob_id);
                         g = _obj_inst->blob_manager()->get(shard_id, current_blob_id, off, len).get();
                     }
@@ -379,7 +386,7 @@ public:
     }
 
     void verify_pg_destroy(pg_id_t pg_id, const string& index_table_uuid_str,
-                           const std::vector<shard_id_t>& shard_id_vec, bool wait_for_destroy = false) {
+                           const std::vector< shard_id_t >& shard_id_vec, bool wait_for_destroy = false) {
         // check pg
         if (wait_for_destroy) {
             while (pg_exist(pg_id)) {
@@ -433,7 +440,7 @@ public:
             EXPECT_EQ(lhs->get_chunk_ids()[i], rhs->get_chunk_ids()[i]);
         }
 
-        //verify recovered pg_info
+        // verify recovered pg_info
         EXPECT_EQ(lhs_pg->pg_info_.id, rhs_pg->pg_info_.id);
         EXPECT_EQ(lhs_pg->pg_info_.replica_set_uuid, rhs_pg->pg_info_.replica_set_uuid);
         EXPECT_EQ(lhs_pg->pg_info_.size, rhs_pg->pg_info_.size);
@@ -464,7 +471,7 @@ public:
 
     peer_id_t get_leader_id(pg_id_t pg_id) {
         if (!am_i_in_pg(pg_id)) return uuids::nil_uuid();
-        while(true) {
+        while (true) {
             PGStats pg_stats;
             auto res = _obj_inst->pg_manager()->get_stats(pg_id, pg_stats);
             if (!res || pg_stats.leader_id.is_nil()) {
@@ -477,7 +484,7 @@ public:
     }
 
     bool wait_for_leader_change(pg_id_t pg_id, peer_id_t old_leader) {
-        if (old_leader.is_nil())return false;
+        if (old_leader.is_nil()) return false;
         while (true) {
             auto leader = get_leader_id(pg_id);
             if (old_leader != leader) { return true; }
@@ -571,10 +578,9 @@ private:
         LOGINFO("Flip {} set", flip_name);
     }
 
-    template <typename T>
-void set_retval_flip(const std::string flip_name, const T retval,
-                     uint32_t count = 1, uint32_t percent = 100,  flip::FlipCondition cond = flip::FlipCondition())
-    {
+    template < typename T >
+    void set_retval_flip(const std::string flip_name, const T retval, uint32_t count = 1, uint32_t percent = 100,
+                         flip::FlipCondition cond = flip::FlipCondition()) {
         flip::FlipFrequency freq;
         freq.set_count(count);
         freq.set_percent(percent);
@@ -596,8 +602,11 @@ void set_retval_flip(const std::string flip_name, const T retval,
         LOGINFO("Flip {} removed", flip_name);
     }
 #endif
-    void RestartFollowerDuringBaselineResyncUsingSigKill(uint64_t flip_delay, uint64_t restart_interval, string restart_phase);
-    void RestartLeaderDuringBaselineResyncUsingSigKill(uint64_t flip_delay, uint64_t restart_interval, string restart_phase);
+    void RestartFollowerDuringBaselineResyncUsingSigKill(uint64_t flip_delay, uint64_t restart_interval,
+                                                         string restart_phase);
+    void RestartLeaderDuringBaselineResyncUsingSigKill(uint64_t flip_delay, uint64_t restart_interval,
+                                                       string restart_phase);
+
 private:
     std::random_device rnd{};
     std::default_random_engine rnd_engine{rnd()};
