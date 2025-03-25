@@ -582,36 +582,37 @@ folly::Future< std::error_code > ReplicationStateMachine::on_fetch_data(const in
                 homestore::BtreeSingleGetRequest get_req{&index_key, &index_value};
 
                 LOGD("fetch data with blob_id {}, shard_id {} from index table", blob_id, shard_id);
-                if (homestore::btree_status_t::success == index_table->get(get_req)) {
-                    if (const auto& pbas = index_value.pbas(); pbas != HSHomeObject::tombstone_pbas) {
-                        RELEASE_ASSERT(pbas.blk_count() * repl_dev()->get_blk_size() == total_size,
-                                       "pbas blk size does not match total_size");
-                        // blocking in an async call is good, since it will not block the caller thread
-                        auto error = homestore::data_service().async_read(pbas, given_buffer, total_size).get();
-                        // io error
-                        if (error) throw std::system_error(err);
-                        // if data matches
-                        if (validate_blob(shard_id, blob_id, given_buffer, total_size)) {
-                            LOGD("pba matches blob data, lsn: {}, blob_id: {}, shard_id: {}", lsn, blob_id, shard_id);
-                            return std::error_code{};
-                        } else {
-                            // there is a scenario that the chunk is gced after we get the pba, but before we schecdule
-                            // the read. we can try to read the index table and read data again, but for the simlicity
-                            // here, we just return error, and let follower to retry fetch data.
-                            throw std::system_error(std::make_error_code(std::errc::resource_unavailable_try_again));
-                        }
-                    } else {
-                        // blob is deleted, so returning whatever data is good , since client will never read it.
-                        LOGD("on_fetch_data: blob has been deleted, blob_id: {}, shard_id: {}", blob_id, shard_id);
-                        return std::error_code{};
-                    }
-                } else {
+                auto rc = index_table->get(get_req);
+                if (sisl_unlikely(homestore::btree_status_t::success != rc)) {
                     // blob never exists or has been gc
                     LOGD("on_fetch_data failed to get from index table, blob never exists or has been gc, blob_id: {}, "
                          "shard_id: {}",
                          blob_id, shard_id);
                     // returning whatever data is good , since client will never read it.
                     return std::error_code{};
+                }
+                const auto& pbas = index_value.pbas();
+                if (sisl_unlikely(pbas == HSHomeObject::tombstone_pbas)) {
+                    // blob is deleted, so returning whatever data is good , since client will never read it.
+                    LOGD("on_fetch_data: blob has been deleted, blob_id: {}, shard_id: {}", blob_id, shard_id);
+                    return std::error_code{};
+                }
+
+                RELEASE_ASSERT(pbas.blk_count() * repl_dev()->get_blk_size() == total_size,
+                               "pbas blk size does not match total_size");
+                // blocking in an async call is good, since it will not block the caller thread
+                auto error = homestore::data_service().async_read(pbas, given_buffer, total_size).get();
+                // io error
+                if (error) throw std::system_error(err);
+                // if data matches
+                if (validate_blob(shard_id, blob_id, given_buffer, total_size)) {
+                    LOGD("pba matches blob data, lsn: {}, blob_id: {}, shard_id: {}", lsn, blob_id, shard_id);
+                    return std::error_code{};
+                } else {
+                    // there is a scenario that the chunk is gced after we get the pba, but before we schecdule
+                    // the read. we can try to read the index table and read data again, but for the simlicity
+                    // here, we just return error, and let follower to retry fetch data.
+                    throw std::system_error(std::make_error_code(std::errc::resource_unavailable_try_again));
                 }
             })
             .thenError< std::system_error >([blob_id, shard_id](const std::system_error& e) {
