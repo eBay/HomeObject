@@ -7,6 +7,7 @@
 #include "generated/resync_blob_data_generated.h"
 #include <homestore/replication/repl_dev.h>
 #include <homestore/replication/repl_decls.h>
+#include "hs_homeobject.hpp"
 
 namespace homeobject {
 void ReplicationStateMachine::on_commit(int64_t lsn, const sisl::blob& header, const sisl::blob& key,
@@ -278,8 +279,8 @@ int ReplicationStateMachine::read_snapshot_obj(std::shared_ptr< homestore::snaps
     LOGD("read current snp obj {}", log_str)
     // invalid Id
     if (!pg_iter->update_cursor(obj_id)) {
-        LOGW("Invalid objId in snapshot read, {}, current shard_seq_num={}, current batch_num={}",
-             log_str, pg_iter->cur_obj_id_.shard_seq_num, pg_iter->cur_obj_id_.batch_id);
+        LOGW("Invalid objId in snapshot read, {}, current shard_seq_num={}, current batch_num={}", log_str,
+             pg_iter->cur_obj_id_.shard_seq_num, pg_iter->cur_obj_id_.batch_id);
         return -1;
     }
 
@@ -315,7 +316,7 @@ int ReplicationStateMachine::read_snapshot_obj(std::shared_ptr< homestore::snaps
 }
 
 void ReplicationStateMachine::write_snapshot_obj(std::shared_ptr< homestore::snapshot_context > context,
-                                                  std::shared_ptr< homestore::snapshot_obj > snp_obj) {
+                                                 std::shared_ptr< homestore::snapshot_obj > snp_obj) {
     RELEASE_ASSERT(context != nullptr, "Context null");
     RELEASE_ASSERT(snp_obj != nullptr, "Snapshot data null");
     auto r_dev = repl_dev();
@@ -371,8 +372,9 @@ void ReplicationStateMachine::write_snapshot_obj(std::shared_ptr< homestore::sna
                 m_snp_rcv_handler->get_shard_cursor() == HSHomeObject::SnapshotReceiveHandler::shard_list_end_marker
                 ? LAST_OBJ_ID
                 : objId(HSHomeObject::get_sequence_num_from_shard_id(m_snp_rcv_handler->get_shard_cursor()), 0).value;
-            LOGI("Resume from previous context breakpoint, lsn:{} pg_id:{} next_shard:{}, shard_cursor:{}", context->get_lsn(),
-                 pg_data->pg_id(), m_snp_rcv_handler->get_next_shard(), m_snp_rcv_handler->get_shard_cursor());
+            LOGI("Resume from previous context breakpoint, lsn:{} pg_id:{} next_shard:{}, shard_cursor:{}",
+                 context->get_lsn(), pg_data->pg_id(), m_snp_rcv_handler->get_next_shard(),
+                 m_snp_rcv_handler->get_shard_cursor());
             return;
         }
 
@@ -476,6 +478,187 @@ std::shared_ptr< homestore::snapshot_context > ReplicationStateMachine::get_snap
 void ReplicationStateMachine::set_snapshot_context(std::shared_ptr< homestore::snapshot_context > context) {
     home_object_->update_snapshot_sb(repl_dev()->group_id(), context);
     m_snapshot_context = context;
+}
+
+folly::Future< std::error_code > ReplicationStateMachine::on_fetch_data(const int64_t lsn, const sisl::blob& header,
+                                                                        const homestore::MultiBlkId& local_blk_id,
+                                                                        sisl::sg_list& sgs) {
+    // the lsn here will always be -1 ,since this lsn has not been appeneded and thus get no lsn
+
+    const ReplicationMessageHeader* msg_header = r_cast< const ReplicationMessageHeader* >(header.cbytes());
+
+    if (msg_header->corrupted()) {
+        LOGW("replication message header is corrupted with crc error, lsn:{}", lsn);
+        return folly::makeFuture< std::error_code >(std::make_error_code(std::errc::bad_message));
+    }
+
+    LOGD("fetch data with lsn: {}, msg type: {}", lsn, msg_header->msg_type);
+
+    // for nuobject case, we can make this assumption, since we use append_blk_allocator.
+    RELEASE_ASSERT(sgs.iovs.size() == 1, "sgs iovs size should be 1, lsn: {}, msg_type: {}", lsn, msg_header->msg_type);
+
+    auto const total_size = local_blk_id.blk_count() * repl_dev()->get_blk_size();
+    RELEASE_ASSERT(total_size == sgs.size,
+                   "total_blk_size does not match, lsn: {}, msg_type: {}, expected size {}, given buffer size {}", lsn,
+                   msg_header->msg_type, total_size, sgs.size);
+
+    auto given_buffer = (uint8_t*)(sgs.iovs[0].iov_base);
+
+    // in homeobject, we have three kinds of requests that will write data(thus fetch_data might happen) to a
+    // chunk:
+    // 1 create_shard : will write a shard header to a chunk
+    // 2 seal_shard : will write a shard footer to a chunk
+    // 3 put_blob: will write user data to a chunk
+
+    // for any type that writes data to a chunk, we need to handle the fetch_data request for it.
+
+    switch (msg_header->msg_type) {
+    case ReplicationMessageType::CREATE_SHARD_MSG:
+    case ReplicationMessageType::SEAL_SHARD_MSG: {
+        // this function only returns data, not care about raft related logic, so no need to check the existence of
+        // shard, just return the shard header/footer directly. Also, no need to read the data from disk, generate it
+        // from Header.
+        auto sb =
+            r_cast< HSHomeObject::shard_info_superblk const* >(header.cbytes() + sizeof(ReplicationMessageHeader));
+
+        auto const expected_size =
+            sisl::round_up(sizeof(HSHomeObject::shard_info_superblk), repl_dev()->get_blk_size());
+
+        RELEASE_ASSERT(
+            sgs.size == expected_size,
+            "shard metadata size does not match, lsn: {}, msg_type: {}, expected size {}, given buffer size {}", lsn,
+            msg_header->msg_type, expected_size, sgs.size);
+
+        // TODO：：return error_code if assert fails, so it will not crash here because of the assert failure.
+
+        std::memcpy(given_buffer, sb, total_size);
+        return folly::makeFuture< std::error_code >(std::error_code{});
+    }
+
+        // TODO: for shard header and footer, follower can generate it itself according to header, no need to fetch it
+        // from leader. this can been done by adding another callback, which will be called before follower tries to
+        // fetch data.
+
+    case ReplicationMessageType::PUT_BLOB_MSG: {
+
+        const auto blob_id = msg_header->blob_id;
+        const auto shard_id = msg_header->shard_id;
+
+        LOGD("fetch data with blob_id {}, shard_id {}", blob_id, shard_id);
+        // we first try to read data according to the local_blk_id to see if it matches the blob_id
+        return std::move(homestore::data_service().async_read(local_blk_id, given_buffer, total_size))
+            .via(folly::getGlobalIOExecutor())
+            .thenValue([this, lsn, blob_id, shard_id, given_buffer, total_size](auto&& err) {
+                // io error
+                if (err) throw std::system_error(err);
+
+                // folly future has no machenism to bypass the later thenValue in the then value chain. so for all the
+                // case that no need to schedule the later async_read, we throw a system_error with no error code to
+                // bypass the next thenValue.
+#ifdef _PRERELEASE
+                if (iomgr_flip::instance()->test_flip("local_blk_data_invalid")) {
+                    LOGI("Simulating forcing to read by indextable");
+                } else if (validate_blob(shard_id, blob_id, given_buffer, total_size)) {
+                    LOGD("local_blk_id matches blob data, lsn: {}, blob_id: {}, shard_id: {}", lsn, blob_id, shard_id);
+                    throw std::system_error(std::error_code{});
+                }
+#else
+                // if data matches
+                if (validate_blob(shard_id, blob_id, given_buffer, total_size)) {
+                    LOGD("local_blk_id matches blob data, lsn: {}, blob_id: {}, shard_id: {}", lsn, blob_id, shard_id);
+                    throw std::system_error(std::error_code{});
+                }
+#endif
+
+                // if data does not match, try to read data according to the index table. this might happen if the chunk
+                // has once been gc.
+                pg_id_t pg_id = shard_id >> homeobject::shard_width;
+                auto hs_pg = home_object_->get_hs_pg(pg_id);
+                if (!hs_pg) {
+                    LOGE("pg not found for pg_id: {}, shard_id: {}", pg_id, shard_id);
+                    // TODO: use a proper error code.
+                    throw std::system_error(std::make_error_code(std::errc::bad_address));
+                }
+                const auto& index_table = hs_pg->index_table_;
+
+                BlobRouteKey index_key{BlobRoute{shard_id, blob_id}};
+                BlobRouteValue index_value;
+                homestore::BtreeSingleGetRequest get_req{&index_key, &index_value};
+
+                LOGD("fetch data with blob_id {}, shard_id {} from index table", blob_id, shard_id);
+
+                auto rc = index_table->get(get_req);
+                if (sisl_unlikely(homestore::btree_status_t::success != rc)) {
+                    // blob never exists or has been gc
+                    LOGD("on_fetch_data failed to get from index table, blob never exists or has been gc, blob_id: {}, "
+                         "shard_id: {}",
+                         blob_id, shard_id);
+                    // returning whatever data is good , since client will never read it.
+                    throw std::system_error(std::error_code{});
+                }
+
+                const auto& pbas = index_value.pbas();
+                if (sisl_unlikely(pbas == HSHomeObject::tombstone_pbas)) {
+                    // blob is deleted, so returning whatever data is good , since client will never read it.
+                    LOGD("on_fetch_data: blob has been deleted, blob_id: {}, shard_id: {}", blob_id, shard_id);
+                    throw std::system_error(std::error_code{});
+                }
+
+                RELEASE_ASSERT(pbas.blk_count() * repl_dev()->get_blk_size() == total_size,
+                               "pbas blk size does not match total_size");
+                return homestore::data_service().async_read(pbas, given_buffer, total_size);
+            })
+            .thenValue([this, lsn, blob_id, shard_id, given_buffer, total_size](auto&& err) {
+                // io error
+                if (err) throw std::system_error(err);
+                // if data matches
+                if (validate_blob(shard_id, blob_id, given_buffer, total_size)) {
+                    LOGD("pba matches blob data, lsn: {}, blob_id: {}, shard_id: {}", lsn, blob_id, shard_id);
+                    return std::error_code{};
+                } else {
+                    // there is a scenario that the chunk is gced after we get the pba, but before we schecdule
+                    // the read. we can try to read the index table and read data again, but for the simlicity
+                    // here, we just return error, and let follower to retry fetch data.
+                    return std::make_error_code(std::errc::resource_unavailable_try_again);
+                }
+            })
+            .thenError< std::system_error >([blob_id, shard_id](const std::system_error& e) {
+                auto ec = e.code();
+
+                if (!ec) {
+                    // if no error code, we come to here, which means the data is valid or no need to read data again.
+                    LOGD("blob valid, blob_id: {}, shard_id: {}", blob_id, shard_id);
+                } else {
+                    // if any error happens, we come to here
+                    LOGE("IO error happens when reading data for blob_id: {}, shard_id: {}, error: {}", blob_id,
+                         shard_id, e.what());
+                }
+
+                return ec;
+            });
+    }
+    default: {
+        LOGW("msg type: {}, should not happen in fetch_data rpc", msg_header->msg_type);
+        return folly::makeFuture< std::error_code >(std::make_error_code(std::errc::operation_not_supported));
+    }
+    }
+}
+
+bool ReplicationStateMachine::validate_blob(shard_id_t shard_id, blob_id_t blob_id, void* data, size_t size) const {
+    auto const* header = r_cast< HSHomeObject::BlobHeader const* >(data);
+    if (!header->valid()) {
+        LOGD("blob header is invalid, blob_id: {}, shard_id: {}, size: {}", blob_id, shard_id, size);
+        return false;
+    }
+    if (header->shard_id != shard_id) {
+        LOGD("shard_id does not match , expected shard_id: {} , shard_id in header: {}", shard_id, header->shard_id);
+        return false;
+    }
+    if (header->blob_id != blob_id) {
+        LOGD("blob_id does not match , expected blob_id: {} , blob_id in header: {}", blob_id, header->blob_id);
+        return false;
+    }
+    return true;
 }
 
 sisl::io_blob_safe HSHomeObject::get_snapshot_sb_data(homestore::group_id_t group_id) {

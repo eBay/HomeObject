@@ -36,15 +36,15 @@ HSHomeObject::PGBlobIterator::PGBlobIterator(HSHomeObject& home_obj, homestore::
     }
 }
 
-//result represents if the objId is valid and the cursors are updated
+// result represents if the objId is valid and the cursors are updated
 bool HSHomeObject::PGBlobIterator::update_cursor(objId id) {
     if (cur_batch_start_time_ != Clock::time_point{}) {
-        HISTOGRAM_OBSERVE(*metrics_, snp_dnr_batch_e2e_time, get_elapsed_time_us(cur_batch_start_time_));
+        HISTOGRAM_OBSERVE(*metrics_, snp_dnr_batch_e2e_latency, get_elapsed_time_us(cur_batch_start_time_));
     }
     cur_batch_start_time_ = Clock::now();
 
     if (id.value == LAST_OBJ_ID) { return true; }
-    //resend batch
+    // resend batch
     if (id.value == cur_obj_id_.value) {
         LOGT("resend the same batch, objId:{}, cur_obj_id:{}", id.to_string(), cur_obj_id_.to_string());
         COUNTER_INCREMENT(*metrics_, snp_dnr_resend_count, 1);
@@ -72,13 +72,13 @@ bool HSHomeObject::PGBlobIterator::update_cursor(objId id) {
         LOGE("invalid objId, expected={}, actual={}", next_obj_id.to_string(), id.to_string());
         return false;
     }
-    //next shard
+    // next shard
     if (cur_obj_id_.shard_seq_num != next_obj_id.shard_seq_num) {
         cur_shard_idx_++;
         cur_start_blob_idx_ = 0;
         cur_batch_blob_count_ = 0;
     } else {
-        //next batch
+        // next batch
         cur_start_blob_idx_ = cur_start_blob_idx_ + cur_batch_blob_count_;
         cur_batch_blob_count_ = 0;
     }
@@ -87,11 +87,11 @@ bool HSHomeObject::PGBlobIterator::update_cursor(objId id) {
 }
 
 objId HSHomeObject::PGBlobIterator::expected_next_obj_id() {
-    //next batch
+    // next batch
     if (cur_start_blob_idx_ + cur_batch_blob_count_ < cur_blob_list_.size()) {
         return objId(cur_obj_id_.shard_seq_num, cur_obj_id_.batch_id + 1);
     }
-    //next shard
+    // next shard
     if (cur_shard_idx_ < static_cast< int64_t >(shard_list_.size() - 1)) {
         auto next_shard_seq_num = shard_list_[cur_shard_idx_ + 1].info.id & 0xFFFFFFFFFFFF;
         return objId(next_shard_seq_num, 0);
@@ -133,15 +133,16 @@ bool HSHomeObject::PGBlobIterator::create_pg_snapshot_data(sisl::io_blob_safe& m
         members.push_back(CreateMemberDirect(builder_, &id, member.name.c_str(), member.priority));
     }
     std::vector< uint64_t > shard_ids;
-    auto total_bytes = pg->durable_entities().total_occupied_blk_count.load(std::memory_order_relaxed) * repl_dev_->
-        get_blk_size();
+    auto total_bytes =
+        pg->durable_entities().total_occupied_blk_count.load(std::memory_order_relaxed) * repl_dev_->get_blk_size();
     auto total_blobs = pg->durable_entities().active_blob_count.load(std::memory_order_relaxed);
     for (auto& shard : shard_list_) {
         shard_ids.push_back(shard.info.id);
     }
 
-    auto pg_entry = CreateResyncPGMetaDataDirect(builder_, pg_info.id, &uuid, pg_info.size, pg_info.chunk_size, pg->durable_entities().blob_sequence_num,
-                                                 pg->shard_sequence_num_, &members, &shard_ids, total_blobs, total_bytes);
+    auto pg_entry = CreateResyncPGMetaDataDirect(builder_, pg_info.id, &uuid, pg_info.size, pg_info.chunk_size,
+                                                 pg->durable_entities().blob_sequence_num, pg->shard_sequence_num_,
+                                                 &members, &shard_ids, total_blobs, total_bytes);
     builder_.FinishSizePrefixed(pg_entry);
 
     pack_resync_message(meta_blob, SyncMessageType::PG_META);
@@ -173,8 +174,8 @@ bool HSHomeObject::PGBlobIterator::create_shard_snapshot_data(sisl::io_blob_safe
     return true;
 }
 
-BlobManager::AsyncResult< sisl::io_blob_safe > HSHomeObject::PGBlobIterator::load_blob_data(
-    const BlobInfo& blob_info, ResyncBlobState& state) {
+BlobManager::AsyncResult< sisl::io_blob_safe > HSHomeObject::PGBlobIterator::load_blob_data(const BlobInfo& blob_info,
+                                                                                            ResyncBlobState& state) {
     auto shard_id = blob_info.shard_id;
     auto blob_id = blob_info.blob_id;
     auto blkid = blob_info.pbas;
@@ -187,53 +188,49 @@ BlobManager::AsyncResult< sisl::io_blob_safe > HSHomeObject::PGBlobIterator::loa
 
     LOGD("Blob get request: shard_id={}, blob_id={}, blkid={}", shard_id, blob_id, blkid.to_string());
     return repl_dev_->async_read(blkid, sgs, total_size)
-                    .thenValue([this, blob_id, shard_id, &state, read_buf = std::move(read_buf)]
-                    (auto&& result) mutable -> BlobManager::AsyncResult< sisl::io_blob_safe > {
-                            if (result) {
-                                LOGE("Failed to get blob, shard_id={}, blob_id={}, err={}", shard_id, blob_id,
-                                     result.value());
-                                return folly::makeUnexpected(BlobError(BlobErrorCode::READ_FAILED));
-                            }
+        .thenValue([this, blob_id, shard_id, &state, read_buf = std::move(read_buf)](
+                       auto&& result) mutable -> BlobManager::AsyncResult< sisl::io_blob_safe > {
+            if (result) {
+                LOGE("Failed to get blob, shard_id={}, blob_id={}, err={}", shard_id, blob_id, result.value());
+                return folly::makeUnexpected(BlobError(BlobErrorCode::READ_FAILED));
+            }
 
-                            BlobHeader const* header = r_cast< BlobHeader const* >(read_buf.cbytes());
-                            if (!header->valid()) {
-                                //The metrics for corrupted blob is handled on the follower side.
-                                LOGE("Invalid header found, shard_id={}, blob_id={}, [header={}]", shard_id, blob_id,
-                                     header->to_string());
-                                state = ResyncBlobState::CORRUPTED;
-                                return std::move(read_buf);
-                            }
+            BlobHeader const* header = r_cast< BlobHeader const* >(read_buf.cbytes());
+            if (!header->valid()) {
+                // The metrics for corrupted blob is handled on the follower side.
+                LOGE("Invalid header found, shard_id={}, blob_id={}, [header={}]", shard_id, blob_id,
+                     header->to_string());
+                state = ResyncBlobState::CORRUPTED;
+                return std::move(read_buf);
+            }
 
-                            if (header->shard_id != shard_id) {
-                                //The metrics for corrupted blob is handled on the follower side.
-                                LOGE("Invalid shard_id in header, shard_id={}, blob_id={}, [header={}]", shard_id,
-                                     blob_id, header->to_string());
-                                state = ResyncBlobState::CORRUPTED;
-                                return std::move(read_buf);
-                            }
+            if (header->shard_id != shard_id) {
+                // The metrics for corrupted blob is handled on the follower side.
+                LOGE("Invalid shard_id in header, shard_id={}, blob_id={}, [header={}]", shard_id, blob_id,
+                     header->to_string());
+                state = ResyncBlobState::CORRUPTED;
+                return std::move(read_buf);
+            }
 
-                            std::string user_key = header->user_key_size
-                                ? std::string((const char*)(read_buf.bytes() + sizeof(BlobHeader)),
-                                              (size_t)header->user_key_size)
-                                : std::string{};
+            std::string user_key = header->user_key_size
+                ? std::string((const char*)(read_buf.bytes() + sizeof(BlobHeader)), (size_t)header->user_key_size)
+                : std::string{};
 
-                            uint8_t const* blob_bytes = read_buf.bytes() + header->data_offset;
-                            uint8_t computed_hash[BlobHeader::blob_max_hash_len]{};
-                            home_obj_.compute_blob_payload_hash(header->hash_algorithm, blob_bytes, header->blob_size,
-                                                                uintptr_cast(user_key.data()), header->user_key_size,
-                                                                computed_hash,
-                                                                BlobHeader::blob_max_hash_len);
-                            if (std::memcmp(computed_hash, header->hash, BlobHeader::blob_max_hash_len) != 0) {
-                                LOGE(
-                                    "corrupted blob found, shard_id: {}, blob_id: {}, hash mismatch header [{}] [computed={:np}]",
-                                    shard_id, blob_id, header->to_string(),
-                                    spdlog::to_hex(computed_hash, computed_hash + BlobHeader::blob_max_hash_len));
-                                state = ResyncBlobState::CORRUPTED;
-                            }
+            uint8_t const* blob_bytes = read_buf.bytes() + header->data_offset;
+            uint8_t computed_hash[BlobHeader::blob_max_hash_len]{};
+            home_obj_.compute_blob_payload_hash(header->hash_algorithm, blob_bytes, header->blob_size,
+                                                uintptr_cast(user_key.data()), header->user_key_size, computed_hash,
+                                                BlobHeader::blob_max_hash_len);
+            if (std::memcmp(computed_hash, header->hash, BlobHeader::blob_max_hash_len) != 0) {
+                LOGE("corrupted blob found, shard_id: {}, blob_id: {}, hash mismatch header [{}] [computed={:np}]",
+                     shard_id, blob_id, header->to_string(),
+                     spdlog::to_hex(computed_hash, computed_hash + BlobHeader::blob_max_hash_len));
+                state = ResyncBlobState::CORRUPTED;
+            }
 
-                            LOGD("Blob get success: shard_id={}, blob_id={}", shard_id, blob_id);
-                            return std::move(read_buf);
-                        });
+            LOGD("Blob get success: shard_id={}, blob_id={}", shard_id, blob_id);
+            return std::move(read_buf);
+        });
 }
 
 bool HSHomeObject::PGBlobIterator::create_blobs_snapshot_data(sisl::io_blob_safe& data_blob) {
@@ -247,7 +244,7 @@ bool HSHomeObject::PGBlobIterator::create_blobs_snapshot_data(sisl::io_blob_safe
     while (total_bytes < max_batch_size_ && idx < cur_blob_list_.size()) {
         auto info = cur_blob_list_[idx++];
         ResyncBlobState state = ResyncBlobState::NORMAL;
-        //handle deleted object
+        // handle deleted object
         if (info.pbas == tombstone_pbas) {
             LOGT("Blob is deleted: shard_id={}, blob_id={}, blkid={}", info.shard_id, info.blob_id,
                  info.pbas.to_string());
@@ -262,11 +259,11 @@ bool HSHomeObject::PGBlobIterator::create_blobs_snapshot_data(sisl::io_blob_safe
             LOGW("Simulating loading blob data error");
             return false;
         }
-        auto delay = iomgr_flip::instance()->get_test_flip< long >("simulate_read_snapshot_load_blob_delay", static_cast<long>(info.blob_id));
+        auto delay = iomgr_flip::instance()->get_test_flip< long >("simulate_read_snapshot_load_blob_delay",
+                                                                   static_cast< long >(info.blob_id));
         LOGD("simulate_read_snapshot_load_blob_delay flip, triggered: {}, blob: {}", delay.has_value(), info.blob_id);
         if (delay) {
-            LOGI("Simulating pg blob iterator load data with delay, delay:{}, blob_id:{}", delay.get(),
-                 info.blob_id);
+            LOGI("Simulating pg blob iterator load data with delay, delay:{}, blob_id:{}", delay.get(), info.blob_id);
             std::this_thread::sleep_for(std::chrono::milliseconds(delay.get()));
         }
 #endif
@@ -276,8 +273,7 @@ bool HSHomeObject::PGBlobIterator::create_blobs_snapshot_data(sisl::io_blob_safe
             auto result = load_blob_data(info, state).get();
             if (result.hasError() && result.error().code == BlobErrorCode::READ_FAILED) {
                 LOGW("Failed to retrieve blob for shard={} blob={} pbas={}, err={}, attempt={}", info.shard_id,
-                     info.blob_id,
-                     info.pbas.to_string(), result.error(), i);
+                     info.blob_id, info.pbas.to_string(), result.error(), i);
             } else {
                 blob = std::move(result.value());
                 break;
@@ -290,24 +286,24 @@ bool HSHomeObject::PGBlobIterator::create_blobs_snapshot_data(sisl::io_blob_safe
             return false;
         }
 
-        HISTOGRAM_OBSERVE(*metrics_, snp_dnr_blob_process_time, get_elapsed_time_us(blob_start));
+        HISTOGRAM_OBSERVE(*metrics_, snp_dnr_blob_process_latency, get_elapsed_time_us(blob_start));
         std::vector< uint8_t > data(blob.cbytes(), blob.cbytes() + blob.size());
         blob_entries.push_back(CreateResyncBlobDataDirect(builder_, info.blob_id, (uint8_t)state, &data));
         total_bytes += blob.size();
     }
-    //should include the deleted blobs
+    // should include the deleted blobs
     cur_batch_blob_count_ = idx - cur_start_blob_idx_;
     if (idx == cur_blob_list_.size()) { end_of_shard = true; }
-    builder_.FinishSizePrefixed(
-        CreateResyncBlobDataBatchDirect(builder_, &blob_entries, end_of_shard));
+    builder_.FinishSizePrefixed(CreateResyncBlobDataBatchDirect(builder_, &blob_entries, end_of_shard));
 
-    LOGD("create blobs snapshot data batch: shard_seq_num={}, batch_num={}, total_bytes={}, blob_num={}, end_of_shard={}",
+    LOGD("create blobs snapshot data batch: shard_seq_num={}, batch_num={}, total_bytes={}, blob_num={}, "
+         "end_of_shard={}",
          cur_obj_id_.shard_seq_num, cur_obj_id_.batch_id, total_bytes, blob_entries.size(), end_of_shard);
 
     COUNTER_INCREMENT(*metrics_, snp_dnr_load_blob, blob_entries.size());
     COUNTER_INCREMENT(*metrics_, snp_dnr_load_bytes, total_bytes);
     pack_resync_message(data_blob, SyncMessageType::SHARD_BATCH);
-    HISTOGRAM_OBSERVE(*metrics_, snp_dnr_batch_process_time, get_elapsed_time_us(batch_start));
+    HISTOGRAM_OBSERVE(*metrics_, snp_dnr_batch_process_latency, get_elapsed_time_us(batch_start));
     return true;
 }
 
@@ -323,7 +319,7 @@ void HSHomeObject::PGBlobIterator::pack_resync_message(sisl::io_blob_safe& dest_
     std::memcpy(dest_blob.bytes(), &header, sizeof(SyncMessageHeader));
     std::memcpy(dest_blob.bytes() + sizeof(SyncMessageHeader), builder_.GetBufferPointer(), builder_.GetSize());
 
-    //reset builder for next message
+    // reset builder for next message
     builder_.Clear();
 }
 
