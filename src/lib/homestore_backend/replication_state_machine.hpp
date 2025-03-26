@@ -200,7 +200,7 @@ private:
     std::shared_ptr< homestore::snapshot_context > get_snapshot_context();
     void set_snapshot_context(std::shared_ptr< homestore::snapshot_context > context);
 
-    bool validate_blob(shard_id_t shard_id, blob_id_t blob_id, void* data, size_t size);
+    bool validate_blob(shard_id_t shard_id, blob_id_t blob_id, void* data, size_t size) const;
 };
 
 } // namespace homeobject

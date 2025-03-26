@@ -551,18 +551,22 @@ folly::Future< std::error_code > ReplicationStateMachine::on_fetch_data(const in
             .thenValue([this, lsn, blob_id, shard_id, given_buffer, total_size](auto&& err) {
                 // io error
                 if (err) throw std::system_error(err);
+
+                // folly future has no machenism to bypass the later thenValue in the then value chain. so for all the
+                // case that no need to schedule the later async_read, we throw a system_error with no error code to
+                // bypass the next thenValue.
 #ifdef _PRERELEASE
-                if (iomgr_flip::instance()->test_flip("force_to_read_by_index_table")) {
+                if (iomgr_flip::instance()->test_flip("local_blk_data_invalid")) {
                     LOGI("Simulating forcing to read by indextable");
                 } else if (validate_blob(shard_id, blob_id, given_buffer, total_size)) {
                     LOGD("local_blk_id matches blob data, lsn: {}, blob_id: {}, shard_id: {}", lsn, blob_id, shard_id);
-                    return std::error_code{};
+                    throw std::system_error(std::error_code{});
                 }
 #else
                 // if data matches
                 if (validate_blob(shard_id, blob_id, given_buffer, total_size)) {
                     LOGD("local_blk_id matches blob data, lsn: {}, blob_id: {}, shard_id: {}", lsn, blob_id, shard_id);
-                    return std::error_code{};
+                    throw std::system_error(std::error_code{});
                 }
 #endif
 
@@ -582,6 +586,7 @@ folly::Future< std::error_code > ReplicationStateMachine::on_fetch_data(const in
                 homestore::BtreeSingleGetRequest get_req{&index_key, &index_value};
 
                 LOGD("fetch data with blob_id {}, shard_id {} from index table", blob_id, shard_id);
+
                 auto rc = index_table->get(get_req);
                 if (sisl_unlikely(homestore::btree_status_t::success != rc)) {
                     // blob never exists or has been gc
@@ -589,21 +594,23 @@ folly::Future< std::error_code > ReplicationStateMachine::on_fetch_data(const in
                          "shard_id: {}",
                          blob_id, shard_id);
                     // returning whatever data is good , since client will never read it.
-                    return std::error_code{};
+                    throw std::system_error(std::error_code{});
                 }
+
                 const auto& pbas = index_value.pbas();
                 if (sisl_unlikely(pbas == HSHomeObject::tombstone_pbas)) {
                     // blob is deleted, so returning whatever data is good , since client will never read it.
                     LOGD("on_fetch_data: blob has been deleted, blob_id: {}, shard_id: {}", blob_id, shard_id);
-                    return std::error_code{};
+                    throw std::system_error(std::error_code{});
                 }
 
                 RELEASE_ASSERT(pbas.blk_count() * repl_dev()->get_blk_size() == total_size,
                                "pbas blk size does not match total_size");
-                // blocking in an async call is good, since it will not block the caller thread
-                auto error = homestore::data_service().async_read(pbas, given_buffer, total_size).get();
+                return homestore::data_service().async_read(pbas, given_buffer, total_size);
+            })
+            .thenValue([this, lsn, blob_id, shard_id, given_buffer, total_size](auto&& err) {
                 // io error
-                if (error) throw std::system_error(err);
+                if (err) throw std::system_error(err);
                 // if data matches
                 if (validate_blob(shard_id, blob_id, given_buffer, total_size)) {
                     LOGD("pba matches blob data, lsn: {}, blob_id: {}, shard_id: {}", lsn, blob_id, shard_id);
@@ -612,14 +619,22 @@ folly::Future< std::error_code > ReplicationStateMachine::on_fetch_data(const in
                     // there is a scenario that the chunk is gced after we get the pba, but before we schecdule
                     // the read. we can try to read the index table and read data again, but for the simlicity
                     // here, we just return error, and let follower to retry fetch data.
-                    throw std::system_error(std::make_error_code(std::errc::resource_unavailable_try_again));
+                    return std::make_error_code(std::errc::resource_unavailable_try_again);
                 }
             })
             .thenError< std::system_error >([blob_id, shard_id](const std::system_error& e) {
-                // if any error happens, we come to here
-                LOGE("IO error happens when reading data for blob_id: {}, shard_id: {}, error: {}", blob_id, shard_id,
-                     e.what());
-                return e.code();
+                auto ec = e.code();
+
+                if (!ec) {
+                    // if no error code, we come to here, which means the data is valid or no need to read data again.
+                    LOGD("blob valid, blob_id: {}, shard_id: {}", blob_id, shard_id);
+                } else {
+                    // if any error happens, we come to here
+                    LOGE("IO error happens when reading data for blob_id: {}, shard_id: {}, error: {}", blob_id,
+                         shard_id, e.what());
+                }
+
+                return ec;
             });
     }
     default: {
@@ -629,7 +644,7 @@ folly::Future< std::error_code > ReplicationStateMachine::on_fetch_data(const in
     }
 }
 
-bool ReplicationStateMachine::validate_blob(shard_id_t shard_id, blob_id_t blob_id, void* data, size_t size) {
+bool ReplicationStateMachine::validate_blob(shard_id_t shard_id, blob_id_t blob_id, void* data, size_t size) const {
     auto const* header = r_cast< HSHomeObject::BlobHeader const* >(data);
     if (!header->valid()) {
         LOGD("blob header is invalid, blob_id: {}, shard_id: {}, size: {}", blob_id, shard_id, size);

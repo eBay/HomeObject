@@ -145,11 +145,11 @@ TEST_F(HomeObjectFixture, BasicPutGetBlobWithPushDataDisabled) {
 
     // set the flip to force to read by index table to exercise reading from the index table is working as expected
     // 50% percentage will achieve the effect that half of the blobs are read from index table and the other
-    // half are read from blk_id
+    // half are read by blk_id
 
     // for now, given_buffer will be filled by the first async_read, so this will pass.
     // TODO:: enhence the logic after we have real gc
-    set_basic_flip("force_to_read_by_index_table", std::numeric_limits< int >::max(), 50);
+    set_basic_flip("local_blk_data_invalid", std::numeric_limits< int >::max(), 50);
 
     // test recovery with pristine state firstly
     restart();
