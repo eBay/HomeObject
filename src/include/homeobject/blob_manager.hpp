@@ -11,7 +11,7 @@ namespace homeobject {
 
 ENUM(BlobErrorCode, uint16_t, UNKNOWN = 1, TIMEOUT, INVALID_ARG, UNSUPPORTED_OP, NOT_LEADER, REPLICATION_ERROR,
      UNKNOWN_SHARD, UNKNOWN_BLOB, UNKNOWN_PG, CHECKSUM_MISMATCH, READ_FAILED, INDEX_ERROR, SEALED_SHARD, RETRY_REQUEST,
-     SHUTTING_DOWN);
+     SHUTTING_DOWN, ROLL_BACK);
 struct BlobError {
     BlobErrorCode code;
     // set when we are not the current leader of the PG.

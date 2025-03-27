@@ -632,4 +632,43 @@ void HSHomeObject::_get_pg_ids(std::vector< pg_id_t >& pg_ids) const {
     }
 }
 
+void HSHomeObject::on_create_pg_message_rollback(int64_t lsn, sisl::blob const& header, sisl::blob const& key,
+                                                 cintrusive< homestore::repl_req_ctx >& hs_ctx) {
+    repl_result_ctx< PGManager::NullResult >* ctx{nullptr};
+    if (hs_ctx && hs_ctx->is_proposer()) {
+        ctx = boost::static_pointer_cast< repl_result_ctx< PGManager::NullResult > >(hs_ctx).get();
+    }
+
+    auto const* msg_header = r_cast< ReplicationMessageHeader const* >(header.cbytes());
+
+    if (msg_header->corrupted()) {
+        LOGE("create PG message header is corrupted , lsn:{}; header: {}", lsn, msg_header->to_string());
+        if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(PGError::CRC_MISMATCH)); }
+        return;
+    }
+
+    auto serailized_pg_info_buf = header.cbytes() + sizeof(ReplicationMessageHeader);
+    const auto serailized_pg_info_size = header.size() - sizeof(ReplicationMessageHeader);
+
+    if (crc32_ieee(init_crc32, serailized_pg_info_buf, serailized_pg_info_size) != msg_header->payload_crc) {
+        // header & value is inconsistent;
+        LOGE("create PG message header is inconsistent with value, lsn:{}", lsn);
+        if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(PGError::CRC_MISMATCH)); }
+        return;
+    }
+
+    switch (msg_header->msg_type) {
+    case ReplicationMessageType::CREATE_PG_MSG: {
+        // TODO:: add rollback logic for create pg rollback if necessary
+        LOGI("lsn: {}, mes_type: {} is rollbacked", lsn, msg_header->msg_type);
+        if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(PGError::ROLL_BACK)); }
+        break;
+    }
+    default: {
+        LOGW("lsn: {}, mes_type: {} should not happen in pg message rollback", lsn, msg_header->msg_type);
+        break;
+    }
+    }
+}
+
 } // namespace homeobject
