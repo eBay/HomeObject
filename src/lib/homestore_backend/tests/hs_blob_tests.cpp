@@ -12,7 +12,7 @@ TEST_F(HomeObjectFixture, BasicEquivalence) {
     EXPECT_EQ(_obj_inst.get(), dynamic_cast< homeobject::HomeObject* >(blob_mgr.get()));
 }
 
-TEST_F(HomeObjectFixture, BasicPutGetDelBlobWRestart) {
+TEST_F(HomeObjectFixture, BasicPutGetDelBlobWithRestart) {
     // test recovery with pristine state firstly
     restart();
 
@@ -136,3 +136,52 @@ TEST_F(HomeObjectFixture, BasicPutGetDelBlobWRestart) {
     // Verify the stats after restart
     verify_obj_count(num_pgs, num_blobs_per_shard * 2, num_shards_per_pg, true /* deleted */);
 }
+
+#ifdef _PRERELEASE
+TEST_F(HomeObjectFixture, BasicPutGetBlobWithPushDataDisabled) {
+    // disable leader push data. As a result, followers have to fetch data to exercise the fetch_data implementation of
+    // statemachine
+    set_basic_flip("disable_leader_push_data", std::numeric_limits< int >::max());
+
+    // set the flip to force to read by index table to exercise reading from the index table is working as expected
+    // 50% percentage will achieve the effect that half of the blobs are read from index table and the other
+    // half are read by blk_id
+
+    // for now, given_buffer will be filled by the first async_read, so this will pass.
+    // TODO:: enhence the logic after we have real gc
+    set_basic_flip("local_blk_data_invalid", std::numeric_limits< int >::max(), 50);
+
+    // test recovery with pristine state firstly
+    restart();
+
+    auto num_pgs = SISL_OPTIONS["num_pgs"].as< uint64_t >();
+    auto num_shards_per_pg = SISL_OPTIONS["num_shards"].as< uint64_t >() / num_pgs;
+
+    auto num_blobs_per_shard = SISL_OPTIONS["num_blobs"].as< uint64_t >() / num_shards_per_pg;
+    std::map< pg_id_t, std::vector< shard_id_t > > pg_shard_id_vec;
+
+    // pg -> next blob_id in this pg
+    std::map< pg_id_t, blob_id_t > pg_blob_id;
+
+    for (uint64_t i = 1; i <= num_pgs; i++) {
+        create_pg(i);
+        pg_blob_id[i] = 0;
+        for (uint64_t j = 0; j < num_shards_per_pg; j++) {
+            auto shard = create_shard(i, 64 * Mi);
+            pg_shard_id_vec[i].emplace_back(shard.id);
+            LOGINFO("pg {} shard {}", i, shard.id);
+        }
+    }
+
+    // Put blob for all shards in all pg's.
+    put_blobs(pg_shard_id_vec, num_blobs_per_shard, pg_blob_id);
+
+    // Verify all get blobs
+    verify_get_blob(pg_shard_id_vec, num_blobs_per_shard);
+
+    // Verify the stats
+    verify_obj_count(num_pgs, num_blobs_per_shard, num_shards_per_pg, false /* deleted */);
+}
+#endif
+
+// TODO:: add more test cases to verify the push data disabled scenario after we have gc

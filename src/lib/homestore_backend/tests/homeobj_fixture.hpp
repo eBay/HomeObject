@@ -567,9 +567,8 @@ private:
         BitsGenerator::gen_blob_bits(blob.body, blob_id);
         return blob;
     }
-
 #ifdef _PRERELEASE
-    void set_basic_flip(const std::string flip_name, uint32_t count = 1, uint32_t percent = 100) {
+    void set_basic_flip(const std::string flip_name, int count = 1, uint32_t percent = 100) {
         flip::FlipCondition null_cond;
         flip::FlipFrequency freq;
         freq.set_count(count);
@@ -602,6 +601,7 @@ private:
         LOGINFO("Flip {} removed", flip_name);
     }
 #endif
+
     void RestartFollowerDuringBaselineResyncUsingSigKill(uint64_t flip_delay, uint64_t restart_interval,
                                                          string restart_phase);
     void RestartLeaderDuringBaselineResyncUsingSigKill(uint64_t flip_delay, uint64_t restart_interval,
