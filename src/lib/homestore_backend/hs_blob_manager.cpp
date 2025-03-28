@@ -543,4 +543,32 @@ void HSHomeObject::compute_blob_payload_hash(BlobHeader::HashAlgorithm algorithm
     }
 }
 
+void HSHomeObject::on_blob_message_rollback(int64_t lsn, sisl::blob const& header, sisl::blob const& key,
+                                            cintrusive< homestore::repl_req_ctx >& hs_ctx) {
+    repl_result_ctx< BlobManager::Result< BlobInfo > >* ctx{nullptr};
+    if (hs_ctx && hs_ctx->is_proposer()) {
+        ctx = boost::static_pointer_cast< repl_result_ctx< BlobManager::Result< BlobInfo > > >(hs_ctx).get();
+    }
+    const ReplicationMessageHeader* msg_header = r_cast< const ReplicationMessageHeader* >(header.cbytes());
+    if (msg_header->corrupted()) {
+        LOGW("replication message header is corrupted with crc error, lsn:{}", lsn);
+        if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(BlobError(BlobErrorCode::CHECKSUM_MISMATCH))); }
+        return;
+    }
+
+    switch (msg_header->msg_type) {
+    case ReplicationMessageType::PUT_BLOB_MSG:
+    case ReplicationMessageType::DEL_BLOB_MSG: {
+        // TODO:: add rollback logic for put_blob and del_blob if necessary
+        LOGI("lsn: {}, mes_type: {} is rollbacked", lsn, msg_header->msg_type);
+        if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(BlobError(BlobErrorCode::ROLL_BACK))); }
+        break;
+    }
+    default: {
+        LOGW("lsn: {}, mes_type: {} should not happen in blob message rollback", lsn, msg_header->msg_type);
+        break;
+    }
+    }
+}
+
 } // namespace homeobject

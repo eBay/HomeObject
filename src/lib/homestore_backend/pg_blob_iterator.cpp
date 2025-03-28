@@ -91,6 +91,10 @@ objId HSHomeObject::PGBlobIterator::expected_next_obj_id() {
     if (cur_start_blob_idx_ + cur_batch_blob_count_ < cur_blob_list_.size()) {
         return objId(cur_obj_id_.shard_seq_num, cur_obj_id_.batch_id + 1);
     }
+    // handle empty shard
+    if (cur_obj_id_.batch_id == 0 && cur_blob_list_.empty()) {
+        return objId(cur_obj_id_.shard_seq_num, cur_obj_id_.batch_id + 1);
+    }
     // next shard
     if (cur_shard_idx_ < static_cast< int64_t >(shard_list_.size() - 1)) {
         auto next_shard_seq_num = shard_list_[cur_shard_idx_ + 1].info.id & 0xFFFFFFFFFFFF;
