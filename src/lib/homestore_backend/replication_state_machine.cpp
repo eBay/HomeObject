@@ -495,6 +495,7 @@ folly::Future< std::error_code > ReplicationStateMachine::on_fetch_data(const in
     if (0 == header.size()) {
         LOGD("Header is empty, which means this req has been committed at leader, so ignore this request. req lsn {}",
              lsn);
+        RELEASE_ASSERT(lsn != -1, "the lsn of a committed req should not be -1");
         return folly::makeFuture< std::error_code >(std::error_code{});
     }
 
