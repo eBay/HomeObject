@@ -492,6 +492,12 @@ void ReplicationStateMachine::set_snapshot_context(std::shared_ptr< homestore::s
 folly::Future< std::error_code > ReplicationStateMachine::on_fetch_data(const int64_t lsn, const sisl::blob& header,
                                                                         const homestore::MultiBlkId& local_blk_id,
                                                                         sisl::sg_list& sgs) {
+    if (0 == header.size()) {
+        LOGD("Header is empty, which means this req has been committed at leader, so ignore this request. req lsn {}",
+             lsn);
+        return folly::makeFuture< std::error_code >(std::error_code{});
+    }
+
     // the lsn here will mostly be -1 ,since this lsn has not been appeneded and thus get no lsn
     // however, there is a corner case that fetch_data happens after push_data is received and log is appended. in this
     // case, lsn will be the corresponding lsn.
