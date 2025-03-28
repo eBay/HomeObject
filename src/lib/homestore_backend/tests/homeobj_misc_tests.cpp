@@ -41,7 +41,9 @@ TEST_F(HomeObjectFixture, HSHomeObjectCPTestBasic) {
 TEST_F(HomeObjectFixture, PGBlobIterator) {
     constexpr pg_id_t pg_id{1};
     // Generate test data
-    uint64_t num_shards_per_pg = 3;
+    // Construct shards as [sealed, empty, open, filtered]
+    uint64_t num_shards_per_pg = 4;
+    uint64_t empty_shard_seq = 2;
     uint64_t num_blobs_per_shard = 5;
     std::map< pg_id_t, std::vector< shard_id_t > > pg_shard_id_vec;
     std::map< pg_id_t, blob_id_t > pg_blob_id;
@@ -50,24 +52,23 @@ TEST_F(HomeObjectFixture, PGBlobIterator) {
     create_pg(pg_id);
     for (uint64_t i = 0; i < num_shards_per_pg; i++) {
         auto shard = create_shard(pg_id, 64 * Mi);
-        shard_list.emplace_back(shard.id);
-        pg_blob_id[i] = 0;
+        if (i != empty_shard_seq - 1) { shard_list.emplace_back(shard.id); }
         LOGINFO("pg {} shard {}", pg_id, shard.id);
     }
+    pg_blob_id[pg_id] = 0;
     put_blobs(pg_shard_id_vec, num_blobs_per_shard, pg_blob_id);
 
     auto pg = _obj_inst->get_hs_pg(pg_id);
     ASSERT_TRUE(pg != nullptr);
 
-    // Construct shards as [sealed, open, filtered]
     seal_shard(pg->shards_.front()->info.id);
     ASSERT_EQ(pg->shards_.front()->info.state, homeobject::ShardInfo::State::SEALED);
     // Filter out the last shard
     auto snp_lsn = pg->shards_.back()->info.lsn - 1;
     // Delete some blobs: delete the first blob of each shard
     blob_id_t current_blob_id{0};
-    for (auto& shard : pg->shards_) {
-        del_blob(pg->pg_info_.id, shard->info.id, current_blob_id);
+    for (auto& shard : shard_list) {
+        del_blob(pg->pg_info_.id, shard, current_blob_id);
         current_blob_id += num_blobs_per_shard;
     }
 
@@ -124,7 +125,12 @@ TEST_F(HomeObjectFixture, PGBlobIterator) {
         LOGINFO("shard meta, oid {}", oid.to_string());
         ASSERT_TRUE(pg_iter->update_cursor(oid));
         ASSERT_TRUE(pg_iter->generate_shard_blob_list());
-        ASSERT_EQ(pg_iter->cur_blob_list_.size(), num_blobs_per_shard);
+        if (shard_seq_num != empty_shard_seq) {
+            ASSERT_EQ(pg_iter->cur_blob_list_.size(), num_blobs_per_shard);
+        } else {
+            ASSERT_EQ(pg_iter->cur_blob_list_.size(), 0);
+        }
+
         sisl::io_blob_safe meta_data;
         ASSERT_TRUE(pg_iter->create_shard_snapshot_data(meta_data));
 
@@ -142,8 +148,10 @@ TEST_F(HomeObjectFixture, PGBlobIterator) {
         // Verify blob data
         uint64_t packed_blob_size{0};
         auto is_finished = false;
-        // Skip the first blob(deleted) of the shard
-        current_blob_id++;
+        if (shard_seq_num != empty_shard_seq) {
+            // Skip the first blob(deleted) of the shard
+            current_blob_id++;
+        }
         while (!is_finished) {
             oid = objId(shard_seq_num, batch_id++);
             ASSERT_TRUE(pg_iter->update_cursor(oid));
@@ -175,7 +183,11 @@ TEST_F(HomeObjectFixture, PGBlobIterator) {
             }
             is_finished = blob_msg->is_last_batch();
         }
-        ASSERT_EQ(packed_blob_size, num_blobs_per_shard - 1);
+        if (shard_seq_num != empty_shard_seq) {
+            ASSERT_EQ(packed_blob_size, num_blobs_per_shard - 1);
+        } else {
+            ASSERT_EQ(packed_blob_size, 0);
+        }
     }
     // Verify last obj
     ASSERT_TRUE(pg_iter->update_cursor(objId(LAST_OBJ_ID)));

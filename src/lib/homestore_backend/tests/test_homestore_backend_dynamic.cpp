@@ -40,7 +40,8 @@ TEST_F(HomeObjectFixture, ReplaceMember) {
     auto num_shards_per_pg = SISL_OPTIONS["num_shards"].as< uint64_t >();
     auto num_blobs_per_shard = SISL_OPTIONS["num_blobs"].as< uint64_t >() / num_shards_per_pg;
 
-    for (uint64_t j = 0; j < num_shards_per_pg; j++)
+    // last shard is empty shard
+    for (uint64_t j = 0; j < num_shards_per_pg + 1; j++)
         create_shard(pg_id, 64 * Mi);
 
     // we can not share all the shard_id and blob_id among all the replicas including the spare ones, so we need to
