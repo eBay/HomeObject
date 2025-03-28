@@ -79,14 +79,23 @@ void ReplicationStateMachine::on_rollback(int64_t lsn, sisl::blob const& header,
         return;
     }
     switch (msg_header->msg_type) {
-    case ReplicationMessageType::CREATE_SHARD_MSG: {
-        home_object_->on_shard_message_rollback(lsn, header, key, ctx);
-        break;
-    }
+    case ReplicationMessageType::CREATE_SHARD_MSG:
     case ReplicationMessageType::SEAL_SHARD_MSG: {
         home_object_->on_shard_message_rollback(lsn, header, key, ctx);
         break;
     }
+
+    case ReplicationMessageType::PUT_BLOB_MSG:
+    case ReplicationMessageType::DEL_BLOB_MSG: {
+        home_object_->on_blob_message_rollback(lsn, header, key, ctx);
+        break;
+    }
+
+    case ReplicationMessageType::CREATE_PG_MSG: {
+        home_object_->on_create_pg_message_rollback(lsn, header, key, ctx);
+        break;
+    }
+
     default: {
         break;
     }
@@ -483,12 +492,22 @@ void ReplicationStateMachine::set_snapshot_context(std::shared_ptr< homestore::s
 folly::Future< std::error_code > ReplicationStateMachine::on_fetch_data(const int64_t lsn, const sisl::blob& header,
                                                                         const homestore::MultiBlkId& local_blk_id,
                                                                         sisl::sg_list& sgs) {
-    // the lsn here will always be -1 ,since this lsn has not been appeneded and thus get no lsn
+    if (0 == header.size()) {
+        LOGD("Header is empty, which means this req has been committed at leader, so ignore this request. req lsn {}",
+             lsn);
+        RELEASE_ASSERT(lsn != -1, "the lsn of a committed req should not be -1");
+        return folly::makeFuture< std::error_code >(std::error_code{});
+    }
+
+    // the lsn here will mostly be -1 ,since this lsn has not been appeneded and thus get no lsn
+    // however, there is a corner case that fetch_data happens after push_data is received and log is appended. in this
+    // case, lsn will be the corresponding lsn.
 
     const ReplicationMessageHeader* msg_header = r_cast< const ReplicationMessageHeader* >(header.cbytes());
 
     if (msg_header->corrupted()) {
-        LOGW("replication message header is corrupted with crc error, lsn:{}", lsn);
+        LOGW("replication message header is corrupted with crc error, lsn: {}, header: {}", lsn,
+             msg_header->to_string());
         return folly::makeFuture< std::error_code >(std::make_error_code(std::errc::bad_message));
     }
 

@@ -733,9 +733,9 @@ public:
                                  shared< homestore::ReplDev > repl_dev, cintrusive< homestore::repl_req_ctx >& hs_ctx);
 
     bool on_shard_message_pre_commit(int64_t lsn, sisl::blob const& header, sisl::blob const& key,
-                                     cintrusive< homestore::repl_req_ctx >&);
+                                     cintrusive< homestore::repl_req_ctx >& hs_ctx);
     void on_shard_message_rollback(int64_t lsn, sisl::blob const& header, sisl::blob const& key,
-                                   cintrusive< homestore::repl_req_ctx >&);
+                                   cintrusive< homestore::repl_req_ctx >& hs_ctx);
 
     /**
      * @brief Retrieves the chunk number associated with the given shard ID.
@@ -791,9 +791,14 @@ public:
 
     bool pg_exists(pg_id_t pg_id) const;
 
+    void on_create_pg_message_rollback(int64_t lsn, sisl::blob const& header, sisl::blob const& key,
+                                       cintrusive< homestore::repl_req_ctx >& hs_ctx);
+
     cshared< HeapChunkSelector > chunk_selector() const { return chunk_selector_; }
 
     // Blob manager related.
+    void on_blob_message_rollback(int64_t lsn, sisl::blob const& header, sisl::blob const& key,
+                                  cintrusive< homestore::repl_req_ctx >& hs_ctx);
     void on_blob_put_commit(int64_t lsn, sisl::blob const& header, sisl::blob const& key,
                             const homestore::MultiBlkId& pbas, cintrusive< homestore::repl_req_ctx >& hs_ctx);
     void on_blob_del_commit(int64_t lsn, sisl::blob const& header, sisl::blob const& key,
