@@ -46,7 +46,7 @@ public:
             s.io_env.http_port = 5000 + g_helper->replica_num();
             LOGD("setup http port to {}", s.io_env.http_port);
         });
-        HSHomeObject::_hs_chunk_size = 20 * Mi;
+        HSHomeObject::_hs_chunk_size = SISL_OPTIONS["chunk_size"].as< uint64_t >() * Mi;
         _obj_inst = std::dynamic_pointer_cast< HSHomeObject >(g_helper->build_new_homeobject());
         // Used to export metrics, it should be called after init_homeobject
         if (SISL_OPTIONS["enable_http"].as< bool >()) { g_helper->app->start_http_server(); }
@@ -59,6 +59,8 @@ public:
 
     void TearDown() override {
         g_helper->sync();
+        LOGINFO("Tearing down homeobject replica={}", g_helper->my_replica_id());
+        LOGINFO("Metrics: {}", sisl::MetricsFarm::getInstance().get_result_in_json().dump(2));
         g_helper->app->stop_http_server();
         _obj_inst.reset();
         g_helper->delete_homeobject();
@@ -66,6 +68,8 @@ public:
 
     void restart(uint32_t shutdown_delay_secs = 0u, uint32_t restart_delay_secs = 0u) {
         g_helper->sync();
+        LOGINFO("Restarting homeobject replica={}", g_helper->my_replica_id());
+        LOGINFO("Metrics: {}", sisl::MetricsFarm::getInstance().get_result_in_json().dump(2));
         trigger_cp(true);
         _obj_inst.reset();
         _obj_inst =
@@ -76,6 +80,7 @@ public:
 
     void stop() {
         LOGINFO("Stoping homeobject replica={}", g_helper->my_replica_id());
+        LOGINFO("Metrics: {}", sisl::MetricsFarm::getInstance().get_result_in_json().dump(2));
         _obj_inst.reset();
         g_helper->homeobj_.reset();
         sleep(120);
@@ -112,7 +117,8 @@ public:
         auto my_replica_num = g_helper->replica_num();
         if (excluding_pg_replicas.contains(my_replica_num)) return;
 
-        auto pg_size = SISL_OPTIONS["pg_size"].as< uint64_t >() * Mi;
+        auto pg_size =
+            SISL_OPTIONS["chunks_per_pg"].as< uint64_t >() * SISL_OPTIONS["chunk_size"].as< uint64_t >() * Mi;
         auto name = g_helper->test_name();
 
         if (leader_replica_num == my_replica_num) {

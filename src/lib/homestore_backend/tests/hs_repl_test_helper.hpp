@@ -115,9 +115,13 @@ public:
         std::list< device_info_t > devices() const override {
             auto const use_file = SISL_OPTIONS["use_file"].as< bool >();
             std::list< device_info_t > devs;
-            if (SISL_OPTIONS.count("device_list") && !use_file) {
-                for (const auto& dev : helper_.dev_list_)
+            LOGWARN("my_devices cnt {}, {}, {} ", helper_.dev_list_.size(), SISL_OPTIONS.count("device_list"),
+                    use_file);
+            if (helper_.dev_list_.size() > 0 && !use_file) {
+                for (const auto& dev : helper_.dev_list_) {
+                    LOGWARN("adding {}", dev);
                     devs.emplace_back(dev, DevType::HDD);
+                }
             } else {
                 for (const auto& dev : helper_.generated_devs)
                     devs.emplace_back(dev, DevType::HDD);
@@ -125,9 +129,7 @@ public:
             return devs;
         }
 
-        uint64_t mem_size() const override {
-            return 2 * Gi;
-        }
+        uint64_t mem_size() const override { return 2 * Gi; }
         peer_id_t discover_svcid(std::optional< peer_id_t > const& p) const override {
             if (p.has_value()) RELEASE_ASSERT_EQ(p.value(), helper_.my_replica_id_, "input svcid not matching");
             return helper_.my_replica_id_;
@@ -145,13 +147,14 @@ public:
         }
 
         void get_prometheus_metrics(const Pistache::Rest::Request&, Pistache::Http::ResponseWriter response) {
-            response.send(Pistache::Http::Code::Ok, sisl::MetricsFarm::getInstance().report(sisl::ReportFormat::kTextFormat));
+            response.send(Pistache::Http::Code::Ok,
+                          sisl::MetricsFarm::getInstance().report(sisl::ReportFormat::kTextFormat));
         }
 
         void start_http_server() {
             std::vector< iomgr::http_route > routes = {
                 {Pistache::Http::Method::Get, "/metrics",
-                    Pistache::Rest::Routes::bind(&TestReplApplication::get_prometheus_metrics, this)},
+                 Pistache::Rest::Routes::bind(&TestReplApplication::get_prometheus_metrics, this)},
             };
 
             auto http_server = ioenvironment.get_http_server();
@@ -175,7 +178,6 @@ public:
             http_server->stop();
         }
     };
-
 
 public:
     friend class TestReplApplication;
@@ -207,9 +209,10 @@ public:
         std::vector< std::vector< std::string > > rdev_list(num_replicas);
         if (SISL_OPTIONS.count("replica_dev_list")) {
             dev_list_all = SISL_OPTIONS["replica_dev_list"].as< std::vector< std::string > >();
+            LOGINFO("Device count {}, num_replicas {}", dev_list_all.size(), num_replicas);
+            LOGINFO("Device list from input={}", fmt::join(dev_list_all, ","));
             RELEASE_ASSERT(dev_list_all.size() % num_replicas == 0,
                            "Number of replica devices should be times of number replicas");
-            LOGINFO("Device list from input={}", fmt::join(dev_list_all, ","));
             uint32_t num_devs_per_replica = dev_list_all.size() / num_replicas;
             for (uint32_t i{0}; i < num_replicas; ++i) {
                 for (uint32_t j{0}; j < num_devs_per_replica; ++j) {
@@ -244,7 +247,7 @@ public:
             shm_ = std::make_unique< bip::shared_memory_object >(bip::open_only, "HO_repl_test_shmem", bip::read_write);
             region_ = std::make_unique< bip::mapped_region >(*shm_, bip::read_write);
             ipc_data_ = static_cast< IPCData* >(region_->get_address());
-            if (SISL_OPTIONS["is_restart"].as<bool>()) {
+            if (SISL_OPTIONS["is_restart"].as< bool >()) {
                 // reset sync point to the next sync point before restart
                 sync_point_num = ipc_data_->sync_point_num_ + 1;
             }
@@ -260,7 +263,7 @@ public:
     void spawn_homeobject_process(uint8_t replica_num, bool is_restart) {
         std::string cmd_line;
         fmt::format_to(std::back_inserter(cmd_line), "{} --replica_num {} --is_restart={}", args_[0], replica_num,
-                       is_restart? "true" : "false");
+                       is_restart ? "true" : "false");
         if (is_restart) {
             auto ut = testing::UnitTest::GetInstance();
             std::string pattern = "";
@@ -311,15 +314,12 @@ public:
         remove_test_files();
     }
 
-    std::shared_ptr< homeobject::HomeObject > restart(uint32_t shutdown_delay_secs = 0u, uint32_t restart_delay_secs = 0u) {
-        if (shutdown_delay_secs > 0) {
-            std::this_thread::sleep_for(std::chrono::seconds(shutdown_delay_secs));
-        }
+    std::shared_ptr< homeobject::HomeObject > restart(uint32_t shutdown_delay_secs = 0u,
+                                                      uint32_t restart_delay_secs = 0u) {
+        if (shutdown_delay_secs > 0) { std::this_thread::sleep_for(std::chrono::seconds(shutdown_delay_secs)); }
         LOGINFO("Stoping homeobject after {} secs, replica={}", shutdown_delay_secs, replica_num_);
         homeobj_.reset();
-        if (restart_delay_secs > 0) {
-            std::this_thread::sleep_for(std::chrono::seconds(restart_delay_secs));
-        }
+        if (restart_delay_secs > 0) { std::this_thread::sleep_for(std::chrono::seconds(restart_delay_secs)); }
         LOGINFO("Starting homeobject after {} secs, replica={}", restart_delay_secs, replica_num_);
         homeobj_ = init_homeobject(std::weak_ptr< TestReplApplication >(app));
         return homeobj_;
@@ -349,9 +349,7 @@ public:
 
     void teardown() { sisl::GrpcAsyncClientWorker::shutdown_all(); }
 
-    void sync() {
-        ipc_data_->sync(sync_point_num++, total_replicas_nums_);
-    }
+    void sync() { ipc_data_->sync(sync_point_num++, total_replicas_nums_); }
 
     // Bump sync point to avoid interference across different test cases
     void bump_sync_point_and_sync() {

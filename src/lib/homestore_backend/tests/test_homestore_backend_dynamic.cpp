@@ -107,7 +107,7 @@ TEST_F(HomeObjectFixture, ReplaceMember) {
         }
 
         wait_for_blob(pg_shard_id_vec[pg_id].back() /*the last shard id in this pg*/,
-                     num_shards_per_pg * num_blobs_per_shard - 1 /*the last blob id in this pg*/);
+                      num_shards_per_pg * num_blobs_per_shard - 1 /*the last blob id in this pg*/);
 
         sleep(5); // wait for incremental append-log requests to complete
     }
@@ -160,14 +160,17 @@ TEST_F(HomeObjectFixture, RestartFollowerDuringBaselineResyncWithoutTimeout) {
 
 // Restart follower during baseline resync and timeout. Also test resumption and conflict with incoming traffic.
 // Take default value as example, num_shards_per_pg=4, num_blobs_per_shard=5.
-//1. Put 1st round blobs in the pg: shard1(blob 0-4), shard2(blob 5-9), shard3(blob 10-14), shard4(blob 15-19).
-//2. Then replace a member, the new member will perform baseline resync.
-//3.a During the baseline resync(BR), restart it when blob id is 11(in shard3) to simulate a follower crash.
-//3.b Then put 2nd round blobs to each shard, shard1(blob 0-4, 20), shard2(blob 5-9, 21), shard3(blob 10-14, 22), shard4(blob 15-19, 23).
-//4. After restart, new member recovers from the context(skip shard1(blob 0-4), shard2(blob 5-9)) and resume to receive shard3(blob 10-14, 22), shard4(blob 15-19, 23).
-//5. After the baseline resync is completed, start incremental append-log requests: logs for blob 20-21 will fetch data, and logs for blob 22-23 will skip.
-//Note: pay attention to num_reserved_log_items and snapshot_freq_distance, if a new snapshot triggered when handling the 2nd round put blobs,
-//logs will be truncated and a new BR will be triggered in incremental resync stage.
+// 1. Put 1st round blobs in the pg: shard1(blob 0-4), shard2(blob 5-9), shard3(blob 10-14), shard4(blob 15-19).
+// 2. Then replace a member, the new member will perform baseline resync.
+// 3.a During the baseline resync(BR), restart it when blob id is 11(in shard3) to simulate a follower crash.
+// 3.b Then put 2nd round blobs to each shard, shard1(blob 0-4, 20), shard2(blob 5-9, 21), shard3(blob 10-14, 22),
+// shard4(blob 15-19, 23).
+// 4. After restart, new member recovers from the context(skip shard1(blob 0-4), shard2(blob 5-9)) and resume to receive
+// shard3(blob 10-14, 22), shard4(blob 15-19, 23).
+// 5. After the baseline resync is completed, start incremental append-log requests: logs for blob 20-21 will fetch
+// data, and logs for blob 22-23 will skip. Note: pay attention to num_reserved_log_items and snapshot_freq_distance, if
+// a new snapshot triggered when handling the 2nd round put blobs, logs will be truncated and a new BR will be triggered
+// in incremental resync stage.
 TEST_F(HomeObjectFixture, RestartFollowerDuringBaselineResyncAndTimeout) {
     RestartFollowerDuringBaselineResyncUsingSigKill(10000, 10000, RECEIVING_SNAPSHOT);
 }
@@ -225,7 +228,7 @@ void HomeObjectFixture::RestartFollowerDuringBaselineResyncUsingSigKill(uint64_t
         pg_shard_id_vec[pg_id].emplace_back(derived_shard_id);
     }
     auto last_shard = pg_shard_id_vec[pg_id].back();
-    //put one more blob in every shard to test incremental resync.
+    // put one more blob in every shard to test incremental resync.
     auto last_blob = num_blobs_per_shard * num_shards_per_pg + num_shards_per_pg - 1;
 
     auto kill_until_shard = pg_shard_id_vec[pg_id].back();
@@ -237,8 +240,9 @@ void HomeObjectFixture::RestartFollowerDuringBaselineResyncUsingSigKill(uint64_t
             flip::FlipCondition cond;
             // will only delay the snapshot with blob id 11 during which restart will happen
             m_fc.create_condition("blob_id", flip::Operator::EQUAL, static_cast< long >(11), &cond);
-            set_retval_flip("simulate_write_snapshot_save_blob_delay", static_cast< long >(flip_delay) /*ms*/, 1, 100, cond);
-            //kill after the last blob in the first shard is replicated
+            set_retval_flip("simulate_write_snapshot_save_blob_delay", static_cast< long >(flip_delay) /*ms*/, 1, 100,
+                            cond);
+            // kill after the last blob in the first shard is replicated
             kill_until_shard = pg_shard_id_vec[pg_id].front();
             kill_until_blob = num_blobs_per_shard - 1;
         } else if (restart_phase == APPLYING_SNAPSHOT) {
@@ -256,7 +260,7 @@ void HomeObjectFixture::RestartFollowerDuringBaselineResyncUsingSigKill(uint64_t
     }
 #endif
 
-    if(!is_restart) {
+    if (!is_restart) {
         for (uint64_t j = 0; j < num_shards_per_pg; j++)
             create_shard(pg_id, 64 * Mi);
 
@@ -284,8 +288,8 @@ void HomeObjectFixture::RestartFollowerDuringBaselineResyncUsingSigKill(uint64_t
                 std::this_thread::sleep_for(std::chrono::milliseconds(500));
                 LOGINFO("new member is waiting to become a member of pg {}", pg_id);
             }
-            LOGDEBUG("wait for the data[shard:{}, blob:{}] replicated to the new member",
-                     kill_until_shard, kill_until_blob);
+            LOGDEBUG("wait for the data[shard:{}, blob:{}] replicated to the new member", kill_until_shard,
+                     kill_until_blob);
             wait_for_blob(kill_until_shard, kill_until_blob);
             LOGINFO("about to kill new member")
             sleep(3);
@@ -340,7 +344,7 @@ void HomeObjectFixture::RestartFollowerDuringBaselineResyncUsingSigKill(uint64_t
     }
 }
 
-    TEST_F(HomeObjectFixture, RestartFollowerDuringBaselineResyncUsingGracefulShutdown) {
+TEST_F(HomeObjectFixture, RestartFollowerDuringBaselineResyncUsingGracefulShutdown) {
     LOGINFO("HomeObject replica={} setup completed", g_helper->replica_num());
     auto spare_num_replicas = SISL_OPTIONS["spare_replicas"].as< uint8_t >();
     ASSERT_TRUE(spare_num_replicas > 0) << "we need spare replicas for homestore backend dynamic tests";
@@ -371,7 +375,7 @@ void HomeObjectFixture::RestartFollowerDuringBaselineResyncUsingSigKill(uint64_t
         pg_shard_id_vec[pg_id].emplace_back(derived_shard_id);
     }
     auto last_shard = pg_shard_id_vec[pg_id].back();
-    //put one more blob in every shard to test incremental resync.
+    // put one more blob in every shard to test incremental resync.
     auto last_blob = num_blobs_per_shard * num_shards_per_pg - 1;
 
     auto kill_until_shard = pg_shard_id_vec[pg_id].back();
@@ -381,7 +385,7 @@ void HomeObjectFixture::RestartFollowerDuringBaselineResyncUsingSigKill(uint64_t
     // will only delay the snapshot with blob id 11 during which restart will happen
     m_fc.create_condition("blob_id", flip::Operator::EQUAL, static_cast< long >(7), &cond);
     set_retval_flip("simulate_write_snapshot_save_blob_delay", static_cast< long >(10000) /*ms*/, 1, 100, cond);
-    //kill after the last blob in the first shard is replicated
+    // kill after the last blob in the first shard is replicated
     kill_until_shard = pg_shard_id_vec[pg_id].front();
     kill_until_blob = num_blobs_per_shard - 1;
 #endif
@@ -413,8 +417,8 @@ void HomeObjectFixture::RestartFollowerDuringBaselineResyncUsingSigKill(uint64_t
             std::this_thread::sleep_for(std::chrono::milliseconds(500));
             LOGINFO("new member is waiting to become a member of pg {}", pg_id);
         }
-        LOGDEBUG("wait for the data[shard:{}, blob:{}] replicated to the new member",
-                 kill_until_shard, kill_until_blob);
+        LOGDEBUG("wait for the data[shard:{}, blob:{}] replicated to the new member", kill_until_shard,
+                 kill_until_blob);
         wait_for_blob(kill_until_shard, kill_until_blob);
         LOGINFO("about to restart new member")
         restart();
@@ -446,7 +450,7 @@ TEST_F(HomeObjectFixture, RestartLeaderAfterBaselineResync) {
     RestartLeaderDuringBaselineResyncUsingSigKill(10000, 1000, AFTER_BASELINE_RESYNC);
 }
 
-//Need to restart the leader for process sync
+// Need to restart the leader for process sync
 void HomeObjectFixture::RestartLeaderDuringBaselineResyncUsingSigKill(uint64_t flip_delay, uint64_t restart_interval,
                                                                       string restart_phase) {
     LOGINFO("HomeObject replica={} setup completed", g_helper->replica_num());
@@ -481,13 +485,13 @@ void HomeObjectFixture::RestartLeaderDuringBaselineResyncUsingSigKill(uint64_t f
     }
 
     auto last_shard = pg_shard_id_vec[pg_id].back();
-    //put one more blob in every shard to test incremental resync.
+    // put one more blob in every shard to test incremental resync.
     auto last_blob = num_blobs_per_shard * num_shards_per_pg + num_shards_per_pg - 1;
-    if(!is_restart) {
+    if (!is_restart) {
         auto kill_until_shard = pg_shard_id_vec[pg_id].back();
         auto kill_until_blob = num_blobs_per_shard * num_shards_per_pg - 1;
         if (restart_phase == RECEIVING_SNAPSHOT) {
-            //kill after the last blob in the first shard is replicated
+            // kill after the last blob in the first shard is replicated
             kill_until_shard = pg_shard_id_vec[pg_id].front();
             kill_until_blob = num_blobs_per_shard - 1;
         }
@@ -499,12 +503,14 @@ void HomeObjectFixture::RestartLeaderDuringBaselineResyncUsingSigKill(uint64_t f
                 flip::FlipCondition cond;
                 // will only delay the snapshot with blob id 7 during which restart will happen
                 m_fc.create_condition("blob_id", flip::Operator::EQUAL, static_cast< long >(7), &cond);
-                set_retval_flip("simulate_read_snapshot_load_blob_delay", static_cast< long >(flip_delay) /*ms*/, 1, 100,
-                                cond);
+                set_retval_flip("simulate_read_snapshot_load_blob_delay", static_cast< long >(flip_delay) /*ms*/, 1,
+                                100, cond);
             } else if (restart_phase == APPLYING_SNAPSHOT) {
                 LOGINFO("restart when applying snapshot: {}", restart_phase);
                 set_retval_flip("simulate_apply_snapshot_delay", static_cast< long >(flip_delay) /*ms*/, 1, 100);
-            } else { LOGWARN("restart after baseline resync: {}", restart_phase); }
+            } else {
+                LOGWARN("restart after baseline resync: {}", restart_phase);
+            }
         }
 #endif
 
@@ -528,9 +534,8 @@ void HomeObjectFixture::RestartLeaderDuringBaselineResyncUsingSigKill(uint64_t f
 
         run_on_pg_leader(pg_id, [&]() {
             auto r = _obj_inst->pg_manager()
-                              ->replace_member(pg_id, out_member_id,
-                                               PGMember{in_member_id, "new_member", 0})
-                              .get();
+                         ->replace_member(pg_id, out_member_id, PGMember{in_member_id, "new_member", 0})
+                         .get();
             ASSERT_TRUE(r);
         });
         initial_leader_replica_id = get_leader_id(pg_id);
@@ -544,7 +549,7 @@ void HomeObjectFixture::RestartLeaderDuringBaselineResyncUsingSigKill(uint64_t f
                      kill_until_blob);
             wait_for_blob(kill_until_shard, kill_until_blob);
         } else if (initial_leader_replica_num == g_helper->replica_num()) {
-            //SyncPoint 1(leader)
+            // SyncPoint 1(leader)
             g_helper->sync();
             LOGINFO("going to kill leader");
             kill();
@@ -558,8 +563,8 @@ void HomeObjectFixture::RestartLeaderDuringBaselineResyncUsingSigKill(uint64_t f
         // SyncPoint 1: tell leader to kill
         g_helper->sync();
 
-        //out member helps to spawn a new process to simulate the leader restart
-        if(out_member_id == g_helper->my_replica_id()) {
+        // out member helps to spawn a new process to simulate the leader restart
+        if (out_member_id == g_helper->my_replica_id()) {
             std::thread spawn_thread([restart_interval, initial_leader_replica_num]() {
                 std::this_thread::sleep_for(std::chrono::milliseconds(restart_interval));
                 LOGINFO("going to restart replica {}", initial_leader_replica_num)
@@ -569,8 +574,8 @@ void HomeObjectFixture::RestartLeaderDuringBaselineResyncUsingSigKill(uint64_t f
         }
         LOGINFO("wait for new member restart")
         g_helper->sync();
-        if(out_member_id != g_helper->my_replica_id()) {
-            //make sure there is a leader
+        if (out_member_id != g_helper->my_replica_id()) {
+            // make sure there is a leader
             get_leader_id(pg_id);
         }
         LOGINFO("going to put more blobs")
@@ -590,7 +595,7 @@ void HomeObjectFixture::RestartLeaderDuringBaselineResyncUsingSigKill(uint64_t f
             });
         }
     } else {
-        //sync for putting blobs
+        // sync for putting blobs
         g_helper->sync();
     }
     LOGINFO("wait for all blobs replicated to the new member")
@@ -603,7 +608,9 @@ SISL_OPTION_GROUP(
     (spdk, "", "spdk", "spdk", ::cxxopts::value< bool >()->default_value("false"), "true or false"),
     (dev_size_mb, "", "dev_size_mb", "size of each device in MB", ::cxxopts::value< uint64_t >()->default_value("2048"),
      "number"),
-    (pg_size, "", "pg_size", "default size of pg in MB", ::cxxopts::value< uint64_t >()->default_value("100"),
+    (chunks_per_pg, "", "chunks_per_pg", "how many chunks a PG has", ::cxxopts::value< uint64_t >()->default_value("5"),
+     "number"),
+    (chunk_size, "", "chunk_size", "size of chunk in MB", ::cxxopts::value< uint64_t >()->default_value("20"),
      "number"),
     (num_threads, "", "num_threads", "number of threads", ::cxxopts::value< uint32_t >()->default_value("2"), "number"),
     (num_devs, "", "num_devs", "number of devices to create", ::cxxopts::value< uint32_t >()->default_value("3"),
@@ -628,8 +635,8 @@ SISL_OPTION_GROUP(
     (is_restart, "", "is_restart",
      "(internal) the process is restart or the first start, only used for the first testcase",
      ::cxxopts::value< bool >()->default_value("false"), "true or false"),
-    (enable_http, "", "enable_http", "enable http server or not",
-        ::cxxopts::value< bool >()->default_value("false"), "true or false"));
+    (enable_http, "", "enable_http", "enable http server or not", ::cxxopts::value< bool >()->default_value("false"),
+     "true or false"));
 
 SISL_LOGGING_INIT(homeobject)
 #define test_options logging, config, homeobject, test_homeobject_repl_common

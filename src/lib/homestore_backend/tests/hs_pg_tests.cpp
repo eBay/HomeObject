@@ -191,7 +191,8 @@ TEST_F(HomeObjectFixture, CreatePGFailed) {
         auto const pg_id = 1;
         const uint8_t leader_replica_num = 0;
         auto my_replica_num = g_helper->replica_num();
-        auto pg_size = SISL_OPTIONS["pg_size"].as< uint64_t >() * Mi;
+        auto pg_size =
+            SISL_OPTIONS["chunks_per_pg"].as< uint64_t >() * SISL_OPTIONS["chunk_size"].as< uint64_t >() * Mi;
         auto name = g_helper->test_name();
         if (leader_replica_num == my_replica_num) {
             auto members = g_helper->members();
