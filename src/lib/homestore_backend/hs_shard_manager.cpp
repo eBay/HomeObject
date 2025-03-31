@@ -10,6 +10,19 @@
 
 namespace homeobject {
 
+SISL_LOGGING_DECL(shardmgr)
+
+#define SLOG(level, shard_id, msg, ...)                                                                                \
+    LOG##level##MOD(shardmgr, "[shardID=0x{:x},pg={},shard=0x{:x}] " msg, shard_id,                                    \
+                    (shard_id >> homeobject::shard_width), (shard_id & homeobject::shard_mask), ##__VA_ARGS__)
+
+#define SLOGT(shard_id, msg, ...) SLOG(TRACE, shard_id, msg, ##__VA_ARGS__)
+#define SLOGD(shard_id, msg, ...) SLOG(DEBUG, shard_id, msg, ##__VA_ARGS__)
+#define SLOGI(shard_id, msg, ...) SLOG(INFO, shard_id, msg, ##__VA_ARGS__)
+#define SLOGW(shard_id, msg, ...) SLOG(WARN, shard_id, msg, ##__VA_ARGS__)
+#define SLOGE(shard_id, msg, ...) SLOG(ERROR, shard_id, msg, ##__VA_ARGS__)
+#define SLOGC(shard_id, msg, ...) SLOG(CRITICAL, shard_id, msg, ##__VA_ARGS__)
+
 ShardError toShardError(ReplServiceError const& e) {
     switch (e) {
     case ReplServiceError::BAD_REQUEST:
@@ -127,15 +140,17 @@ ShardManager::AsyncResult< ShardInfo > HSHomeObject::_create_shard(pg_id_t pg_ow
     }
 
     auto new_shard_id = generate_new_shard_id(pg_owner);
+    SLOGD(new_shard_id, "Create shard request: pg=[{}], size=[{}]", pg_owner, size_bytes);
     auto create_time = get_current_timestamp();
 
     // select chunk for shard.
-    const auto v_chunkID = chunk_selector()->get_most_available_blk_chunk(pg_owner);
+    const auto v_chunkID = chunk_selector()->get_most_available_blk_chunk(new_shard_id, pg_owner);
     if (!v_chunkID.has_value()) {
-        LOGW("no availble chunk left to create shard for pg [{}]", pg_owner);
+        SLOGW(new_shard_id, "no availble chunk left to create shard for pg [{}]", pg_owner);
         decr_pending_request_num();
         return folly::makeUnexpected(ShardError::NO_SPACE_LEFT);
     }
+    SLOGD(new_shard_id, "vchunk_id: {}", v_chunkID.value());
 
     // Prepare the shard info block
     sisl::io_blob_safe sb_blob(sisl::round_up(sizeof(shard_info_superblk), repl_dev->get_blk_size()), io_align);
@@ -175,7 +190,20 @@ ShardManager::AsyncResult< ShardInfo > HSHomeObject::_create_shard(pg_id_t pg_ow
 
     // replicate this create shard message to PG members;
     repl_dev->async_alloc_write(req->cheader_buf(), sisl::blob{}, req->data_sgs(), req);
-    return req->result();
+    return req->result().deferValue(
+        [this, req, repl_dev](const auto& result) -> ShardManager::AsyncResult< ShardInfo > {
+            if (result.hasError()) {
+                auto err = result.error();
+                // FIXME: RETURNING CORRECT LEADER
+                // if (err == ShardError::NOT_LEADER) { err.current_leader = repl_dev->get_leader_id(); }
+                decr_pending_request_num();
+                return folly::makeUnexpected(err);
+            }
+            auto shard_info = result.value();
+            SLOGD(shard_info.id, "Shard created success.");
+            decr_pending_request_num();
+            return shard_info;
+        });
 }
 
 ShardManager::AsyncResult< ShardInfo > HSHomeObject::_seal_shard(ShardInfo const& info) {
@@ -187,20 +215,29 @@ ShardManager::AsyncResult< ShardInfo > HSHomeObject::_seal_shard(ShardInfo const
 
     auto pg_id = info.placement_group;
     auto shard_id = info.id;
-
+    SLOGD(shard_id, "Seal shard request: is_open=[{}]", info.is_open());
     auto hs_pg = get_hs_pg(pg_id);
-    RELEASE_ASSERT(hs_pg, "PG not found");
+    if (!hs_pg) {
+        SLOGW(shard_id, "PG {} not found", pg_id);
+        decr_pending_request_num();
+        return folly::makeUnexpected(ShardError::UNKNOWN_PG);
+    }
+
     auto repl_dev = hs_pg->repl_dev_;
-    RELEASE_ASSERT(repl_dev != nullptr, "Repl dev null");
+    if (!repl_dev) {
+        SLOGW(shard_id, "failed to get repl dev instance for pg [{}]", pg_id);
+        decr_pending_request_num();
+        return folly::makeUnexpected(ShardError::PG_NOT_READY);
+    }
 
     if (!repl_dev->is_leader()) {
-        LOGW("failed to seal shard for shard [{}], not leader", shard_id);
+        SLOGW(shard_id, "failed to seal shard for shard [{}], not leader", shard_id);
         decr_pending_request_num();
         return folly::makeUnexpected(ShardError::NOT_LEADER);
     }
 
     if (!repl_dev->is_ready_for_traffic()) {
-        LOGW("failed to seal shard for shard [{}], not ready for traffic", shard_id);
+        SLOGW(shard_id, "failed to seal shard for shard [{}], not ready for traffic", shard_id);
         decr_pending_request_num();
         return folly::makeUnexpected(ShardError::RETRY_REQUEST);
     }
@@ -232,7 +269,20 @@ ShardManager::AsyncResult< ShardInfo > HSHomeObject::_seal_shard(ShardInfo const
 
     // replicate this seal shard message to PG members;
     repl_dev->async_alloc_write(req->cheader_buf(), sisl::blob{}, req->data_sgs(), req);
-    return req->result();
+    return req->result().deferValue(
+        [this, req, repl_dev](const auto& result) -> ShardManager::AsyncResult< ShardInfo > {
+            if (result.hasError()) {
+                auto err = result.error();
+                // FIXME: RETURNING CORRECT LEADER
+                // if (err == BlobErrorCode::NOT_LEADER) { err.current_leader = repl_dev->get_leader_id(); }
+                decr_pending_request_num();
+                return folly::makeUnexpected(err);
+            }
+            auto shard_info = result.value();
+            SLOGD(shard_info.id, "Seal shard request: Shard sealed success, is_open=[{}]", shard_info.is_open());
+            decr_pending_request_num();
+            return shard_info;
+        });
 }
 
 // move seal_shard to pre_commit can not fundamentally solve the conflict between seal_shard and put_blob, since
@@ -339,7 +389,6 @@ void HSHomeObject::on_shard_message_rollback(int64_t lsn, sisl::blob const& head
         break;
     }
     }
-    if (ctx) decr_pending_request_num();
 }
 
 void HSHomeObject::local_create_shard(ShardInfo shard_info, homestore::chunk_num_t v_chunk_id,
@@ -425,7 +474,7 @@ void HSHomeObject::on_shard_message_commit(int64_t lsn, sisl::blob const& h, hom
         local_create_shard(shard_info, v_chunk_id, blkids.chunk_num(), blkids.blk_count());
         if (ctx) { ctx->promise_.setValue(ShardManager::Result< ShardInfo >(shard_info)); }
 
-        LOGI("Commit done for CREATE_SHARD_MSG for shard {}", shard_info.id);
+        SLOGD(shard_info.id, "Commit done for creating shard 0x{:x}", shard_info.id);
 
         break;
     }
@@ -452,17 +501,13 @@ void HSHomeObject::on_shard_message_commit(int64_t lsn, sisl::blob const& h, hom
         } else
             LOGW("try to commit SEAL_SHARD_MSG but shard state is not sealed, shard_id: {}", shard_info.id);
         if (ctx) { ctx->promise_.setValue(ShardManager::Result< ShardInfo >(shard_info)); }
-        LOGI("Commit done for SEAL_SHARD_MSG for shard {}", shard_info.id);
+        SLOGD(shard_info.id, "Commit done for sealing shard 0x{:x}", shard_info.id);
 
         break;
     }
     default:
         break;
     }
-
-    // only for leader and it`s not log replay, then we can make sure this is a on-line client request and we should dec
-    //  the pending request num.
-    if (ctx) decr_pending_request_num();
 }
 
 void HSHomeObject::on_shard_meta_blk_found(homestore::meta_blk* mblk, sisl::byte_view buf) {

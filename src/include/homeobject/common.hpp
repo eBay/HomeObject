@@ -9,7 +9,7 @@
 
 SISL_LOGGING_DECL(homeobject);
 
-#define HOMEOBJECT_LOG_MODS homeobject, blobmgr
+#define HOMEOBJECT_LOG_MODS homeobject, blobmgr, shardmgr
 
 #ifndef Ki
 constexpr uint64_t Ki = 1024ul;

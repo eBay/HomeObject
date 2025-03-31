@@ -108,10 +108,11 @@ public:
     /**
      * pop pg top chunk
      *
+     * @param ctx  only for logging.
      * @param pg_id The ID of the pg.
      * @return An optional chunk_num_t value representing v_chunk_id, or std::nullopt if no space left.
      */
-    std::optional< chunk_num_t > get_most_available_blk_chunk(pg_id_t pg_id) const;
+    std::optional< chunk_num_t > get_most_available_blk_chunk(uint64_t ctx, pg_id_t pg_id);
 
     // this should be called on each pg meta blk found
     bool recover_pg_chunks(pg_id_t pg_id, std::vector< chunk_num_t >&& p_chunk_ids);

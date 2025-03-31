@@ -164,7 +164,7 @@ TEST_F(HeapChunkSelectorTest, test_identical_layout) {
         for (int j = 3; j > 0; --j) {
             ASSERT_EQ(pg_chunk_collection->available_blk_count, start_available_blk_count);
 
-            const auto v_chunkID = HCS.get_most_available_blk_chunk(pg_id);
+            const auto v_chunkID = HCS.get_most_available_blk_chunk(j, pg_id);
             ASSERT_TRUE(v_chunkID.has_value());
             p_chunk_id = pg_chunk_collection->m_pg_chunks[v_chunkID.value()]->get_chunk_id();
             ASSERT_EQ(HCS.m_chunks[p_chunk_id]->m_state, ChunkState::INUSE);
@@ -203,7 +203,7 @@ TEST_F(HeapChunkSelectorTest, test_identical_layout) {
             start_available_blk_count -= j;
         }
         // all chunks have been given out
-        ASSERT_FALSE(HCS.get_most_available_blk_chunk(pg_id).has_value());
+        ASSERT_FALSE(HCS.get_most_available_blk_chunk(9999, pg_id).has_value());
     }
 }
 
@@ -366,7 +366,7 @@ TEST_F(HeapChunkSelectorTest, test_recovery) {
         ASSERT_EQ(pg_chunk_collection->m_pg_chunks[0]->m_state, ChunkState::INUSE);
         ASSERT_EQ(pg_chunk_collection->m_pg_chunks[1]->m_state, ChunkState::AVAILABLE);
 
-        const auto v_chunkID = HCS_recovery.get_most_available_blk_chunk(pg_id);
+        const auto v_chunkID = HCS_recovery.get_most_available_blk_chunk(9999, pg_id);
         ASSERT_TRUE(v_chunkID.has_value());
         auto chunk = HCS_recovery.select_specific_chunk(pg_id, v_chunkID.value());
         ASSERT_NE(chunk, nullptr);

@@ -892,8 +892,15 @@ private:
     uint64_t get_pending_request_num() const { return pending_request_num.load(); }
 
     // only leader will call incr and decr pending request num
-    void incr_pending_request_num() const { pending_request_num++; }
-    void decr_pending_request_num() const { pending_request_num--; }
+    void incr_pending_request_num() const {
+        uint64_t now=pending_request_num.fetch_add(1);
+        LOGT("inc pending req, was {}", now);
+    }
+        void decr_pending_request_num() const {
+        uint64_t now = pending_request_num.fetch_sub(1);
+        LOGT("desc pending req, was {}", now);
+        DEBUG_ASSERT(now>0, "pending == 0 ");
+    }
 };
 
 class BlobIndexServiceCallbacks : public homestore::IndexServiceCallbacks {

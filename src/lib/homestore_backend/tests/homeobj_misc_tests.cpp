@@ -260,7 +260,7 @@ TEST_F(HomeObjectFixture, SnapshotReceiveHandler) {
         shard.total_capacity_bytes = 1024 * Mi;
         shard.lsn = snp_lsn;
 
-        auto v_chunk_id = _obj_inst->chunk_selector()->get_most_available_blk_chunk(pg_id);
+        auto v_chunk_id = _obj_inst->chunk_selector()->get_most_available_blk_chunk(shard.id, pg_id);
 
         auto shard_entry = CreateResyncShardMetaData(builder, shard.id, pg_id, static_cast< uint8_t >(shard.state),
                                                      shard.lsn, shard.created_time, shard.last_modified_time,
