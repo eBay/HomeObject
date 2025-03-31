@@ -361,16 +361,6 @@ void HSHomeObject::mark_pg_destroyed(pg_id_t pg_id) {
 }
 
 void HSHomeObject::destroy_hs_resources(pg_id_t pg_id) {
-    // Step 1: purge on repl dev
-    auto lg = std::scoped_lock(_pg_lock);
-    auto hs_pg = _get_hs_pg_unlocked(pg_id);
-    if (hs_pg == nullptr) {
-        LOGW("destroy repl dev with unknown pg_id {}", pg_id);
-        return;
-    }
-    hs_pg->repl_dev_->purge();
-
-    // Step 2: reset pg chunks
     chunk_selector_->reset_pg_chunks(pg_id);
 }
 
