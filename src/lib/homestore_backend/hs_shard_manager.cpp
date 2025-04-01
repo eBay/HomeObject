@@ -303,7 +303,6 @@ bool HSHomeObject::on_shard_message_pre_commit(int64_t lsn, sisl::blob const& he
         LOGW("replication message header is corrupted with crc error, lsn:{}", lsn);
         if (ctx) {
             ctx->promise_.setValue(folly::makeUnexpected(ShardError::CRC_MISMATCH));
-            decr_pending_request_num();
         }
         // TODO::if fail to pre_commit, shuold we crash here?
 
@@ -347,7 +346,6 @@ void HSHomeObject::on_shard_message_rollback(int64_t lsn, sisl::blob const& head
         LOGW("replication message header is corrupted with crc error, lsn:{}", lsn);
         if (ctx) {
             ctx->promise_.setValue(folly::makeUnexpected(ShardError::CRC_MISMATCH));
-            decr_pending_request_num();
         }
         return;
     }
@@ -430,7 +428,6 @@ void HSHomeObject::on_shard_message_commit(int64_t lsn, sisl::blob const& h, hom
         LOGW("replication message header is corrupted with crc error, lsn:{}", lsn);
         if (ctx) {
             ctx->promise_.setValue(folly::makeUnexpected(ShardError::CRC_MISMATCH));
-            decr_pending_request_num();
         }
         // TODO::if fail to commit, shuold we crash here?
         return;
@@ -448,7 +445,6 @@ void HSHomeObject::on_shard_message_commit(int64_t lsn, sisl::blob const& h, hom
         LOGW("failed to read data from homestore blks, lsn:{}", lsn);
         if (ctx) {
             ctx->promise_.setValue(folly::makeUnexpected(ShardError::UNKNOWN));
-            decr_pending_request_num();
         }
         return;
     }
@@ -458,7 +454,6 @@ void HSHomeObject::on_shard_message_commit(int64_t lsn, sisl::blob const& h, hom
         LOGW("replication message header is inconsistent with value, lsn:{}", lsn);
         if (ctx) {
             ctx->promise_.setValue(folly::makeUnexpected(ShardError::CRC_MISMATCH));
-            decr_pending_request_num();
         }
         return;
     }
