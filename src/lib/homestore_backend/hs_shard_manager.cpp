@@ -78,6 +78,11 @@ uint64_t HSHomeObject::get_sequence_num_from_shard_id(uint64_t shard_id) {
     return shard_id & (max_shard_num_in_pg() - 1);
 }
 
+pg_id_t HSHomeObject::get_pg_id_from_shard_id(uint64_t shard_id) {
+    //get highest 16bit
+        return shard_id >> shard_width;
+}
+
 std::string HSHomeObject::serialize_shard_info(const ShardInfo& info) {
     nlohmann::json j;
     j["shard_info"]["shard_id_t"] = info.id;

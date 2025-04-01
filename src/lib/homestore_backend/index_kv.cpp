@@ -132,6 +132,11 @@ shared< BlobIndexTable > HSHomeObject::get_index_table(pg_id_t pg_id) {
     return hs_pg->index_table_;
 }
 
+BlobManager::Result< std::vector< HSHomeObject::BlobInfo > > HSHomeObject::get_shard_blobs(shard_id_t shard_id) {
+    return query_blobs_in_shard(get_pg_id_from_shard_id(shard_id), get_sequence_num_from_shard_id(shard_id), 0,
+                                UINT64_MAX);
+}
+
 BlobManager::Result< std::vector< HSHomeObject::BlobInfo > >
 HSHomeObject::query_blobs_in_shard(pg_id_t pg_id, uint64_t cur_shard_seq_num, blob_id_t start_blob_id,
                                    uint64_t max_num_in_batch) {
