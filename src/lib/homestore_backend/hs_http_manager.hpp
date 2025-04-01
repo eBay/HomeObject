@@ -28,6 +28,11 @@ private:
     void get_malloc_stats(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response);
     void reconcile_leader(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response);
     void yield_leadership_to_follower(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response);
+    void get_pg(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response);
+    void get_pg_chunks(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response);
+    void dump_chunk(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response);
+    void dump_shard(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response);
+    void get_shard(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response);
 
 #ifdef _PRERELEASE
     void crash_system(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response);

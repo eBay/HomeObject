@@ -607,5 +607,29 @@ HeapChunkSelector::get_extend_vchunk(const homestore::chunk_num_t chunk_id) cons
     if (it != m_chunks.end()) { return it->second; }
     return nullptr;
 }
+// dump chunks info for given pg_id, return json format
+nlohmann::json HeapChunkSelector::dump_chunks_info(pg_id_t pg_id) const {
+    std::shared_lock lock_guard(m_chunk_selector_mtx);
+    auto pg_it = m_per_pg_chunks.find(pg_id);
+    if (pg_it == m_per_pg_chunks.end()) {
+        LOGWARNMOD(homeobject, "No pg found for pg_id {}", pg_id);
+        return nlohmann::json::object(); // Return an empty JSON object if pg_id is not found
+    }
+
+    nlohmann::json pg_chunk_info;
+    pg_chunk_info["pg"]["id"] = pg_id;
+    nlohmann::json chunks_array = nlohmann::json::array();
+    for (const auto& chunk : pg_it->second->m_pg_chunks) {
+        nlohmann::json chunk_json;
+        chunk_json["vchunk_id"] = chunk->m_v_chunk_id.value();
+        chunk_json["available_blk_count"] = chunk->available_blks();
+        chunk_json["state"] = chunk->m_state;
+        chunk_json["p_chunk_id"] = chunk->get_chunk_id();
+        chunks_array.push_back(chunk_json);
+    }
+    pg_chunk_info["pg"]["chunk_num"] = pg_it->second->m_pg_chunks.size();
+    pg_chunk_info["pg"]["chunks"] = chunks_array;
+    return pg_chunk_info;
+}
 
 } // namespace homeobject

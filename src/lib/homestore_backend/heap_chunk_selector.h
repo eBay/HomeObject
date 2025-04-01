@@ -213,6 +213,8 @@ public:
     void update_vchunk_info_after_gc(const chunk_num_t move_from_chunk, const chunk_num_t move_to_chunk,
                                      const ChunkState final_state, const pg_id_t pg_id, const chunk_num_t vchunk_id,
                                      const uint64_t task_id);
+    
+    nlohmann::json dump_chunks_info(pg_id_t pg_id) const;
 
 private:
     void add_chunk_internal(const chunk_num_t, bool add_to_heap = true);

@@ -361,6 +361,11 @@ public:
         void reconcile_leader() const;
 
         void yield_leadership_to_follower() const;
+        
+        /**
+         * Returns all shards
+         */
+        std::vector< Shard > get_chunk_shards(homestore::chunk_num_t v_chunk_id) const;
     };
 
     struct HS_Shard : public Shard {
@@ -371,6 +376,7 @@ public:
 
         void update_info(const ShardInfo& info, std::optional< homestore::chunk_num_t > p_chunk_id = std::nullopt);
         auto p_chunk_id() const { return sb_->p_chunk_id; }
+        auto v_chunk_id() const { return sb_->v_chunk_id; }
     };
 
 #pragma pack(1)
@@ -843,6 +849,13 @@ public:
     static uint64_t get_sequence_num_from_shard_id(uint64_t shard_id);
 
     /**
+     * @brief Get the sequence number of the shard from the shard id.
+     *
+     * @param shard_id The ID of the shard.
+     * @return The PG ID of the shard.
+     */
+    pg_id_t get_pg_id_from_shard_id(uint64_t shard_id);
+    /**
      * @brief recover PG and shard from the superblock.
      *
      */
@@ -938,6 +951,8 @@ public:
     const HS_PG* _get_hs_pg_unlocked(pg_id_t pg_id) const;
     bool verify_blob(const void* blob, const shard_id_t shard_id, const blob_id_t blob_id,
                      bool allow_delete_marker = false) const;
+
+    BlobManager::Result< std::vector< BlobInfo > > get_shard_blobs(shard_id_t shard_id);
 
 private:
     std::shared_ptr< BlobIndexTable > create_pg_index_table();
