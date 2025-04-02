@@ -69,7 +69,7 @@ public:
     void restart(uint32_t shutdown_delay_secs = 0u, uint32_t restart_delay_secs = 0u) {
         g_helper->sync();
         LOGINFO("Restarting homeobject replica={}", g_helper->my_replica_id());
-        LOGINFO("Metrics: {}", sisl::MetricsFarm::getInstance().get_result_in_json().dump(2));
+        LOGTRACE("Metrics: {}", sisl::MetricsFarm::getInstance().get_result_in_json().dump(2));
         trigger_cp(true);
         _obj_inst.reset();
         _obj_inst =

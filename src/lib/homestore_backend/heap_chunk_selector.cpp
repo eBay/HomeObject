@@ -347,7 +347,8 @@ std::shared_ptr< const std::vector< homestore::chunk_num_t > > HeapChunkSelector
     return p_chunk_ids;
 }
 
-std::optional< homestore::chunk_num_t > HeapChunkSelector::get_most_available_blk_chunk(pg_id_t pg_id) const {
+std::optional< homestore::chunk_num_t >
+HeapChunkSelector::get_most_available_blk_chunk(uint64_t ctx, pg_id_t pg_id) {
     std::shared_lock lock_guard(m_chunk_selector_mtx);
     auto pg_it = m_per_pg_chunks.find(pg_id);
     if (pg_it == m_per_pg_chunks.end()) {
@@ -363,10 +364,12 @@ std::optional< homestore::chunk_num_t > HeapChunkSelector::get_most_available_bl
                              return !a->available() || (b->available() && a->available_blks() < b->available_blks());
                          });
     if (!(*max_it)->available()) {
-        LOGWARNMOD(homeobject, "No available chunk for PG {}", pg_id);
+        LOGWARNMOD(homeobject, "No available chunk for PG [{}], ctx=[0x{:x}]", pg_id, ctx);
         return std::nullopt;
     }
     auto v_chunk_id = std::distance(pg_chunks.begin(), max_it);
+    LOGDEBUGMOD(homeobject, "Picked vchunk {} : [pchunk={}, avail={}], ctx=[0x{:x}]", v_chunk_id, pg_chunks[v_chunk_id]->get_chunk_id(),
+          pg_chunks[v_chunk_id]->available_blks(), ctx);
     pg_chunks[v_chunk_id]->m_state = ChunkState::INUSE;
     --pg_chunk_collection->available_num_chunks;
     pg_chunk_collection->available_blk_count -= pg_chunks[v_chunk_id]->available_blks();

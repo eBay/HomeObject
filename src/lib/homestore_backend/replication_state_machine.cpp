@@ -13,7 +13,7 @@ namespace homeobject {
 void ReplicationStateMachine::on_commit(int64_t lsn, const sisl::blob& header, const sisl::blob& key,
                                         const homestore::MultiBlkId& pbas, cintrusive< homestore::repl_req_ctx >& ctx) {
     const ReplicationMessageHeader* msg_header = r_cast< const ReplicationMessageHeader* >(header.cbytes());
-    LOGD("applying raft log commit with lsn:{}, msg type: {}", lsn, msg_header->msg_type);
+    LOGT("applying raft log commit with lsn:{}, msg type: {}", lsn, msg_header->msg_type);
     switch (msg_header->msg_type) {
     case ReplicationMessageType::CREATE_PG_MSG: {
         home_object_->on_create_pg_message_commit(lsn, header, repl_dev(), ctx);
@@ -58,7 +58,7 @@ bool ReplicationStateMachine::on_pre_commit(int64_t lsn, sisl::blob const& heade
         LOGE("corrupted message in pre_commit, lsn:{}", lsn);
         return false;
     }
-    LOGD("on_pre_commit with lsn:{}, msg type: {}", lsn, msg_header->msg_type);
+    LOGT("on_pre_commit with lsn:{}, msg type: {}", lsn, msg_header->msg_type);
     switch (msg_header->msg_type) {
     case ReplicationMessageType::SEAL_SHARD_MSG: {
         return home_object_->on_shard_message_pre_commit(lsn, header, key, ctx);
