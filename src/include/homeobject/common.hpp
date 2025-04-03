@@ -6,6 +6,7 @@
 #include <folly/futures/Future.h>
 
 #include <sisl/logging/logging.h>
+#include <random>
 
 SISL_LOGGING_DECL(homeobject);
 
@@ -30,6 +31,14 @@ using pg_id_t = uint16_t;
 using shard_id_t = uint64_t;
 using snp_batch_id_t = uint16_t;
 using snp_obj_id_t = uint64_t;
+using trace_id_t = uint64_t;
+
+inline uint64_t generateRandomTraceId() {
+    std::random_device rd;
+    std::mt19937_64 gen(rd());
+    std::uniform_int_distribution< uint64_t > dis;
+    return dis(gen);
+}
 
 template < class E >
 class Manager {

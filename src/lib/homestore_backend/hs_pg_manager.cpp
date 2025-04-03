@@ -87,14 +87,14 @@ PGManager::NullAsyncResult HSHomeObject::_create_pg(PGInfo&& pg_info, std::set< 
         decr_pending_request_num();
         return folly::makeUnexpected(PGError::NO_SPACE_LEFT);
     }
-
+    trace_id_t tid = generateRandomTraceId();
     pg_info.chunk_size = chunk_size;
     pg_info.replica_set_uuid = boost::uuids::random_generator()();
     const auto repl_dev_group_id = pg_info.replica_set_uuid;
     return hs_repl_service()
         .create_repl_dev(pg_info.replica_set_uuid, peers)
         .via(executor_)
-        .thenValue([this, pg_info = std::move(pg_info)](auto&& v) mutable -> PGManager::NullAsyncResult {
+        .thenValue([this, pg_info = std::move(pg_info), tid](auto&& v) mutable -> PGManager::NullAsyncResult {
 #ifdef _PRERELEASE
             if (iomgr_flip::instance()->test_flip("create_pg_create_repl_dev_error")) {
                 LOGW("Simulating create repl dev error in creating pg");
@@ -107,9 +107,9 @@ PGManager::NullAsyncResult HSHomeObject::_create_pg(PGInfo&& pg_info, std::set< 
             // all raft members will create PGinfo and index table for this PG.
 
             // FIXME:https://github.com/eBay/HomeObject/pull/136#discussion_r1470504271
-            return do_create_pg(v.value(), std::move(pg_info));
+            return do_create_pg(v.value(), std::move(pg_info), tid);
         })
-        .thenValue([this, pg_id, repl_dev_group_id](auto&& r) -> PGManager::NullAsyncResult {
+        .thenValue([this, pg_id, repl_dev_group_id, tid](auto&& r) -> PGManager::NullAsyncResult {
             // reclaim resources if failed to create pg
             if (r.hasError()) {
                 bool res = chunk_selector_->return_pg_chunks_to_dev_heap(pg_id);
@@ -132,7 +132,7 @@ PGManager::NullAsyncResult HSHomeObject::_create_pg(PGInfo&& pg_info, std::set< 
         });
 }
 
-PGManager::NullAsyncResult HSHomeObject::do_create_pg(cshared< homestore::ReplDev > repl_dev, PGInfo&& pg_info) {
+PGManager::NullAsyncResult HSHomeObject::do_create_pg(cshared< homestore::ReplDev > repl_dev, PGInfo&& pg_info, trace_id_t tid) {
     auto serailized_pg_info = serialize_pg_info(pg_info);
     auto info_size = serailized_pg_info.size();
 
@@ -151,7 +151,7 @@ PGManager::NullAsyncResult HSHomeObject::do_create_pg(cshared< homestore::ReplDe
 #endif
 
     // replicate this create pg message to all raft members of this group
-    repl_dev->async_alloc_write(req->header_buf(), sisl::blob{}, sisl::sg_list{}, req);
+    repl_dev->async_alloc_write(req->header_buf(), sisl::blob{}, sisl::sg_list{}, req, tid);
     return req->result().deferValue([req](auto const& e) -> PGManager::NullAsyncResult {
         if (!e) { return folly::makeUnexpected(e.error()); }
         return folly::Unit();
@@ -159,29 +159,29 @@ PGManager::NullAsyncResult HSHomeObject::do_create_pg(cshared< homestore::ReplDe
 }
 
 folly::Expected< HSHomeObject::HS_PG*, PGError > HSHomeObject::local_create_pg(shared< ReplDev > repl_dev,
-                                                                               PGInfo pg_info) {
+                                                                               PGInfo pg_info, trace_id_t tid) {
     auto pg_id = pg_info.id;
     if (auto hs_pg = get_hs_pg(pg_id); hs_pg) {
-        LOGW("PG already exists, pg_id {}", pg_id);
+        LOGW("PG already exists, pg_id {}, trace_id: {}", pg_id, tid);
         return const_cast< HS_PG* >(hs_pg);
     }
 
     auto local_chunk_size = chunk_selector()->get_chunk_size();
     if (pg_info.chunk_size != local_chunk_size) {
-        LOGE("Chunk sizes are inconsistent, leader_chunk_size={}, local_chunk_size={}", pg_info.chunk_size,
-             local_chunk_size);
+        LOGE("Chunk sizes are inconsistent, leader_chunk_size={}, local_chunk_size={}, trace_id: {}", pg_info.chunk_size,
+             local_chunk_size, tid);
         return folly::makeUnexpected< PGError >(PGError::UNKNOWN);
     }
 
     // select chunks for pg
     auto const num_chunk = chunk_selector()->select_chunks_for_pg(pg_id, pg_info.size);
     if (!num_chunk.has_value()) {
-        LOGW("Failed to select chunks for pg {}", pg_id);
+        LOGW("Failed to select chunks for pg {}, trace_id: {}", pg_id, tid);
         return folly::makeUnexpected(PGError::NO_SPACE_LEFT);
     }
     auto chunk_ids = chunk_selector()->get_pg_chunks(pg_id);
     if (chunk_ids == nullptr) {
-        LOGW("Failed to get pg chunks, pg_id {}", pg_id);
+        LOGW("Failed to get pg chunks, pg_id {}, trace_id: {}", pg_id, tid);
         return folly::makeUnexpected(PGError::NO_SPACE_LEFT);
     }
 
@@ -196,8 +196,8 @@ folly::Expected< HSHomeObject::HS_PG*, PGError > HSHomeObject::local_create_pg(s
         RELEASE_ASSERT(index_table_pg_map_.count(uuid_str) == 0, "duplicate index table found");
         index_table_pg_map_[uuid_str] = PgIndexTable{pg_id, index_table};
 
-        LOGI("create pg {} successfully, index table uuid={} pg_size={} num_chunk={}", pg_id, uuid_str, pg_info.size,
-             num_chunk.value());
+        LOGI("create pg {} successfully, index table uuid={} pg_size={} num_chunk={}, trace_id={}", pg_id, uuid_str,
+             pg_info.size, num_chunk.value(), tid);
         hs_pg->index_table_ = index_table;
         // Add to index service, so that it gets cleaned up when index service is shutdown.
         hs()->index_service().add_index_table(index_table);
@@ -213,11 +213,12 @@ void HSHomeObject::on_create_pg_message_commit(int64_t lsn, sisl::blob const& he
     if (hs_ctx && hs_ctx->is_proposer()) {
         ctx = boost::static_pointer_cast< repl_result_ctx< PGManager::NullResult > >(hs_ctx).get();
     }
+    auto tid = hs_ctx ? hs_ctx->traceID() : 0;
 
     auto const* msg_header = r_cast< ReplicationMessageHeader const* >(header.cbytes());
 
     if (msg_header->corrupted()) {
-        LOGE("create PG message header is corrupted , lsn:{}; header: {}", lsn, msg_header->to_string());
+        LOGE("create PG message header is corrupted , lsn:{}; header: {}, trace_id: {}", lsn, msg_header->to_string(), tid);
         if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(PGError::CRC_MISMATCH)); }
         return;
     }
@@ -227,7 +228,7 @@ void HSHomeObject::on_create_pg_message_commit(int64_t lsn, sisl::blob const& he
 
     if (crc32_ieee(init_crc32, serailized_pg_info_buf, serailized_pg_info_size) != msg_header->payload_crc) {
         // header & value is inconsistent;
-        LOGE("create PG message header is inconsistent with value, lsn:{}", lsn);
+        LOGE("create PG message header is inconsistent with value, lsn:{}, trace_id: {}", lsn, tid);
         if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(PGError::CRC_MISMATCH)); }
         return;
     }

@@ -615,12 +615,13 @@ private:
     // blob related
     BlobManager::AsyncResult< Blob > _get_blob_data(const shared< homestore::ReplDev >& repl_dev, shard_id_t shard_id,
                                                     blob_id_t blob_id, uint64_t req_offset, uint64_t req_len,
-                                                    const homestore::MultiBlkId& blkid) const;
+                                                    const homestore::MultiBlkId& blkid, trace_id_t tid) const;
 
     // create pg related
-    static PGManager::NullAsyncResult do_create_pg(cshared< homestore::ReplDev > repl_dev, PGInfo&& pg_info);
+    static PGManager::NullAsyncResult do_create_pg(cshared< homestore::ReplDev > repl_dev, PGInfo&& pg_info,
+                                                   trace_id_t tid = 0);
     folly::Expected< HSHomeObject::HS_PG*, PGError > local_create_pg(shared< homestore::ReplDev > repl_dev,
-                                                                     PGInfo pg_info);
+                                                                     PGInfo pg_info, trace_id_t tid = 0);
     static std::string serialize_pg_info(const PGInfo& info);
     static PGInfo deserialize_pg_info(const unsigned char* pg_info_str, size_t size);
     void add_pg_to_map(unique< HS_PG > hs_pg);
@@ -632,7 +633,7 @@ private:
     static ShardInfo deserialize_shard_info(const char* shard_info_str, size_t size);
     static std::string serialize_shard_info(const ShardInfo& info);
     void local_create_shard(ShardInfo shard_info, homestore::chunk_num_t v_chunk_id, homestore::chunk_num_t p_chunk_id,
-                            homestore::blk_count_t blk_count);
+                            homestore::blk_count_t blk_count, trace_id_t tid=0);
     void add_new_shard_to_map(ShardPtr&& shard);
     void update_shard_in_map(const ShardInfo& shard_info);
 
@@ -803,7 +804,7 @@ public:
                             const homestore::MultiBlkId& pbas, cintrusive< homestore::repl_req_ctx >& hs_ctx);
     void on_blob_del_commit(int64_t lsn, sisl::blob const& header, sisl::blob const& key,
                             cintrusive< homestore::repl_req_ctx >& hs_ctx);
-    bool local_add_blob_info(pg_id_t pg_id, BlobInfo const& blob_info);
+    bool local_add_blob_info(pg_id_t pg_id, BlobInfo const& blob_info, trace_id_t tid=0);
     homestore::ReplResult< homestore::blk_alloc_hints >
     blob_put_get_blk_alloc_hints(sisl::blob const& header, cintrusive< homestore::repl_req_ctx >& ctx);
     void compute_blob_payload_hash(BlobHeader::HashAlgorithm algorithm, const uint8_t* blob_bytes, size_t blob_size,
