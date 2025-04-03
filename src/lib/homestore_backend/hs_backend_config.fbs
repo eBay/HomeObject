@@ -15,6 +15,9 @@ table HSBackendSettings {
 
     //Snapshot blob load retry count
     snapshot_blob_load_retry: uint8 = 3 (hotswap);
+
+    //Reserved space in a chunk
+    reserved_bytes_in_chunk: uint64 = 16777216 (hotswap);
 }
 
 root_type HSBackendSettings;

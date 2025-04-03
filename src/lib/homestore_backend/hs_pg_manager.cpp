@@ -1,3 +1,5 @@
+#include "hs_backend_config.hpp"
+
 #include <boost/uuid/random_generator.hpp>
 #include <boost/uuid/string_generator.hpp>
 #include <homestore/replication_service.hpp>
@@ -531,6 +533,7 @@ HSHomeObject::HS_PG::HS_PG(PGInfo info, shared< homestore::ReplDev > rdev, share
     pg_sb_->active_blob_count = 0;
     pg_sb_->tombstone_blob_count = 0;
     pg_sb_->total_occupied_blk_count = 0;
+    reserved_blks_ = sisl::round_up(HS_BACKEND_DYNAMIC_CONFIG(reserved_bytes_in_chunk) / repl_dev_->get_blk_size(), 1);
     uint32_t i{0};
     pg_members* pg_sb_members = pg_sb_->get_pg_members_mutable();
     for (auto const& m : pg_info_.members) {
@@ -555,6 +558,7 @@ HSHomeObject::HS_PG::HS_PG(superblk< pg_info_superblk >&& sb, shared< ReplDev > 
     durable_entities_.active_blob_count = pg_sb_->active_blob_count;
     durable_entities_.tombstone_blob_count = pg_sb_->tombstone_blob_count;
     durable_entities_.total_occupied_blk_count = pg_sb_->total_occupied_blk_count;
+    reserved_blks_ = sisl::round_up(HS_BACKEND_DYNAMIC_CONFIG(reserved_bytes_in_chunk) / repl_dev_->get_blk_size(), 1);
 }
 
 uint32_t HSHomeObject::HS_PG::total_shards() const { return shards_.size(); }
@@ -566,6 +570,8 @@ uint32_t HSHomeObject::HS_PG::open_shards() const {
 uint32_t HSHomeObject::HS_PG::get_snp_progress() const {
     return snp_rcvr_info_sb_->progress.complete_bytes / snp_rcvr_info_sb_->progress.total_bytes;
 }
+
+uint64_t HSHomeObject::HS_PG::get_reserved_blks() const { return reserved_blks_; }
 
 // NOTE: caller should hold the _pg_lock
 const HSHomeObject::HS_PG* HSHomeObject::_get_hs_pg_unlocked(pg_id_t pg_id) const {
