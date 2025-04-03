@@ -47,6 +47,7 @@ private:
     static constexpr uint64_t HS_CHUNK_SIZE = 2 * Gi;
     static constexpr uint32_t _data_block_size = 1024;
     static uint64_t _hs_chunk_size;
+    uint32_t _hs_reserved_blks = 0;
     ///
 
     /// Overridable Helpers
@@ -791,6 +792,8 @@ public:
     bool release_chunk_based_on_create_shard_message(sisl::blob const& header);
 
     bool pg_exists(pg_id_t pg_id) const;
+
+    uint32_t get_reserved_blks() const { return _hs_reserved_blks; }
 
     void on_create_pg_message_rollback(int64_t lsn, sisl::blob const& header, sisl::blob const& key,
                                        cintrusive< homestore::repl_req_ctx >& hs_ctx);
