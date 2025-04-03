@@ -155,7 +155,8 @@ ReplicationStateMachine::get_blk_alloc_hints(sisl::blob const& header, uint32_t 
     case ReplicationMessageType::CREATE_SHARD_MSG: {
         pg_id_t pg_id = msg_header->pg_id;
         // check whether the pg exists
-        if (!home_object_->pg_exists(pg_id)) {
+        auto hs_pg = home_object_->get_hs_pg(msg_header->pg_id);
+        if (hs_pg == nullptr) {
             LOGI("can not find pg {} when getting blk_alloc_hint", pg_id);
             // TODO:: add error code to indicate the pg not found in homestore side
             return folly::makeUnexpected(homestore::ReplServiceError::NO_SPACE_LEFT);
@@ -172,6 +173,7 @@ ReplicationStateMachine::get_blk_alloc_hints(sisl::blob const& header, uint32_t 
         static_assert(std::is_same< homestore::chunk_num_t, uint16_t >::value, "chunk_num_t is not uint16_t");
         homestore::chunk_num_t v_chunk_id = v_chunkID.value();
         hints.application_hint = ((uint64_t)pg_id << 16) | v_chunk_id;
+        hints.reserved_blks = hs_pg->get_reserved_blks();
         return hints;
     }
 

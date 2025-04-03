@@ -301,6 +301,7 @@ public:
         shared< homestore::ReplDev > repl_dev_;
         std::shared_ptr< BlobIndexTable > index_table_;
         PGMetrics metrics_;
+        uint64_t reserved_blks_;
 
         // Snapshot receiver progress info, used as a checkpoint for recovery
         // Placed within HS_PG since HomeObject is unable to locate the ReplicationStateMachine
@@ -331,6 +332,11 @@ public:
          * Returns the progress of the baseline resync.
          */
         uint32_t get_snp_progress() const;
+
+        /**
+         * Returns the reserved blks count in a chunk
+         */
+        uint64_t get_reserved_blks() const;
     };
 
     struct HS_Shard : public Shard {
