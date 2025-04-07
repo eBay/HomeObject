@@ -120,7 +120,7 @@ void HSHomeObject::print_btree_index(pg_id_t pg_id) const {
 shared< BlobIndexTable > HSHomeObject::get_index_table(pg_id_t pg_id) {
     auto hs_pg = get_hs_pg(pg_id);
     if (hs_pg == nullptr) {
-        LOGW("PG not found for pg_id={} when getting index table", pg_id);
+        LOGW("PG not found for pg={} when getting index table", pg_id);
         return nullptr;
     }
     RELEASE_ASSERT(hs_pg->index_table_ != nullptr, "Index table not found for PG");

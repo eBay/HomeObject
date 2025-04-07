@@ -98,7 +98,7 @@ TEST_F(HomeObjectFixture, SealShard) {
             auto current_time = std::chrono::steady_clock::now();
             auto duration = std::chrono::duration_cast< std::chrono::seconds >(current_time - start_time).count();
             if (duration >= 20) {
-                LOGINFO("Failed to create shard at pg {}", pg_id);
+                LOGINFO("Failed to create shard at pg={}", pg_id);
                 res = false;
                 break;
             }

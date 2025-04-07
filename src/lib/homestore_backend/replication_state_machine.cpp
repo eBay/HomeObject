@@ -13,7 +13,7 @@ namespace homeobject {
 void ReplicationStateMachine::on_commit(int64_t lsn, const sisl::blob& header, const sisl::blob& key,
                                         const homestore::MultiBlkId& pbas, cintrusive< homestore::repl_req_ctx >& ctx) {
     const ReplicationMessageHeader* msg_header = r_cast< const ReplicationMessageHeader* >(header.cbytes());
-    LOGT("applying raft log commit with lsn:{}, msg type: {}", lsn, msg_header->msg_type);
+    LOGT("applying raft log commit with lsn={}, msg type={}", lsn, msg_header->msg_type);
     switch (msg_header->msg_type) {
     case ReplicationMessageType::CREATE_PG_MSG: {
         home_object_->on_create_pg_message_commit(lsn, header, repl_dev(), ctx);
@@ -44,21 +44,21 @@ bool ReplicationStateMachine::on_pre_commit(int64_t lsn, sisl::blob const& heade
     // function is called. So there is nothing is needed to do and we can get the binding chunk_id with the newly shard
     // from the blkid in on_commit()
     if (ctx->op_code() == homestore::journal_type_t::HS_CTRL_REPLACE) {
-        LOGI("pre_commit replace member log entry, lsn:{}", lsn);
+        LOGI("pre_commit replace member log entry, lsn={}", lsn);
         return true;
     }
 
     if (ctx->op_code() == homestore::journal_type_t::HS_CTRL_DESTROY) {
-        LOGI("pre_commit destroy member log entry, lsn:{}", lsn);
+        LOGI("pre_commit destroy member log entry, lsn={}", lsn);
         return true;
     }
 
     const ReplicationMessageHeader* msg_header = r_cast< const ReplicationMessageHeader* >(header.cbytes());
     if (msg_header->corrupted()) {
-        LOGE("corrupted message in pre_commit, lsn:{}", lsn);
+        LOGE("corrupted message in pre_commit, lsn={}", lsn);
         return false;
     }
-    LOGT("on_pre_commit with lsn:{}, msg type: {}", lsn, msg_header->msg_type);
+    LOGT("on_pre_commit with lsn={}, msg type={}", lsn, msg_header->msg_type);
     switch (msg_header->msg_type) {
     case ReplicationMessageType::SEAL_SHARD_MSG: {
         return home_object_->on_shard_message_pre_commit(lsn, header, key, ctx);
@@ -72,10 +72,10 @@ bool ReplicationStateMachine::on_pre_commit(int64_t lsn, sisl::blob const& heade
 
 void ReplicationStateMachine::on_rollback(int64_t lsn, sisl::blob const& header, sisl::blob const& key,
                                           cintrusive< homestore::repl_req_ctx >& ctx) {
-    LOGI("on_rollback  with lsn:{}", lsn);
+    LOGI("on_rollback  with lsn={}", lsn);
     const ReplicationMessageHeader* msg_header = r_cast< const ReplicationMessageHeader* >(header.cbytes());
     if (msg_header->corrupted()) {
-        LOGE("corrupted message in rollback, lsn:{}", lsn);
+        LOGE("corrupted message in rollback, lsn={}", lsn);
         return;
     }
     switch (msg_header->msg_type) {
@@ -109,7 +109,7 @@ void ReplicationStateMachine::on_error(ReplServiceError error, const sisl::blob&
     RELEASE_ASSERT(ctx, "ctx should not be nullptr in on_error");
     RELEASE_ASSERT(ctx->is_proposer(), "on_error should only be called from proposer");
     const ReplicationMessageHeader* msg_header = r_cast< const ReplicationMessageHeader* >(header.cbytes());
-    LOGE("on_error, message type {} with lsn {}, error {}", msg_header->msg_type, ctx->lsn(), error);
+    LOGE("on_error, message type={} with lsn={}, error={}", msg_header->msg_type, ctx->lsn(), error);
     switch (msg_header->msg_type) {
     case ReplicationMessageType::CREATE_PG_MSG: {
         auto result_ctx = boost::static_pointer_cast< repl_result_ctx< PGManager::NullResult > >(ctx).get();
@@ -142,7 +142,7 @@ void ReplicationStateMachine::on_error(ReplServiceError error, const sisl::blob&
         break;
     }
     default: {
-        LOGE("Unknown message type, error unhandled , error :{}, lsn {}", error, ctx->lsn());
+        LOGE("Unknown message type, error unhandled , error={}, lsn={}", error, ctx->lsn());
         break;
     }
     }
@@ -156,14 +156,17 @@ ReplicationStateMachine::get_blk_alloc_hints(sisl::blob const& header, uint32_t 
         pg_id_t pg_id = msg_header->pg_id;
         // check whether the pg exists
         if (!home_object_->pg_exists(pg_id)) {
-            LOGI("can not find pg {} when getting blk_alloc_hint", pg_id);
+            LOGI("shardID=0x{:x}, pg={}, shard=0x{:x}, can not find pg={} when getting blk_alloc_hint",
+                 msg_header->shard_id, (msg_header->shard_id >> homeobject::shard_width),
+                 (msg_header->shard_id & homeobject::shard_mask), pg_id);
             // TODO:: add error code to indicate the pg not found in homestore side
             return folly::makeUnexpected(homestore::ReplServiceError::NO_SPACE_LEFT);
         }
 
         auto v_chunkID = home_object_->resolve_v_chunk_id_from_msg(header);
         if (!v_chunkID.has_value()) {
-            LOGW("can not resolve v_chunk_id from msg");
+            LOGW("shardID=0x{:x}, pg={}, shard=0x{:x}, can not resolve v_chunk_id from msg", msg_header->shard_id,
+                 (msg_header->shard_id >> homeobject::shard_width), (msg_header->shard_id & homeobject::shard_mask));
             return folly::makeUnexpected(homestore::ReplServiceError::FAILED);
         }
         homestore::blk_alloc_hints hints;
@@ -179,7 +182,9 @@ ReplicationStateMachine::get_blk_alloc_hints(sisl::blob const& header, uint32_t 
     case ReplicationMessageType::SEAL_SHARD_MSG: {
         auto p_chunkID = home_object_->get_shard_p_chunk_id(msg_header->shard_id);
         if (!p_chunkID.has_value()) {
-            LOGW("shard does not exist, underlying engine will retry this later", msg_header->shard_id);
+            LOGW("shardID=0x{:x}, pg={}, shard=0x{:x}, shard does not exist, underlying engine will retry this later",
+                 msg_header->shard_id, (msg_header->shard_id >> homeobject::shard_width),
+                 (msg_header->shard_id & homeobject::shard_mask));
             return folly::makeUnexpected(homestore::ReplServiceError::RESULT_NOT_EXIST_YET);
         }
         homestore::blk_alloc_hints hints;
@@ -206,11 +211,11 @@ void ReplicationStateMachine::on_replace_member(const homestore::replica_member_
 void ReplicationStateMachine::on_destroy(const homestore::group_id_t& group_id) {
     auto PG_ID = home_object_->get_pg_id_with_group_id(group_id);
     if (!PG_ID.has_value()) {
-        LOGW("do not have pg mapped by group_id {}", boost::uuids::to_string(group_id));
+        LOGW("do not have pg mapped by group_id={}", boost::uuids::to_string(group_id));
         return;
     }
     home_object_->pg_destroy(PG_ID.value());
-    LOGI("replica destroyed, cleared PG {} resources with group_id {}", PG_ID.value(),
+    LOGI("replica destroyed, cleared pg={} resources with group_id={}", PG_ID.value(),
          boost::uuids::to_string(group_id));
 }
 
@@ -218,12 +223,12 @@ homestore::AsyncReplResult<>
 ReplicationStateMachine::create_snapshot(std::shared_ptr< homestore::snapshot_context > context) {
     std::lock_guard lk(m_snapshot_lock);
     if (get_snapshot_context() != nullptr && context->get_lsn() < m_snapshot_context->get_lsn()) {
-        LOGI("Skipping create snapshot, new snapshot lsn: {} is less than current snapshot lsn: {}", context->get_lsn(),
+        LOGI("Skipping create snapshot, new snapshot lsn={} is less than current snapshot lsn={}", context->get_lsn(),
              m_snapshot_context->get_lsn());
         return folly::makeSemiFuture< homestore::ReplResult< folly::Unit > >(folly::Unit{});
     }
 
-    LOGI("create snapshot with lsn: {}", context->get_lsn());
+    LOGI("create snapshot with lsn={}", context->get_lsn());
     set_snapshot_context(context);
     return folly::makeSemiFuture< homestore::ReplResult< folly::Unit > >(folly::Unit{});
 }
@@ -231,9 +236,9 @@ ReplicationStateMachine::create_snapshot(std::shared_ptr< homestore::snapshot_co
 bool ReplicationStateMachine::apply_snapshot(std::shared_ptr< homestore::snapshot_context > context) {
 #ifdef _PRERELEASE
     auto delay = iomgr_flip::instance()->get_test_flip< long >("simulate_apply_snapshot_delay");
-    LOGD("simulate_apply_snapshot_delay flip, triggered: {}", delay.has_value());
+    LOGD("simulate_apply_snapshot_delay flip, triggered={}", delay.has_value());
     if (delay) {
-        LOGI("Simulating apply snapshot with delay, delay:{}", delay.get());
+        LOGI("Simulating apply snapshot with delay, delay={}", delay.get());
         std::this_thread::sleep_for(std::chrono::milliseconds(delay.get()));
     }
 #endif
@@ -257,7 +262,7 @@ int ReplicationStateMachine::read_snapshot_obj(std::shared_ptr< homestore::snaps
         // Create the pg blob iterator for the first time.
         pg_iter = new HSHomeObject::PGBlobIterator(*home_object_, repl_dev()->group_id(), context->get_lsn());
         snp_obj->user_ctx = (void*)pg_iter;
-        LOGD("Allocated new pg blob iterator {}, group={}, lsn={}", static_cast< void* >(pg_iter),
+        LOGD("Allocated new pg blob iterator={}, group={}, lsn={}", static_cast< void* >(pg_iter),
              boost::uuids::to_string(repl_dev()->group_id()), context->get_lsn());
     } else {
         pg_iter = r_cast< HSHomeObject::PGBlobIterator* >(snp_obj->user_ctx);
@@ -284,7 +289,7 @@ int ReplicationStateMachine::read_snapshot_obj(std::shared_ptr< homestore::snaps
     }
 
     auto obj_id = objId(snp_obj->offset);
-    log_str = fmt::format("{} shard_seq_num={} batch_num={}", log_str, obj_id.shard_seq_num, obj_id.batch_id);
+    log_str = fmt::format("{} shard_seq_num=0x{:x} batch_num={}", log_str, obj_id.shard_seq_num, obj_id.batch_id);
 
     LOGD("read current snp obj {}", log_str)
     // invalid Id
@@ -333,14 +338,15 @@ void ReplicationStateMachine::write_snapshot_obj(std::shared_ptr< homestore::sna
     if (!m_snp_rcv_handler) {
         m_snp_rcv_handler = std::make_unique< HSHomeObject::SnapshotReceiveHandler >(*home_object_, r_dev);
         if (m_snp_rcv_handler->load_prev_context_and_metrics()) {
-            LOGI("Reloaded previous snapshot context, lsn:{} pg_id:{} next_shard:{}", context->get_lsn(),
+            LOGI("Reloaded previous snapshot context, lsn={} pg={} next_shard:0x{:x}", context->get_lsn(),
                  m_snp_rcv_handler->get_context_pg_id(), m_snp_rcv_handler->get_next_shard());
         }
     }
 
     auto obj_id = objId(snp_obj->offset);
-    auto log_suffix = fmt::format("group={} lsn={} shard={} batch_num={} size={}", uuids::to_string(r_dev->group_id()),
-                                  context->get_lsn(), obj_id.shard_seq_num, obj_id.batch_id, snp_obj->blob.size());
+    auto log_suffix =
+        fmt::format("group={} lsn={} shard=0x{:x} batch_num={} size={}", uuids::to_string(r_dev->group_id()),
+                    context->get_lsn(), obj_id.shard_seq_num, obj_id.batch_id, snp_obj->blob.size());
     LOGI("received snapshot obj, {}", log_suffix);
 
     if (snp_obj->is_last_obj) {
@@ -352,20 +358,21 @@ void ReplicationStateMachine::write_snapshot_obj(std::shared_ptr< homestore::sna
     // Check message integrity
 #ifdef _PRERELEASE
     if (iomgr_flip::instance()->test_flip("state_machine_write_corrupted_data")) {
-        LOGW("Simulating writing corrupted snapshot data, lsn:{}, obj_id {} shard {} batch {}", context->get_lsn(),
+        LOGW("Simulating writing corrupted snapshot data, lsn={}, obj_id={} shard 0x{:x} batch={}", context->get_lsn(),
              obj_id.value, obj_id.shard_seq_num, obj_id.batch_id);
         return;
     }
 #endif
     auto header = r_cast< const SyncMessageHeader* >(snp_obj->blob.cbytes());
     if (header->corrupted()) {
-        LOGE("corrupted message in write_snapshot_data, lsn:{}, obj_id {} shard {} batch {}", context->get_lsn(),
+        LOGE("corrupted message in write_snapshot_data, lsn={}, obj_id={} shard 0x{:x} batch={}", context->get_lsn(),
              obj_id.value, obj_id.shard_seq_num, obj_id.batch_id);
         return;
     }
     if (auto payload_size = snp_obj->blob.size() - sizeof(SyncMessageHeader); payload_size != header->payload_size) {
-        LOGE("payload size mismatch in write_snapshot_data {} != {}, lsn:{}, obj_id {} shard {} batch {}", payload_size,
-             header->payload_size, context->get_lsn(), obj_id.value, obj_id.shard_seq_num, obj_id.batch_id);
+        LOGE("payload size mismatch in write_snapshot_data {} != {}, lsn={}, obj_id={} shard 0x{:x} batch={}",
+             payload_size, header->payload_size, context->get_lsn(), obj_id.value, obj_id.shard_seq_num,
+             obj_id.batch_id);
         return;
     }
     auto data_buf = snp_obj->blob.cbytes() + sizeof(SyncMessageHeader);
@@ -382,7 +389,7 @@ void ReplicationStateMachine::write_snapshot_obj(std::shared_ptr< homestore::sna
                 m_snp_rcv_handler->get_shard_cursor() == HSHomeObject::SnapshotReceiveHandler::shard_list_end_marker
                 ? LAST_OBJ_ID
                 : objId(HSHomeObject::get_sequence_num_from_shard_id(m_snp_rcv_handler->get_shard_cursor()), 0).value;
-            LOGI("Resume from previous context breakpoint, lsn:{} pg_id:{} next_shard:{}, shard_cursor:{}",
+            LOGI("Resume from previous context breakpoint, lsn={} pg={} next_shard:0x{:x}, shard_cursor:0x{:x}",
                  context->get_lsn(), pg_data->pg_id(), m_snp_rcv_handler->get_next_shard(),
                  m_snp_rcv_handler->get_shard_cursor());
             return;
@@ -391,22 +398,22 @@ void ReplicationStateMachine::write_snapshot_obj(std::shared_ptr< homestore::sna
         // Init a new transmission
         // If PG already exists, clean the stale pg resources. Let's resync on a pristine base
         if (home_object_->pg_exists(pg_data->pg_id())) {
-            LOGI("pg already exists, clean pg resources before snapshot, pg_id:{} {}", pg_data->pg_id(), log_suffix);
+            LOGI("pg already exists, clean pg resources before snapshot, pg={} {}", pg_data->pg_id(), log_suffix);
             home_object_->pg_destroy(pg_data->pg_id());
         }
-        LOGI("reset context from lsn:{} to lsn:{}", m_snp_rcv_handler->get_context_lsn(), context->get_lsn());
+        LOGI("reset context from lsn={} to lsn={}", m_snp_rcv_handler->get_context_lsn(), context->get_lsn());
         m_snp_rcv_handler->reset_context_and_metrics(context->get_lsn(), pg_data->pg_id());
 
         auto ret = m_snp_rcv_handler->process_pg_snapshot_data(*pg_data);
         if (ret) {
             // Do not proceed, will request for resending the PG data
-            LOGE("Failed to process PG snapshot data lsn:{} obj_id {} shard {} batch {}, err {}", context->get_lsn(),
-                 obj_id.value, obj_id.shard_seq_num, obj_id.batch_id, ret);
+            LOGE("Failed to process PG snapshot data lsn={} obj_id={} shard 0x{:x} batch={}, err={}",
+                 context->get_lsn(), obj_id.value, obj_id.shard_seq_num, obj_id.batch_id, ret);
             return;
         }
         snp_obj->offset =
             objId(HSHomeObject::get_sequence_num_from_shard_id(m_snp_rcv_handler->get_next_shard()), 0).value;
-        LOGD("Write snapshot, processed PG data pg_id:{} {}", pg_data->pg_id(), log_suffix);
+        LOGD("Write snapshot, processed PG data pg={} {}", pg_data->pg_id(), log_suffix);
         return;
     }
 
@@ -420,13 +427,13 @@ void ReplicationStateMachine::write_snapshot_obj(std::shared_ptr< homestore::sna
         auto ret = m_snp_rcv_handler->process_shard_snapshot_data(*shard_data);
         if (ret) {
             // Do not proceed, will request for resending the shard data
-            LOGE("Failed to process shard snapshot data lsn:{} obj_id {} shard {} batch {}, err {}", context->get_lsn(),
-                 obj_id.value, obj_id.shard_seq_num, obj_id.batch_id, ret);
+            LOGE("Failed to process shard snapshot data lsn={} obj_id={} shard 0x{:x} batch={}, err={}",
+                 context->get_lsn(), obj_id.value, obj_id.shard_seq_num, obj_id.batch_id, ret);
             return;
         }
         // Request for the next batch
         snp_obj->offset = objId(obj_id.shard_seq_num, 1).value;
-        LOGD("Write snapshot, processed shard data shard_seq_num:{} {}", obj_id.shard_seq_num, log_suffix);
+        LOGD("Write snapshot, processed shard data shard_seq_num:0x{:x} {}", obj_id.shard_seq_num, log_suffix);
         return;
     }
 
@@ -440,7 +447,7 @@ void ReplicationStateMachine::write_snapshot_obj(std::shared_ptr< homestore::sna
         m_snp_rcv_handler->process_blobs_snapshot_data(*blob_batch, obj_id.batch_id, blob_batch->is_last_batch());
     if (ret) {
         // Do not proceed, will request for resending the current blob batch
-        LOGE("Failed to process blob snapshot data lsn:{} obj_id {} shard {} batch {}, err {}", context->get_lsn(),
+        LOGE("Failed to process blob snapshot data lsn={} obj_id={} shard 0x{:x} batch={}, err={}", context->get_lsn(),
              obj_id.value, obj_id.shard_seq_num, obj_id.batch_id, ret);
         return;
     }
@@ -456,8 +463,8 @@ void ReplicationStateMachine::write_snapshot_obj(std::shared_ptr< homestore::sna
         snp_obj->offset = objId(obj_id.shard_seq_num, obj_id.batch_id + 1).value;
     }
 
-    LOGD("Write snapshot, processed blob data shard_seq_num:{} batch_num:{} {}", obj_id.shard_seq_num, obj_id.batch_id,
-         log_suffix);
+    LOGD("Write snapshot, processed blob data shard_seq_num:0x{:x} batch_num={} {}", obj_id.shard_seq_num,
+         obj_id.batch_id, log_suffix);
 }
 
 void ReplicationStateMachine::free_user_snp_ctx(void*& user_snp_ctx) {
@@ -467,7 +474,7 @@ void ReplicationStateMachine::free_user_snp_ctx(void*& user_snp_ctx) {
     }
 
     auto pg_iter = r_cast< HSHomeObject::PGBlobIterator* >(user_snp_ctx);
-    LOGD("Freeing snapshot iterator {}, pg_id={} group={}", static_cast< void* >(pg_iter), pg_iter->pg_id_,
+    LOGD("Freeing snapshot iterator={}, pg={} group={}", static_cast< void* >(pg_iter), pg_iter->pg_id_,
          boost::uuids::to_string(pg_iter->group_id_));
     delete pg_iter;
     user_snp_ctx = nullptr;
@@ -479,7 +486,7 @@ std::shared_ptr< homestore::snapshot_context > ReplicationStateMachine::get_snap
         auto sb_data = home_object_->get_snapshot_sb_data(repl_dev()->group_id());
         if (sb_data.size() > 0) {
             m_snapshot_context = repl_dev()->deserialize_snapshot_context(sb_data);
-            LOGI("Loaded previous snapshot from superblk, lsn:{}", m_snapshot_context->get_lsn());
+            LOGI("Loaded previous snapshot from superblk, lsn={}", m_snapshot_context->get_lsn());
         }
     }
     return m_snapshot_context;
@@ -494,7 +501,7 @@ folly::Future< std::error_code > ReplicationStateMachine::on_fetch_data(const in
                                                                         const homestore::MultiBlkId& local_blk_id,
                                                                         sisl::sg_list& sgs) {
     if (0 == header.size()) {
-        LOGD("Header is empty, which means this req has been committed at leader, so ignore this request. req lsn {}",
+        LOGD("Header is empty, which means this req has been committed at leader, so ignore this request. req lsn={}",
              lsn);
         RELEASE_ASSERT(lsn != -1, "the lsn of a committed req should not be -1");
         return folly::makeFuture< std::error_code >(std::error_code{});
@@ -507,19 +514,18 @@ folly::Future< std::error_code > ReplicationStateMachine::on_fetch_data(const in
     const ReplicationMessageHeader* msg_header = r_cast< const ReplicationMessageHeader* >(header.cbytes());
 
     if (msg_header->corrupted()) {
-        LOGW("replication message header is corrupted with crc error, lsn: {}, header: {}", lsn,
-             msg_header->to_string());
+        LOGW("replication message header is corrupted with crc error, lsn={}, header={}", lsn, msg_header->to_string());
         return folly::makeFuture< std::error_code >(std::make_error_code(std::errc::bad_message));
     }
 
-    LOGD("fetch data with lsn: {}, msg type: {}", lsn, msg_header->msg_type);
+    LOGD("fetch data with lsn={}, msg type={}", lsn, msg_header->msg_type);
 
     // for nuobject case, we can make this assumption, since we use append_blk_allocator.
-    RELEASE_ASSERT(sgs.iovs.size() == 1, "sgs iovs size should be 1, lsn: {}, msg_type: {}", lsn, msg_header->msg_type);
+    RELEASE_ASSERT(sgs.iovs.size() == 1, "sgs iovs size should be 1, lsn={}, msg_type={}", lsn, msg_header->msg_type);
 
     auto const total_size = local_blk_id.blk_count() * repl_dev()->get_blk_size();
     RELEASE_ASSERT(total_size == sgs.size,
-                   "total_blk_size does not match, lsn: {}, msg_type: {}, expected size {}, given buffer size {}", lsn,
+                   "total_blk_size does not match, lsn={}, msg_type={}, expected size={}, given buffer size={}", lsn,
                    msg_header->msg_type, total_size, sgs.size);
 
     auto given_buffer = (uint8_t*)(sgs.iovs[0].iov_base);
@@ -546,7 +552,7 @@ folly::Future< std::error_code > ReplicationStateMachine::on_fetch_data(const in
 
         RELEASE_ASSERT(
             sgs.size == expected_size,
-            "shard metadata size does not match, lsn: {}, msg_type: {}, expected size {}, given buffer size {}", lsn,
+            "shard metadata size does not match, lsn={}, msg_type={}, expected size={}, given buffer size={}", lsn,
             msg_header->msg_type, expected_size, sgs.size);
 
         // TODO：：return error_code if assert fails, so it will not crash here because of the assert failure.
@@ -564,7 +570,7 @@ folly::Future< std::error_code > ReplicationStateMachine::on_fetch_data(const in
         const auto blob_id = msg_header->blob_id;
         const auto shard_id = msg_header->shard_id;
 
-        LOGD("fetch data with blob_id {}, shard_id {}", blob_id, shard_id);
+        LOGD("fetch data with blob_id={}, shard=0x{:x}", blob_id, shard_id);
         // we first try to read data according to the local_blk_id to see if it matches the blob_id
         return std::move(homestore::data_service().async_read(local_blk_id, given_buffer, total_size))
             .via(folly::getGlobalIOExecutor())
@@ -579,13 +585,13 @@ folly::Future< std::error_code > ReplicationStateMachine::on_fetch_data(const in
                 if (iomgr_flip::instance()->test_flip("local_blk_data_invalid")) {
                     LOGI("Simulating forcing to read by indextable");
                 } else if (validate_blob(shard_id, blob_id, given_buffer, total_size)) {
-                    LOGD("local_blk_id matches blob data, lsn: {}, blob_id: {}, shard_id: {}", lsn, blob_id, shard_id);
+                    LOGD("local_blk_id matches blob data, lsn={}, blob_id={}, shard=0x{:x}", lsn, blob_id, shard_id);
                     throw std::system_error(std::error_code{});
                 }
 #else
                 // if data matches
                 if (validate_blob(shard_id, blob_id, given_buffer, total_size)) {
-                    LOGD("local_blk_id matches blob data, lsn: {}, blob_id: {}, shard_id: {}", lsn, blob_id, shard_id);
+                    LOGD("local_blk_id matches blob data, lsn={}, blob_id={}, shard_id={}", lsn, blob_id, shard_id);
                     throw std::system_error(std::error_code{});
                 }
 #endif
@@ -595,7 +601,8 @@ folly::Future< std::error_code > ReplicationStateMachine::on_fetch_data(const in
                 pg_id_t pg_id = shard_id >> homeobject::shard_width;
                 auto hs_pg = home_object_->get_hs_pg(pg_id);
                 if (!hs_pg) {
-                    LOGE("pg not found for pg_id: {}, shard_id: {}", pg_id, shard_id);
+                    LOGE("pg not found for pg={}, shardID=0x{:x}, shard=0x{:x}", pg_id, shard_id,
+                         (shard_id & homeobject::shard_mask));
                     // TODO: use a proper error code.
                     throw std::system_error(std::make_error_code(std::errc::bad_address));
                 }
@@ -605,14 +612,15 @@ folly::Future< std::error_code > ReplicationStateMachine::on_fetch_data(const in
                 BlobRouteValue index_value;
                 homestore::BtreeSingleGetRequest get_req{&index_key, &index_value};
 
-                LOGD("fetch data with blob_id {}, shard_id {} from index table", blob_id, shard_id);
+                LOGD("fetch data with blob_id={}, shardID=0x{:x}, pg={}, shard=0x{:x} from index table", blob_id,
+                     shard_id, pg_id, (shard_id & homeobject::shard_mask));
 
                 auto rc = index_table->get(get_req);
                 if (sisl_unlikely(homestore::btree_status_t::success != rc)) {
                     // blob never exists or has been gc
-                    LOGD("on_fetch_data failed to get from index table, blob never exists or has been gc, blob_id: {}, "
-                         "shard_id: {}",
-                         blob_id, shard_id);
+                    LOGD("on_fetch_data failed to get from index table, blob never exists or has been gc, blob_id={}, "
+                         "shardID=0x{:x}, pg={}, shard=0x{:x}",
+                         blob_id, shard_id, pg_id, (shard_id & homeobject::shard_mask));
                     // returning whatever data is good , since client will never read it.
                     throw std::system_error(std::error_code{});
                 }
@@ -620,7 +628,8 @@ folly::Future< std::error_code > ReplicationStateMachine::on_fetch_data(const in
                 const auto& pbas = index_value.pbas();
                 if (sisl_unlikely(pbas == HSHomeObject::tombstone_pbas)) {
                     // blob is deleted, so returning whatever data is good , since client will never read it.
-                    LOGD("on_fetch_data: blob has been deleted, blob_id: {}, shard_id: {}", blob_id, shard_id);
+                    LOGD("on_fetch_data: blob has been deleted, blob_id={}, shardID=0x{:x}, pg={}, shard=0x{:x}",
+                         blob_id, shard_id, pg_id, (shard_id & homeobject::shard_mask));
                     throw std::system_error(std::error_code{});
                 }
 
@@ -633,7 +642,8 @@ folly::Future< std::error_code > ReplicationStateMachine::on_fetch_data(const in
                 if (err) throw std::system_error(err);
                 // if data matches
                 if (validate_blob(shard_id, blob_id, given_buffer, total_size)) {
-                    LOGD("pba matches blob data, lsn: {}, blob_id: {}, shard_id: {}", lsn, blob_id, shard_id);
+                    LOGD("pba matches blob data, lsn={}, blob_id={}, shardID=0x{:x}, pg={}, shard=0x{:x}", lsn, blob_id,
+                         shard_id, (shard_id >> homeobject::shard_width), (shard_id & homeobject::shard_mask));
                     return std::error_code{};
                 } else {
                     // there is a scenario that the chunk is gced after we get the pba, but before we schecdule
@@ -647,18 +657,21 @@ folly::Future< std::error_code > ReplicationStateMachine::on_fetch_data(const in
 
                 if (!ec) {
                     // if no error code, we come to here, which means the data is valid or no need to read data again.
-                    LOGD("blob valid, blob_id: {}, shard_id: {}", blob_id, shard_id);
+                    LOGD("blob valid, blob_id={}, shardID=0x{:x}, pg={}, shard=0x{:x}", blob_id, shard_id,
+                         (shard_id >> homeobject::shard_width), (shard_id & homeobject::shard_mask));
                 } else {
                     // if any error happens, we come to here
-                    LOGE("IO error happens when reading data for blob_id: {}, shard_id: {}, error: {}", blob_id,
-                         shard_id, e.what());
+                    LOGE("IO error happens when reading data for blob_id={}, shardID=0x{:x}, pg={}, shard=0x{:x}, "
+                         "error={}",
+                         blob_id, shard_id, (shard_id >> homeobject::shard_width), (shard_id & homeobject::shard_mask),
+                         e.what());
                 }
 
                 return ec;
             });
     }
     default: {
-        LOGW("msg type: {}, should not happen in fetch_data rpc", msg_header->msg_type);
+        LOGW("msg type={}, should not happen in fetch_data rpc", msg_header->msg_type);
         return folly::makeFuture< std::error_code >(std::make_error_code(std::errc::operation_not_supported));
     }
     }
@@ -667,15 +680,17 @@ folly::Future< std::error_code > ReplicationStateMachine::on_fetch_data(const in
 bool ReplicationStateMachine::validate_blob(shard_id_t shard_id, blob_id_t blob_id, void* data, size_t size) const {
     auto const* header = r_cast< HSHomeObject::BlobHeader const* >(data);
     if (!header->valid()) {
-        LOGD("blob header is invalid, blob_id: {}, shard_id: {}, size: {}", blob_id, shard_id, size);
+        LOGD("blob header is invalid, blob_id={}, shardID=0x{:x}, pg={}, shard=0x{:x}, size={}", blob_id, shard_id,
+             (shard_id >> homeobject::shard_width), (shard_id & homeobject::shard_mask), size);
         return false;
     }
     if (header->shard_id != shard_id) {
-        LOGD("shard_id does not match , expected shard_id: {} , shard_id in header: {}", shard_id, header->shard_id);
+        LOGD("shard_id does not match , expected shardID=0x{:x} , shard_id in header=0x{:x}", shard_id,
+             header->shard_id);
         return false;
     }
     if (header->blob_id != blob_id) {
-        LOGD("blob_id does not match , expected blob_id: {} , blob_id in header: {}", blob_id, header->blob_id);
+        LOGD("blob_id does not match , expected blob_id={} , blob_id in header={}", blob_id, header->blob_id);
         return false;
     }
     return true;
@@ -685,7 +700,7 @@ sisl::io_blob_safe HSHomeObject::get_snapshot_sb_data(homestore::group_id_t grou
     std::shared_lock lk(snp_sbs_lock_);
     auto it = snp_ctx_sbs_.find(group_id);
     if (it == snp_ctx_sbs_.end()) {
-        LOGD("Snapshot context superblk not found for group_id {}", group_id);
+        LOGD("Snapshot context superblk not found for group_id={}", group_id);
         return {};
     }
 
@@ -699,7 +714,7 @@ void HSHomeObject::update_snapshot_sb(homestore::group_id_t group_id,
     std::unique_lock lk(snp_sbs_lock_);
     auto it = snp_ctx_sbs_.find(group_id);
     if (it != snp_ctx_sbs_.end()) {
-        LOGD("Existing snapshot context superblk destroyed for group_id {}, lsn {}", group_id, it->second->lsn);
+        LOGD("Existing snapshot context superblk destroyed for group_id={}, lsn={}", group_id, it->second->lsn);
         it->second.destroy();
     } else {
         it = snp_ctx_sbs_.insert({group_id, homestore::superblk< snapshot_ctx_superblk >(_snp_ctx_meta_name)}).first;
@@ -711,20 +726,20 @@ void HSHomeObject::update_snapshot_sb(homestore::group_id_t group_id,
     it->second->data_size = data.size();
     std::copy_n(data.cbytes(), data.size(), it->second->data);
     it->second.write();
-    LOGI("Snapshot context superblk updated for group_id {}, lsn {}", group_id, ctx->get_lsn());
+    LOGI("Snapshot context superblk updated for group_id={}, lsn={}", group_id, ctx->get_lsn());
 }
 
 void HSHomeObject::destroy_snapshot_sb(homestore::group_id_t group_id) {
     std::unique_lock lk(snp_sbs_lock_);
     auto it = snp_ctx_sbs_.find(group_id);
     if (it == snp_ctx_sbs_.end()) {
-        LOGI("Snapshot context superblk not found for group_id {}", group_id);
+        LOGI("Snapshot context superblk not found for group_id={}", group_id);
         return;
     }
 
     it->second.destroy();
     snp_ctx_sbs_.erase(it);
-    LOGI("Snapshot context superblk destroyed for group_id {}", group_id);
+    LOGI("Snapshot context superblk destroyed for group_id={}", group_id);
 }
 
 void HSHomeObject::on_snp_ctx_meta_blk_found(homestore::meta_blk* mblk, sisl::byte_view buf) {
@@ -734,7 +749,7 @@ void HSHomeObject::on_snp_ctx_meta_blk_found(homestore::meta_blk* mblk, sisl::by
 
     std::unique_lock lk(snp_sbs_lock_);
     if (auto it = snp_ctx_sbs_.find(sb->group_id); it != snp_ctx_sbs_.end()) {
-        LOGWARN("Found duplicate snapshot context superblk for group_id {}, current lsn {}, existing lsn {}",
+        LOGWARN("Found duplicate snapshot context superblk for group_id={}, current lsn={}, existing lsn={}",
                 sb->group_id, sb->lsn, it->second->lsn);
         if (it->second->lsn <= sb->lsn) {
             LOGI("Replacing existing snapshot context superblk with new one");

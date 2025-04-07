@@ -79,7 +79,7 @@ public:
             host_port.first = uri.host();
             host_port.second = uri.port();
         } catch (std::runtime_error const& e) {
-            LOGE("can't extract host from uuid {}, endpoint: {}; error: {}", to_string(uuid), endpoint, e.what());
+            LOGE("can't extract host from uuid {}, endpoint={}; error={}", to_string(uuid), endpoint, e.what());
         }
         return host_port;
     }
@@ -113,7 +113,7 @@ void HSHomeObject::init_homestore() {
     auto app = _application.lock();
     RELEASE_ASSERT(app, "HomeObjectApplication lifetime unexpected!");
 
-    LOGI("Starting iomgr with {} threads, spdk: {}", app->threads(), false);
+    LOGI("Starting iomgr with {} threads, spdk={}", app->threads(), false);
     ioenvironment.with_iomgr(iomgr::iomgr_params{.num_threads = app->threads(), .is_spdk = app->spdk_mode()})
         .with_http_server();
 

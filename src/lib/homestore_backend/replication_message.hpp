@@ -78,7 +78,7 @@ struct ReplicationMessageHeader : public BaseMessageHeader<ReplicationMessageHea
 
     std::string to_string() const {
         return fmt::format(
-            "magic={:#x} version={} msg_type={} pg_id={} shard_id={} payload_size={} payload_crc={} header_crc={}\n",
+            "magic={:#x} version={} msg_type={} pg={} shard_id={} payload_size={} payload_crc={} header_crc={}\n",
             magic_num, protocol_version, enum_name(msg_type), pg_id, shard_id, payload_size, payload_crc, header_crc);
     }
 };

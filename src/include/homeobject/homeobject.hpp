@@ -108,7 +108,7 @@ struct formatter< homeobject::device_info_t > {
         default:
             type = "UNKNOWN";
         }
-        return fmt::format_to(ctx.out(), "Path: {}, Type: {}", device.path.string(), type);
+        return fmt::format_to(ctx.out(), "Path={}, Type={}", device.path.string(), type);
     }
 };
 } // namespace fmt

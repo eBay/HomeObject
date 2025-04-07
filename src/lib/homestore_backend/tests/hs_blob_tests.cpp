@@ -31,7 +31,7 @@ TEST_F(HomeObjectFixture, BasicPutGetDelBlobWithRestart) {
         for (uint64_t j = 0; j < num_shards_per_pg; j++) {
             auto shard = create_shard(i, 64 * Mi);
             pg_shard_id_vec[i].emplace_back(shard.id);
-            LOGINFO("pg {} shard {}", i, shard.id);
+            LOGINFO("pg={} shard {}", i, shard.id);
         }
     }
 
@@ -169,7 +169,7 @@ TEST_F(HomeObjectFixture, BasicPutGetBlobWithPushDataDisabled) {
         for (uint64_t j = 0; j < num_shards_per_pg; j++) {
             auto shard = create_shard(i, 64 * Mi);
             pg_shard_id_vec[i].emplace_back(shard.id);
-            LOGINFO("pg {} shard {}", i, shard.id);
+            LOGINFO("pg={} shard {}", i, shard.id);
         }
     }
 

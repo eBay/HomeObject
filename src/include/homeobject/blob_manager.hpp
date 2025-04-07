@@ -59,9 +59,9 @@ struct formatter< homeobject::BlobError > {
     template < typename FormatContext >
     auto format(homeobject::BlobError const& err, FormatContext& ctx) {
         if (err.current_leader.has_value()) {
-            return fmt::format_to(ctx.out(), "Code: {}, Leader: {}", err.code, err.current_leader.value());
+            return fmt::format_to(ctx.out(), "Code={}, Leader={}", err.code, err.current_leader.value());
         } else {
-            return fmt::format_to(ctx.out(), "Code: {}", err.code);
+            return fmt::format_to(ctx.out(), "Code={}", err.code);
         }
     }
 };
