@@ -132,7 +132,8 @@ PGManager::NullAsyncResult HSHomeObject::_create_pg(PGInfo&& pg_info, std::set< 
         });
 }
 
-PGManager::NullAsyncResult HSHomeObject::do_create_pg(cshared< homestore::ReplDev > repl_dev, PGInfo&& pg_info, trace_id_t tid) {
+PGManager::NullAsyncResult HSHomeObject::do_create_pg(cshared< homestore::ReplDev > repl_dev, PGInfo&& pg_info,
+                                                      trace_id_t tid) {
     auto serailized_pg_info = serialize_pg_info(pg_info);
     auto info_size = serailized_pg_info.size();
 
@@ -168,8 +169,8 @@ folly::Expected< HSHomeObject::HS_PG*, PGError > HSHomeObject::local_create_pg(s
 
     auto local_chunk_size = chunk_selector()->get_chunk_size();
     if (pg_info.chunk_size != local_chunk_size) {
-        LOGE("Chunk sizes are inconsistent, leader_chunk_size={}, local_chunk_size={}, trace_id: {}", pg_info.chunk_size,
-             local_chunk_size, tid);
+        LOGE("Chunk sizes are inconsistent, leader_chunk_size={}, local_chunk_size={}, trace_id: {}",
+             pg_info.chunk_size, local_chunk_size, tid);
         return folly::makeUnexpected< PGError >(PGError::UNKNOWN);
     }
 
@@ -218,7 +219,8 @@ void HSHomeObject::on_create_pg_message_commit(int64_t lsn, sisl::blob const& he
     auto const* msg_header = r_cast< ReplicationMessageHeader const* >(header.cbytes());
 
     if (msg_header->corrupted()) {
-        LOGE("create PG message header is corrupted , lsn:{}; header: {}, trace_id: {}", lsn, msg_header->to_string(), tid);
+        LOGE("create PG message header is corrupted , lsn:{}; header: {}, trace_id: {}", lsn, msg_header->to_string(),
+             tid);
         if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(PGError::CRC_MISMATCH)); }
         return;
     }
@@ -361,23 +363,28 @@ void HSHomeObject::mark_pg_destroyed(pg_id_t pg_id) {
     LOGD("PG {} is marked as destroyed", pg_id);
 }
 
-void HSHomeObject::destroy_hs_resources(pg_id_t pg_id) {
-    chunk_selector_->reset_pg_chunks(pg_id);
-}
+void HSHomeObject::destroy_hs_resources(pg_id_t pg_id) { chunk_selector_->reset_pg_chunks(pg_id); }
 
 void HSHomeObject::destroy_pg_index_table(pg_id_t pg_id) {
-    auto lg = std::scoped_lock(_pg_lock);
-    auto hs_pg = _get_hs_pg_unlocked(pg_id);
-    if (hs_pg == nullptr) {
-        LOGW("destroy pg index table with unknown pg_id {}", pg_id);
-        return;
+    std::shared_ptr< BlobIndexTable > index_table;
+
+    {
+        // index_table->destroy() will trigger a cp_flush, which will call homeobject#cp_flush and try to acquire
+        // `_pg_lock`, so we need to release the lock here to avoid a dead lock
+        auto lg = std::scoped_lock(_pg_lock);
+        auto hs_pg = _get_hs_pg_unlocked(pg_id);
+        if (hs_pg == nullptr) {
+            LOGW("destroy pg index table with unknown pg_id {}", pg_id);
+            return;
+        }
+        index_table = hs_pg->index_table_;
     }
 
-    if (nullptr != hs_pg->index_table_) {
-        auto uuid_str = boost::uuids::to_string(hs_pg->index_table_->uuid());
+    if (nullptr != index_table) {
+        auto uuid_str = boost::uuids::to_string(index_table->uuid());
         index_table_pg_map_.erase(uuid_str);
-        hs()->index_service().remove_index_table(hs_pg->index_table_);
-        hs_pg->index_table_->destroy();
+        hs()->index_service().remove_index_table(index_table);
+        index_table->destroy();
         LOGD("PG {} index table is destroyed", pg_id);
     } else {
         LOGD("PG {} index table is not found, skip destroy", pg_id);
