@@ -1,3 +1,4 @@
+#include "hs_backend_config.hpp"
 #include "hs_homeobject.hpp"
 #include "replication_message.hpp"
 #include "replication_state_machine.hpp"
@@ -408,14 +409,18 @@ HSHomeObject::blob_put_get_blk_alloc_hints(sisl::blob const& header, cintrusive<
     homestore::blk_alloc_hints hints;
 
     auto hs_shard = d_cast< HS_Shard* >((*shard_iter->second).get());
-    BLOGD(tid, msg_header->shard_id, msg_header->blob_id, "Picked p_chunk_id=[{}]", hs_shard->sb_->p_chunk_id);
     hints.chunk_id_hint = hs_shard->sb_->p_chunk_id;
+    if (hs_ctx->is_proposer()) { hints.reserved_blks = get_reserved_blks(); }
+    BLOGD(tid, msg_header->shard_id, msg_header->blob_id, "Picked p_chunk_id={}, reserved_blks={}",
+          hs_shard->sb_->p_chunk_id, get_reserved_blks());
 
     if (msg_header->blob_id != 0) {
         // check if the blob already exists, if yes, return the blk id
         auto r = get_blob_from_index_table(hs_pg->index_table_, msg_header->shard_id, msg_header->blob_id);
         if (r.hasValue()) {
-            BLOGT(tid, msg_header->shard_id, msg_header->blob_id, "Blob has already been persisted");
+            BLOGT(tid, msg_header->shard_id, msg_header->blob_id,
+                  "Blob has already been persisted, blk_num={}, blk_count={}", r.value().blk_num(),
+                  r.value().blk_count());
             hints.committed_blk_id = r.value();
         }
     }

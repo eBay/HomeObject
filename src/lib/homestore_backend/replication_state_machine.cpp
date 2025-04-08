@@ -149,7 +149,7 @@ void ReplicationStateMachine::on_error(ReplServiceError error, const sisl::blob&
 }
 
 homestore::ReplResult< homestore::blk_alloc_hints >
-ReplicationStateMachine::get_blk_alloc_hints(sisl::blob const& header, uint32_t data_size) {
+ReplicationStateMachine::get_blk_alloc_hints(sisl::blob const& header, uint32_t data_size, cintrusive< homestore::repl_req_ctx >& hs_ctx) {
     const ReplicationMessageHeader* msg_header = r_cast< const ReplicationMessageHeader* >(header.cbytes());
     switch (msg_header->msg_type) {
     case ReplicationMessageType::CREATE_SHARD_MSG: {
@@ -172,6 +172,7 @@ ReplicationStateMachine::get_blk_alloc_hints(sisl::blob const& header, uint32_t 
         static_assert(std::is_same< homestore::chunk_num_t, uint16_t >::value, "chunk_num_t is not uint16_t");
         homestore::chunk_num_t v_chunk_id = v_chunkID.value();
         hints.application_hint = ((uint64_t)pg_id << 16) | v_chunk_id;
+        if (hs_ctx->is_proposer()) { hints.reserved_blks = home_object_->get_reserved_blks(); }
         return hints;
     }
 
@@ -187,7 +188,7 @@ ReplicationStateMachine::get_blk_alloc_hints(sisl::blob const& header, uint32_t 
     }
 
     case ReplicationMessageType::PUT_BLOB_MSG:
-        return home_object_->blob_put_get_blk_alloc_hints(header, nullptr);
+        return home_object_->blob_put_get_blk_alloc_hints(header, hs_ctx);
 
     case ReplicationMessageType::DEL_BLOB_MSG:
     default:

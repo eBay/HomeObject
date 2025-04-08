@@ -123,6 +123,10 @@ void HSHomeObject::init_homestore() {
     RELEASE_ASSERT(app_mem_size > 0, "Invalid app_mem_size");
     LOGI("Initialize and start HomeStore with app_mem_size = {}", homestore::in_bytes(app_mem_size));
 
+    if (HS_BACKEND_DYNAMIC_CONFIG(reserved_bytes_in_chunk) > 0) {
+        _hs_reserved_blks = sisl::round_up(HS_BACKEND_DYNAMIC_CONFIG(reserved_bytes_in_chunk) / _data_block_size, 1);
+        LOGI("will reserve {} blks in each chunk", _hs_reserved_blks);
+    }
     std::vector< homestore::dev_info > device_info;
     bool has_data_dev = false;
     bool has_fast_dev = false;

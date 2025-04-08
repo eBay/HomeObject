@@ -166,7 +166,7 @@ public:
     /// @param header Header originally passed with repl_dev::write() api on the leader
     /// @return Expected to return blk_alloc_hints for this write
     homestore::ReplResult< homestore::blk_alloc_hints > get_blk_alloc_hints(sisl::blob const& header,
-                                                                            uint32_t data_size) override;
+                                                                            uint32_t data_size, cintrusive< homestore::repl_req_ctx >& hs_ctx) override;
 
     /// @brief Called when replication module is replacing an existing member with a new member
     void on_replace_member(const homestore::replica_member_info& member_out,

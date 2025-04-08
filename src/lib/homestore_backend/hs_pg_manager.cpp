@@ -1,3 +1,5 @@
+#include "hs_backend_config.hpp"
+
 #include <boost/uuid/random_generator.hpp>
 #include <boost/uuid/string_generator.hpp>
 #include <homestore/replication_service.hpp>
@@ -190,6 +192,7 @@ folly::Expected< HSHomeObject::HS_PG*, PGError > HSHomeObject::local_create_pg(s
     auto index_table = create_index_table();
     auto uuid_str = boost::uuids::to_string(index_table->uuid());
 
+    repl_dev->set_custom_rdev_name(fmt::format("rdev{}", pg_info.id));
     auto hs_pg = std::make_unique< HS_PG >(std::move(pg_info), std::move(repl_dev), index_table, chunk_ids);
     auto ret = hs_pg.get();
     {
