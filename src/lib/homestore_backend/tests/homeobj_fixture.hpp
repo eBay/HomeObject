@@ -60,7 +60,7 @@ public:
     void TearDown() override {
         g_helper->sync();
         LOGINFO("Tearing down homeobject replica={}", g_helper->my_replica_id());
-        LOGINFO("Metrics: {}", sisl::MetricsFarm::getInstance().get_result_in_json().dump(2));
+        LOGINFO("Metrics={}", sisl::MetricsFarm::getInstance().get_result_in_json().dump(2));
         g_helper->app->stop_http_server();
         _obj_inst.reset();
         g_helper->delete_homeobject();
@@ -69,7 +69,7 @@ public:
     void restart(uint32_t shutdown_delay_secs = 0u, uint32_t restart_delay_secs = 0u) {
         g_helper->sync();
         LOGINFO("Restarting homeobject replica={}", g_helper->my_replica_id());
-        LOGTRACE("Metrics: {}", sisl::MetricsFarm::getInstance().get_result_in_json().dump(2));
+        LOGTRACE("Metrics={}", sisl::MetricsFarm::getInstance().get_result_in_json().dump(2));
         trigger_cp(true);
         _obj_inst.reset();
         _obj_inst =
@@ -80,7 +80,7 @@ public:
 
     void stop() {
         LOGINFO("Stoping homeobject replica={}", g_helper->my_replica_id());
-        LOGINFO("Metrics: {}", sisl::MetricsFarm::getInstance().get_result_in_json().dump(2));
+        LOGINFO("Metrics={}", sisl::MetricsFarm::getInstance().get_result_in_json().dump(2));
         _obj_inst.reset();
         g_helper->homeobj_.reset();
         sleep(120);
@@ -135,13 +135,13 @@ public:
             }
             auto p = _obj_inst->pg_manager()->create_pg(std::move(info)).get();
             ASSERT_TRUE(p);
-            LOGINFO("pg {} is created at leader", pg_id);
+            LOGINFO("pg={} is created at leader", pg_id);
         } else {
             // follower need to wait for pg creation to complete locally
             while (!pg_exist(pg_id)) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(1000));
             }
-            LOGINFO("pg {} is created at follower", pg_id);
+            LOGINFO("pg={} is created at follower", pg_id);
         }
     }
 
@@ -249,14 +249,14 @@ public:
                     run_on_pg_leader(pg_id, [&]() {
                         auto put_blob = build_blob(current_blob_id);
 
-                        LOGINFO("Put blob pg {} shard {} blob {} size {} data {}", pg_id, shard_id, current_blob_id,
+                        LOGINFO("Put blob pg={} shard {} blob {} size {} data {}", pg_id, shard_id, current_blob_id,
                                 put_blob.body.size(),
                                 hex_bytes(put_blob.body.cbytes(), std::min(10u, put_blob.body.size())));
 
                         auto b = _obj_inst->blob_manager()->put(shard_id, std::move(put_blob)).get();
 
                         if (!b) {
-                            LOGERROR("Failed to put blob pg {} shard {} error={}", pg_id, shard_id, b.error());
+                            LOGERROR("Failed to put blob pg={} shard {} error={}", pg_id, shard_id, b.error());
                             ASSERT_TRUE(false);
                         }
 
@@ -273,7 +273,7 @@ public:
             pg_blob_id[pg_id] = current_blob_id;
             auto last_blob_id = pg_blob_id[pg_id] - 1;
             while (!blob_exist(shard_id, last_blob_id)) {
-                LOGINFO("waiting for pg_id {} blob {} to be created locally", pg_id, last_blob_id);
+                LOGINFO("waiting for pg={} blob {} to be created locally", pg_id, last_blob_id);
                 std::this_thread::sleep_for(std::chrono::milliseconds(1000));
             }
             LOGINFO("shard {} blob {} is created locally, which means all the blob before {} are created", shard_id,
@@ -286,7 +286,7 @@ public:
         run_on_pg_leader(pg_id, [&]() {
             auto g = _obj_inst->blob_manager()->del(shard_id, blob_id).get();
             ASSERT_TRUE(g);
-            LOGINFO("delete blob, pg {} shard {} blob {}", pg_id, shard_id, blob_id);
+            LOGINFO("delete blob, pg={} shard {} blob {}", pg_id, shard_id, blob_id);
         });
         while (blob_exist(shard_id, blob_id)) {
             LOGINFO("waiting for shard {} blob {} to be deleted locally", shard_id, blob_id);
@@ -335,7 +335,7 @@ public:
             if (pg_start_blob_id.find(pg_id) != pg_start_blob_id.end()) current_blob_id = pg_start_blob_id[pg_id];
             for (const auto& shard_id : shard_vec) {
                 for (uint64_t k = 0; k < num_blobs_per_shard; k++) {
-                    LOGDEBUG("going to verify blob pg {} shard {} blob {}", pg_id, shard_id, current_blob_id);
+                    LOGDEBUG("going to verify blob pg={} shard {} blob {}", pg_id, shard_id, current_blob_id);
                     auto blob = build_blob(current_blob_id);
                     len = blob.body.size();
                     if (use_random_offset) {
@@ -357,7 +357,7 @@ public:
                     ASSERT_TRUE(!!g) << "get blob fail, shard_id " << shard_id << " blob_id " << current_blob_id
                                      << " replica number " << g_helper->replica_num();
                     auto result = std::move(g.value());
-                    LOGINFO("get blob pg {} shard {} blob {} off {} len {} data {}", pg_id, shard_id, current_blob_id,
+                    LOGINFO("get blob pg={} shard {} blob {} off {} len {} data {}", pg_id, shard_id, current_blob_id,
                             off, len, hex_bytes(result.body.cbytes(), std::min(len, 10u)));
                     EXPECT_EQ(result.body.size(), len);
                     EXPECT_EQ(std::memcmp(result.body.bytes(), blob.body.cbytes() + off, result.body.size()), 0);

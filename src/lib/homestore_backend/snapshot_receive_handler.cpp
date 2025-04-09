@@ -13,7 +13,7 @@ HSHomeObject::SnapshotReceiveHandler::SnapshotReceiveHandler(HSHomeObject& home_
         home_obj_(home_obj), repl_dev_(std::move(repl_dev)) {}
 
 int HSHomeObject::SnapshotReceiveHandler::process_pg_snapshot_data(ResyncPGMetaData const& pg_meta) {
-    LOGI("process_pg_snapshot_data pg_id:{}", pg_meta.pg_id());
+    LOGI("process_pg_snapshot_data pg={}", pg_meta.pg_id());
 
     // Init shard list
     ctx_->shard_list.clear();
@@ -45,7 +45,7 @@ int HSHomeObject::SnapshotReceiveHandler::process_pg_snapshot_data(ResyncPGMetaD
 #endif
     auto ret = home_obj_.local_create_pg(repl_dev_, pg_info);
     if (ret.hasError()) {
-        LOGE("Failed to create PG {}, err {}", pg_meta.pg_id(), ret.error());
+        LOGE("Failed to create pg={}, err {}", pg_meta.pg_id(), ret.error());
         return CREATE_PG_ERR;
     }
     auto hs_pg = ret.value();
@@ -67,7 +67,8 @@ int HSHomeObject::SnapshotReceiveHandler::process_pg_snapshot_data(ResyncPGMetaD
 }
 
 int HSHomeObject::SnapshotReceiveHandler::process_shard_snapshot_data(ResyncShardMetaData const& shard_meta) {
-    LOGI("process_shard_snapshot_data shard_id:{}", shard_meta.shard_id());
+    LOGI("process_shard_snapshot_data shardID=0x{:x}, pg={}, shard=0x{:x}", shard_meta.shard_id(),
+         (shard_meta.shard_id() >> homeobject::shard_width), (shard_meta.shard_id() & homeobject::shard_mask));
 
     // Persist shard meta on chunk data
     sisl::io_blob_safe aligned_buf(sisl::round_up(sizeof(shard_info_superblk), io_align), io_align);
@@ -90,14 +91,15 @@ int HSHomeObject::SnapshotReceiveHandler::process_shard_snapshot_data(ResyncShar
     auto status = homestore::data_service().alloc_blks(
         sisl::round_up(aligned_buf.size(), homestore::data_service().get_blk_size()), hints, blk_id);
     if (status != homestore::BlkAllocStatus::SUCCESS) {
-        LOGE("Failed to allocate blocks for shard {}", shard_meta.shard_id());
+        LOGE("Failed to allocate blocks for shardID=0x{:x}, pg={}, shard=0x{:x}", shard_meta.shard_id(),
+             (shard_meta.shard_id() >> homeobject::shard_width), (shard_meta.shard_id() & homeobject::shard_mask));
         return ALLOC_BLK_ERR;
     }
     shard_sb->p_chunk_id = blk_id.to_single_blkid().chunk_num();
 
     auto free_allocated_blks = [blk_id]() {
         homestore::data_service().async_free_blk(blk_id).thenValue([blk_id](auto&& err) {
-            LOGD("Freed blk_id:{} due to failure in persisting shard info, err {}", blk_id.to_string(),
+            LOGD("Freed blk_id={} due to failure in persisting shard info, err {}", blk_id.to_string(),
                  err ? err.message() : "nil");
         });
     };
@@ -114,15 +116,17 @@ int HSHomeObject::SnapshotReceiveHandler::process_shard_snapshot_data(ResyncShar
                          .thenValue([&blk_id](auto&& err) -> BlobManager::AsyncResult< blob_id_t > {
                              // TODO: do we need to update repl_dev metrics?
                              if (err) {
-                                 LOGE("Failed to write shard info to blk_id: {}", blk_id.to_string());
+                                 LOGE("Failed to write shard info to blk_id={}", blk_id.to_string());
                                  return folly::makeUnexpected(BlobError(BlobErrorCode::REPLICATION_ERROR));
                              }
-                             LOGD("Shard info written to blk_id:{}", blk_id.to_string());
+                             LOGD("Shard info written to blk_id={}", blk_id.to_string());
                              return 0;
                          })
                          .get();
     if (ret.hasError()) {
-        LOGE("Failed to write shard info of shard_id {} to blk_id:{}", shard_meta.shard_id(), blk_id.to_string());
+        LOGE("Failed to write shard info of shardID=0x{:x}, pg={}, shard=0x{:x} to blk_id={}", shard_meta.shard_id(),
+             (shard_meta.shard_id() >> homeobject::shard_width), (shard_meta.shard_id() & homeobject::shard_mask),
+             blk_id.to_string());
         free_allocated_blks();
         return WRITE_DATA_ERR;
     }
@@ -151,7 +155,7 @@ int HSHomeObject::SnapshotReceiveHandler::process_blobs_snapshot_data(ResyncBlob
     // Find physical chunk id for current shard
     auto v_chunk_id = home_obj_.get_shard_v_chunk_id(ctx_->shard_cursor);
     auto p_chunk_id = home_obj_.get_shard_p_chunk_id(ctx_->shard_cursor);
-    RELEASE_ASSERT(p_chunk_id.has_value(), "Failed to load chunk of current shard_cursor:{}", ctx_->shard_cursor);
+    RELEASE_ASSERT(p_chunk_id.has_value(), "Failed to load chunk of current shard_cursor={}", ctx_->shard_cursor);
     homestore::blk_alloc_hints hints;
     hints.chunk_id_hint = *p_chunk_id;
 
@@ -161,7 +165,7 @@ int HSHomeObject::SnapshotReceiveHandler::process_blobs_snapshot_data(ResyncBlob
 
         // Skip deleted blobs
         if (blob->state() == static_cast< uint8_t >(ResyncBlobState::DELETED)) {
-            LOGD("Skip deleted blob_id:{}", blob->blob_id());
+            LOGD("Skip deleted blob_id={}", blob->blob_id());
             continue;
         }
 
@@ -170,9 +174,9 @@ int HSHomeObject::SnapshotReceiveHandler::process_blobs_snapshot_data(ResyncBlob
 #ifdef _PRERELEASE
         auto delay = iomgr_flip::instance()->get_test_flip< long >("simulate_write_snapshot_save_blob_delay",
                                                                    static_cast< long >(blob->blob_id()));
-        LOGD("simulate_write_snapshot_save_blob_delay flip, triggered: {}, blob: {}", delay.has_value(), blob->blob_id());
+        LOGD("simulate_write_snapshot_save_blob_delay flip, triggered={}, blob={}", delay.has_value(), blob->blob_id());
         if (delay) {
-            LOGI("Simulating pg snapshot receive data with delay, delay:{}, blob_id:{}", delay.get(), blob->blob_id());
+            LOGI("Simulating pg snapshot receive data with delay, delay={}, blob_id={}", delay.get(), blob->blob_id());
             std::this_thread::sleep_for(std::chrono::milliseconds(delay.get()));
         }
 #endif
@@ -180,12 +184,12 @@ int HSHomeObject::SnapshotReceiveHandler::process_blobs_snapshot_data(ResyncBlob
         // Check duplication to avoid reprocessing. This may happen on resent blob batches.
         if (!ctx_->index_table) {
             auto hs_pg = home_obj_.get_hs_pg(ctx_->pg_id);
-            RELEASE_ASSERT(hs_pg != nullptr, "PG not found for pg_id:{}", ctx_->pg_id);
+            RELEASE_ASSERT(hs_pg != nullptr, "PG not found for pg={}", ctx_->pg_id);
             ctx_->index_table = hs_pg->index_table_;
         }
         RELEASE_ASSERT(ctx_->index_table != nullptr, "Index table instance null");
         if (home_obj_.get_blob_from_index_table(ctx_->index_table, ctx_->shard_cursor, blob->blob_id())) {
-            LOGD("Skip already persisted blob_id:{}", blob->blob_id());
+            LOGD("Skip already persisted blob_id={}", blob->blob_id());
             continue;
         }
 
@@ -197,7 +201,7 @@ int HSHomeObject::SnapshotReceiveHandler::process_blobs_snapshot_data(ResyncBlob
             if (!header->valid()) {
                 std::unique_lock<std::shared_mutex> lock(mutex);
                 ctx_->progress.error_count++;
-                LOGE("Invalid header found for blob_id {}: [header={}]", blob->blob_id(), header->to_string());
+                LOGE("Invalid header found for blob_id={}: [header={}]", blob->blob_id(), header->to_string());
                 return INVALID_BLOB_HEADER;
             }
             std::string user_key = header->user_key_size
@@ -209,14 +213,15 @@ int HSHomeObject::SnapshotReceiveHandler::process_blobs_snapshot_data(ResyncBlob
                                                 header->blob_size, uintptr_cast(user_key.data()), header->user_key_size,
                                                 computed_hash, BlobHeader::blob_max_hash_len);
             if (std::memcmp(computed_hash, header->hash, BlobHeader::blob_max_hash_len) != 0) {
-                LOGE("Hash mismatch for blob_id {}: header [{}] [computed={:np}]", blob->blob_id(), header->to_string(),
+                LOGE("Hash mismatch for blob_id={}: header [{}] [computed={:np}]", blob->blob_id(), header->to_string(),
                      spdlog::to_hex(computed_hash, computed_hash + BlobHeader::blob_max_hash_len));
                 std::unique_lock<std::shared_mutex> lock(mutex);
                 ctx_->progress.error_count++;
                 return BLOB_DATA_CORRUPTED;
             }
         } else {
-            LOGW("find corrupted_blobs: {} in shard {}", blob->blob_id(), ctx_->shard_cursor);
+            LOGW("find corrupted_blobs={} in shardID=0x{:x}, pg={}, shard=0x{:x}", blob->blob_id(), ctx_->shard_cursor,
+                 (ctx_->shard_cursor >> homeobject::shard_width), (ctx_->shard_cursor & homeobject::shard_mask));
             std::unique_lock<std::shared_mutex> lock(mutex);
             ctx_->progress.corrupted_blobs++;
         }
@@ -230,7 +235,9 @@ int HSHomeObject::SnapshotReceiveHandler::process_blobs_snapshot_data(ResyncBlob
         auto status = homestore::data_service().alloc_blks(
             sisl::round_up(aligned_buf.size(), homestore::data_service().get_blk_size()), hints, blk_id);
         if (status != homestore::BlkAllocStatus::SUCCESS) {
-            LOGE("Failed to allocate blocks for shard {} blob {}", ctx_->shard_cursor, blob->blob_id());
+            LOGE("Failed to allocate blocks for shardID=0x{:x}, pg={}, shard=0x{:x} blob {}", ctx_->shard_cursor,
+                 (ctx_->shard_cursor >> homeobject::shard_width), (ctx_->shard_cursor & homeobject::shard_mask),
+                 blob->blob_id());
             std::unique_lock<std::shared_mutex> lock(mutex);
             ctx_->progress.error_count++;
             return ALLOC_BLK_ERR;
@@ -238,7 +245,7 @@ int HSHomeObject::SnapshotReceiveHandler::process_blobs_snapshot_data(ResyncBlob
 
         auto free_allocated_blks = [blk_id]() {
             homestore::data_service().async_free_blk(blk_id).thenValue([blk_id](auto&& err) {
-                LOGD("Freed blk_id:{} due to failure in adding blob info, err {}", blk_id.to_string(),
+                LOGD("Freed blk_id={} due to failure in adding blob info, err {}", blk_id.to_string(),
                      err ? err.message() : "nil");
             });
         };
@@ -257,22 +264,22 @@ int HSHomeObject::SnapshotReceiveHandler::process_blobs_snapshot_data(ResyncBlob
                              .thenValue([&blk_id](auto&& err) -> BlobManager::AsyncResult< blob_id_t > {
                                  // TODO: do we need to update repl_dev metrics?
                                  if (err) {
-                                     LOGE("Failed to write blob info to blk_id: {}", blk_id.to_string());
+                                     LOGE("Failed to write blob info to blk_id={}", blk_id.to_string());
                                      return folly::makeUnexpected(BlobError(BlobErrorCode::REPLICATION_ERROR));
                                  }
-                                 LOGD("Blob info written to blk_id:{}", blk_id.to_string());
+                                 LOGD("Blob info written to blk_id={}", blk_id.to_string());
                                  return 0;
                              })
                              .get();
         if (ret.hasError()) {
-            LOGE("Failed to write blob info of blob_id {} to blk_id:{}", blob->blob_id(), blk_id.to_string());
+            LOGE("Failed to write blob info of blob_id {} to blk_id={}", blob->blob_id(), blk_id.to_string());
             free_allocated_blks();
             std::unique_lock<std::shared_mutex> lock(mutex);
             ctx_->progress.error_count++;
             return WRITE_DATA_ERR;
         }
         if (homestore::data_service().commit_blk(blk_id) != homestore::BlkAllocStatus::SUCCESS) {
-            LOGE("Failed to commit blk_id:{} for blob_id: {}", blk_id.to_string(), blob->blob_id());
+            LOGE("Failed to commit blk_id={} for blob_id={}", blk_id.to_string(), blob->blob_id());
             std::unique_lock<std::shared_mutex> lock(mutex);
             ctx_->progress.error_count++;
             free_allocated_blks();
@@ -283,7 +290,7 @@ int HSHomeObject::SnapshotReceiveHandler::process_blobs_snapshot_data(ResyncBlob
         bool success =
             home_obj_.local_add_blob_info(ctx_->pg_id, BlobInfo{ctx_->shard_cursor, blob->blob_id(), blk_id});
         if (!success) {
-            LOGE("Failed to add blob info for blob_id:{}", blob->blob_id());
+            LOGE("Failed to add blob info for blob_id={}", blob->blob_id());
             std::unique_lock<std::shared_mutex> lock(mutex);
             ctx_->progress.error_count++;
             free_allocated_blks();
@@ -292,10 +299,10 @@ int HSHomeObject::SnapshotReceiveHandler::process_blobs_snapshot_data(ResyncBlob
         total_bytes += data_size;
         auto duration = get_elapsed_time_us(start);
         HISTOGRAM_OBSERVE(*metrics_, snp_rcvr_blob_process_time, duration);
-        LOGD("Persisted blob_id:{} in {}us", blob->blob_id(), duration);
+        LOGD("Persisted blob_id={} in {}us", blob->blob_id(), duration);
     }
 
-    //update metrics
+    // update metrics
     {
         std::unique_lock<std::shared_mutex> lock(mutex);
         ctx_->progress.cur_batch_blobs = data_blobs.blob_list()->size();
@@ -346,7 +353,8 @@ bool HSHomeObject::SnapshotReceiveHandler::load_prev_context_and_metrics() {
 
     RELEASE_ASSERT(hs_pg->snp_rcvr_info_sb_->pg_id == hs_pg->pg_sb_->id &&
                        hs_pg->snp_rcvr_shard_list_sb_->pg_id == hs_pg->pg_sb_->id,
-                   "PG id in snp_info sb not matching with PG sb");
+                   "PG id in snp_info sb not matching with PG sb, snp_info_pg={}, snp_shard_pg={}, pg={}",
+                   hs_pg->snp_rcvr_info_sb_->pg_id, hs_pg->snp_rcvr_shard_list_sb_->pg_id, hs_pg->pg_sb_->id);
 
     ctx_ = std::make_shared< SnapshotContext >(hs_pg->snp_rcvr_info_sb_->snp_lsn, hs_pg->snp_rcvr_info_sb_->pg_id);
     ctx_->shard_cursor = hs_pg->snp_rcvr_info_sb_->shard_cursor;
@@ -356,8 +364,9 @@ bool HSHomeObject::SnapshotReceiveHandler::load_prev_context_and_metrics() {
     ctx_->progress = snapshot_progress(hs_pg->snp_rcvr_info_sb_->progress);
     metrics_ = std::make_unique< ReceiverSnapshotMetrics >(ctx_);
 
-    LOGINFO("Resuming snapshot receiver context from lsn:{} pg_id:{} shard_cursor:{}", ctx_->snp_lsn,
-            hs_pg->snp_rcvr_info_sb_->pg_id, ctx_->shard_cursor);
+    LOGINFO("Resuming snapshot receiver context from lsn={} pg={} shardID=0x{:x}, pg={}, shard=0x{:x}", ctx_->snp_lsn,
+            hs_pg->snp_rcvr_info_sb_->pg_id, ctx_->shard_cursor, (ctx_->shard_cursor >> homeobject::shard_width),
+            (ctx_->shard_cursor & homeobject::shard_mask));
     return true;
 }
 
@@ -394,7 +403,7 @@ shard_id_t HSHomeObject::SnapshotReceiveHandler::get_next_shard() const {
 
 void HSHomeObject::SnapshotReceiveHandler::update_snp_info_sb(bool init) {
     auto hs_pg = home_obj_.get_hs_pg(ctx_->pg_id);
-    RELEASE_ASSERT(hs_pg != nullptr, "PG not found");
+    RELEASE_ASSERT(hs_pg != nullptr, "PG not found, pg={}", ctx_->pg_id);
 
     auto* sb = hs_pg->snp_rcvr_info_sb_.get();
     if (init) {
@@ -440,7 +449,7 @@ void HSHomeObject::on_snp_rcvr_meta_blk_found(homestore::meta_blk* mblk, sisl::b
     sb.load(buf, mblk);
 
     auto hs_pg = get_hs_pg(sb->pg_id);
-    RELEASE_ASSERT(hs_pg != nullptr, "PG not found");
+    RELEASE_ASSERT(hs_pg != nullptr, "PG not found, pg={}", sb->pg_id);
     if (!hs_pg->snp_rcvr_info_sb_.is_empty()) { hs_pg->snp_rcvr_info_sb_.destroy(); }
     hs_pg->snp_rcvr_info_sb_ = std::move(sb);
 }
@@ -455,7 +464,7 @@ void HSHomeObject::on_snp_rcvr_shard_list_meta_blk_found(homestore::meta_blk* mb
     sb.load(buf, mblk);
 
     auto hs_pg = get_hs_pg(sb->pg_id);
-    RELEASE_ASSERT(hs_pg != nullptr, "PG not found");
+    RELEASE_ASSERT(hs_pg != nullptr, "PG not found, pg={}", sb->pg_id);
     if (!hs_pg->snp_rcvr_shard_list_sb_.is_empty()) { hs_pg->snp_rcvr_shard_list_sb_.destroy(); }
     hs_pg->snp_rcvr_shard_list_sb_ = std::move(sb);
 }

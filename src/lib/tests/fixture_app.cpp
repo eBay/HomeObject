@@ -57,12 +57,12 @@ void TestFixture::SetUp() {
     ASSERT_TRUE(!!s_e);
     s_e.then([this](auto&& i) { _shard_2 = std::move(i); });
 
-    LOGDEBUG("Get on empty Shard: {}", _shard_1.id);
+    LOGDEBUG("Get on empty Shard={}", _shard_1.id);
     auto g_e = homeobj_->blob_manager()->get(_shard_1.id, 0).get();
     ASSERT_FALSE(g_e);
     EXPECT_EQ(homeobject::BlobErrorCode::UNKNOWN_BLOB, g_e.error().getCode());
 
-    LOGDEBUG("Insert Blob to: {}", _shard_1.id);
+    LOGDEBUG("Insert Blob to={}", _shard_1.id);
     auto o_e = homeobj_->blob_manager()
                    ->put(_shard_1.id, homeobject::Blob{sisl::io_blob_safe(4 * Ki, 512u), "test_blob", 4 * Mi})
                    .get();

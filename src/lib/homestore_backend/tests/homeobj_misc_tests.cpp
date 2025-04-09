@@ -9,7 +9,7 @@ TEST_F(HomeObjectFixture, HSHomeObjectCPTestBasic) {
     create_pg(1 /* pg_id */);
     auto shard_info = create_shard(1 /* pg_id */, 64 * Mi);
     pg_shard_id_vec.emplace_back(1 /* pg_id */, shard_info.id);
-    LOGINFO("pg {} shard {}", 1, shard_info.id);
+    LOGINFO("pg={} shard {}", 1, shard_info.id);
     {
         // Step-2: write some dirty pg information and add to dirt list;
         auto lg = std::unique_lock(_obj_inst->_pg_lock);
@@ -53,7 +53,7 @@ TEST_F(HomeObjectFixture, PGBlobIterator) {
     for (uint64_t i = 0; i < num_shards_per_pg; i++) {
         auto shard = create_shard(pg_id, 64 * Mi);
         if (i != empty_shard_seq - 1) { shard_list.emplace_back(shard.id); }
-        LOGINFO("pg {} shard {}", pg_id, shard.id);
+        LOGINFO("pg={} shard {}", pg_id, shard.id);
     }
     pg_blob_id[pg_id] = 0;
     put_blobs(pg_shard_id_vec, num_blobs_per_shard, pg_blob_id);
@@ -175,7 +175,7 @@ TEST_F(HomeObjectFixture, PGBlobIterator) {
                 ASSERT_TRUE(
                     memcmp(result.body.cbytes(), blob_data + blob_header->data_offset, blob_header->blob_size) == 0);
                 packed_blob_size++;
-                LOGDEBUG("[{}]Get blob pg {}, shard {}, blob {}, data_len {}, blob_len {}, header_len {}, user_key_len "
+                LOGDEBUG("[{}]Get blob pg={}, shard {}, blob {}, data_len {}, blob_len {}, header_len {}, user_key_len "
                          "{}, data {}",
                          packed_blob_size, pg->pg_info_.id, shard->info.id, b->blob_id(), b->data()->size(),
                          blob_header->blob_size, sizeof(HSHomeObject::BlobHeader), blob_header->user_key_size,
@@ -217,7 +217,7 @@ TEST_F(HomeObjectFixture, SnapshotReceiveHandler) {
 
     // Step 1: Test write pg meta - cannot test full logic since the PG already exists
     // Generate ResyncPGMetaData message
-    LOGINFO("TESTING: applying meta for pg {}", pg_id);
+    LOGINFO("TESTING: applying meta for pg={}", pg_id);
     constexpr auto blob_seq_num = num_shards_per_pg * num_batches_per_shard * num_blobs_per_batch;
     flatbuffers::FlatBufferBuilder builder;
     std::vector< flatbuffers::Offset< Member > > members;

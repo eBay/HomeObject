@@ -17,7 +17,7 @@ ShardManager::AsyncResult< ShardInfo > MemoryHomeObject::_create_shard(pg_id_t p
         auto& s_list = pg_it->second->shards_;
         info.id = make_new_shard_id(pg_owner, s_list.size());
         auto iter = s_list.emplace(s_list.end(), std::make_unique< Shard >(info));
-        LOGDEBUG("Creating Shard [{}]: in Pg [{}] of Size [{}b]", info.id & shard_mask, pg_owner, size_bytes);
+        LOGDEBUG("Creating Shard [{}]: in pg={} of Size [{}b]", info.id & shard_mask, pg_owner, size_bytes);
         auto [_, s_happened] = _shard_map.emplace(info.id, iter);
         RELEASE_ASSERT(s_happened, "Duplicate Shard insertion!");
     }

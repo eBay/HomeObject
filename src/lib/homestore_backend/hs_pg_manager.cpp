@@ -71,21 +71,21 @@ PGManager::NullAsyncResult HSHomeObject::_create_pg(PGInfo&& pg_info, std::set< 
 
     auto pg_id = pg_info.id;
     if (pg_exists(pg_id)) {
-        LOGW("pg already exists! pg_id {}", pg_id);
+        LOGW("pg already exists! pg={}", pg_id);
         decr_pending_request_num();
         return folly::Unit();
     }
 
     const auto chunk_size = chunk_selector()->get_chunk_size();
     if (pg_info.size < chunk_size) {
-        LOGW("Not support to create PG which pg_size {} < chunk_size {}", pg_info.size, chunk_size);
+        LOGW("Not support to create PG which pg_size={} < chunk_size={}", pg_info.size, chunk_size);
         decr_pending_request_num();
         return folly::makeUnexpected(PGError::INVALID_ARG);
     }
 
     auto const num_chunk = chunk_selector()->select_chunks_for_pg(pg_id, pg_info.size);
     if (!num_chunk.has_value()) {
-        LOGW("Failed to select chunks for pg {}", pg_id);
+        LOGW("Failed to select chunks for pg={}", pg_id);
         decr_pending_request_num();
         return folly::makeUnexpected(PGError::NO_SPACE_LEFT);
     }
@@ -115,14 +115,14 @@ PGManager::NullAsyncResult HSHomeObject::_create_pg(PGInfo&& pg_info, std::set< 
             // reclaim resources if failed to create pg
             if (r.hasError()) {
                 bool res = chunk_selector_->return_pg_chunks_to_dev_heap(pg_id);
-                RELEASE_ASSERT(res, "Failed to return pg {} chunks to dev_heap", pg_id);
+                RELEASE_ASSERT(res, "Failed to return pg={} chunks to dev_heap", pg_id);
                 // no matter if create repl dev successfully, remove it.
                 // if don't have repl dev, it will return ReplServiceError::SERVER_NOT_FOUND
                 return hs_repl_service()
                     .remove_repl_dev(repl_dev_group_id)
                     .deferValue([r, repl_dev_group_id, this](auto&& e) -> PGManager::NullAsyncResult {
                         if (e != ReplServiceError::OK) {
-                            LOGW("Failed to remove repl device which group_id {}, error: {}", repl_dev_group_id, e);
+                            LOGW("Failed to remove repl device which group_id={}, error={}", repl_dev_group_id, e);
                         }
                         decr_pending_request_num();
                         // still return the original error
@@ -165,13 +165,13 @@ folly::Expected< HSHomeObject::HS_PG*, PGError > HSHomeObject::local_create_pg(s
                                                                                PGInfo pg_info, trace_id_t tid) {
     auto pg_id = pg_info.id;
     if (auto hs_pg = get_hs_pg(pg_id); hs_pg) {
-        LOGW("PG already exists, pg_id {}, trace_id: {}", pg_id, tid);
+        LOGW("PG already exists, pg={}, trace_id={}", pg_id, tid);
         return const_cast< HS_PG* >(hs_pg);
     }
 
     auto local_chunk_size = chunk_selector()->get_chunk_size();
     if (pg_info.chunk_size != local_chunk_size) {
-        LOGE("Chunk sizes are inconsistent, leader_chunk_size={}, local_chunk_size={}, trace_id: {}",
+        LOGE("Chunk sizes are inconsistent, leader_chunk_size={}, local_chunk_size={}, trace_id={}",
              pg_info.chunk_size, local_chunk_size, tid);
         return folly::makeUnexpected< PGError >(PGError::UNKNOWN);
     }
@@ -179,12 +179,12 @@ folly::Expected< HSHomeObject::HS_PG*, PGError > HSHomeObject::local_create_pg(s
     // select chunks for pg
     auto const num_chunk = chunk_selector()->select_chunks_for_pg(pg_id, pg_info.size);
     if (!num_chunk.has_value()) {
-        LOGW("Failed to select chunks for pg {}, trace_id: {}", pg_id, tid);
+        LOGW("Failed to select chunks for pg={}, trace_id={}", pg_id, tid);
         return folly::makeUnexpected(PGError::NO_SPACE_LEFT);
     }
     auto chunk_ids = chunk_selector()->get_pg_chunks(pg_id);
     if (chunk_ids == nullptr) {
-        LOGW("Failed to get pg chunks, pg_id {}, trace_id: {}", pg_id, tid);
+        LOGW("Failed to get pg chunks, pg={}, trace_id={}", pg_id, tid);
         return folly::makeUnexpected(PGError::NO_SPACE_LEFT);
     }
 
@@ -200,7 +200,7 @@ folly::Expected< HSHomeObject::HS_PG*, PGError > HSHomeObject::local_create_pg(s
         RELEASE_ASSERT(index_table_pg_map_.count(uuid_str) == 0, "duplicate index table found");
         index_table_pg_map_[uuid_str] = PgIndexTable{pg_id, index_table};
 
-        LOGI("create pg {} successfully, index table uuid={} pg_size={} num_chunk={}, trace_id={}", pg_id, uuid_str,
+        LOGI("create pg={} successfully, index table uuid={} pg_size={} num_chunk={}, trace_id={}", pg_id, uuid_str,
              pg_info.size, num_chunk.value(), tid);
         hs_pg->index_table_ = index_table;
         // Add to index service, so that it gets cleaned up when index service is shutdown.
@@ -222,7 +222,7 @@ void HSHomeObject::on_create_pg_message_commit(int64_t lsn, sisl::blob const& he
     auto const* msg_header = r_cast< ReplicationMessageHeader const* >(header.cbytes());
 
     if (msg_header->corrupted()) {
-        LOGE("create PG message header is corrupted , lsn:{}; header: {}, trace_id: {}", lsn, msg_header->to_string(),
+        LOGE("create PG message header is corrupted , lsn={}; header={}, trace_id={}", lsn, msg_header->to_string(),
              tid);
         if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(PGError::CRC_MISMATCH)); }
         return;
@@ -233,7 +233,7 @@ void HSHomeObject::on_create_pg_message_commit(int64_t lsn, sisl::blob const& he
 
     if (crc32_ieee(init_crc32, serailized_pg_info_buf, serailized_pg_info_size) != msg_header->payload_crc) {
         // header & value is inconsistent;
-        LOGE("create PG message header is inconsistent with value, lsn:{}, trace_id: {}", lsn, tid);
+        LOGE("create PG message header is inconsistent with value, lsn={}, trace_id={}", lsn, tid);
         if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(PGError::CRC_MISMATCH)); }
         return;
     }
@@ -339,7 +339,7 @@ std::optional< pg_id_t > HSHomeObject::get_pg_id_with_group_id(homestore::group_
 }
 
 void HSHomeObject::pg_destroy(pg_id_t pg_id) {
-    LOGI("Destroying pg {}", pg_id);
+    LOGI("Destroying pg={}", pg_id);
     mark_pg_destroyed(pg_id);
     destroy_shards(pg_id);
     destroy_hs_resources(pg_id);
@@ -349,21 +349,21 @@ void HSHomeObject::pg_destroy(pg_id_t pg_id) {
     // return pg chunks to dev heap
     // which must be done after destroying pg super blk to avoid multiple pg use same chunks
     bool res = chunk_selector_->return_pg_chunks_to_dev_heap(pg_id);
-    RELEASE_ASSERT(res, "Failed to return pg {} chunks to dev_heap", pg_id);
+    RELEASE_ASSERT(res, "Failed to return pg={} chunks to dev_heap", pg_id);
 
-    LOGI("pg {} is destroyed", pg_id);
+    LOGI("pg={} is destroyed", pg_id);
 }
 
 void HSHomeObject::mark_pg_destroyed(pg_id_t pg_id) {
     auto lg = std::scoped_lock(_pg_lock);
     auto hs_pg = const_cast< HS_PG* >(_get_hs_pg_unlocked(pg_id));
     if (hs_pg == nullptr) {
-        LOGW("mark pg destroyed with unknown pg_id {}", pg_id);
+        LOGW("mark pg destroyed with unknown pg={}", pg_id);
         return;
     }
     hs_pg->pg_sb_->state = PGState::DESTROYED;
     hs_pg->pg_sb_.write();
-    LOGD("PG {} is marked as destroyed", pg_id);
+    LOGD("pg={} is marked as destroyed", pg_id);
 }
 
 void HSHomeObject::destroy_hs_resources(pg_id_t pg_id) { chunk_selector_->reset_pg_chunks(pg_id); }
@@ -377,7 +377,7 @@ void HSHomeObject::destroy_pg_index_table(pg_id_t pg_id) {
         auto lg = std::scoped_lock(_pg_lock);
         auto hs_pg = _get_hs_pg_unlocked(pg_id);
         if (hs_pg == nullptr) {
-            LOGW("destroy pg index table with unknown pg_id {}", pg_id);
+            LOGW("destroy pg index table with unknown pg={}", pg_id);
             return;
         }
         index_table = hs_pg->index_table_;
@@ -388,9 +388,9 @@ void HSHomeObject::destroy_pg_index_table(pg_id_t pg_id) {
         index_table_pg_map_.erase(uuid_str);
         hs()->index_service().remove_index_table(index_table);
         index_table->destroy();
-        LOGD("PG {} index table is destroyed", pg_id);
+        LOGD("pg={} index table is destroyed", pg_id);
     } else {
-        LOGD("PG {} index table is not found, skip destroy", pg_id);
+        LOGD("pg={} index table is not found, skip destroy", pg_id);
     }
 }
 
@@ -401,7 +401,7 @@ void HSHomeObject::destroy_pg_superblk(pg_id_t pg_id) {
     auto fut = homestore::hs()->cp_mgr().trigger_cp_flush(true /* force */);
     auto on_complete = [&](auto success) {
         RELEASE_ASSERT(success, "Failed to trigger CP flush");
-        LOGI("CP Flush trigged by pg_destroy completed, pg_id={}", pg_id);
+        LOGI("CP Flush triggered by pg_destroy completed, pg={}", pg_id);
     };
     on_complete(std::move(fut).get());
 
@@ -409,7 +409,7 @@ void HSHomeObject::destroy_pg_superblk(pg_id_t pg_id) {
         auto lg = std::scoped_lock(_pg_lock);
         auto hs_pg = const_cast< HS_PG* >(_get_hs_pg_unlocked(pg_id));
         if (hs_pg == nullptr) {
-            LOGW("destroy pg superblk with unknown pg_id {}", pg_id);
+            LOGW("destroy pg superblk with unknown pg={}", pg_id);
             return;
         }
 
@@ -478,7 +478,8 @@ void HSHomeObject::on_pg_meta_blk_found(sisl::byte_view const& buf, void* meta_c
     auto v = hs_repl_service().get_repl_dev(pg_sb->replica_set_uuid);
     if (v.hasError()) {
         // TODO: We need to raise an alert here, since without pg repl_dev all operations on that pg will fail
-        LOGE("open_repl_dev for group_id={} has failed", boost::uuids::to_string(pg_sb->replica_set_uuid));
+        LOGE("open_repl_dev for group_id={} has failed, pg={}", boost::uuids::to_string(pg_sb->replica_set_uuid),
+             pg_sb->id);
         return;
     }
     auto pg_id = pg_sb->id;
@@ -497,7 +498,7 @@ void HSHomeObject::on_pg_meta_blk_found(sisl::byte_view const& buf, void* meta_c
     } else {
         RELEASE_ASSERT(hs_pg->pg_sb_->state == PGState::DESTROYED, "IndexTable should be recovered before PG");
         hs_pg->index_table_ = nullptr;
-        LOGI("Index table not found for destroyed pg_id={}, index_table_uuid={}", pg_id, uuid_str);
+        LOGI("Index table not found for destroyed pg={}, index_table_uuid={}", pg_id, uuid_str);
     }
 
     add_pg_to_map(std::move(hs_pg));
@@ -526,7 +527,7 @@ HSHomeObject::HS_PG::HS_PG(PGInfo info, shared< homestore::ReplDev > rdev, share
         metrics_{*this},
         snp_rcvr_info_sb_{_snp_rcvr_meta_name},
         snp_rcvr_shard_list_sb_{_snp_rcvr_shard_list_meta_name} {
-    RELEASE_ASSERT(pg_chunk_ids != nullptr, "PG chunks null");
+    RELEASE_ASSERT(pg_chunk_ids != nullptr, "PG chunks null, pg={}", pg_info_.id);
     const uint32_t num_chunks = pg_chunk_ids->size();
     pg_sb_.create(sizeof(pg_info_superblk) - sizeof(char) + pg_info_.members.size() * sizeof(pg_members) +
                   num_chunks * sizeof(homestore::chunk_num_t));
@@ -643,7 +644,7 @@ void HSHomeObject::on_create_pg_message_rollback(int64_t lsn, sisl::blob const& 
     auto const* msg_header = r_cast< ReplicationMessageHeader const* >(header.cbytes());
 
     if (msg_header->corrupted()) {
-        LOGE("create PG message header is corrupted , lsn:{}; header: {}", lsn, msg_header->to_string());
+        LOGE("create PG message header is corrupted , lsn={}, header={}", lsn, msg_header->to_string());
         if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(PGError::CRC_MISMATCH)); }
         return;
     }
@@ -653,7 +654,7 @@ void HSHomeObject::on_create_pg_message_rollback(int64_t lsn, sisl::blob const& 
 
     if (crc32_ieee(init_crc32, serailized_pg_info_buf, serailized_pg_info_size) != msg_header->payload_crc) {
         // header & value is inconsistent;
-        LOGE("create PG message header is inconsistent with value, lsn:{}", lsn);
+        LOGE("create PG message header is inconsistent with value, lsn={}", lsn);
         if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(PGError::CRC_MISMATCH)); }
         return;
     }
@@ -661,12 +662,13 @@ void HSHomeObject::on_create_pg_message_rollback(int64_t lsn, sisl::blob const& 
     switch (msg_header->msg_type) {
     case ReplicationMessageType::CREATE_PG_MSG: {
         // TODO:: add rollback logic for create pg rollback if necessary
-        LOGI("lsn: {}, mes_type: {} is rollbacked", lsn, msg_header->msg_type);
+        LOGI("lsn={}, msg_type={}, pg={}, create pg is rollbacked", lsn, msg_header->msg_type, msg_header->pg_id);
         if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(PGError::ROLL_BACK)); }
         break;
     }
     default: {
-        LOGW("lsn: {}, mes_type: {} should not happen in pg message rollback", lsn, msg_header->msg_type);
+        LOGW("lsn={}, mes_type={}, pg={}, should not happen in pg message rollback", lsn, msg_header->msg_type,
+             msg_header->pg_id);
         break;
     }
     }

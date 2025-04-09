@@ -34,7 +34,7 @@ TEST_F(HomeObjectFixture, PGStatsTest) {
 
     PGStats pg_stats;
     auto res = _obj_inst->pg_manager()->get_stats(pg_id, pg_stats);
-    LOGINFO("stats: {}", pg_stats.to_string());
+    LOGINFO("stats={}", pg_stats.to_string());
 
     EXPECT_EQ(res, true);
     EXPECT_EQ(pg_stats.id, pg_id);
@@ -44,7 +44,7 @@ TEST_F(HomeObjectFixture, PGStatsTest) {
     EXPECT_EQ(pg_stats.num_members, g_helper->members().size());
 
     auto stats = _obj_inst->get_stats();
-    LOGINFO("HomeObj stats: {}", stats.to_string());
+    LOGINFO("HomeObj stats={}", stats.to_string());
 }
 
 TEST_F(HomeObjectFixture, PGExceedSpaceTest) {
@@ -75,7 +75,7 @@ TEST_F(HomeObjectFixture, PGExceedSpaceTest) {
             auto current_time = std::chrono::steady_clock::now();
             auto duration = std::chrono::duration_cast< std::chrono::seconds >(current_time - start_time).count();
             if (duration >= 20) {
-                LOGINFO("Failed to create pg {} at follower", pg_id);
+                LOGINFO("Failed to create pg={} at follower", pg_id);
                 res = false;
                 break;
             }
@@ -114,7 +114,7 @@ TEST_F(HomeObjectFixture, PGSizeLessThanChunkTest) {
             auto current_time = std::chrono::steady_clock::now();
             auto duration = std::chrono::duration_cast< std::chrono::seconds >(current_time - start_time).count();
             if (duration >= 20) {
-                LOGINFO("Failed to create pg {} at follower", pg_id);
+                LOGINFO("Failed to create pg={} at follower", pg_id);
                 res = false;
                 break;
             }
@@ -176,7 +176,7 @@ TEST_F(HomeObjectFixture, ConcurrencyCreatePG) {
     // verify all pgs are created
     for (pg_id_t i = 1; i <= pg_num; ++i) {
         ASSERT_TRUE(pg_exist(i));
-        LOGINFO("Create pg {} successfully", i);
+        LOGINFO("Create pg={} successfully", i);
     }
 }
 
@@ -218,7 +218,7 @@ TEST_F(HomeObjectFixture, CreatePGFailed) {
             std::this_thread::sleep_for(std::chrono::seconds(70));
             int num_repl = 0;
             _obj_inst->hs_repl_service().iterate_repl_devs([&num_repl](cshared< homestore::ReplDev >&) { num_repl++; });
-            LOGINFO("Failed to create pg {} at leader, times {}， num_repl {}", pg_id, i, num_repl);
+            LOGINFO("Failed to create pg={} at leader, times {}， num_repl {}", pg_id, i, num_repl);
             ASSERT_EQ(0, num_repl);
 
         } else {
@@ -229,7 +229,7 @@ TEST_F(HomeObjectFixture, CreatePGFailed) {
                 auto current_time = std::chrono::steady_clock::now();
                 auto duration = std::chrono::duration_cast< std::chrono::seconds >(current_time - start_time).count();
                 if (duration >= 20) {
-                    LOGINFO("Failed to create pg {} at follower", pg_id);
+                    LOGINFO("Failed to create pg={} at follower", pg_id);
                     res = false;
                     break;
                 }
@@ -244,7 +244,7 @@ TEST_F(HomeObjectFixture, CreatePGFailed) {
     auto const pg_id = 1;
     create_pg(pg_id);
     ASSERT_TRUE(pg_exist(pg_id));
-    LOGINFO("create pg {} successfully", pg_id);
+    LOGINFO("create pg={} successfully", pg_id);
     restart();
     ASSERT_TRUE(pg_exist(pg_id));
 }

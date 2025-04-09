@@ -280,7 +280,7 @@ public:
                     }
                 }
             }
-            LOGINFO("Restart, gtest filter pattern: {}", pattern);
+            LOGINFO("Restart, gtest filter pattern={}", pattern);
             if ("" != pattern) { fmt::format_to(std::back_inserter(cmd_line), " --gtest_filter={}", pattern); }
         }
         for (int j{1}; j < (int)args_.size(); ++j) {
@@ -296,7 +296,7 @@ public:
             fmt::format_to(std::back_inserter(cmd_line), " {}", args_[j]);
         }
 
-        LOGINFO("Spawning Homeobject cmd: {}", cmd_line);
+        LOGINFO("Spawning Homeobject cmd={}", cmd_line);
         boost::process::child c(boost::process::cmd = cmd_line, proc_grp_);
         c.detach();
     }

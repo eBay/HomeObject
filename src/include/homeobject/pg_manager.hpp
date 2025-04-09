@@ -77,7 +77,7 @@ struct PGStats {
 
         return fmt::format(
             "PGStats: id={}, replica_set_uuid={}, leader={}, num_members={}, total_shards={}, open_shards={}, "
-            "avail_open_shards={}, used_bytes={}, avail_bytes={}, members: {}",
+            "avail_open_shards={}, used_bytes={}, avail_bytes={}, members={}",
             id, boost::uuids::to_string(replica_set_uuid), boost::uuids::to_string(leader_id), num_members,
             total_shards, open_shards, avail_open_shards, used_bytes, avail_bytes, members_str);
     }

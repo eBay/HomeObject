@@ -103,7 +103,7 @@ TEST_F(HomeObjectFixture, ReplaceMember) {
     if (in_member_id == g_helper->my_replica_id()) {
         while (!am_i_in_pg(pg_id)) {
             std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-            LOGINFO("new member is waiting to become a member of pg {}", pg_id);
+            LOGINFO("new member is waiting to become a member of pg={}", pg_id);
         }
 
         wait_for_blob(pg_shard_id_vec[pg_id].back() /*the last shard id in this pg*/,
@@ -123,7 +123,7 @@ TEST_F(HomeObjectFixture, ReplaceMember) {
     if (out_member_id == g_helper->my_replica_id()) {
         while (am_i_in_pg(pg_id)) {
             std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-            LOGINFO("old member is waiting to leave pg {}", pg_id);
+            LOGINFO("old member is waiting to leave pg={}", pg_id);
         }
         verify_pg_destroy(pg_id, index_table_uuid_str, pg_shard_id_vec[pg_id], true);
         // since this case out_member don't have any pg, so we can check each chunk.
@@ -236,7 +236,7 @@ void HomeObjectFixture::RestartFollowerDuringBaselineResyncUsingSigKill(uint64_t
 #ifdef _PRERELEASE
     if (!is_restart && in_member_id == g_helper->my_replica_id()) {
         if (restart_phase == RECEIVING_SNAPSHOT) {
-            LOGINFO("Test case: restart follower when receiving snapshot: {}", restart_phase);
+            LOGINFO("Test case: restart follower when receiving snapshot={}", restart_phase);
             flip::FlipCondition cond;
             // will only delay the snapshot with blob id 11 during which restart will happen
             m_fc.create_condition("blob_id", flip::Operator::EQUAL, static_cast< long >(11), &cond);
@@ -246,16 +246,16 @@ void HomeObjectFixture::RestartFollowerDuringBaselineResyncUsingSigKill(uint64_t
             kill_until_shard = pg_shard_id_vec[pg_id].front();
             kill_until_blob = num_blobs_per_shard - 1;
         } else if (restart_phase == APPLYING_SNAPSHOT) {
-            LOGINFO("Test case: restart follower when applying snapshot: {}", restart_phase);
+            LOGINFO("Test case: restart follower when applying snapshot={}", restart_phase);
             set_retval_flip("simulate_apply_snapshot_delay", static_cast< long >(flip_delay) /*ms*/, 1, 100);
         } else if (restart_phase == TRUNCATING_LOGS) {
             flip::FlipCondition cond;
             // TODO This flip should be added in homestore
             m_fc.create_condition("compact_lsn", flip::Operator::EQUAL, static_cast< long >(26), &cond);
-            LOGINFO("Test case: restart follower when truncating logs: {}", restart_phase);
+            LOGINFO("Test case: restart follower when truncating logs={}", restart_phase);
             set_retval_flip("simulate_truncate_log_delay", static_cast< long >(flip_delay) /*ms*/, 1, 100, cond);
         } else {
-            LOGWARN("restart after baseline resync: {}", restart_phase);
+            LOGWARN("restart after baseline resync={}", restart_phase);
         }
     }
 #endif
@@ -286,9 +286,9 @@ void HomeObjectFixture::RestartFollowerDuringBaselineResyncUsingSigKill(uint64_t
         if (in_member_id == g_helper->my_replica_id()) {
             while (!am_i_in_pg(pg_id)) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(500));
-                LOGINFO("new member is waiting to become a member of pg {}", pg_id);
+                LOGINFO("new member is waiting to become a member of pg={}", pg_id);
             }
-            LOGDEBUG("wait for the data[shard:{}, blob:{}] replicated to the new member", kill_until_shard,
+            LOGDEBUG("wait for the data[shard={}, blob={}] replicated to the new member", kill_until_shard,
                      kill_until_blob);
             wait_for_blob(kill_until_shard, kill_until_blob);
             LOGINFO("about to kill new member")
@@ -300,7 +300,7 @@ void HomeObjectFixture::RestartFollowerDuringBaselineResyncUsingSigKill(uint64_t
             LOGINFO("Destroying PG on removed member");
             while (am_i_in_pg(pg_id)) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(500));
-                LOGINFO("Old member is waiting to leave pg {}", pg_id);
+                LOGINFO("Old member is waiting to leave pg={}", pg_id);
             }
         }
 
@@ -328,7 +328,7 @@ void HomeObjectFixture::RestartFollowerDuringBaselineResyncUsingSigKill(uint64_t
         // new member restart
         while (!am_i_in_pg(pg_id)) {
             std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-            LOGINFO("new member is waiting to become a member of pg {}", pg_id);
+            LOGINFO("new member is waiting to become a member of pg={}", pg_id);
         }
         run_if_in_pg(pg_id, [&]() {
             wait_for_blob(last_shard, last_blob);
@@ -415,9 +415,9 @@ TEST_F(HomeObjectFixture, RestartFollowerDuringBaselineResyncUsingGracefulShutdo
     if (in_member_id == g_helper->my_replica_id()) {
         while (!am_i_in_pg(pg_id)) {
             std::this_thread::sleep_for(std::chrono::milliseconds(500));
-            LOGINFO("new member is waiting to become a member of pg {}", pg_id);
+            LOGINFO("new member is waiting to become a member of pg={}", pg_id);
         }
-        LOGDEBUG("wait for the data[shard:{}, blob:{}] replicated to the new member", kill_until_shard,
+        LOGDEBUG("wait for the data[shard={}, blob={}] replicated to the new member", kill_until_shard,
                  kill_until_blob);
         wait_for_blob(kill_until_shard, kill_until_blob);
         LOGINFO("about to restart new member")
@@ -432,7 +432,7 @@ TEST_F(HomeObjectFixture, RestartFollowerDuringBaselineResyncUsingGracefulShutdo
         LOGINFO("Destroying PG on removed member");
         while (am_i_in_pg(pg_id)) {
             std::this_thread::sleep_for(std::chrono::milliseconds(500));
-            LOGINFO("Old member is waiting to leave pg {}", pg_id);
+            LOGINFO("Old member is waiting to leave pg={}", pg_id);
         }
     }
     g_helper->sync();
@@ -498,7 +498,7 @@ void HomeObjectFixture::RestartLeaderDuringBaselineResyncUsingSigKill(uint64_t f
 #ifdef _PRERELEASE
         if (initial_leader_replica_num == g_helper->replica_num()) {
             if (restart_phase == RECEIVING_SNAPSHOT) {
-                LOGINFO("restart when receiving snapshot: {}, kill_until_shard={}, kill_until_blob={}", restart_phase,
+                LOGINFO("restart when receiving snapshot={}, kill_until_shard={}, kill_until_blob={}", restart_phase,
                         kill_until_shard, kill_until_blob);
                 flip::FlipCondition cond;
                 // will only delay the snapshot with blob id 7 during which restart will happen
@@ -506,10 +506,10 @@ void HomeObjectFixture::RestartLeaderDuringBaselineResyncUsingSigKill(uint64_t f
                 set_retval_flip("simulate_read_snapshot_load_blob_delay", static_cast< long >(flip_delay) /*ms*/, 1,
                                 100, cond);
             } else if (restart_phase == APPLYING_SNAPSHOT) {
-                LOGINFO("restart when applying snapshot: {}", restart_phase);
+                LOGINFO("restart when applying snapshot={}", restart_phase);
                 set_retval_flip("simulate_apply_snapshot_delay", static_cast< long >(flip_delay) /*ms*/, 1, 100);
             } else {
-                LOGWARN("restart after baseline resync: {}", restart_phase);
+                LOGWARN("restart after baseline resync={}", restart_phase);
             }
         }
 #endif
@@ -543,9 +543,9 @@ void HomeObjectFixture::RestartLeaderDuringBaselineResyncUsingSigKill(uint64_t f
         if (in_member_id == g_helper->my_replica_id()) {
             while (!am_i_in_pg(pg_id)) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(500));
-                LOGINFO("new member is waiting to become a member of pg {}", pg_id);
+                LOGINFO("new member is waiting to become a member of pg={}", pg_id);
             }
-            LOGDEBUG("wait for the data[shard:{}, blob:{}] replicated to the new member", kill_until_shard,
+            LOGDEBUG("wait for the data[shard={}, blob={}] replicated to the new member", kill_until_shard,
                      kill_until_blob);
             wait_for_blob(kill_until_shard, kill_until_blob);
         } else if (initial_leader_replica_num == g_helper->replica_num()) {
@@ -557,7 +557,7 @@ void HomeObjectFixture::RestartLeaderDuringBaselineResyncUsingSigKill(uint64_t f
             LOGINFO("Destroying PG on removed member");
             while (am_i_in_pg(pg_id)) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(500));
-                LOGINFO("Old member is waiting to leave pg {}", pg_id);
+                LOGINFO("Old member is waiting to leave pg={}", pg_id);
             }
         }
         // SyncPoint 1: tell leader to kill

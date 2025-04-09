@@ -45,7 +45,8 @@ void HeapChunkSelector::add_chunk_internal(const chunk_num_t p_chunk_id, bool ad
 csharedChunk HeapChunkSelector::select_chunk(homestore::blk_count_t count, const homestore::blk_alloc_hints& hint) {
     auto& chunkIdHint = hint.chunk_id_hint;
     if (chunkIdHint.has_value()) {
-        LOGWARNMOD(homeobject, "should not allocated a chunk with exiting chunk_id {} in hint!", chunkIdHint.value());
+        LOGWARNMOD(homeobject, "should not allocated a chunk with exiting chunkIdHint={} in hint!",
+                   chunkIdHint.value());
         return nullptr;
     }
 
@@ -67,7 +68,7 @@ csharedChunk HeapChunkSelector::select_specific_chunk(const pg_id_t pg_id, const
     std::shared_lock lock_guard(m_chunk_selector_mtx);
     auto pg_it = m_per_pg_chunks.find(pg_id);
     if (pg_it == m_per_pg_chunks.end()) {
-        LOGWARNMOD(homeobject, "No pg found for pg_id {}", pg_id);
+        LOGWARNMOD(homeobject, "No pg found for pg={}", pg_id);
         return nullptr;
     }
 
@@ -75,7 +76,7 @@ csharedChunk HeapChunkSelector::select_specific_chunk(const pg_id_t pg_id, const
     auto& pg_chunks = pg_chunk_collection->m_pg_chunks;
     std::scoped_lock lock(pg_chunk_collection->mtx);
     if (v_chunk_id >= pg_chunks.size()) {
-        LOGWARNMOD(homeobject, "No chunk found for v_chunk_id {}", v_chunk_id);
+        LOGWARNMOD(homeobject, "No chunk found for v_chunk_id={}", v_chunk_id);
         return nullptr;
     }
     auto chunk = pg_chunks[v_chunk_id];
@@ -98,14 +99,14 @@ bool HeapChunkSelector::release_chunk(const pg_id_t pg_id, const chunk_num_t v_c
     std::shared_lock lock_guard(m_chunk_selector_mtx);
     auto pg_it = m_per_pg_chunks.find(pg_id);
     if (pg_it == m_per_pg_chunks.end()) {
-        LOGWARNMOD(homeobject, "No pg found for pg_id {}", pg_id);
+        LOGWARNMOD(homeobject, "No pg found for pg={}", pg_id);
         return false;
     }
 
     auto pg_chunk_collection = pg_it->second;
     auto& pg_chunks = pg_chunk_collection->m_pg_chunks;
     if (v_chunk_id >= pg_chunks.size()) {
-        LOGWARNMOD(homeobject, "No chunk found for v_chunk_id {}", v_chunk_id);
+        LOGWARNMOD(homeobject, "No chunk found for v_chunk_id={}", v_chunk_id);
         return false;
     }
     std::scoped_lock lock(pg_chunk_collection->mtx);
@@ -122,7 +123,7 @@ bool HeapChunkSelector::reset_pg_chunks(pg_id_t pg_id) {
     std::shared_lock lock_guard(m_chunk_selector_mtx);
     auto pg_it = m_per_pg_chunks.find(pg_id);
     if (pg_it == m_per_pg_chunks.end()) {
-        LOGWARNMOD(homeobject, "No pg found for pg_id {}", pg_id);
+        LOGWARNMOD(homeobject, "No pg found for pg={}", pg_id);
         return false;
     }
     {
@@ -139,14 +140,14 @@ bool HeapChunkSelector::return_pg_chunks_to_dev_heap(const pg_id_t pg_id) {
     std::unique_lock lock_guard(m_chunk_selector_mtx);
     auto pg_it = m_per_pg_chunks.find(pg_id);
     if (pg_it == m_per_pg_chunks.end()) {
-        LOGWARNMOD(homeobject, "No pg found for pg_id {}", pg_id);
+        LOGWARNMOD(homeobject, "No pg found for pg={}", pg_id);
         return false;
     }
 
     auto pg_chunk_collection = pg_it->second;
     auto pdev_id = pg_chunk_collection->m_pg_chunks[0]->get_pdev_id();
     auto pdev_it = m_per_dev_heap.find(pdev_id);
-    RELEASE_ASSERT(pdev_it != m_per_dev_heap.end(), "pdev {} should in per dev heap", pdev_id);
+    RELEASE_ASSERT(pdev_it != m_per_dev_heap.end(), "pdev_id={} should in per dev heap", pdev_id);
     auto pdev_heap = pdev_it->second;
 
     {
@@ -175,14 +176,14 @@ bool HeapChunkSelector::is_chunk_available(const pg_id_t pg_id, const chunk_num_
     std::shared_lock lock_guard(m_chunk_selector_mtx);
     auto pg_it = m_per_pg_chunks.find(pg_id);
     if (pg_it == m_per_pg_chunks.end()) {
-        LOGWARNMOD(homeobject, "No pg found for pg_id {}", pg_id);
+        LOGWARNMOD(homeobject, "No pg found for pg={}", pg_id);
         return false;
     }
 
     auto pg_chunk_collection = pg_it->second;
     auto& pg_chunks = pg_chunk_collection->m_pg_chunks;
     if (v_chunk_id >= pg_chunks.size()) {
-        LOGWARNMOD(homeobject, "No chunk found for v_chunk_id {}", v_chunk_id);
+        LOGWARNMOD(homeobject, "No chunk found for v_chunk_id={}", v_chunk_id);
         return false;
     }
     std::scoped_lock lock(pg_chunk_collection->mtx);
@@ -194,7 +195,7 @@ std::optional< uint32_t > HeapChunkSelector::select_chunks_for_pg(pg_id_t pg_id,
     std::unique_lock lock_guard(m_chunk_selector_mtx);
     const auto chunk_size = get_chunk_size();
     if (pg_size < chunk_size) {
-        LOGWARNMOD(homeobject, "pg_size {} is less than chunk_size {}", pg_size, chunk_size);
+        LOGWARNMOD(homeobject, "pg_size={} is less than chunk_size={}", pg_size, chunk_size);
         return std::nullopt;
     }
     const uint32_t num_chunk = sisl::round_down(pg_size, chunk_size) / chunk_size;
@@ -202,7 +203,7 @@ std::optional< uint32_t > HeapChunkSelector::select_chunks_for_pg(pg_id_t pg_id,
     if (m_per_pg_chunks.find(pg_id) != m_per_pg_chunks.end()) {
         // leader may call select_chunks_for_pg multiple times
         RELEASE_ASSERT(num_chunk == m_per_pg_chunks[pg_id]->m_pg_chunks.size(), "num_chunk should be same");
-        LOGWARNMOD(homeobject, "PG had already created, pg_id {}", pg_id);
+        LOGWARNMOD(homeobject, "PG had already created, pg={}", pg_id);
         return num_chunk;
     }
 
@@ -214,7 +215,7 @@ std::optional< uint32_t > HeapChunkSelector::select_chunks_for_pg(pg_id_t pg_id,
                                               });
     auto& pdev_heap = most_avail_dev_it->second;
     if (num_chunk > pdev_heap->size()) {
-        LOGWARNMOD(homeobject, "Pdev has no enough space to create pg {} with num_chunk {}", pg_id, num_chunk);
+        LOGWARNMOD(homeobject, "Pdev has no enough space to create pg={} with num_chunk={}", pg_id, num_chunk);
         return std::nullopt;
     }
 
@@ -248,11 +249,11 @@ bool HeapChunkSelector::recover_pg_chunks(pg_id_t pg_id, std::vector< chunk_num_
     std::unique_lock lock_guard(m_chunk_selector_mtx);
     // check pg exist
     if (m_per_pg_chunks.find(pg_id) != m_per_pg_chunks.end()) {
-        LOGWARNMOD(homeobject, "PG {} had been recovered", pg_id);
+        LOGWARNMOD(homeobject, "pg={} had been recovered", pg_id);
         return false;
     }
     if (p_chunk_ids.size() == 0) {
-        LOGWARNMOD(homeobject, "Unexpected empty PG {}", pg_id);
+        LOGWARNMOD(homeobject, "Unexpected empty pg={}", pg_id);
         return false;
     }
 
@@ -261,7 +262,7 @@ bool HeapChunkSelector::recover_pg_chunks(pg_id_t pg_id, std::vector< chunk_num_
     for (auto p_chunk_id : p_chunk_ids) {
         auto it = m_chunks.find(p_chunk_id);
         if (it == m_chunks.end()) {
-            LOGWARNMOD(homeobject, "No chunk found for ChunkID {}", p_chunk_id);
+            LOGWARNMOD(homeobject, "No chunk found for p_chunk_id={}", p_chunk_id);
             return false;
         }
         auto chunk = it->second;
@@ -305,7 +306,7 @@ bool HeapChunkSelector::recover_pg_chunks_states(pg_id_t pg_id,
     std::unique_lock lock_guard(m_chunk_selector_mtx);
     auto pg_it = m_per_pg_chunks.find(pg_id);
     if (pg_it == m_per_pg_chunks.end()) {
-        LOGWARNMOD(homeobject, "PG chunks should be recovered beforhand, pg_id={}", pg_id);
+        LOGWARNMOD(homeobject, "PG chunks should be recovered beforhand, pg={}", pg_id);
         return false;
     }
 
@@ -332,7 +333,7 @@ std::shared_ptr< const std::vector< homestore::chunk_num_t > > HeapChunkSelector
     std::shared_lock lock_guard(m_chunk_selector_mtx);
     auto pg_it = m_per_pg_chunks.find(pg_id);
     if (pg_it == m_per_pg_chunks.end()) {
-        LOGWARNMOD(homeobject, "PG {} had never been created", pg_id);
+        LOGWARNMOD(homeobject, "pg={} had never been created", pg_id);
         return nullptr;
     }
 
@@ -352,7 +353,7 @@ HeapChunkSelector::get_most_available_blk_chunk(uint64_t ctx, pg_id_t pg_id) {
     std::shared_lock lock_guard(m_chunk_selector_mtx);
     auto pg_it = m_per_pg_chunks.find(pg_id);
     if (pg_it == m_per_pg_chunks.end()) {
-        LOGWARNMOD(homeobject, "No pg found for pg_id {}", pg_id);
+        LOGWARNMOD(homeobject, "No pg found for pg={}", pg_id);
         return std::nullopt;
     }
     std::scoped_lock lock(pg_it->second->mtx);
@@ -364,12 +365,12 @@ HeapChunkSelector::get_most_available_blk_chunk(uint64_t ctx, pg_id_t pg_id) {
                              return !a->available() || (b->available() && a->available_blks() < b->available_blks());
                          });
     if (!(*max_it)->available()) {
-        LOGWARNMOD(homeobject, "No available chunk for PG [{}], ctx=[0x{:x}]", pg_id, ctx);
+        LOGWARNMOD(homeobject, "No available chunk for pg={}, ctx=0x{:x}", pg_id, ctx);
         return std::nullopt;
     }
     auto v_chunk_id = std::distance(pg_chunks.begin(), max_it);
-    LOGDEBUGMOD(homeobject, "Picked vchunk {} : [pchunk={}, avail={}], ctx=[0x{:x}]", v_chunk_id, pg_chunks[v_chunk_id]->get_chunk_id(),
-          pg_chunks[v_chunk_id]->available_blks(), ctx);
+    LOGDEBUGMOD(homeobject, "Picked v_chunk_id={} : [p_chunk_id={}, avail={}], ctx=0x{:x}", v_chunk_id,
+                pg_chunks[v_chunk_id]->get_chunk_id(), pg_chunks[v_chunk_id]->available_blks(), ctx);
     pg_chunks[v_chunk_id]->m_state = ChunkState::INUSE;
     --pg_chunk_collection->available_num_chunks;
     pg_chunk_collection->available_blk_count -= pg_chunks[v_chunk_id]->available_blks();
@@ -391,7 +392,7 @@ uint32_t HeapChunkSelector::avail_num_chunks(pg_id_t pg_id) const {
     std::shared_lock lock_guard(m_chunk_selector_mtx);
     auto pg_it = m_per_pg_chunks.find(pg_id);
     if (pg_it == m_per_pg_chunks.end()) {
-        LOGWARNMOD(homeobject, "No pg found for pg_id {}", pg_id);
+        LOGWARNMOD(homeobject, "No pg found for pg={}", pg_id);
         return 0;
     }
     return pg_it->second->available_num_chunks.load();
@@ -403,7 +404,7 @@ uint64_t HeapChunkSelector::avail_blks(pg_id_t pg_id) const {
     std::shared_lock lock_guard(m_chunk_selector_mtx);
     auto pg_it = m_per_pg_chunks.find(pg_id);
     if (pg_it == m_per_pg_chunks.end()) {
-        LOGWARNMOD(homeobject, "No pg found for pg_id {}", pg_id);
+        LOGWARNMOD(homeobject, "No pg found for pg={}", pg_id);
         return 0;
     }
     return pg_it->second->available_blk_count.load();
