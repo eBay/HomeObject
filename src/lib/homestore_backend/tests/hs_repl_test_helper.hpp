@@ -130,6 +130,7 @@ public:
         }
 
         uint64_t mem_size() const override { return 2 * Gi; }
+        int max_data_size() const override { return 4 * Mi; }
         peer_id_t discover_svcid(std::optional< peer_id_t > const& p) const override {
             if (p.has_value()) RELEASE_ASSERT_EQ(p.value(), helper_.my_replica_id_, "input svcid not matching");
             return helper_.my_replica_id_;

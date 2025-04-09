@@ -47,6 +47,7 @@ public:
     }
 
     uint64_t mem_size() const override { return 2 * Gi; }
+    int max_data_size() const override { return 4 * Mi; }
 
     homeobject::peer_id_t discover_svcid(std::optional< homeobject::peer_id_t > const& p) const override;
     std::string lookup_peer(homeobject::peer_id_t const&) const override { return "127.0.0.1:4000"; }
