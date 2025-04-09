@@ -153,10 +153,14 @@ void HSHomeObject::init_homestore() {
     chunk_selector_ = std::make_shared< HeapChunkSelector >();
     using namespace homestore;
     auto repl_app = std::make_shared< HSReplApplication >(repl_impl_type::server_side, false, this, _application);
+    uint64_t max_snapshot_batch_size_in_bytes = HS_BACKEND_DYNAMIC_CONFIG(max_snapshot_batch_size_mb) * Mi;
+    RELEASE_ASSERT(max_snapshot_batch_size_in_bytes <= INT_MAX, "snapshot size is larger than the grpc limit");
     bool need_format = HomeStore::instance()
                            ->with_index_service(std::make_unique< BlobIndexServiceCallbacks >(this))
                            .with_repl_data_service(repl_app, chunk_selector_)
-                           .start(hs_input_params{.devices = device_info, .app_mem_size = app_mem_size},
+                           .start(hs_input_params{.devices = device_info, .app_mem_size = app_mem_size,
+                                                  .max_data_size = app->max_data_size(),
+                                                  .max_snapshot_batch_size = s_cast< int >(max_snapshot_batch_size_in_bytes)},
                                   [this]() { register_homestore_metablk_callback(); });
 
     // We either recoverd a UUID and no FORMAT is needed, or we need one for a later superblock

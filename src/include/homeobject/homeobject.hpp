@@ -46,6 +46,8 @@ public:
     virtual std::list< device_info_t > devices() const = 0;
     // Memory size in bytes
     virtual uint64_t mem_size() const = 0;
+    // Max data size trans on the data plane in byte
+    virtual int max_data_size() const = 0;
 
     // Callback made after determining if a SvcId exists or not during initialization, will consume response
     virtual peer_id_t discover_svcid(std::optional< peer_id_t > const& found) const = 0;
