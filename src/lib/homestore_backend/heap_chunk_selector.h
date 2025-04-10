@@ -180,6 +180,16 @@ public:
 
     bool is_chunk_available(const pg_id_t pg_id, const chunk_num_t v_chunk_id) const;
 
+    /**
+     * @brief Returns all the pdev ids that managed by this chunk selector.
+     */
+    std::list< uint32_t > get_pdev_ids() const;
+
+    /**
+     * @brief select an available chunk from the given pdev.
+     */
+    std::shared_ptr< ExtendedVChunk > select_chunk_from_pdev(uint32_t pdev_id);
+
 private:
     void add_chunk_internal(const chunk_num_t, bool add_to_heap = true);
 
