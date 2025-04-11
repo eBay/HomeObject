@@ -348,8 +348,7 @@ std::shared_ptr< const std::vector< homestore::chunk_num_t > > HeapChunkSelector
     return p_chunk_ids;
 }
 
-std::optional< homestore::chunk_num_t >
-HeapChunkSelector::get_most_available_blk_chunk(uint64_t ctx, pg_id_t pg_id) {
+std::optional< homestore::chunk_num_t > HeapChunkSelector::get_most_available_blk_chunk(uint64_t ctx, pg_id_t pg_id) {
     std::shared_lock lock_guard(m_chunk_selector_mtx);
     auto pg_it = m_per_pg_chunks.find(pg_id);
     if (pg_it == m_per_pg_chunks.end()) {
@@ -419,6 +418,39 @@ uint64_t HeapChunkSelector::total_blks(uint32_t dev_id) const {
     }
 
     return it->second->m_total_blks;
+}
+
+std::list< uint32_t > HeapChunkSelector::get_pdev_ids() const {
+    std::list< uint32_t > pdev_ids;
+    for (const auto& [pdev_id, _] : m_per_dev_heap) {
+        pdev_ids.emplace_back(pdev_id);
+    }
+    return pdev_ids;
+}
+
+std::shared_ptr< HeapChunkSelector::ExtendedVChunk > HeapChunkSelector::select_chunk_from_pdev(uint32_t pdev_id) {
+    std::unique_lock lock_guard(m_chunk_selector_mtx);
+    auto it = m_per_dev_heap.find(pdev_id);
+    if (it == m_per_dev_heap.end()) {
+        LOGWARNMOD(homeobject, "No pdev heap found for pdev {}", pdev_id);
+        return nullptr;
+    }
+    auto pdev_heap = it->second;
+    std::unique_lock lock(pdev_heap->mtx);
+    if (pdev_heap->m_heap.empty()) {
+        LOGWARNMOD(homeobject, "No available chunk found for pdev {}", pdev_id);
+        return nullptr;
+    }
+    auto chunk = pdev_heap->m_heap.top();
+    pdev_heap->m_heap.pop();
+    pdev_heap->available_blk_count -= chunk->available_blks();
+
+    RELEASE_ASSERT(!chunk->m_pg_id.has_value(), "chunk {} is selected from pdev heap, but it has a pg_id {}!",
+                   chunk->get_chunk_id(), chunk->m_pg_id.value());
+    RELEASE_ASSERT(chunk->get_total_blks() == chunk->available_blks(), "chunk should be empty");
+    RELEASE_ASSERT(chunk->available(), "chunk state should be available");
+
+    return chunk;
 }
 
 } // namespace homeobject
