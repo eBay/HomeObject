@@ -447,6 +447,8 @@ std::shared_ptr< HeapChunkSelector::ExtendedVChunk > HeapChunkSelector::select_c
 
     RELEASE_ASSERT(!chunk->m_pg_id.has_value(), "chunk {} is selected from pdev heap, but it has a pg_id {}!",
                    chunk->get_chunk_id(), chunk->m_pg_id.value());
+    RELEASE_ASSERT(chunk->get_total_blks() == chunk->available_blks(), "chunk should be empty");
+    RELEASE_ASSERT(chunk->available(), "chunk state should be available");
 
     return chunk;
 }
