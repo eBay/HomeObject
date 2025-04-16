@@ -149,7 +149,8 @@ void ReplicationStateMachine::on_error(ReplServiceError error, const sisl::blob&
 }
 
 homestore::ReplResult< homestore::blk_alloc_hints >
-ReplicationStateMachine::get_blk_alloc_hints(sisl::blob const& header, uint32_t data_size, cintrusive< homestore::repl_req_ctx >& hs_ctx) {
+ReplicationStateMachine::get_blk_alloc_hints(sisl::blob const& header, uint32_t data_size,
+                                             cintrusive< homestore::repl_req_ctx >& hs_ctx) {
     const ReplicationMessageHeader* msg_header = r_cast< const ReplicationMessageHeader* >(header.cbytes());
     switch (msg_header->msg_type) {
     case ReplicationMessageType::CREATE_SHARD_MSG: {
@@ -546,9 +547,8 @@ folly::Future< std::error_code > ReplicationStateMachine::on_fetch_data(const in
         // from Header.
         auto sb =
             r_cast< HSHomeObject::shard_info_superblk const* >(header.cbytes() + sizeof(ReplicationMessageHeader));
-
-        auto const expected_size =
-            sisl::round_up(sizeof(HSHomeObject::shard_info_superblk), repl_dev()->get_blk_size());
+        auto const raw_size = sizeof(HSHomeObject::shard_info_superblk);
+        auto const expected_size = sisl::round_up(raw_size, repl_dev()->get_blk_size());
 
         RELEASE_ASSERT(
             sgs.size == expected_size,
@@ -557,7 +557,7 @@ folly::Future< std::error_code > ReplicationStateMachine::on_fetch_data(const in
 
         // TODO：：return error_code if assert fails, so it will not crash here because of the assert failure.
 
-        std::memcpy(given_buffer, sb, total_size);
+        std::memcpy(given_buffer, sb, raw_size);
         return folly::makeFuture< std::error_code >(std::error_code{});
     }
 
