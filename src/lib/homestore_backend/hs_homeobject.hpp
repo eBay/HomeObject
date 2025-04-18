@@ -13,6 +13,7 @@
 #include "replication_message.hpp"
 #include "homeobject/common.hpp"
 #include "index_kv.hpp"
+#include "gc_manager.hpp"
 #include "generated/resync_pg_data_generated.h"
 #include "generated/resync_shard_data_generated.h"
 #include "generated/resync_blob_data_generated.h"
@@ -25,8 +26,10 @@ class IndexTableBase;
 namespace homeobject {
 
 class BlobRouteKey;
+class BlobRouteByChunkKey;
 class BlobRouteValue;
 using BlobIndexTable = homestore::IndexTable< BlobRouteKey, BlobRouteValue >;
+
 class HttpManager;
 
 static constexpr uint64_t io_align{512};
@@ -48,7 +51,6 @@ private:
     static constexpr uint32_t _data_block_size = 1024;
     static uint64_t _hs_chunk_size;
     uint32_t _hs_reserved_blks = 0;
-    ///
 
     /// Overridable Helpers
     ShardManager::AsyncResult< ShardInfo > _create_shard(pg_id_t, uint64_t size_bytes) override;
@@ -75,6 +77,7 @@ private:
         std::shared_ptr< BlobIndexTable > index_table;
     };
     std::unordered_map< std::string, PgIndexTable > index_table_pg_map_;
+    std::unordered_map< std::string, std::shared_ptr< GCBlobIndexTable > > gc_index_table_map;
     std::once_flag replica_restart_flag_;
 
 public:
@@ -605,6 +608,7 @@ private:
     std::unordered_map< homestore::group_id_t, homestore::superblk< snapshot_ctx_superblk > > snp_ctx_sbs_;
     mutable std::shared_mutex snp_sbs_lock_;
     shared< HeapChunkSelector > chunk_selector_;
+    shared< GCManager > gc_mgr_;
     unique< HttpManager > http_mgr_;
     bool recovery_done_{false};
 
@@ -634,7 +638,7 @@ private:
     static ShardInfo deserialize_shard_info(const char* shard_info_str, size_t size);
     static std::string serialize_shard_info(const ShardInfo& info);
     void local_create_shard(ShardInfo shard_info, homestore::chunk_num_t v_chunk_id, homestore::chunk_num_t p_chunk_id,
-                            homestore::blk_count_t blk_count, trace_id_t tid=0);
+                            homestore::blk_count_t blk_count, trace_id_t tid = 0);
     void add_new_shard_to_map(ShardPtr&& shard);
     void update_shard_in_map(const ShardInfo& shard_info);
 
@@ -650,6 +654,9 @@ private:
     void on_snp_rcvr_meta_blk_recover_completed(bool success);
     void on_snp_rcvr_shard_list_meta_blk_found(homestore::meta_blk* mblk, sisl::byte_view buf);
     void on_snp_rcvr_shard_list_meta_blk_recover_completed(bool success);
+    void on_gc_task_meta_blk_found(sisl::byte_view const& buf, void* meta_cookie);
+    void on_gc_actor_meta_found(sisl::byte_view const& buf, void* meta_cookie);
+    void on_reserved_chunk_meta_found(sisl::byte_view const& buf, void* meta_cookie);
 
     void persist_pg_sb();
 
@@ -665,6 +672,11 @@ public:
      * Initializes the homestore.
      */
     void init_homestore();
+
+    /**
+     * Initializes gc manager.
+     */
+    void init_gc();
 
 #if 0
     /**
@@ -807,14 +819,15 @@ public:
                             const homestore::MultiBlkId& pbas, cintrusive< homestore::repl_req_ctx >& hs_ctx);
     void on_blob_del_commit(int64_t lsn, sisl::blob const& header, sisl::blob const& key,
                             cintrusive< homestore::repl_req_ctx >& hs_ctx);
-    bool local_add_blob_info(pg_id_t pg_id, BlobInfo const& blob_info, trace_id_t tid=0);
+    bool local_add_blob_info(pg_id_t pg_id, BlobInfo const& blob_info, trace_id_t tid = 0);
     homestore::ReplResult< homestore::blk_alloc_hints >
     blob_put_get_blk_alloc_hints(sisl::blob const& header, cintrusive< homestore::repl_req_ctx >& ctx);
     void compute_blob_payload_hash(BlobHeader::HashAlgorithm algorithm, const uint8_t* blob_bytes, size_t blob_size,
                                    const uint8_t* user_key_bytes, size_t user_key_size, uint8_t* hash_bytes,
                                    size_t hash_len) const;
 
-    std::shared_ptr< BlobIndexTable > recover_index_table(homestore::superblk< homestore::index_table_sb >&& sb);
+    std::shared_ptr< homestore::IndexTableBase >
+    recover_index_table(homestore::superblk< homestore::index_table_sb >&& sb);
     std::optional< pg_id_t > get_pg_id_with_group_id(homestore::group_id_t group_id) const;
 
     // Snapshot persistence related
@@ -823,7 +836,8 @@ public:
     void destroy_snapshot_sb(homestore::group_id_t group_id);
 
 private:
-    std::shared_ptr< BlobIndexTable > create_index_table();
+    std::shared_ptr< BlobIndexTable > create_pg_index_table();
+    std::shared_ptr< GCBlobIndexTable > create_gc_index_table();
 
     std::pair< bool, homestore::btree_status_t > add_to_index_table(shared< BlobIndexTable > index_table,
                                                                     const BlobInfo& blob_info);
@@ -897,13 +911,13 @@ private:
 
     // only leader will call incr and decr pending request num
     void incr_pending_request_num() const {
-        uint64_t now=pending_request_num.fetch_add(1);
+        uint64_t now = pending_request_num.fetch_add(1);
         LOGT("inc pending req, was {}", now);
     }
-        void decr_pending_request_num() const {
+    void decr_pending_request_num() const {
         uint64_t now = pending_request_num.fetch_sub(1);
         LOGT("desc pending req, was {}", now);
-        DEBUG_ASSERT(now>0, "pending == 0 ");
+        DEBUG_ASSERT(now > 0, "pending == 0 ");
     }
 };
 
