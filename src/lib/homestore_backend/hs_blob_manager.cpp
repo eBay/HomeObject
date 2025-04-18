@@ -9,8 +9,8 @@
 
 SISL_LOGGING_DECL(blobmgr)
 
-#define BLOG(level, trace_id, shard_id, blob_id, msg, ...)                                                                       \
-    LOG##level##MOD(blobmgr, "[traceID={},shardID=0x{:x},pg={},shard=0x{:x},blob={}] " msg, trace_id, shard_id,                    \
+#define BLOG(level, trace_id, shard_id, blob_id, msg, ...)                                                             \
+    LOG##level##MOD(blobmgr, "[traceID={},shardID=0x{:x},pg={},shard=0x{:x},blob={}] " msg, trace_id, shard_id,        \
                     (shard_id >> homeobject::shard_width), (shard_id & homeobject::shard_mask), blob_id,               \
                     ##__VA_ARGS__)
 
@@ -183,19 +183,20 @@ BlobManager::AsyncResult< blob_id_t > HSHomeObject::_put_blob(ShardInfo const& s
           req->blob_header()->to_string(), req->data_sgs_string());
 
     repl_dev->async_alloc_write(req->cheader_buf(), req->ckey_buf(), req->data_sgs(), req, tid);
-    return req->result().deferValue([this, req, repl_dev, tid](const auto& result) -> BlobManager::AsyncResult< blob_id_t > {
-        if (result.hasError()) {
-            auto err = result.error();
-            if (err.getCode() == BlobErrorCode::NOT_LEADER) { err.current_leader = repl_dev->get_leader_id(); }
+    return req->result().deferValue(
+        [this, req, repl_dev, tid](const auto& result) -> BlobManager::AsyncResult< blob_id_t > {
+            if (result.hasError()) {
+                auto err = result.error();
+                if (err.getCode() == BlobErrorCode::NOT_LEADER) { err.current_leader = repl_dev->get_leader_id(); }
+                decr_pending_request_num();
+                return folly::makeUnexpected(err);
+            }
+            auto blob_info = result.value();
+            BLOGD(tid, blob_info.shard_id, blob_info.blob_id, "Blob Put request: Put blob success blkid={}",
+                  blob_info.pbas.to_string());
             decr_pending_request_num();
-            return folly::makeUnexpected(err);
-        }
-        auto blob_info = result.value();
-        BLOGD(tid, blob_info.shard_id, blob_info.blob_id, "Blob Put request: Put blob success blkid={}",
-              blob_info.pbas.to_string());
-        decr_pending_request_num();
-        return blob_info.blob_id;
-    });
+            return blob_info.blob_id;
+        });
 }
 
 bool HSHomeObject::local_add_blob_info(pg_id_t const pg_id, BlobInfo const& blob_info, trace_id_t tid) {
@@ -209,7 +210,8 @@ bool HSHomeObject::local_add_blob_info(pg_id_t const pg_id, BlobInfo const& blob
     BLOGT(tid, blob_info.shard_id, blob_info.blob_id, "blob put commit, exist_already={}, status={}, pbas={}",
           exist_already, status, blob_info.pbas.to_string());
     if (status != homestore::btree_status_t::success) {
-        BLOGE(tid, blob_info.shard_id, blob_info.blob_id, "Failed to insert into index table, err {}", enum_name(status));
+        BLOGE(tid, blob_info.shard_id, blob_info.blob_id, "Failed to insert into index table, err {}",
+              enum_name(status));
         return false;
     }
     if (!exist_already) {
@@ -272,7 +274,7 @@ void HSHomeObject::on_blob_put_commit(int64_t lsn, sisl::blob const& header, sis
 BlobManager::AsyncResult< Blob > HSHomeObject::_get_blob(ShardInfo const& shard, blob_id_t blob_id, uint64_t req_offset,
                                                          uint64_t req_len) const {
     if (is_shutting_down()) {
-        LOGI("service is being shut down");
+        LOGI("service is being shutdown");
         return folly::makeUnexpected(BlobErrorCode::SHUTTING_DOWN);
     }
     incr_pending_request_num();
@@ -308,7 +310,8 @@ BlobManager::AsyncResult< Blob > HSHomeObject::_get_blob(ShardInfo const& shard,
 BlobManager::AsyncResult< Blob > HSHomeObject::_get_blob_data(const shared< homestore::ReplDev >& repl_dev,
                                                               shard_id_t shard_id, blob_id_t blob_id,
                                                               uint64_t req_offset, uint64_t req_len,
-                                                              const homestore::MultiBlkId& blkid, trace_id_t tid) const {
+                                                              const homestore::MultiBlkId& blkid,
+                                                              trace_id_t tid) const {
     auto const total_size = blkid.blk_count() * repl_dev->get_blk_size();
     sisl::io_blob_safe read_buf{total_size, io_align};
 
@@ -316,8 +319,7 @@ BlobManager::AsyncResult< Blob > HSHomeObject::_get_blob_data(const shared< home
     sgs.size = total_size;
     sgs.iovs.emplace_back(iovec{.iov_base = read_buf.bytes(), .iov_len = read_buf.size()});
 
-    BLOGD(tid, shard_id, blob_id, "Reading from blkid={} to buf={}", blkid.to_string(),
-          (void*)read_buf.bytes());
+    BLOGD(tid, shard_id, blob_id, "Reading from blkid={} to buf={}", blkid.to_string(), (void*)read_buf.bytes());
     return repl_dev->async_read(blkid, sgs, total_size)
         .thenValue([this, tid, blob_id, shard_id, req_len, req_offset, blkid, repl_dev,
                     read_buf = std::move(read_buf)](auto&& result) mutable -> BlobManager::AsyncResult< Blob > {
@@ -455,13 +457,13 @@ BlobManager::NullAsyncResult HSHomeObject::_del_blob(ShardInfo const& shard, blo
           repl_dev->group_id(), shard.id, blob_id);
 
     if (!repl_dev->is_leader()) {
-        BLOGW(tid, shard.id, blob_id,"failed to del blob, not leader");
+        BLOGW(tid, shard.id, blob_id, "failed to del blob, not leader");
         decr_pending_request_num();
         return folly::makeUnexpected(BlobError(BlobErrorCode::NOT_LEADER, repl_dev->get_leader_id()));
     }
 
     if (!repl_dev->is_ready_for_traffic()) {
-        BLOGW(tid, shard.id, blob_id,"failed to del blob, not ready for traffic");
+        BLOGW(tid, shard.id, blob_id, "failed to del blob, not ready for traffic");
         decr_pending_request_num();
         return folly::makeUnexpected(BlobError(BlobErrorCode::RETRY_REQUEST));
     }
@@ -480,18 +482,19 @@ BlobManager::NullAsyncResult HSHomeObject::_del_blob(ShardInfo const& shard, blo
     std::memcpy(req->key_buf().bytes(), &blob_id, sizeof(blob_id_t));
 
     repl_dev->async_alloc_write(req->cheader_buf(), req->ckey_buf(), sisl::sg_list{}, req, tid);
-    return req->result().deferValue([this, repl_dev, tid](const auto& result) -> folly::Expected< folly::Unit, BlobError > {
-        if (result.hasError()) {
-            auto err = result.error();
-            if (err.getCode() == BlobErrorCode::NOT_LEADER) { err.current_leader = repl_dev->get_leader_id(); }
+    return req->result().deferValue(
+        [this, repl_dev, tid](const auto& result) -> folly::Expected< folly::Unit, BlobError > {
+            if (result.hasError()) {
+                auto err = result.error();
+                if (err.getCode() == BlobErrorCode::NOT_LEADER) { err.current_leader = repl_dev->get_leader_id(); }
+                decr_pending_request_num();
+                return folly::makeUnexpected(err);
+            }
+            auto blob_info = result.value();
+            BLOGT(tid, blob_info.shard_id, blob_info.blob_id, "Delete blob successful");
             decr_pending_request_num();
-            return folly::makeUnexpected(err);
-        }
-        auto blob_info = result.value();
-        BLOGT(tid, blob_info.shard_id, blob_info.blob_id, "Delete blob successful");
-        decr_pending_request_num();
-        return folly::Unit();
-    });
+            return folly::Unit();
+        });
 }
 
 void HSHomeObject::on_blob_del_commit(int64_t lsn, sisl::blob const& header, sisl::blob const& key,
