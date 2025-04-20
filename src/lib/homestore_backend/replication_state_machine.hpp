@@ -2,6 +2,8 @@
 
 #include <folly/futures/Future.h>
 #include <homestore/replication/repl_dev.h>
+#include <homestore/replication/repl_decls.h>
+#include <homestore/blk.h>
 #include "hs_homeobject.hpp"
 #include "replication_message.hpp"
 
@@ -187,9 +189,19 @@ public:
                             std::shared_ptr< homestore::snapshot_obj > snp_obj) override;
     void free_user_snp_ctx(void*& user_snp_ctx) override;
 
+    /// @brief ask upper layer to decide which data should be returned.
+    // @param header - header of the log entry.
+    // @param blkid - original blkid of the log entry
+    // @param sgs - sgs to be filled with data
+    // @param lsn - lsn of the log entry
     folly::Future< std::error_code > on_fetch_data(const int64_t lsn, const sisl::blob& header,
                                                    const homestore::MultiBlkId& local_blk_id,
                                                    sisl::sg_list& sgs) override;
+
+    /// @brief ask upper layer to handle no_space_left event
+    // @param lsn - on which repl_lsn no_space_left happened
+    // @param chunk_id - on which chunk no_space_left happened
+    void on_no_space_left(homestore::repl_lsn_t lsn, homestore::chunk_num_t chunk_id) override;
 
 private:
     HSHomeObject* home_object_{nullptr};
@@ -203,6 +215,24 @@ private:
     void set_snapshot_context(std::shared_ptr< homestore::snapshot_context > context);
 
     bool validate_blob(shard_id_t shard_id, blob_id_t blob_id, void* data, size_t size) const;
+
+    /* no space left error handling*/
+private:
+    // this is used to track the latest no_space_left error. It means after we commit to lsn, we have to start handling
+    // no_space_left for the chunk(chunk_id)
+    struct no_space_left_error_info {
+        homestore::repl_lsn_t lsn{std::numeric_limits< homestore::repl_lsn_t >::max()};
+        homestore::chunk_num_t chunk_id{0};
+        mutable std::shared_mutex mutex;
+    } m_no_space_left_error_info;
+
+    void set_no_space_left_error_info(homestore::repl_lsn_t lsn, homestore::chunk_num_t chunk_id);
+
+    void reset_no_space_left_error_info();
+
+    std::pair< homestore::repl_lsn_t, homestore::chunk_num_t > get_no_space_left_error_info() const;
+
+    void handle_no_space_left(homestore ::repl_lsn_t lsn, homestore ::chunk_num_t chunk_id);
 };
 
 } // namespace homeobject

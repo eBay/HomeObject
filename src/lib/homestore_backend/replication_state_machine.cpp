@@ -39,6 +39,36 @@ void ReplicationStateMachine::on_commit(int64_t lsn, const sisl::blob& header, c
         break;
     }
     }
+
+    // handle no_space_left error if we have any
+    const auto [target_lsn, chunk_id] = get_no_space_left_error_info();
+    if (std::numeric_limits< homestore::repl_lsn_t >::max() == target_lsn) {
+        // no pending no_space_left error to handle
+        return;
+    }
+
+    RELEASE_ASSERT(target_lsn >= lsn,
+                   "the lsn of no_space_left_error_info should be greater than or equal to the lsn of the "
+                   "committed rreq. "
+                   "current no_space_left_error_info lsn={}, committed rreq lsn={}",
+                   target_lsn, lsn);
+
+    if (repl_dev()->is_leader()) {
+        // no need to handle stale no_space_left as a leader, since that log(casuing no_space_left) is not in the
+        // log store, and will not be committed.
+        LOGT("I am leader, reset no_space_left_error_info(lsn={}, chunk_id={}) after lsn={} is commited", target_lsn,
+             chunk_id, lsn);
+        reset_no_space_left_error_info();
+        return;
+    }
+
+    if (target_lsn == lsn) {
+        // if I am follower,  check if there is pending no_space_left error to be handled. only follower will handle
+        // this
+        LOGT("handle no_space_left_error_info, lsn={}, chunk_id={}", lsn, chunk_id);
+        handle_no_space_left(lsn, chunk_id);
+        reset_no_space_left_error_info();
+    }
 }
 
 bool ReplicationStateMachine::on_pre_commit(int64_t lsn, sisl::blob const& header, sisl::blob const& key,
@@ -768,4 +798,88 @@ void HSHomeObject::on_snp_ctx_meta_blk_found(homestore::meta_blk* mblk, sisl::by
 void HSHomeObject::on_snp_ctx_meta_blk_recover_completed(bool success) {
     LOGI("Snapshot context meta blk recover completed");
 }
+
+// on_no_space_left will be called in raft channel, which will blocking new logs to come in.
+// here, we need to check if all the appended logs have been already committed.
+
+// if yes, we can guarantee all the index entry of all the logs have already been written to pg index table(which is
+// used by gc thread to identify valid blobs), so we can handle the no_space_left error directly.
+
+// if not, we need to set an no_space_left error info and wait for the commit thread to handle this error after the
+// lsn-1 is committed.
+
+void ReplicationStateMachine::on_no_space_left(homestore::repl_lsn_t lsn, homestore::chunk_num_t chunk_id) {
+    LOGD("got no_space_left error at lsn={}, chunk_id={}", lsn, chunk_id);
+
+    // we need to pause statemachin here before we check and compare last_append_lsn and last_commit_lsn, since there is
+    // very corner case that when we do this, the last_append_lsn is being committed. for example, last_append_lsn is 10
+    // and last_commit_lsn is 9,  so we will set an erro info and wait for the commit thread to handle it after lsn 10
+    // is committed. but lsn 10 is probably being committed now, if the commit is completed after the comparation but
+    // before we set the error info, then commit thread will never handle the error info, since all the appended log
+    // have been committed and new more new logs can be appended, so on_commit will never be trigger again.
+    repl_dev()->pause_statemachine();
+
+    // last_append_lsn here means the raft_lsn of the last log in logstore.
+    const auto last_append_lsn = repl_dev()->get_last_append_lsn();
+    const auto last_commit_lsn = repl_dev()->get_last_commit_lsn();
+    LOGD("last_append_lsn={}, last_commit_lsn={}", last_append_lsn, last_commit_lsn);
+    if (last_append_lsn == last_commit_lsn) {
+        // if last_append_lsn == last_commit_lsn, it means all the logs have been committed, so we have to handle it
+        // here, since on_commit will never be triggered from now on.
+        LOGD("all the committed logs have been committed, handle no_space_left directly!");
+        handle_no_space_left(lsn, chunk_id);
+    } else {
+        const auto [error_lsn, error_chunk_id] = get_no_space_left_error_info();
+        if (lsn - 1 < error_lsn) {
+            /*set a new error info or overwrite an existing error info*/
+            // we wait for the commit thread to handle this error after lsn - 1 is committed.
+            LOGD("wait for the commit thread to handle no_space_left error after lsn {} is committed, "
+                 "last_append_lsn {}, last_commit_lsn {}",
+                 lsn - 1, last_append_lsn, last_commit_lsn);
+            set_no_space_left_error_info(lsn - 1, error_chunk_id);
+        } else {
+            LOGD("got no_space_left error but my expected lsn {} is larger than existing error info lsn {}, "
+                 "ignore it!",
+                 lsn - 1, error_lsn);
+        }
+    }
+
+    repl_dev()->resume_statemachine();
+}
+
+void ReplicationStateMachine::set_no_space_left_error_info(homestore::repl_lsn_t lsn, homestore::chunk_num_t chunk_id) {
+    std::unique_lock lk(m_no_space_left_error_info.mutex);
+    m_no_space_left_error_info.lsn = lsn;
+    m_no_space_left_error_info.chunk_id = chunk_id;
+}
+
+void ReplicationStateMachine::reset_no_space_left_error_info() {
+    std::unique_lock lk(m_no_space_left_error_info.mutex);
+    m_no_space_left_error_info.lsn = std::numeric_limits< homestore::repl_lsn_t >::max();
+    m_no_space_left_error_info.chunk_id = 0;
+}
+
+std::pair< homestore::repl_lsn_t, homestore::chunk_num_t >
+ReplicationStateMachine::get_no_space_left_error_info() const {
+    std::shared_lock lk(m_no_space_left_error_info.mutex);
+    return {m_no_space_left_error_info.lsn, m_no_space_left_error_info.chunk_id};
+}
+
+void ReplicationStateMachine::handle_no_space_left(homestore::repl_lsn_t lsn, homestore::chunk_num_t chunk_id) {
+    LOGW("start handling no_space_left error for chunk_id={} , lsn={}", chunk_id, lsn);
+    // 1 drain all the pending requests and refuse later coming new requests for repl_dev, so that no new block can be
+    // allocated from now on.
+    repl_dev()->quiesce_reqs();
+
+    // 2 clear all the in-memeory rreqs that alrady allocated blocks on the chunk.
+    repl_dev()->clear_chunk_req(chunk_id);
+
+    // 3 handling this error in the homeobject, do what ever you want.
+    // for homeobject, we will submit an emergent gc task to gc manager
+    // gc->summit_emergent_gc_task().wait();
+
+    // 4 start accepting new requests again.
+    repl_dev()->resume_accepting_reqs();
+}
+
 } // namespace homeobject
