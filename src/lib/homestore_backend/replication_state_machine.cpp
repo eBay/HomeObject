@@ -11,8 +11,11 @@
 
 namespace homeobject {
 void ReplicationStateMachine::on_commit(int64_t lsn, const sisl::blob& header, const sisl::blob& key,
-                                        const homestore::MultiBlkId& pbas, cintrusive< homestore::repl_req_ctx >& ctx) {
+                                        const std::vector< homestore::MultiBlkId >& pbas,
+                                        cintrusive< homestore::repl_req_ctx >& ctx) {
     const ReplicationMessageHeader* msg_header = r_cast< const ReplicationMessageHeader* >(header.cbytes());
+    RELEASE_ASSERT_EQ(pbas.size(), 1, "Invalid blklist size");
+
     LOGT("applying raft log commit with lsn={}, msg type={}", lsn, msg_header->msg_type);
     switch (msg_header->msg_type) {
     case ReplicationMessageType::CREATE_PG_MSG: {
@@ -21,12 +24,12 @@ void ReplicationStateMachine::on_commit(int64_t lsn, const sisl::blob& header, c
     }
     case ReplicationMessageType::CREATE_SHARD_MSG:
     case ReplicationMessageType::SEAL_SHARD_MSG: {
-        home_object_->on_shard_message_commit(lsn, header, pbas, repl_dev(), ctx);
+        home_object_->on_shard_message_commit(lsn, header, pbas[0], repl_dev(), ctx);
         break;
     }
 
     case ReplicationMessageType::PUT_BLOB_MSG: {
-        home_object_->on_blob_put_commit(lsn, header, key, pbas, ctx);
+        home_object_->on_blob_put_commit(lsn, header, key, pbas[0], ctx);
         break;
     }
     case ReplicationMessageType::DEL_BLOB_MSG:
@@ -578,9 +581,9 @@ folly::Future< std::error_code > ReplicationStateMachine::on_fetch_data(const in
                 // io error
                 if (err) throw std::system_error(err);
 
-                // folly future has no machenism to bypass the later thenValue in the then value chain. so for all the
-                // case that no need to schedule the later async_read, we throw a system_error with no error code to
-                // bypass the next thenValue.
+            // folly future has no machenism to bypass the later thenValue in the then value chain. so for all the
+            // case that no need to schedule the later async_read, we throw a system_error with no error code to
+            // bypass the next thenValue.
 #ifdef _PRERELEASE
                 if (iomgr_flip::instance()->test_flip("local_blk_data_invalid")) {
                     LOGI("Simulating forcing to read by indextable");
