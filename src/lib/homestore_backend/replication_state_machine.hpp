@@ -104,6 +104,21 @@ public:
                    std::vector< homestore::MultiBlkId > const& blkids,
                    cintrusive< homestore::repl_req_ctx >& ctx) override;
 
+    /// @brief Called when the log entry has been committed in the replica set.
+    ///
+    /// This function is called from a dedicated commit thread which is different from the original thread calling
+    /// replica_set::write(). There is only one commit thread, and lsn is guaranteed to be monotonically increasing.
+    ///
+    /// @param lsn - The log sequence number
+    /// @param header - Header originally passed with replica_set::write() api
+    /// @param key - Key originally passed with replica_set::write() api
+    /// @param blkids - List of independent blkids where data is written to the storage engine.
+    /// @param ctx - Context passed as part of the replica_set::write() api
+    ///
+    virtual void on_commit(int64_t lsn, sisl::blob const& header, sisl::blob const& key,
+                           std::vector< homestore::MultiBlkId > const& blkids,
+                           cintrusive< homestore::repl_req_ctx >& ctx) override;
+
     /// @brief Called when the log entry has been received by the replica dev.
     ///
     /// On recovery, this is called from a random worker thread before the raft server is started. It is
@@ -221,7 +236,7 @@ private:
     // this is used to track the latest no_space_left error. It means after we commit to lsn, we have to start handling
     // no_space_left for the chunk(chunk_id)
     struct no_space_left_error_info {
-        homestore::repl_lsn_t lsn{std::numeric_limits< homestore::repl_lsn_t >::max()};
+        homestore::repl_lsn_t wait_commit_lsn{std::numeric_limits< homestore::repl_lsn_t >::max()};
         homestore::chunk_num_t chunk_id{0};
         mutable std::shared_mutex mutex;
     } m_no_space_left_error_info;

@@ -10,6 +10,13 @@
 #include "hs_homeobject.hpp"
 
 namespace homeobject {
+void ReplicationStateMachine::on_commit(int64_t lsn, sisl::blob const& header, sisl::blob const& key,
+                                        std::vector< homestore::MultiBlkId > const& blkids,
+                                        cintrusive< homestore::repl_req_ctx >& ctx) {
+    // TODO::implement this function if necessary.
+    LOGI("no support yet! to be implemented ", lsn);
+}
+
 void ReplicationStateMachine::on_commit(int64_t lsn, const sisl::blob& header, const sisl::blob& key,
                                         const std::vector< homestore::MultiBlkId >& pbas,
                                         cintrusive< homestore::repl_req_ctx >& ctx) {
@@ -65,7 +72,7 @@ void ReplicationStateMachine::on_commit(int64_t lsn, const sisl::blob& header, c
     if (target_lsn == lsn) {
         // if I am follower,  check if there is pending no_space_left error to be handled. only follower will handle
         // this
-        LOGT("handle no_space_left_error_info, lsn={}, chunk_id={}", lsn, chunk_id);
+        LOGD("handle no_space_left_error_info, lsn={}, chunk_id={}", lsn, chunk_id);
         handle_no_space_left(lsn, chunk_id);
         reset_no_space_left_error_info();
     }
@@ -132,6 +139,14 @@ void ReplicationStateMachine::on_rollback(int64_t lsn, sisl::blob const& header,
     default: {
         break;
     }
+    }
+
+    // cancel no_space_left_error_info if matches
+    const auto [target_lsn, chunk_id] = get_no_space_left_error_info();
+    if (target_lsn >= lsn) {
+        LOGD("cancel no_space_left_error_info, wait_commit_lsn={}, chunk_id={}, currrent lsn={}", target_lsn, chunk_id,
+             lsn);
+        reset_no_space_left_error_info();
     }
 }
 
@@ -849,20 +864,20 @@ void ReplicationStateMachine::on_no_space_left(homestore::repl_lsn_t lsn, homest
 
 void ReplicationStateMachine::set_no_space_left_error_info(homestore::repl_lsn_t lsn, homestore::chunk_num_t chunk_id) {
     std::unique_lock lk(m_no_space_left_error_info.mutex);
-    m_no_space_left_error_info.lsn = lsn;
+    m_no_space_left_error_info.wait_commit_lsn = lsn;
     m_no_space_left_error_info.chunk_id = chunk_id;
 }
 
 void ReplicationStateMachine::reset_no_space_left_error_info() {
     std::unique_lock lk(m_no_space_left_error_info.mutex);
-    m_no_space_left_error_info.lsn = std::numeric_limits< homestore::repl_lsn_t >::max();
+    m_no_space_left_error_info.wait_commit_lsn = std::numeric_limits< homestore::repl_lsn_t >::max();
     m_no_space_left_error_info.chunk_id = 0;
 }
 
 std::pair< homestore::repl_lsn_t, homestore::chunk_num_t >
 ReplicationStateMachine::get_no_space_left_error_info() const {
     std::shared_lock lk(m_no_space_left_error_info.mutex);
-    return {m_no_space_left_error_info.lsn, m_no_space_left_error_info.chunk_id};
+    return {m_no_space_left_error_info.wait_commit_lsn, m_no_space_left_error_info.chunk_id};
 }
 
 void ReplicationStateMachine::handle_no_space_left(homestore::repl_lsn_t lsn, homestore::chunk_num_t chunk_id) {
