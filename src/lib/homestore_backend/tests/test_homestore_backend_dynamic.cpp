@@ -487,6 +487,10 @@ void HomeObjectFixture::RestartLeaderDuringBaselineResyncUsingSigKill(uint64_t f
     auto last_shard = pg_shard_id_vec[pg_id].back();
     // put one more blob in every shard to test incremental resync.
     auto last_blob = num_blobs_per_shard * num_shards_per_pg + num_shards_per_pg - 1;
+
+    auto out_member_id = g_helper->replica_id(num_replicas - 1);
+    auto in_member_id = g_helper->replica_id(num_replicas); /*spare replica*/
+
     if (!is_restart) {
         auto kill_until_shard = pg_shard_id_vec[pg_id].back();
         auto kill_until_blob = num_blobs_per_shard * num_shards_per_pg - 1;
@@ -529,8 +533,6 @@ void HomeObjectFixture::RestartLeaderDuringBaselineResyncUsingSigKill(uint64_t f
         g_helper->sync();
 
         // ========Stage 2: replace a member========
-        auto out_member_id = g_helper->replica_id(num_replicas - 1);
-        auto in_member_id = g_helper->replica_id(num_replicas); /*spare replica*/
 
         run_on_pg_leader(pg_id, [&]() {
             auto r = _obj_inst->pg_manager()
@@ -572,31 +574,39 @@ void HomeObjectFixture::RestartLeaderDuringBaselineResyncUsingSigKill(uint64_t f
             });
             spawn_thread.detach();
         }
-        LOGINFO("wait for new member restart")
+        LOGINFO("wait for leader restart");
+        // SyncPoint 2: other: wait leader restart
         g_helper->sync();
-        if (out_member_id != g_helper->my_replica_id()) {
-            // make sure there is a leader
-            get_leader_id(pg_id);
-        }
-        LOGINFO("going to put more blobs")
-        pg_blob_id[pg_id] = num_blobs_per_shard * num_shards_per_pg;
-        put_blobs(pg_shard_id_vec, 1, pg_blob_id);
-        if (out_member_id != g_helper->my_replica_id()) { wait_for_blob(last_shard, last_blob); }
+    } else { // is_restart == true, path for restarted leader
+        // SyncPoint 2: Leader: restarted
+        // The sync() was called in Setup().
+        LOGINFO("leader restarted");
+    }
+    if (out_member_id != g_helper->my_replica_id()) {
+        // make sure there is a leader
+        get_leader_id(pg_id);
+    }
 
-        if (in_member_id == g_helper->my_replica_id()) {
-            run_if_in_pg(pg_id, [&]() {
-                LOGDEBUG("verify blobs");
-                // 1st round blobs
-                verify_get_blob(pg_shard_id_vec, num_blobs_per_shard, false, true);
-                // // 2nd round blobs
-                pg_blob_id[pg_id] = num_blobs_per_shard * num_shards_per_pg;
-                verify_get_blob(pg_shard_id_vec, 1, false, true, pg_blob_id);
-                verify_obj_count(1, num_shards_per_pg, num_blobs_per_shard + 1, false);
-            });
-        }
-    } else {
-        // sync for putting blobs
-        g_helper->sync();
+    if (initial_leader_replica_num == g_helper->replica_num()) {
+        LOGINFO("I was the previous leader, now my_id={}, leader_id={}", g_helper->my_replica_id(),
+                get_leader_id(pg_id));
+    }
+
+    LOGINFO("going to put more blobs")
+    pg_blob_id[pg_id] = num_blobs_per_shard * num_shards_per_pg;
+    put_blobs(pg_shard_id_vec, 1, pg_blob_id);
+    if (out_member_id != g_helper->my_replica_id()) { wait_for_blob(last_shard, last_blob); }
+
+    if (in_member_id == g_helper->my_replica_id()) {
+        run_if_in_pg(pg_id, [&]() {
+            LOGDEBUG("verify blobs");
+            // 1st round blobs
+            verify_get_blob(pg_shard_id_vec, num_blobs_per_shard, false, true);
+            // // 2nd round blobs
+            pg_blob_id[pg_id] = num_blobs_per_shard * num_shards_per_pg;
+            verify_get_blob(pg_shard_id_vec, 1, false, true, pg_blob_id);
+            verify_obj_count(1, num_shards_per_pg, num_blobs_per_shard + 1, false);
+        });
     }
     LOGINFO("wait for all blobs replicated to the new member")
     // SyncPoint 3: waiting for all the blobs replicated to the new member
