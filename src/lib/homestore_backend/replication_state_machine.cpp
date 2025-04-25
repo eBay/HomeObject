@@ -10,12 +10,6 @@
 #include "hs_homeobject.hpp"
 
 namespace homeobject {
-void ReplicationStateMachine::on_commit(int64_t lsn, sisl::blob const& header, sisl::blob const& key,
-                                        std::vector< homestore::MultiBlkId > const& blkids,
-                                        cintrusive< homestore::repl_req_ctx >& ctx) {
-    // TODO::implement this function if necessary.
-    LOGI("no support yet! to be implemented ", lsn);
-}
 
 void ReplicationStateMachine::on_commit(int64_t lsn, const sisl::blob& header, const sisl::blob& key,
                                         const std::vector< homestore::MultiBlkId >& pbas,
@@ -70,8 +64,7 @@ void ReplicationStateMachine::on_commit(int64_t lsn, const sisl::blob& header, c
     }
 
     if (target_lsn == lsn) {
-        // if I am follower,  check if there is pending no_space_left error to be handled. only follower will handle
-        // this
+        // check if there is pending no_space_left error to be handled. only follower will handle this
         LOGD("handle no_space_left_error_info, lsn={}, chunk_id={}", lsn, chunk_id);
         handle_no_space_left(lsn, chunk_id);
         reset_no_space_left_error_info();
@@ -626,9 +619,9 @@ folly::Future< std::error_code > ReplicationStateMachine::on_fetch_data(const in
                 // io error
                 if (err) throw std::system_error(err);
 
-            // folly future has no machenism to bypass the later thenValue in the then value chain. so for all the
-            // case that no need to schedule the later async_read, we throw a system_error with no error code to
-            // bypass the next thenValue.
+                // folly future has no machenism to bypass the later thenValue in the then value chain. so for all the
+                // case that no need to schedule the later async_read, we throw a system_error with no error code to
+                // bypass the next thenValue.
 #ifdef _PRERELEASE
                 if (iomgr_flip::instance()->test_flip("local_blk_data_invalid")) {
                     LOGI("Simulating forcing to read by indextable");
@@ -834,6 +827,15 @@ void ReplicationStateMachine::on_no_space_left(homestore::repl_lsn_t lsn, homest
     // have been committed and new more new logs can be appended, so on_commit will never be trigger again.
     repl_dev()->pause_statemachine();
 
+    // basically, there are three cases:
+    //  1. if there is some appended logs that have not been committed, we need to set an error info and delegate
+    //  handle_no_space_left to on_commit.
+    //  2. if all the appended logs have been committed, but the lsn, which no_space_left is triggered, is exactly the
+    //  last_append_lsn + 1, we must handle_no_space_left inline.
+    //  3. if all the appended logs have been committed, but the lsn, which no_space_left is triggered, is larger than
+    //  last_append_lsn + 1, we can select anyone of both, handle_no_space_left inline or set an error info or delegate
+    //  it to on_commit.
+
     // last_append_lsn here means the raft_lsn of the last log in logstore.
     const auto last_append_lsn = repl_dev()->get_last_append_lsn();
     const auto last_commit_lsn = repl_dev()->get_last_commit_lsn();
@@ -893,8 +895,11 @@ void ReplicationStateMachine::handle_no_space_left(homestore::repl_lsn_t lsn, ho
     // for homeobject, we will submit an emergent gc task to gc manager
     // gc->summit_emergent_gc_task().wait();
 
-    // 4 start accepting new requests again.
+    //  4 start accepting new requests again.
     repl_dev()->resume_accepting_reqs();
+
+    // TODO:: add step4 and reset_no_space_left_error_info into the thenValue of the returned future of
+    // summit_emergent_gc_task() , so that it will not block in handle_no_space_left
 }
 
 } // namespace homeobject
