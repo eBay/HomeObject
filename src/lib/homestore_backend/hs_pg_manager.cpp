@@ -62,7 +62,8 @@ PGError toPgError(ReplServiceError const& e) {
     return *(static_cast< HSHomeObject::HS_PG const& >(pg).repl_dev_);
 }
 
-PGManager::NullAsyncResult HSHomeObject::_create_pg(PGInfo&& pg_info, std::set< peer_id_t > const& peers) {
+PGManager::NullAsyncResult HSHomeObject::_create_pg(PGInfo&& pg_info, std::set< peer_id_t > const& peers,
+                                                    trace_id_t tid) {
     if (is_shutting_down()) {
         LOGI("service is being shut down");
         return folly::makeUnexpected(PGError::SHUTTING_DOWN);
@@ -89,7 +90,6 @@ PGManager::NullAsyncResult HSHomeObject::_create_pg(PGInfo&& pg_info, std::set< 
         decr_pending_request_num();
         return folly::makeUnexpected(PGError::NO_SPACE_LEFT);
     }
-    trace_id_t tid = generateRandomTraceId();
     pg_info.chunk_size = chunk_size;
     pg_info.replica_set_uuid = boost::uuids::random_generator()();
     const auto repl_dev_group_id = pg_info.replica_set_uuid;
@@ -154,7 +154,7 @@ PGManager::NullAsyncResult HSHomeObject::do_create_pg(cshared< homestore::ReplDe
 #endif
 
     // replicate this create pg message to all raft members of this group
-    repl_dev->async_alloc_write(req->header_buf(), sisl::blob{}, sisl::sg_list{}, req, tid);
+    repl_dev->async_alloc_write(req->header_buf(), sisl::blob{}, sisl::sg_list{}, req, false/* part_of_batch */, tid);
     return req->result().deferValue([req](auto const& e) -> PGManager::NullAsyncResult {
         if (!e) { return folly::makeUnexpected(e.error()); }
         return folly::Unit();
@@ -250,9 +250,10 @@ void HSHomeObject::on_create_pg_message_commit(int64_t lsn, sisl::blob const& he
 }
 
 PGManager::NullAsyncResult HSHomeObject::_replace_member(pg_id_t pg_id, peer_id_t const& old_member_id,
-                                                         PGMember const& new_member, uint32_t commit_quorum) {
+                                                         PGMember const& new_member, uint32_t commit_quorum,
+                                                         trace_id_t tid) {
     if (is_shutting_down()) {
-        LOGI("service is being shut down");
+        LOGI("service is being shut down, trace_id={}", tid);
         return folly::makeUnexpected(PGError::SHUTTING_DOWN);
     }
     incr_pending_request_num();
@@ -271,8 +272,8 @@ PGManager::NullAsyncResult HSHomeObject::_replace_member(pg_id_t pg_id, peer_id_
     }
     auto group_id = repl_dev.group_id();
 
-    LOGI("PG replace member initated member_out={} member_in={}", boost::uuids::to_string(old_member_id),
-         boost::uuids::to_string(new_member.id));
+    LOGI("PG replace member initated member_out={} member_in={} trace_id={}", boost::uuids::to_string(old_member_id),
+         boost::uuids::to_string(new_member.id), tid);
 
     replica_member_info in_replica, out_replica;
     out_replica.id = old_member_id;
@@ -282,7 +283,7 @@ PGManager::NullAsyncResult HSHomeObject::_replace_member(pg_id_t pg_id, peer_id_
     in_replica.name[new_member.name.size()] = '\0';
 
     return hs_repl_service()
-        .replace_member(group_id, out_replica, in_replica, commit_quorum)
+        .replace_member(group_id, out_replica, in_replica, commit_quorum, tid)
         .via(executor_)
         .thenValue([this](auto&& v) mutable -> PGManager::NullAsyncResult {
             decr_pending_request_num();

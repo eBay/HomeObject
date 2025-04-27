@@ -41,10 +41,10 @@ struct Blob {
 
 class BlobManager : public Manager< BlobError > {
 public:
-    virtual AsyncResult< blob_id_t > put(shard_id_t shard, Blob&&) = 0;
+    virtual AsyncResult< blob_id_t > put(shard_id_t shard, Blob&&, trace_id_t tid = 0) = 0;
     virtual AsyncResult< Blob > get(shard_id_t shard, blob_id_t const& blob, uint64_t off = 0,
-                                    uint64_t len = 0) const = 0;
-    virtual NullAsyncResult del(shard_id_t shard, blob_id_t const& blob) = 0;
+                                    uint64_t len = 0, trace_id_t tid = 0) const = 0;
+    virtual NullAsyncResult del(shard_id_t shard, blob_id_t const& blob, trace_id_t tid = 0) = 0;
 };
 
 } // namespace homeobject

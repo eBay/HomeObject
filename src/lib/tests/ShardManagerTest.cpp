@@ -54,7 +54,8 @@ TEST_F(TestFixture, SealShardNoShard) {
 
 TEST_F(TestFixture, SealShard) {
     for (auto i = 0; 2 > i; ++i) {
-        auto e = homeobj_->shard_manager()->seal_shard(_shard_1.id).get();
+        auto tid = homeobject::generateRandomTraceId();
+        auto e = homeobj_->shard_manager()->seal_shard(_shard_1.id, tid).get();
         ASSERT_TRUE(!!e);
         e.then([this](auto const& info) {
             EXPECT_TRUE(info.id == _shard_1.id);

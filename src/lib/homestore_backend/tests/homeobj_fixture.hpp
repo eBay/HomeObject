@@ -149,8 +149,9 @@ public:
         g_helper->sync();
         if (!am_i_in_pg(pg_id)) return {};
         // schedule create_shard only on leader
+        auto tid = generateRandomTraceId();
         run_on_pg_leader(pg_id, [&]() {
-            auto s = _obj_inst->shard_manager()->create_shard(pg_id, size_bytes).get();
+            auto s = _obj_inst->shard_manager()->create_shard(pg_id, size_bytes, tid).get();
             RELEASE_ASSERT(!!s, "failed to create shard");
             auto ret = s.value();
             g_helper->set_uint64_id(ret.id);
@@ -165,7 +166,7 @@ public:
         auto shard_id = g_helper->get_uint64_id();
 
         // all the members need to wait for shard creation to complete locally
-        while (!shard_exist(shard_id)) {
+        while (!shard_exist(shard_id, tid)) {
             // for leader, shard creation is done locally and will nor reach here. but for follower, we need to wait for
             // shard creation to complete locally
             std::this_thread::sleep_for(std::chrono::milliseconds(1000));
@@ -184,24 +185,25 @@ public:
         RELEASE_ASSERT(local_v_chunkID.has_value(), "failed to get shard v_chunk_id");
         RELEASE_ASSERT(leader_v_chunk_id == local_v_chunkID, "v_chunk_id supposed to be identical");
 
-        auto r = _obj_inst->shard_manager()->get_shard(shard_id).get();
+        auto r = _obj_inst->shard_manager()->get_shard(shard_id, tid).get();
         RELEASE_ASSERT(!!r, "failed to get shard {}", shard_id);
         return r.value();
     }
 
     ShardInfo seal_shard(shard_id_t shard_id) {
         g_helper->sync();
-        auto r = _obj_inst->shard_manager()->get_shard(shard_id).get();
+        auto tid = generateRandomTraceId();
+        auto r = _obj_inst->shard_manager()->get_shard(shard_id, tid).get();
         if (!r) return {};
         auto pg_id = r.value().placement_group;
 
         run_on_pg_leader(pg_id, [&]() {
-            auto s = _obj_inst->shard_manager()->seal_shard(shard_id).get();
+            auto s = _obj_inst->shard_manager()->seal_shard(shard_id, tid).get();
             RELEASE_ASSERT(!!s, "failed to seal shard");
         });
 
         while (true) {
-            auto r = _obj_inst->shard_manager()->get_shard(shard_id).get();
+            auto r = _obj_inst->shard_manager()->get_shard(shard_id, tid).get();
             RELEASE_ASSERT(!!r, "failed to get shard {}", shard_id);
             auto shard_info = r.value();
             if (shard_info.state == ShardInfo::State::SEALED) { return shard_info; }
@@ -213,12 +215,13 @@ public:
 
     void put_blob(shard_id_t shard_id, Blob&& blob, bool need_sync_before_start = true) {
         g_helper->sync();
-        auto r = _obj_inst->shard_manager()->get_shard(shard_id).get();
+        auto tid = generateRandomTraceId();
+        auto r = _obj_inst->shard_manager()->get_shard(shard_id, tid).get();
         if (!r) return;
         auto pg_id = r.value().placement_group;
 
         run_on_pg_leader(pg_id, [&]() {
-            auto b = _obj_inst->blob_manager()->put(shard_id, std::move(blob)).get();
+            auto b = _obj_inst->blob_manager()->put(shard_id, std::move(blob), tid).get();
             RELEASE_ASSERT(!!b, "failed to pub blob");
             g_helper->set_uint64_id(b.value());
         });
@@ -248,12 +251,15 @@ public:
                 for (uint64_t k = 0; k < num_blobs_per_shard; k++) {
                     run_on_pg_leader(pg_id, [&]() {
                         auto put_blob = build_blob(current_blob_id);
+                        auto tid = generateRandomTraceId();
 
-                        LOGINFO("Put blob pg={} shard {} blob {} size {} data {}", pg_id, shard_id, current_blob_id,
+                        LOGINFO("Put blob pg={} shard {} blob {} size {} data {} trace_id={}", pg_id, shard_id,
+                                current_blob_id,
                                 put_blob.body.size(),
-                                hex_bytes(put_blob.body.cbytes(), std::min(10u, put_blob.body.size())));
+                                hex_bytes(put_blob.body.cbytes(), std::min(10u, put_blob.body.size())),
+                                tid);
 
-                        auto b = _obj_inst->blob_manager()->put(shard_id, std::move(put_blob)).get();
+                        auto b = _obj_inst->blob_manager()->put(shard_id, std::move(put_blob), tid).get();
 
                         if (!b) {
                             LOGERROR("Failed to put blob pg={} shard {} error={}", pg_id, shard_id, b.error());
@@ -283,13 +289,14 @@ public:
 
     void del_blob(pg_id_t pg_id, shard_id_t shard_id, blob_id_t blob_id) {
         g_helper->sync();
+        auto tid = generateRandomTraceId();
         run_on_pg_leader(pg_id, [&]() {
-            auto g = _obj_inst->blob_manager()->del(shard_id, blob_id).get();
+            auto g = _obj_inst->blob_manager()->del(shard_id, blob_id, tid).get();
             ASSERT_TRUE(g);
-            LOGINFO("delete blob, pg={} shard {} blob {}", pg_id, shard_id, blob_id);
+            LOGINFO("delete blob, pg={} shard {} blob {} trace_id={}", pg_id, shard_id, blob_id, tid);
         });
         while (blob_exist(shard_id, blob_id)) {
-            LOGINFO("waiting for shard {} blob {} to be deleted locally", shard_id, blob_id);
+            LOGINFO("waiting for shard {} blob {} to be deleted locally, trace_id={}", shard_id, blob_id, tid);
             std::this_thread::sleep_for(std::chrono::milliseconds(1000));
         }
     }
@@ -305,7 +312,8 @@ public:
                 for (; current_blob_id < pg_blob_id[pg_id];) {
                     for (const auto& shard_id : shard_vec) {
                         for (uint64_t k = 0; k < num_blobs_per_shard; k++) {
-                            auto g = _obj_inst->blob_manager()->del(shard_id, current_blob_id).get();
+                            auto tid = generateRandomTraceId();
+                            auto g = _obj_inst->blob_manager()->del(shard_id, current_blob_id, tid).get();
                             ASSERT_TRUE(g);
                             LOGINFO("delete blob shard {} blob {}", shard_id, current_blob_id);
                             current_blob_id++;
@@ -335,7 +343,9 @@ public:
             if (pg_start_blob_id.find(pg_id) != pg_start_blob_id.end()) current_blob_id = pg_start_blob_id[pg_id];
             for (const auto& shard_id : shard_vec) {
                 for (uint64_t k = 0; k < num_blobs_per_shard; k++) {
-                    LOGDEBUG("going to verify blob pg={} shard {} blob {}", pg_id, shard_id, current_blob_id);
+                    auto tid = generateRandomTraceId();
+                    LOGDEBUG("going to verify blob pg={} shard {} blob {} trace_id={}",
+                             pg_id, shard_id, current_blob_id, tid);
                     auto blob = build_blob(current_blob_id);
                     len = blob.body.size();
                     if (use_random_offset) {
@@ -347,12 +357,12 @@ public:
                         if ((off + len) >= blob.body.size()) { len = blob.body.size() - off; }
                     }
 
-                    auto g = _obj_inst->blob_manager()->get(shard_id, current_blob_id, off, len).get();
+                    auto g = _obj_inst->blob_manager()->get(shard_id, current_blob_id, off, len, tid).get();
                     while (wait_when_not_exist && g.hasError() && g.error().code == BlobErrorCode::UNKNOWN_BLOB) {
                         LOGDEBUG("blob not exist at the moment, waiting for sync, shard {} blob {}", shard_id,
                                  current_blob_id);
                         wait_for_blob(shard_id, current_blob_id);
-                        g = _obj_inst->blob_manager()->get(shard_id, current_blob_id, off, len).get();
+                        g = _obj_inst->blob_manager()->get(shard_id, current_blob_id, off, len, tid).get();
                     }
                     ASSERT_TRUE(!!g) << "get blob fail, shard_id " << shard_id << " blob_id " << current_blob_id
                                      << " replica number " << g_helper->replica_num();
@@ -526,8 +536,8 @@ private:
         return std::find(pg_ids.begin(), pg_ids.end(), pg_id) != pg_ids.end();
     }
 
-    bool shard_exist(shard_id_t id) {
-        auto r = _obj_inst->shard_manager()->get_shard(id).get();
+    bool shard_exist(shard_id_t id, trace_id_t tid = 0) {
+        auto r = _obj_inst->shard_manager()->get_shard(id, tid).get();
         return !!r;
     }
 
