@@ -1,7 +1,8 @@
 #include "mem_homeobject.hpp"
 
 namespace homeobject {
-PGManager::NullAsyncResult MemoryHomeObject::_create_pg(PGInfo&& pg_info, std::set< peer_id_t > const&) {
+PGManager::NullAsyncResult MemoryHomeObject::_create_pg(PGInfo&& pg_info, std::set< peer_id_t > const&, trace_id_t tid) {
+    (void)tid;
     auto lg = std::scoped_lock(_pg_lock);
     auto [it1, _] = _pg_map.try_emplace(pg_info.id, std::make_unique< PG >(pg_info));
     RELEASE_ASSERT(_pg_map.end() != it1, "Unknown map insert error!");
@@ -9,7 +10,12 @@ PGManager::NullAsyncResult MemoryHomeObject::_create_pg(PGInfo&& pg_info, std::s
 }
 
 PGManager::NullAsyncResult MemoryHomeObject::_replace_member(pg_id_t id, peer_id_t const& old_member,
-                                                             PGMember const& new_member, uint32_t commit_quorum) {
+                                                             PGMember const& new_member, uint32_t commit_quorum,
+                                                             trace_id_t tid) {
+    (void)old_member;
+    (void)new_member;
+    (void)commit_quorum;
+    (void)tid;
     auto lg = std::shared_lock(_pg_lock);
     auto it = _pg_map.find(id);
     if (_pg_map.end() == it) {

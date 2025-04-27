@@ -17,7 +17,9 @@ namespace homeobject {
     } else
 
 // Write (move) Blob to new BlobExt on heap and Insert BlobExt to Index
-BlobManager::AsyncResult< blob_id_t > MemoryHomeObject::_put_blob(ShardInfo const& _shard, Blob&& _blob) {
+BlobManager::AsyncResult< blob_id_t > MemoryHomeObject::_put_blob(ShardInfo const& _shard, Blob&& _blob,
+                                                                  trace_id_t tid) {
+    (void)tid;
     WITH_SHARD
     blob_id_t new_blob_id;
     {
@@ -37,7 +39,10 @@ BlobManager::AsyncResult< blob_id_t > MemoryHomeObject::_put_blob(ShardInfo cons
 
 // Lookup BlobExt and duplicate underyling Blob for user; only *safe* because we defer GC.
 BlobManager::AsyncResult< Blob > MemoryHomeObject::_get_blob(ShardInfo const& _shard, blob_id_t _blob, uint64_t off,
-                                                             uint64_t len) const {
+                                                             uint64_t len, trace_id_t tid) const {
+    (void)off;
+    (void)len;
+    (void)tid;
     WITH_SHARD
     WITH_ROUTE(_blob)
     IF_BLOB_ALIVE { return blob_it->second.blob_->clone(); }
@@ -45,7 +50,8 @@ BlobManager::AsyncResult< Blob > MemoryHomeObject::_get_blob(ShardInfo const& _s
 }
 
 // Tombstone BlobExt entry
-BlobManager::NullAsyncResult MemoryHomeObject::_del_blob(ShardInfo const& _shard, blob_id_t _blob) {
+BlobManager::NullAsyncResult MemoryHomeObject::_del_blob(ShardInfo const& _shard, blob_id_t _blob, trace_id_t tid) {
+    (void)tid;
     WITH_SHARD
     WITH_ROUTE(_blob)
     IF_BLOB_ALIVE {

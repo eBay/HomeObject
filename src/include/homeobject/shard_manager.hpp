@@ -42,10 +42,10 @@ public:
     static uint64_t max_shard_size(); // Static function forces runtime evaluation.
     static uint64_t max_shard_num_in_pg();
 
-    virtual AsyncResult< ShardInfo > get_shard(shard_id_t id) const = 0;
-    virtual AsyncResult< InfoList > list_shards(pg_id_t id) const = 0;
-    virtual AsyncResult< ShardInfo > create_shard(pg_id_t pg_owner, uint64_t size_bytes) = 0;
-    virtual AsyncResult< ShardInfo > seal_shard(shard_id_t id) = 0;
+    virtual AsyncResult< ShardInfo > get_shard(shard_id_t id, trace_id_t tid = 0) const = 0;
+    virtual AsyncResult< InfoList > list_shards(pg_id_t id, trace_id_t tid = 0) const = 0;
+    virtual AsyncResult< ShardInfo > create_shard(pg_id_t pg_owner, uint64_t size_bytes, trace_id_t tid = 0) = 0;
+    virtual AsyncResult< ShardInfo > seal_shard(shard_id_t id, trace_id_t tid = 0) = 0;
 };
 
 } // namespace homeobject

@@ -105,7 +105,8 @@ ShardInfo HSHomeObject::deserialize_shard_info(const char* json_str, size_t str_
     return shard_info;
 }
 
-ShardManager::AsyncResult< ShardInfo > HSHomeObject::_create_shard(pg_id_t pg_owner, uint64_t size_bytes) {
+ShardManager::AsyncResult< ShardInfo > HSHomeObject::_create_shard(pg_id_t pg_owner, uint64_t size_bytes,
+                                                                   trace_id_t tid) {
 
     if (is_shutting_down()) {
         LOGI("service is being shut down");
@@ -138,7 +139,6 @@ ShardManager::AsyncResult< ShardInfo > HSHomeObject::_create_shard(pg_id_t pg_ow
         decr_pending_request_num();
         return folly::makeUnexpected(ShardError::RETRY_REQUEST);
     }
-    auto tid = generateRandomTraceId();
     auto new_shard_id = generate_new_shard_id(pg_owner);
     SLOGD(tid, new_shard_id, "Create shard request: pg={}, size={}", pg_owner, size_bytes);
     auto create_time = get_current_timestamp();
@@ -189,7 +189,7 @@ ShardManager::AsyncResult< ShardInfo > HSHomeObject::_create_shard(pg_id_t pg_ow
     req->add_data_sg(std::move(sb_blob));
 
     // replicate this create shard message to PG members;
-    repl_dev->async_alloc_write(req->cheader_buf(), sisl::blob{}, req->data_sgs(), req, tid);
+    repl_dev->async_alloc_write(req->cheader_buf(), sisl::blob{}, req->data_sgs(), req, false/* part_of_batch */, tid);
     return req->result().deferValue(
         [this, req, repl_dev, tid](const auto& result) -> ShardManager::AsyncResult< ShardInfo > {
             if (result.hasError()) {
@@ -206,7 +206,7 @@ ShardManager::AsyncResult< ShardInfo > HSHomeObject::_create_shard(pg_id_t pg_ow
         });
 }
 
-ShardManager::AsyncResult< ShardInfo > HSHomeObject::_seal_shard(ShardInfo const& info) {
+ShardManager::AsyncResult< ShardInfo > HSHomeObject::_seal_shard(ShardInfo const& info, trace_id_t tid) {
     if (is_shutting_down()) {
         LOGI("service is being shut down");
         return folly::makeUnexpected(ShardError::SHUTTING_DOWN);
@@ -215,7 +215,6 @@ ShardManager::AsyncResult< ShardInfo > HSHomeObject::_seal_shard(ShardInfo const
 
     auto pg_id = info.placement_group;
     auto shard_id = info.id;
-    auto tid = generateRandomTraceId();
     SLOGD(tid, shard_id, "Seal shard request: is_open={}", info.is_open());
     auto hs_pg = get_hs_pg(pg_id);
     if (!hs_pg) {
@@ -269,7 +268,7 @@ ShardManager::AsyncResult< ShardInfo > HSHomeObject::_seal_shard(ShardInfo const
     req->add_data_sg(std::move(sb_blob));
 
     // replicate this seal shard message to PG members;
-    repl_dev->async_alloc_write(req->cheader_buf(), sisl::blob{}, req->data_sgs(), req, tid);
+    repl_dev->async_alloc_write(req->cheader_buf(), sisl::blob{}, req->data_sgs(), req, false/* part_of_batch */, tid);
     return req->result().deferValue(
         [this, req, repl_dev, tid](const auto& result) -> ShardManager::AsyncResult< ShardInfo > {
             if (result.hasError()) {

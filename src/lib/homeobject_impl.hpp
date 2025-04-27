@@ -87,18 +87,20 @@ class HomeObjectImpl : public HomeObject,
                        public std::enable_shared_from_this< HomeObjectImpl > {
 
     /// Implementation defines these
-    virtual ShardManager::AsyncResult< ShardInfo > _create_shard(pg_id_t, uint64_t size_bytes) = 0;
-    virtual ShardManager::AsyncResult< ShardInfo > _seal_shard(ShardInfo const&) = 0;
+    virtual ShardManager::AsyncResult< ShardInfo > _create_shard(pg_id_t, uint64_t size_bytes, trace_id_t tid) = 0;
+    virtual ShardManager::AsyncResult< ShardInfo > _seal_shard(ShardInfo const&, trace_id_t tid) = 0;
 
-    virtual BlobManager::AsyncResult< blob_id_t > _put_blob(ShardInfo const&, Blob&&) = 0;
-    virtual BlobManager::AsyncResult< Blob > _get_blob(ShardInfo const&, blob_id_t, uint64_t off = 0,
-                                                       uint64_t len = 0) const = 0;
-    virtual BlobManager::NullAsyncResult _del_blob(ShardInfo const&, blob_id_t) = 0;
+    virtual BlobManager::AsyncResult< blob_id_t > _put_blob(ShardInfo const&, Blob&&, trace_id_t tid) = 0;
+    virtual BlobManager::AsyncResult< Blob > _get_blob(ShardInfo const&, blob_id_t, uint64_t off, uint64_t len,
+                                                       trace_id_t tid) const = 0;
+    virtual BlobManager::NullAsyncResult _del_blob(ShardInfo const&, blob_id_t, trace_id_t tid) = 0;
     ///
 
-    virtual PGManager::NullAsyncResult _create_pg(PGInfo&& pg_info, std::set< peer_id_t > const& peers) = 0;
+    virtual PGManager::NullAsyncResult _create_pg(PGInfo&& pg_info, std::set< peer_id_t > const& peers,
+                                                  trace_id_t tid) = 0;
     virtual PGManager::NullAsyncResult _replace_member(pg_id_t id, peer_id_t const& old_member,
-                                                       PGMember const& new_member, uint32_t commit_quorum) = 0;
+                                                       PGMember const& new_member, uint32_t commit_quorum,
+                                                       trace_id_t trace_id) = 0;
     virtual bool _get_stats(pg_id_t id, PGStats& stats) const = 0;
     virtual void _get_pg_ids(std::vector< pg_id_t >& pg_ids) const = 0;
 
@@ -122,7 +124,7 @@ protected:
     ///
 
     auto _defer() const { return folly::makeSemiFuture().via(executor_); }
-    folly::Future< ShardManager::Result< ShardInfo > > _get_shard(shard_id_t id) const;
+    folly::Future< ShardManager::Result< ShardInfo > > _get_shard(shard_id_t id, trace_id_t tid) const;
 
 public:
     explicit HomeObjectImpl(std::weak_ptr< HomeObjectApplication >&& application);
@@ -143,25 +145,25 @@ public:
     HomeObjectStats get_stats() const final { return _get_stats(); }
 
     /// PgManager
-    PGManager::NullAsyncResult create_pg(PGInfo&& pg_info) final;
+    PGManager::NullAsyncResult create_pg(PGInfo&& pg_info, trace_id_t tid) final;
     PGManager::NullAsyncResult replace_member(pg_id_t id, peer_id_t const& old_member, PGMember const& new_member,
-                                              u_int32_t commit_quorum) final;
+                                              u_int32_t commit_quorum, trace_id_t trace_id) final;
     // see api comments in base class;
     bool get_stats(pg_id_t id, PGStats& stats) const final;
     void get_pg_ids(std::vector< pg_id_t >& pg_ids) const final;
 
     /// ShardManager
-    ShardManager::AsyncResult< ShardInfo > get_shard(shard_id_t id) const final;
-    ShardManager::AsyncResult< ShardInfo > create_shard(pg_id_t pg_owner, uint64_t size_bytes) final;
-    ShardManager::AsyncResult< InfoList > list_shards(pg_id_t pg) const final;
-    ShardManager::AsyncResult< ShardInfo > seal_shard(shard_id_t id) final;
+    ShardManager::AsyncResult< ShardInfo > get_shard(shard_id_t id, trace_id_t tid) const final;
+    ShardManager::AsyncResult< ShardInfo > create_shard(pg_id_t pg_owner, uint64_t size_bytes, trace_id_t tid) final;
+    ShardManager::AsyncResult< InfoList > list_shards(pg_id_t pg, trace_id_t tid) const final;
+    ShardManager::AsyncResult< ShardInfo > seal_shard(shard_id_t id, trace_id_t tid) final;
     uint64_t get_current_timestamp();
 
     /// BlobManager
-    BlobManager::AsyncResult< blob_id_t > put(shard_id_t shard, Blob&&) final;
+    BlobManager::AsyncResult< blob_id_t > put(shard_id_t shard, Blob&&, trace_id_t tid) final;
     BlobManager::AsyncResult< Blob > get(shard_id_t shard, blob_id_t const& blob, uint64_t off,
-                                         uint64_t len) const final;
-    BlobManager::NullAsyncResult del(shard_id_t shard, blob_id_t const& blob) final;
+                                         uint64_t len, trace_id_t tid) const final;
+    BlobManager::NullAsyncResult del(shard_id_t shard, blob_id_t const& blob, trace_id_t tid) final;
 };
 
 } // namespace homeobject

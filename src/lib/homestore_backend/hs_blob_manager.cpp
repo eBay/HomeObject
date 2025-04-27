@@ -83,14 +83,13 @@ struct put_blob_req_ctx : public repl_result_ctx< BlobManager::Result< HSHomeObj
     sisl::io_blob_safe& blob_header_buf() { return data_bufs_[blob_header_idx_]; }
 };
 
-BlobManager::AsyncResult< blob_id_t > HSHomeObject::_put_blob(ShardInfo const& shard, Blob&& blob) {
+BlobManager::AsyncResult< blob_id_t > HSHomeObject::_put_blob(ShardInfo const& shard, Blob&& blob, trace_id_t tid) {
 
     if (is_shutting_down()) {
         LOGI("service is being shut down");
         return folly::makeUnexpected(BlobErrorCode::SHUTTING_DOWN);
     }
     incr_pending_request_num();
-    auto tid = generateRandomTraceId();
     auto& pg_id = shard.placement_group;
     shared< homestore::ReplDev > repl_dev;
     blob_id_t new_blob_id;
@@ -106,7 +105,7 @@ BlobManager::AsyncResult< blob_id_t > HSHomeObject::_put_blob(ShardInfo const& s
                         "exhausted all available blob ids");
     }
     RELEASE_ASSERT(repl_dev != nullptr, "Repl dev instance null");
-    BLOGD(tid, shard.id, new_blob_id, "Blob Put request:, pg={}, group={}, shard=0x{:x}, length={}", pg_id,
+    BLOGD(tid, shard.id, new_blob_id, "Blob Put request: pg={}, group={}, shard=0x{:x}, length={}", pg_id,
           repl_dev->group_id(), shard.id, blob.body.size());
 
     if (!repl_dev->is_leader()) {
@@ -182,7 +181,7 @@ BlobManager::AsyncResult< blob_id_t > HSHomeObject::_put_blob(ShardInfo const& s
     BLOGT(tid, req->blob_header()->shard_id, req->blob_header()->blob_id, "Put blob: header={} sgs={}",
           req->blob_header()->to_string(), req->data_sgs_string());
 
-    repl_dev->async_alloc_write(req->cheader_buf(), req->ckey_buf(), req->data_sgs(), req, tid);
+    repl_dev->async_alloc_write(req->cheader_buf(), req->ckey_buf(), req->data_sgs(), req, false/* part_of_batch */, tid);
     return req->result().deferValue([this, req, repl_dev, tid](const auto& result) -> BlobManager::AsyncResult< blob_id_t > {
         if (result.hasError()) {
             auto err = result.error();
@@ -270,13 +269,12 @@ void HSHomeObject::on_blob_put_commit(int64_t lsn, sisl::blob const& header, sis
 }
 
 BlobManager::AsyncResult< Blob > HSHomeObject::_get_blob(ShardInfo const& shard, blob_id_t blob_id, uint64_t req_offset,
-                                                         uint64_t req_len) const {
+                                                         uint64_t req_len, trace_id_t tid) const {
     if (is_shutting_down()) {
         LOGI("service is being shut down");
         return folly::makeUnexpected(BlobErrorCode::SHUTTING_DOWN);
     }
     incr_pending_request_num();
-    auto trace_id = generateRandomTraceId();
     auto& pg_id = shard.placement_group;
     auto hs_pg = get_hs_pg(pg_id);
     RELEASE_ASSERT(hs_pg, "PG not found");
@@ -293,16 +291,16 @@ BlobManager::AsyncResult< Blob > HSHomeObject::_get_blob(ShardInfo const& shard,
         return folly::makeUnexpected(BlobError(BlobErrorCode::RETRY_REQUEST));
     }
 
-    BLOGD(trace_id, shard.id, blob_id, "Blob Get request: pd={}, group={}, shard=0x{:x}, blob={}, offset={}, len={}",
+    BLOGD(tid, shard.id, blob_id, "Blob Get request: pd={}, group={}, shard=0x{:x}, blob={}, offset={}, len={}",
           pg_id, repl_dev->group_id(), shard.id, blob_id, req_offset, req_len);
     auto r = get_blob_from_index_table(index_table, shard.id, blob_id);
     if (!r) {
-        BLOGE(trace_id, shard.id, blob_id, "Blob not found in index during get blob");
+        BLOGE(tid, shard.id, blob_id, "Blob not found in index during get blob");
         decr_pending_request_num();
         return folly::makeUnexpected(r.error());
     }
 
-    return _get_blob_data(repl_dev, shard.id, blob_id, req_offset, req_len, r.value() /* blkid*/, trace_id);
+    return _get_blob_data(repl_dev, shard.id, blob_id, req_offset, req_len, r.value() /* blkid*/, tid);
 }
 
 BlobManager::AsyncResult< Blob > HSHomeObject::_get_blob_data(const shared< homestore::ReplDev >& repl_dev,
@@ -437,13 +435,12 @@ HSHomeObject::blob_put_get_blk_alloc_hints(sisl::blob const& header, cintrusive<
     return hints;
 }
 
-BlobManager::NullAsyncResult HSHomeObject::_del_blob(ShardInfo const& shard, blob_id_t blob_id) {
+BlobManager::NullAsyncResult HSHomeObject::_del_blob(ShardInfo const& shard, blob_id_t blob_id, trace_id_t tid) {
     if (is_shutting_down()) {
         LOGI("service is being shut down");
         return folly::makeUnexpected(BlobErrorCode::SHUTTING_DOWN);
     }
     incr_pending_request_num();
-    auto tid = generateRandomTraceId();
     BLOGT(tid, shard.id, blob_id, "deleting blob");
     auto& pg_id = shard.placement_group;
     auto hs_pg = get_hs_pg(pg_id);
@@ -479,7 +476,7 @@ BlobManager::NullAsyncResult HSHomeObject::_del_blob(ShardInfo const& shard, blo
     // Populate the key
     std::memcpy(req->key_buf().bytes(), &blob_id, sizeof(blob_id_t));
 
-    repl_dev->async_alloc_write(req->cheader_buf(), req->ckey_buf(), sisl::sg_list{}, req, tid);
+    repl_dev->async_alloc_write(req->cheader_buf(), req->ckey_buf(), sisl::sg_list{}, req, false/* part_of_batch */, tid);
     return req->result().deferValue([this, repl_dev, tid](const auto& result) -> folly::Expected< folly::Unit, BlobError > {
         if (result.hasError()) {
             auto err = result.error();

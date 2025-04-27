@@ -76,9 +76,10 @@ TEST_F(HomeObjectFixture, BasicPutGetDelBlobWithRestart) {
         run_on_pg_leader(pg_id, [&]() {
             for (const auto& shard_id : shard_vec) {
                 for (uint64_t k = 0; k < num_blobs_per_shard; k++) {
-                    auto g = _obj_inst->blob_manager()->del(shard_id, blob_id).get();
+                    auto tid = generateRandomTraceId();
+                    auto g = _obj_inst->blob_manager()->del(shard_id, blob_id, tid).get();
                     ASSERT_TRUE(g);
-                    LOGINFO("delete blob shard {} blob {}", shard_id, blob_id);
+                    LOGINFO("delete blob shard {} blob {}, trace_id={}", shard_id, blob_id, tid);
                     blob_id++;
                 }
             }

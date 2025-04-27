@@ -45,31 +45,32 @@ void TestFixture::SetUp() {
     info.members.insert(homeobject::PGMember{_peer1, "peer1", 1});
     // info.members.insert(homeobject::PGMember{_peer2, "peer2", 0});
 
-    LOGDEBUG("Setup Pg");
-    EXPECT_TRUE(homeobj_->pg_manager()->create_pg(std::move(info)).get());
+    auto tid = homeobject::generateRandomTraceId();
+    LOGDEBUG("Setup Pg, trace_id={}", tid);
+    EXPECT_TRUE(homeobj_->pg_manager()->create_pg(std::move(info), tid).get());
 
-    LOGDEBUG("Setup Shards");
-    auto s_e = homeobj_->shard_manager()->create_shard(_pg_id, Mi).get();
+    LOGDEBUG("Setup Shards, trace_id={}", tid);
+    auto s_e = homeobj_->shard_manager()->create_shard(_pg_id, Mi, tid).get();
     ASSERT_TRUE(!!s_e);
     s_e.then([this](auto&& i) { _shard_1 = std::move(i); });
 
-    s_e = homeobj_->shard_manager()->create_shard(_pg_id, Mi).get();
+    s_e = homeobj_->shard_manager()->create_shard(_pg_id, Mi, tid).get();
     ASSERT_TRUE(!!s_e);
     s_e.then([this](auto&& i) { _shard_2 = std::move(i); });
 
-    LOGDEBUG("Get on empty Shard={}", _shard_1.id);
-    auto g_e = homeobj_->blob_manager()->get(_shard_1.id, 0).get();
+    LOGDEBUG("Get on empty Shard={}, trace_id={}", _shard_1.id, tid);
+    auto g_e = homeobj_->blob_manager()->get(_shard_1.id, 0, 0, 0, tid).get();
     ASSERT_FALSE(g_e);
     EXPECT_EQ(homeobject::BlobErrorCode::UNKNOWN_BLOB, g_e.error().getCode());
 
-    LOGDEBUG("Insert Blob to={}", _shard_1.id);
+    LOGDEBUG("Insert Blob to={}, trace_id={}", _shard_1.id, tid);
     auto o_e = homeobj_->blob_manager()
-                   ->put(_shard_1.id, homeobject::Blob{sisl::io_blob_safe(4 * Ki, 512u), "test_blob", 4 * Mi})
+                   ->put(_shard_1.id, homeobject::Blob{sisl::io_blob_safe(4 * Ki, 512u), "test_blob", 4 * Mi}, tid)
                    .get();
     EXPECT_TRUE(!!o_e);
     o_e.then([this](auto&& b) mutable { _blob_id = std::move(b); });
 
-    g_e = homeobj_->blob_manager()->get(_shard_1.id, _blob_id).get();
+    g_e = homeobj_->blob_manager()->get(_shard_1.id, _blob_id, 0, 0, tid).get();
     EXPECT_TRUE(!!g_e);
     g_e.then([](auto&& blob) {
         EXPECT_STREQ(blob.user_key.c_str(), "test_blob");
