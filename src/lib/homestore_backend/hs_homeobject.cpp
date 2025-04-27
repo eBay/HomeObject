@@ -60,6 +60,17 @@ public:
         return it->second;
     }
 
+    void destroy_repl_dev_listener(homestore::group_id_t group_id) override {
+        std::scoped_lock lock_guard(_repl_sm_map_lock);
+	auto it = _repl_sm_map.find(group_id);
+	if (it == _repl_sm_map.end()) {
+            LOGE("cannot find group id in repl_sm_map");
+	    DEBUG_ASSERT(it != _repl_sm_map.end(), "cannot find group id in repl_sm_map");
+	    return;
+	}
+        _repl_sm_map.erase(it);
+    }
+
     void on_repl_devs_init_completed() override { _home_object->on_replica_restart(); }
 
     std::pair< std::string, uint16_t > lookup_peer(homestore::replica_id_t uuid) const override {
