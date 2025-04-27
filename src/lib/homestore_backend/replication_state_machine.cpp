@@ -202,7 +202,7 @@ ReplicationStateMachine::get_blk_alloc_hints(sisl::blob const& header, uint32_t 
                  msg_header->shard_id, (msg_header->shard_id >> homeobject::shard_width),
                  (msg_header->shard_id & homeobject::shard_mask), pg_id);
             // TODO:: add error code to indicate the pg not found in homestore side
-            return folly::makeUnexpected(homestore::ReplServiceError::RESULT_NOT_EXIST_YET);
+            return folly::makeUnexpected(homestore::ReplServiceError::NO_SPACE_LEFT);
         }
 
         auto v_chunkID = home_object_->resolve_v_chunk_id_from_msg(header);
