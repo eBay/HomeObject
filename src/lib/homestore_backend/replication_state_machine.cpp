@@ -136,24 +136,29 @@ void ReplicationStateMachine::on_rollback(int64_t lsn, sisl::blob const& header,
     }
     }
 
-    // cancel no_space_left_error_info if matches
     const auto [target_lsn, chunk_id] = get_no_space_left_error_info();
-    if (target_lsn >= lsn) {
-        LOGD("cancel no_space_left_error_info, wait_commit_lsn={}, chunk_id={}, currrent lsn={}", target_lsn, chunk_id,
-             lsn);
-        reset_no_space_left_error_info();
-    }
+
+    RELEASE_ASSERT(
+        target_lsn >= lsn,
+        "wait_commit_lsn should be bigger than rollbacked lsn wait_commit_lsn={}, chunk_id={}, currrent lsn={}",
+        target_lsn, chunk_id, lsn);
+
+    // if target_lsn is int64_max, it`s is also ok to reset_no_space_left_error_info
+    reset_no_space_left_error_info();
 }
 
 void ReplicationStateMachine::on_config_rollback(int64_t lsn) {
     LOGD("rollback config at lsn={}", lsn);
-    // cancel no_space_left_error_info if matches
+
     const auto [target_lsn, chunk_id] = get_no_space_left_error_info();
-    if (target_lsn >= lsn) {
-        LOGD("cancel no_space_left_error_info, wait_commit_lsn={}, chunk_id={}, currrent lsn={}", target_lsn, chunk_id,
-             lsn);
-        reset_no_space_left_error_info();
-    }
+
+    RELEASE_ASSERT(
+        target_lsn >= lsn,
+        "wait_commit_lsn should be bigger than rollbacked lsn wait_commit_lsn={}, chunk_id={}, currrent lsn={}",
+        target_lsn, chunk_id, lsn);
+
+    // if target_lsn is int64_max, it`s is also ok to reset_no_space_left_error_info
+    reset_no_space_left_error_info();
 }
 
 void ReplicationStateMachine::on_restart() { LOGD("ReplicationStateMachine::on_restart"); }
@@ -824,16 +829,19 @@ void ReplicationStateMachine::on_no_space_left(homestore::repl_lsn_t lsn, homest
     LOGD("got no_space_left error at lsn={}, chunk_id={}", lsn, chunk_id);
 
     const auto [target_lsn, error_chunk_id] = get_no_space_left_error_info();
-    if (lsn - 1 < target_lsn) {
-        // set a new error info or overwrite an existing error info, postpone handling this error after lsn - 1 is
-        // committed.
-        LOGD("set no_space_left error info with lsn={}, chunk_id={}", lsn - 1, chunk_id);
-        set_no_space_left_error_info(lsn - 1, error_chunk_id);
-    } else {
-        LOGD("got no_space_left error but my expected lsn {} is larger than existing error info lsn {}, "
-             "ignore it!",
-             lsn - 1, target_lsn);
-    }
+
+    RELEASE_ASSERT(lsn - 1 <= target_lsn,
+                   "new target lsn should be less than or equal to the existing target "
+                   "lsn, new_target_lsn={}, existing_target_lsn={}",
+                   lsn - 1, target_lsn);
+
+    // set a new error info or overwrite an existing error info, postpone handling this error until lsn - 1 is
+    // committed.
+    LOGD("set no_space_left error info with lsn={}, chunk_id={}, existing error info: lsn={}, chunk_id={}", lsn - 1,
+         chunk_id, target_lsn, error_chunk_id);
+
+    // setting the same error info is ok.
+    set_no_space_left_error_info(lsn - 1, chunk_id);
 }
 
 void ReplicationStateMachine::set_no_space_left_error_info(homestore::repl_lsn_t lsn, homestore::chunk_num_t chunk_id) {
