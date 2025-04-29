@@ -66,8 +66,7 @@ void ReplicationStateMachine::notify_committed_lsn(int64_t lsn) {
     }
 
     if (target_lsn == lsn) {
-        // check if there is pending no_space_left error to be handled. only follower will handle this
-        LOGD("handle no_space_left_error_info, lsn={}, chunk_id={}", lsn, chunk_id);
+        LOGD("match no_space_left_error_info, lsn={}, chunk_id={}", lsn, chunk_id);
         handle_no_space_left(lsn, chunk_id);
         reset_no_space_left_error_info();
     }
