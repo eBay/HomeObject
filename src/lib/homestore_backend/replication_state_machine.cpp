@@ -40,7 +40,9 @@ void ReplicationStateMachine::on_commit(int64_t lsn, const sisl::blob& header, c
         break;
     }
     }
+}
 
+void ReplicationStateMachine::notify_committed_lsn(int64_t lsn) {
     // handle no_space_left error if we have any
     const auto [target_lsn, chunk_id] = get_no_space_left_error_info();
     if (std::numeric_limits< homestore::repl_lsn_t >::max() == target_lsn) {
@@ -134,6 +136,17 @@ void ReplicationStateMachine::on_rollback(int64_t lsn, sisl::blob const& header,
     }
     }
 
+    // cancel no_space_left_error_info if matches
+    const auto [target_lsn, chunk_id] = get_no_space_left_error_info();
+    if (target_lsn >= lsn) {
+        LOGD("cancel no_space_left_error_info, wait_commit_lsn={}, chunk_id={}, currrent lsn={}", target_lsn, chunk_id,
+             lsn);
+        reset_no_space_left_error_info();
+    }
+}
+
+void ReplicationStateMachine::on_config_rollback(int64_t lsn) {
+    LOGD("rollback config at lsn={}", lsn);
     // cancel no_space_left_error_info if matches
     const auto [target_lsn, chunk_id] = get_no_space_left_error_info();
     if (target_lsn >= lsn) {
@@ -807,61 +820,20 @@ void HSHomeObject::on_snp_ctx_meta_blk_recover_completed(bool success) {
     LOGI("Snapshot context meta blk recover completed");
 }
 
-// on_no_space_left will be called in raft channel, which will blocking new logs to come in.
-// here, we need to check if all the appended logs have been already committed.
-
-// if yes, we can guarantee all the index entry of all the logs have already been written to pg index table(which is
-// used by gc thread to identify valid blobs), so we can handle the no_space_left error directly.
-
-// if not, we need to set an no_space_left error info and wait for the commit thread to handle this error after the
-// lsn-1 is committed.
-
 void ReplicationStateMachine::on_no_space_left(homestore::repl_lsn_t lsn, homestore::chunk_num_t chunk_id) {
     LOGD("got no_space_left error at lsn={}, chunk_id={}", lsn, chunk_id);
 
-    // we need to pause statemachin here before we check and compare last_append_lsn and last_commit_lsn, since there is
-    // very corner case that when we do this, the last_append_lsn is being committed. for example, last_append_lsn is 10
-    // and last_commit_lsn is 9,  so we will set an erro info and wait for the commit thread to handle it after lsn 10
-    // is committed. but lsn 10 is probably being committed now, if the commit is completed after the comparation but
-    // before we set the error info, then commit thread will never handle the error info, since all the appended log
-    // have been committed and new more new logs can be appended, so on_commit will never be trigger again.
-    repl_dev()->pause_statemachine();
-
-    // basically, there are three cases:
-    //  1. if there is some appended logs that have not been committed, we need to set an error info and delegate
-    //  handle_no_space_left to on_commit.
-    //  2. if all the appended logs have been committed, but the lsn, which no_space_left is triggered, is exactly the
-    //  last_append_lsn + 1, we must handle_no_space_left inline.
-    //  3. if all the appended logs have been committed, but the lsn, which no_space_left is triggered, is larger than
-    //  last_append_lsn + 1, we can select anyone of both, handle_no_space_left inline or set an error info or delegate
-    //  it to on_commit.
-
-    // last_append_lsn here means the raft_lsn of the last log in logstore.
-    const auto last_append_lsn = repl_dev()->get_last_append_lsn();
-    const auto last_commit_lsn = repl_dev()->get_last_commit_lsn();
-    LOGD("last_append_lsn={}, last_commit_lsn={}", last_append_lsn, last_commit_lsn);
-    if (last_append_lsn == last_commit_lsn) {
-        // if last_append_lsn == last_commit_lsn, it means all the logs have been committed, so we have to handle it
-        // here, since on_commit will never be triggered from now on.
-        LOGD("all the committed logs have been committed, handle no_space_left directly!");
-        handle_no_space_left(lsn, chunk_id);
+    const auto [target_lsn, error_chunk_id] = get_no_space_left_error_info();
+    if (lsn - 1 < target_lsn) {
+        // set a new error info or overwrite an existing error info, postpone handling this error after lsn - 1 is
+        // committed.
+        LOGD("set no_space_left error info with lsn={}, chunk_id={}", lsn - 1, chunk_id);
+        set_no_space_left_error_info(lsn - 1, error_chunk_id);
     } else {
-        const auto [error_lsn, error_chunk_id] = get_no_space_left_error_info();
-        if (lsn - 1 < error_lsn) {
-            /*set a new error info or overwrite an existing error info*/
-            // we wait for the commit thread to handle this error after lsn - 1 is committed.
-            LOGD("wait for the commit thread to handle no_space_left error after lsn {} is committed, "
-                 "last_append_lsn {}, last_commit_lsn {}",
-                 lsn - 1, last_append_lsn, last_commit_lsn);
-            set_no_space_left_error_info(lsn - 1, error_chunk_id);
-        } else {
-            LOGD("got no_space_left error but my expected lsn {} is larger than existing error info lsn {}, "
-                 "ignore it!",
-                 lsn - 1, error_lsn);
-        }
+        LOGD("got no_space_left error but my expected lsn {} is larger than existing error info lsn {}, "
+             "ignore it!",
+             lsn - 1, target_lsn);
     }
-
-    repl_dev()->resume_statemachine();
 }
 
 void ReplicationStateMachine::set_no_space_left_error_info(homestore::repl_lsn_t lsn, homestore::chunk_num_t chunk_id) {
