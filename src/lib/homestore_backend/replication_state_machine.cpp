@@ -43,6 +43,7 @@ void ReplicationStateMachine::on_commit(int64_t lsn, const sisl::blob& header, c
 }
 
 void ReplicationStateMachine::notify_committed_lsn(int64_t lsn) {
+    LOGD("got committed lsn notification , lsn={}", lsn);
     // handle no_space_left error if we have any
     const auto [target_lsn, chunk_id] = get_no_space_left_error_info();
     if (std::numeric_limits< homestore::repl_lsn_t >::max() == target_lsn) {
