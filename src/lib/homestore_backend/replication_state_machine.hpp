@@ -202,6 +202,24 @@ public:
     // @param chunk_id - on which chunk no_space_left happened
     void on_no_space_left(homestore::repl_lsn_t lsn, homestore::chunk_num_t chunk_id) override;
 
+    /// @brief Called when the config log entry has been rolled backed.
+    ///
+    /// This function is called on followers only when the log entry is going to be overwritten. This function is called
+    /// from a random worker thread, but is guaranteed to be serialized.
+    ///
+    /// For each config log index, it is guaranteed that either on_config_commit() or on_config_rollback() is called but
+    /// not both.
+    /// @param lsn - The log sequence number of the rollbacked config log entry
+    void on_config_rollback(int64_t lsn) override;
+
+    /// @brief periodically called to notify the lastest committed lsn to the listener.
+    /// NOTE: this callback will block the thread of flushing the latest committed lsn into repl_dev superblk as DC_LSN,
+    /// pls take care if there is any heavy or blocking operation in this callback.
+    ///
+    /// @param lsn - The lasted committed log sequence number so far
+    ///
+    void notify_committed_lsn(int64_t lsn) override;
+
 private:
     HSHomeObject* home_object_{nullptr};
 
