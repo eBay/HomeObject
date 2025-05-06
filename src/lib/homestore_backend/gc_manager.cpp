@@ -205,79 +205,143 @@ void GCManager::pdev_gc_actor::handle_recovered_gc_task(const GCManager::gc_task
 
 void GCManager::pdev_gc_actor::switch_chunks_after_data_copy(chunk_id_t move_from_chunk, chunk_id_t move_to_chunk,
                                                              uint8_t priority) {
-    // // 1 get all blob index from gc index table
-    // std::vector< std::pair< BlobRouteByChunkKey, BlobRouteValue > > out_vector;
-    // auto start_key = BlobRouteByChunkKey{BlobRouteByChunk(move_to_chunk, 0, 0)};
-    // auto end_key = BlobRouteByChunkKey{BlobRouteByChunk{move_to_chunk, std::numeric_limits< uint64_t >::max(),
-    //                                                     std::numeric_limits< uint64_t >::max()}};
-    // homestore::BtreeQueryRequest< BlobRouteByChunkKey > query_req{homestore::BtreeKeyRange< BlobRouteByChunkKey >{
-    //     std::move(start_key), true /* inclusive */, std::move(end_key), true /* inclusive */
-    // }};
+    // 1 get all blob index from gc index table
+    std::vector< std::pair< BlobRouteByChunkKey, BlobRouteValue > > out_vector;
+    auto start_key = BlobRouteByChunkKey{BlobRouteByChunk(move_to_chunk, 0, 0)};
+    auto end_key = BlobRouteByChunkKey{BlobRouteByChunk{move_to_chunk, std::numeric_limits< uint64_t >::max(),
+                                                        std::numeric_limits< uint64_t >::max()}};
+    homestore::BtreeQueryRequest< BlobRouteByChunkKey > query_req{homestore::BtreeKeyRange< BlobRouteByChunkKey >{
+        std::move(start_key), true /* inclusive */, std::move(end_key), true /* inclusive */
+    }};
 
-    // auto const ret = m_index_table->query(query_req, out_vector);
-    // if (ret != homestore::btree_status_t::success) {
-    //     // "ret != homestore::btree_status_t::has_more" is not expetced here, since we are querying all the pbas in
-    //     one
-    //     // time.
-    //     // TODO:: handle the error case here.
-    //     RELEASE_ASSERT(false, "Failed to query blobs in index table for ret={} move_to_chunk={}", ret,
-    //     move_to_chunk);
-    // }
+    auto const ret = m_index_table->query(query_req, out_vector);
+    if (ret != homestore::btree_status_t::success) {
+        // "ret != homestore::btree_status_t::has_more" is not expetced here, since we are querying all the pbas in one
+        // time.
+        // TODO:: handle the error case here.
+        RELEASE_ASSERT(false, "Failed to query blobs in index table for ret={} move_to_chunk={}", ret, move_to_chunk);
+    }
 
-    // // 2 get pg index table
-    // auto move_from_vchunk = m_chunk_selector->get_extend_vchunk(move_from_chunk);
-    // RELEASE_ASSERT(move_from_vchunk->m_pg_id.has_value(), "chunk_id={} is expected to belong to a pg, but not!",
-    //                move_from_chunk);
-    // auto pg_id = move_from_vchunk->m_pg_id.value();
-    // auto hs_pg = m_hs_home_object->get_hs_pg(pg_id);
-    // RELEASE_ASSERT(hs_pg, "Unknown PG for pg_id={}", pg_id);
-    // auto pg_index_table = hs_pg->index_table_;
-    // RELEASE_ASSERT(pg_index_table, "Index table not found for PG pg_id={}", pg_id);
+    // 2 get pg index table
+    auto move_from_vchunk = m_chunk_selector->get_extend_vchunk(move_from_chunk);
+    RELEASE_ASSERT(move_from_vchunk->m_pg_id.has_value(), "chunk_id={} is expected to belong to a pg, but not!",
+                   move_from_chunk);
+    auto pg_id = move_from_vchunk->m_pg_id.value();
+    auto hs_pg = m_hs_home_object->get_hs_pg(pg_id);
+    RELEASE_ASSERT(hs_pg, "Unknown PG for pg_id={}", pg_id);
+    auto pg_index_table = hs_pg->index_table_;
+    RELEASE_ASSERT(pg_index_table, "Index table not found for PG pg_id={}", pg_id);
 
-    // // 3 update pg index table according to the query result of gc index table.
-    // // BtreeRangePutRequest only support update a range of keys to the same value, so we need to update the pg
-    // // indextable here one by one. since the update of index table is very fast , and gc is not time sensitive, so
-    // // for now we do this sequentially.
-    // // TODO:: concurrently update pg index table if necessary
+    // 3 update pg index table according to the query result of gc index table.
+    // BtreeRangePutRequest only support update a range of keys to the same value, so we need to update the pg
+    // indextable here one by one. since the update of index table is very fast , and gc is not time sensitive, so
+    // for now we do this sequentially.
+    // TODO:: concurrently update pg index table if necessary
 
-    // for (const auto& [k, v] : out_vector) {
-    //     BlobRouteKey index_key{BlobRoute{k.key().shard, k.key().blob}};
+    for (const auto& [k, v] : out_vector) {
+        BlobRouteKey index_key{BlobRoute{k.key().shard, k.key().blob}};
 
-    //     homestore::BtreeSinglePutRequest update_req{
-    //         &index_key, &v, homestore::btree_put_type::UPDATE, nullptr,
-    //         [](homestore::BtreeKey const& key, homestore::BtreeValue const& value_in_btree,
-    //            homestore::BtreeValue const& new_value) -> homestore::put_filter_decision {
-    //             BlobRouteValue existing_value{value_in_btree};
-    //             if (existing_value.pbas() == HSHomeObject::tombstone_pbas) {
-    //                 //  if the blob has been deleted and the value is tombstone,
-    //                 //  we should not use a valid pba to update a tombstone.
-    //                 return homestore::put_filter_decision::keep;
-    //             }
-    //             return homestore::put_filter_decision::replace;
-    //         }};
+        homestore::BtreeSinglePutRequest update_req{
+            &index_key, &v, homestore::btree_put_type::UPDATE, nullptr,
+            [](homestore::BtreeKey const& key, homestore::BtreeValue const& value_in_btree,
+               homestore::BtreeValue const& new_value) -> homestore::put_filter_decision {
+                BlobRouteValue existing_value{value_in_btree};
+                if (existing_value.pbas() == HSHomeObject::tombstone_pbas) {
+                    //  if the blob has been deleted and the value is tombstone,
+                    //  we should not use a valid pba to update a tombstone.
+                    return homestore::put_filter_decision::keep;
+                }
+                return homestore::put_filter_decision::replace;
+            }};
 
-    //     auto status = pg_index_table->put(update_req);
-    //     if (status != homestore::btree_status_t::success && status != homestore::btree_status_t::filtered_out) {
-    //         // TODO:: handle the error case here.
-    //         RELEASE_ASSERT(false, "can not update pg index table, pg_id={}, move_from_chunk_id={}", pg_id,
-    //                        move_from_chunk);
-    //     }
-    // }
+        auto status = pg_index_table->put(update_req);
+        if (status != homestore::btree_status_t::success && status != homestore::btree_status_t::filtered_out) {
+            // TODO:: handle the error case here.
+            RELEASE_ASSERT(false, "can not update pg index table, pg_id={}, move_from_chunk_id={}", pg_id,
+                           move_from_chunk);
+        }
+    }
 
-    // //  4 change the pg_id and vchunk_id of the move_to_chunk according to move_to_chunk
-    // auto move_to_vchunk = m_chunk_selector->get_extend_vchunk(move_to_chunk);
-    // move_to_vchunk->m_pg_id = move_from_vchunk->m_pg_id;
-    // move_to_vchunk->m_v_chunk_id = move_from_vchunk->m_v_chunk_id;
-    // move_to_vchunk->m_state =
-    //     priority == static_cast< uint8_t >(TASK_PRIORITY::NORMAL) ? ChunkState::AVAILABLE : ChunkState::INUSE;
+    //  4 change the pg_id and vchunk_id of the move_to_chunk according to move_to_chunk
+    auto move_to_vchunk = m_chunk_selector->get_extend_vchunk(move_to_chunk);
+    move_to_vchunk->m_pg_id = move_from_vchunk->m_pg_id;
+    move_to_vchunk->m_v_chunk_id = move_from_vchunk->m_v_chunk_id;
+    move_to_vchunk->m_state =
+        priority == static_cast< uint8_t >(TASK_PRIORITY::NORMAL) ? ChunkState::AVAILABLE : ChunkState::INUSE;
 
-    // //  5 push the move_from_chunk to the reserved chunk queue and the move_to_chunk to the pg heap.
-    // //  6 update the reserved chunk of this gc actor, metablk
-    // //  7 update the chunk list of pg, metablk
+    // TODO:
+    //  5 push the move_from_chunk to the reserved chunk queue and the move_to_chunk to the pg heap.
+    //  6 update the reserved chunk of this gc actor, metablk
+    //  7 update the chunk list of pg, metablk
+    //  8 change chunk->shard list map
 }
 
-void GCManager::pdev_gc_actor::copy_valid_data(chunk_id_t move_from_chunk, chunk_id_t move_to_chunk) {
-    // TODO:: implement the data copy logic here.
+bool GCManager::pdev_gc_actor::copy_valid_data(chunk_id_t move_from_chunk, chunk_id_t move_to_chunk) {
+    auto move_to_chunk_total_blks = m_chunk_selector->get_extend_vchunk(move_to_chunk)->get_total_blks();
+    auto move_to_chunk_available_blks = m_chunk_selector->get_extend_vchunk(move_to_chunk)->available_blks();
+    RELEASE_ASSERT(move_to_chunk_total_blks == move_to_chunk_available_blks,
+                   "move_from_chunk should be empty, total_blks={}, available_blks={}, move_to_chunk_id={}",
+                   move_to_chunk_total_blks, move_to_chunk_available_blks, move_to_chunk);
+
+    auto shards = m_hs_home_object->get_shards_in_chunk(move_from_chunk);
+    auto& data_service = homestore::data_service();
+
+    homestore::blk_alloc_hints hints;
+    hints.chunk_id_hint = move_to_chunk;
+    Homestore::MultiBlkId out_blkids;
+
+    for (const auto& shard_id : shards) {
+        std::vector< std::pair< BlobRouteKey, BlobRouteValue > > out_vector;
+        auto start_key = BlobRouteKey{BlobRoute{shard_id, std::numeric_limits< uint64_t >::min()}};
+        auto end_key = BlobRouteKey{BlobRoute{shard_id, std::numeric_limits< uint64_t >::max()}};
+        homestore::BtreeQueryRequest< BlobRouteKey > query_req{
+            homestore::BtreeKeyRange< BlobRouteKey >{std::move(start_key), true /* inclusive */, std::move(end_key),
+                                                     true /* inclusive */},
+            homestore::BtreeQueryType::SWEEP_NON_INTRUSIVE_PAGINATION_QUERY, static_cast< uint32_t >(max_num_in_batch)};
+        auto const status = m_index_table->query(query_req, out_vector);
+        if (ret != homestore::btree_status_t::success && ret != homestore::btree_status_t::has_more) {
+            LOGERROR("Failed to query blobs in index table for ret={} shard={}", ret, shard_id);
+            return false;
+        }
+
+        if (out_vector.empty()) {
+            LOGINFO("empty shard found in move_to_chunk, chunk_id={}, shard_id={}", move_from_chunk, shard_id);
+
+            // TODO::send a delete shard request to the raft channel
+
+            continue;
+        }
+
+        // write a shard header for this shard in move_to_chunk
+        const auto shard_sb = m_hs_home_object->_get_hs_shard(shard_id)->_sb.get();
+        auto blk_size = data_service.get_blk_size();
+        auto shard_sb_size = sizeof(HSHomeObject::shard_info_superblk);
+        auto header_size = sisl::round_up(sizeof(HSHomeObject::shard_info_superblk), blk_size);
+
+        auto haader_buf = iomanager.iobuf_alloc(blk_size, header_size);
+        std::memset(haader_buf, 0, header_size);
+        std::memcpy(haader_buf, shard_sb, shard_sb_size);
+        ((HSHomeObject::shard_info_superblk*)haader_buf)->info.state = ShardInfo::State::OPEN;
+
+        sisl::sg_list sgs;
+        sgs.size = header_size;
+        sgs.iovs.emplace_back(iovec{.iov_base = haader_buf, .iov_len = header_size});
+
+        auto err = data_service.async_alloc_write(sgs, hints, out_blkids, false)
+                       .thenValue([this, move_to_chunk, shard_id](auto&& err) {
+                           if (err) {
+                               LOGE("Failed to write shard header for move_to_chunk={} shard_id={}: err={}",
+                                    move_to_chunk, shard_id, result.error());
+                               if (err) throw std::system_error(err);
+                           }
+                       })
+                       .thenError< std::system_error >();
+
+        // copy all the shard data from move_from_chunk to move_to_chunk
+
+        // write a shard footer to the move_to_chunk
+    }
+    return true;
 }
 
 void GCManager::pdev_gc_actor::purge_reserved_chunk(chunk_id_t chunk) {

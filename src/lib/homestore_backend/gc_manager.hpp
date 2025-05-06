@@ -171,7 +171,8 @@ public:
 
         // copy all the valid data from the move_from_chunk to move_to_chunk. valid data means those blobs that are not
         // tombstone in the pg index table
-        void copy_valid_data(chunk_id_t move_from_chunk, chunk_id_t move_to_chunk);
+        // return true if the data copy is successful, false otherwise.
+        bool copy_valid_data(chunk_id_t move_from_chunk, chunk_id_t move_to_chunk);
 
         // before we select a reserved chunk and start gc, we need:
         //  1 clear all the entries of this chunk in the gc index table

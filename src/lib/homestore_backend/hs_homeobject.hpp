@@ -61,7 +61,8 @@ private:
                                                trace_id_t tid) const override;
     BlobManager::NullAsyncResult _del_blob(ShardInfo const&, blob_id_t, trace_id_t tid) override;
 
-    PGManager::NullAsyncResult _create_pg(PGInfo&& pg_info, std::set< peer_id_t > const& peers, trace_id_t tid) override;
+    PGManager::NullAsyncResult _create_pg(PGInfo&& pg_info, std::set< peer_id_t > const& peers,
+                                          trace_id_t tid) override;
     PGManager::NullAsyncResult _replace_member(pg_id_t id, peer_id_t const& old_member, PGMember const& new_member,
                                                uint32_t commit_quorum, trace_id_t tid) override;
 
@@ -79,6 +80,9 @@ private:
     std::unordered_map< std::string, PgIndexTable > index_table_pg_map_;
     std::unordered_map< std::string, std::shared_ptr< GCBlobIndexTable > > gc_index_table_map;
     std::once_flag replica_restart_flag_;
+
+    // mapping from chunk to shard list.
+    folly::ConcurrentHashMap< homestore::chunk_num_t, std::unordered_set< shard_id_t > > chunk_to_shards_map_;
 
 public:
 #pragma pack(1)
@@ -639,8 +643,9 @@ private:
     static std::string serialize_shard_info(const ShardInfo& info);
     void local_create_shard(ShardInfo shard_info, homestore::chunk_num_t v_chunk_id, homestore::chunk_num_t p_chunk_id,
                             homestore::blk_count_t blk_count, trace_id_t tid = 0);
-    void add_new_shard_to_map(ShardPtr&& shard);
+    void add_new_shard_to_map(std::unique_ptr< HS_Shard > shard);
     void update_shard_in_map(const ShardInfo& shard_info);
+    const HS_Shard* _get_hs_shard(const shard_id_t shard_id) const;
 
     // recover part
     void register_homestore_metablk_callback();
@@ -829,6 +834,8 @@ public:
     std::shared_ptr< homestore::IndexTableBase >
     recover_index_table(homestore::superblk< homestore::index_table_sb >&& sb);
     std::optional< pg_id_t > get_pg_id_with_group_id(homestore::group_id_t group_id) const;
+
+    const auto get_shards_in_chunk(homestore::chunk_num_t chunk_id) const { return chunk_to_shards_map_.at(chunk_id); }
 
     // Snapshot persistence related
     sisl::io_blob_safe get_snapshot_sb_data(homestore::group_id_t group_id);
