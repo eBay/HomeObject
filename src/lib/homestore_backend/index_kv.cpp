@@ -7,7 +7,7 @@ SISL_LOGGING_DECL(blobmgr)
 
 namespace homeobject {
 
-std::shared_ptr< BlobIndexTable > HSHomeObject::create_index_table() {
+std::shared_ptr< BlobIndexTable > HSHomeObject::create_pg_index_table() {
     homestore::uuid_t uuid = boost::uuids::random_generator()();
     homestore::uuid_t parent_uuid = boost::uuids::random_generator()();
     std::string uuid_str = boost::uuids::to_string(uuid);
@@ -15,32 +15,60 @@ std::shared_ptr< BlobIndexTable > HSHomeObject::create_index_table() {
     bt_cfg.m_leaf_node_type = homestore::btree_node_type::FIXED;
     bt_cfg.m_int_node_type = homestore::btree_node_type::FIXED;
 
-    auto index_table =
-        std::make_shared< homestore::IndexTable< BlobRouteKey, BlobRouteValue > >(uuid, parent_uuid, 0, bt_cfg);
-
-    return index_table;
+    return std::make_shared< BlobIndexTable >(uuid, parent_uuid, static_cast< uint32_t >(INDEX_TYPE::BLOB_INDEX),
+                                              bt_cfg);
 }
 
-std::shared_ptr< BlobIndexTable >
+std::shared_ptr< GCBlobIndexTable > HSHomeObject::create_gc_index_table() {
+    homestore::uuid_t uuid = boost::uuids::random_generator()();
+    homestore::uuid_t parent_uuid = boost::uuids::random_generator()();
+    std::string uuid_str = boost::uuids::to_string(uuid);
+    homestore::BtreeConfig bt_cfg(homestore::hs()->index_service().node_size());
+    bt_cfg.m_leaf_node_type = homestore::btree_node_type::FIXED;
+    bt_cfg.m_int_node_type = homestore::btree_node_type::FIXED;
+
+    // for now, we use the user_sb_size in index_table meta blk to differentiate blob and gc index.
+    // TODO: make necessary change if we need adapt to the new index table case.
+    return std::make_shared< GCBlobIndexTable >(uuid, parent_uuid, static_cast< uint32_t >(INDEX_TYPE::GC_BLOB_INDEX),
+                                                bt_cfg);
+}
+
+std::shared_ptr< homestore::IndexTableBase >
 HSHomeObject::recover_index_table(homestore::superblk< homestore::index_table_sb >&& sb) {
     homestore::BtreeConfig bt_cfg(homestore::hs()->index_service().node_size());
     bt_cfg.m_leaf_node_type = homestore::btree_node_type::FIXED;
     bt_cfg.m_int_node_type = homestore::btree_node_type::FIXED;
 
     auto uuid_str = boost::uuids::to_string(sb->uuid);
-    auto index_table = std::make_shared< homestore::IndexTable< BlobRouteKey, BlobRouteValue > >(std::move(sb), bt_cfg);
 
-    // Check if PG is already recovered.
-    std::scoped_lock lock_guard(index_lock_);
-    auto it = index_table_pg_map_.find(uuid_str);
-    RELEASE_ASSERT(it == index_table_pg_map_.end(), "PG should be recovered after IndexTable");
-    index_table_pg_map_.emplace(uuid_str, PgIndexTable{0, index_table});
+    if (sb->user_sb_size == static_cast< uint32_t >(INDEX_TYPE::BLOB_INDEX)) {
+        auto index_table = std::make_shared< BlobIndexTable >(std::move(sb), bt_cfg);
+        // Check if PG is already recovered.
+        std::scoped_lock lock_guard(index_lock_);
+        auto it = index_table_pg_map_.find(uuid_str);
+        RELEASE_ASSERT(it == index_table_pg_map_.end(), "pg index should not be found when recovered");
+        index_table_pg_map_.emplace(uuid_str, PgIndexTable{0, index_table});
+        LOGTRACEMOD(blobmgr, "Recovered pg index table uuid {}", uuid_str);
+        return index_table;
+    }
 
-    LOGTRACEMOD(blobmgr, "Recovered index table uuid {}", uuid_str);
-    return index_table;
+    if (sb->user_sb_size == static_cast< uint32_t >(INDEX_TYPE::GC_BLOB_INDEX)) {
+        auto index_table = std::make_shared< GCBlobIndexTable >(std::move(sb), bt_cfg);
+        // TODO::for the convinence, we use the same lock as blob index table here. add a new lock if needed.
+        std::scoped_lock lock_guard(index_lock_);
+        auto it = gc_index_table_map.find(uuid_str);
+        RELEASE_ASSERT(it == gc_index_table_map.end(), "gc index should not be found when recovered");
+        gc_index_table_map.emplace(uuid_str, index_table);
+        LOGTRACEMOD(blobmgr, "Recovered gc index table uuid {}", uuid_str);
+        return index_table;
+    }
+
+    RELEASE_ASSERT(false, "Invalid index table type!!");
+    return nullptr;
 }
 
-//The bool result indicates if the blob already exists, but if the existing pbas is the same as the new pbas, it will return homestore::btree_status_t::success.
+// The bool result indicates if the blob already exists, but if the existing pbas is the same as the new pbas, it will
+// return homestore::btree_status_t::success.
 std::pair< bool, homestore::btree_status_t > HSHomeObject::add_to_index_table(shared< BlobIndexTable > index_table,
                                                                               const BlobInfo& blob_info) {
     BlobRouteKey index_key{BlobRoute{blob_info.shard_id, blob_info.blob_id}};
@@ -49,17 +77,16 @@ std::pair< bool, homestore::btree_status_t > HSHomeObject::add_to_index_table(sh
                                              &existing_value};
     auto status = index_table->put(put_req);
     if (status != homestore::btree_status_t::success) {
-        if ((existing_value.pbas().is_valid() && existing_value.pbas() == blob_info.pbas)
-            || existing_value.pbas() == tombstone_pbas) {
-            LOGT(
-                "blob already exists, but existing pbas is the same as the new pbas or has been deleted, ignore it, blob_id={}, pbas={}, status={}",
-                blob_info.blob_id, blob_info.pbas.to_string(), status);
+        if ((existing_value.pbas().is_valid() && existing_value.pbas() == blob_info.pbas) ||
+            existing_value.pbas() == tombstone_pbas) {
+            LOGT("blob already exists, but existing pbas is the same as the new pbas or has been deleted, ignore it, "
+                 "blob_id={}, pbas={}, status={}",
+                 blob_info.blob_id, blob_info.pbas.to_string(), status);
             return {true, homestore::btree_status_t::success};
         }
         if (existing_value.pbas().is_valid()) {
-            LOGE(
-                "blob already exists, and conflict occurs, blob_id={}, existing pbas={}, new pbas={}, status={}",
-                blob_info.blob_id, existing_value.pbas().to_string(), blob_info.pbas.to_string(), status);
+            LOGE("blob already exists, and conflict occurs, blob_id={}, existing pbas={}, new pbas={}, status={}",
+                 blob_info.blob_id, existing_value.pbas().to_string(), blob_info.pbas.to_string(), status);
             return {true, status};
         }
         LOGE("Failed to put to index table error {}", status);
