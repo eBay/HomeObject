@@ -830,10 +830,13 @@ void ReplicationStateMachine::on_no_space_left(homestore::repl_lsn_t lsn, homest
 
     const auto [target_lsn, error_chunk_id] = get_no_space_left_error_info();
 
-    RELEASE_ASSERT(lsn - 1 <= target_lsn,
-                   "new target lsn should be less than or equal to the existing target "
-                   "lsn, new_target_lsn={}, existing_target_lsn={}",
-                   lsn - 1, target_lsn);
+    if (lsn > target_lsn) {
+        // if a new no_space_left happens on a bigger lsn than the target lsn , ignore it.
+        LOGD("no_space_left happens at lsn={}, chunk_id={}, but bigger than the current target_lsn={}, "
+             "error_chunk_id={}, ignore it",
+             lsn, chunk_id, target_lsn, error_chunk_id);
+        return;
+    }
 
     // set a new error info or overwrite an existing error info, postpone handling this error until lsn - 1 is
     // committed.
