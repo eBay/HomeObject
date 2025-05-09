@@ -86,6 +86,15 @@ bool HSHomeObject::PGBlobIterator::update_cursor(objId id) {
     return true;
 }
 
+void HSHomeObject::PGBlobIterator::reset_cursor() {
+    cur_obj_id_ = {0, 0};
+    cur_shard_idx_ = -1;
+    std::vector< BlobInfo > cur_blob_list_{0};
+    cur_start_blob_idx_=0;
+    cur_batch_blob_count_=0;
+    cur_batch_start_time_ = Clock::time_point{};
+}
+
 objId HSHomeObject::PGBlobIterator::expected_next_obj_id() {
     // next batch
     if (cur_start_blob_idx_ + cur_batch_blob_count_ < cur_blob_list_.size()) {
