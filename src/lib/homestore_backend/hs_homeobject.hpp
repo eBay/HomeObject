@@ -437,6 +437,7 @@ public:
         PGBlobIterator(HSHomeObject& home_obj, homestore::group_id_t group_id, uint64_t upto_lsn = 0);
         PG* get_pg_metadata();
         bool update_cursor(objId id);
+        void reset_cursor();
         objId expected_next_obj_id();
         bool generate_shard_blob_list();
         BlobManager::AsyncResult< sisl::io_blob_safe > load_blob_data(const BlobInfo& blob_info,
