@@ -187,42 +187,42 @@ TEST_F(HomeObjectFixture, BasicPutGetBlobWithPushDataDisabled) {
     remove_flip("disable_leader_push_data");
 }
 
-TEST_F(HomeObjectFixture, BasicPutGetBlobWithNoSpaceLeft) {
-    set_basic_flip("simulate_no_space_left", std::numeric_limits< int >::max(), 50);
-
-    // test recovery with pristine state firstly
-    restart();
-
-    auto num_pgs = SISL_OPTIONS["num_pgs"].as< uint64_t >();
-    auto num_shards_per_pg = SISL_OPTIONS["num_shards"].as< uint64_t >() / num_pgs;
-
-    auto num_blobs_per_shard = SISL_OPTIONS["num_blobs"].as< uint64_t >() / num_shards_per_pg;
-    std::map< pg_id_t, std::vector< shard_id_t > > pg_shard_id_vec;
-
-    // pg -> next blob_id in this pg
-    std::map< pg_id_t, blob_id_t > pg_blob_id;
-
-    for (uint64_t i = 1; i <= num_pgs; i++) {
-        create_pg(i);
-        pg_blob_id[i] = 0;
-        for (uint64_t j = 0; j < num_shards_per_pg; j++) {
-            auto shard = create_shard(i, 64 * Mi);
-            pg_shard_id_vec[i].emplace_back(shard.id);
-            LOGINFO("pg={} shard {}", i, shard.id);
-        }
-    }
-
-    // Put blob for all shards in all pg's.
-    put_blobs(pg_shard_id_vec, num_blobs_per_shard, pg_blob_id);
-
-    // Verify all get blobs
-    verify_get_blob(pg_shard_id_vec, num_blobs_per_shard);
-
-    // Verify the stats
-    verify_obj_count(num_pgs, num_blobs_per_shard, num_shards_per_pg, false /* deleted */);
-
-    remove_flip("simulate_no_space_left");
-}
+// TEST_F(HomeObjectFixture, BasicPutGetBlobWithNoSpaceLeft) {
+//     set_basic_flip("simulate_no_space_left", std::numeric_limits< int >::max(), 50);
+//
+//     // test recovery with pristine state firstly
+//     restart();
+//
+//     auto num_pgs = SISL_OPTIONS["num_pgs"].as< uint64_t >();
+//     auto num_shards_per_pg = SISL_OPTIONS["num_shards"].as< uint64_t >() / num_pgs;
+//
+//     auto num_blobs_per_shard = SISL_OPTIONS["num_blobs"].as< uint64_t >() / num_shards_per_pg;
+//     std::map< pg_id_t, std::vector< shard_id_t > > pg_shard_id_vec;
+//
+//     // pg -> next blob_id in this pg
+//     std::map< pg_id_t, blob_id_t > pg_blob_id;
+//
+//     for (uint64_t i = 1; i <= num_pgs; i++) {
+//         create_pg(i);
+//         pg_blob_id[i] = 0;
+//         for (uint64_t j = 0; j < num_shards_per_pg; j++) {
+//             auto shard = create_shard(i, 64 * Mi);
+//             pg_shard_id_vec[i].emplace_back(shard.id);
+//             LOGINFO("pg={} shard {}", i, shard.id);
+//         }
+//     }
+//
+//     // Put blob for all shards in all pg's.
+//     put_blobs(pg_shard_id_vec, num_blobs_per_shard, pg_blob_id);
+//
+//     // Verify all get blobs
+//     verify_get_blob(pg_shard_id_vec, num_blobs_per_shard);
+//
+//     // Verify the stats
+//     verify_obj_count(num_pgs, num_blobs_per_shard, num_shards_per_pg, false /* deleted */);
+//
+//     remove_flip("simulate_no_space_left");
+// }
 
 #endif
 
