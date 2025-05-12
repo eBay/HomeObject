@@ -16,7 +16,7 @@
 
 namespace homeobject {
 
-ENUM(ChunkState, uint8_t, AVAILABLE = 0, INUSE);
+ENUM(ChunkState, uint8_t, AVAILABLE = 0, INUSE, GC);
 
 using csharedChunk = homestore::cshared< homestore::Chunk >;
 
@@ -74,6 +74,16 @@ public:
     // this function will be used by create shard or recovery flow to mark one specific chunk to be busy, caller should
     // be responsible to use release_chunk() interface to release it when no longer to use the chunk anymore.
     csharedChunk select_specific_chunk(const pg_id_t pg_id, const chunk_num_t v_chunk_id);
+
+    /**
+     * try to mark a chunk as gc state, so that it will not be selected by any creating shard.
+     *
+     * @param chunk_id
+     * @param force if the current state is inuse, should we force to mark it as gc. this is used for the emergent gc
+     * case
+     * @return true if success, false if the chunk is not inuse or not found.
+     */
+    bool try_mark_chunk_to_gc_state(const chunk_num_t chunk_id, bool force = false);
 
     // This function returns a chunk back to ChunkSelector.
     // It is used in two scenarios: 1. seal shard  2. create shard rollback
@@ -179,6 +189,22 @@ public:
     uint32_t total_disks() const { return m_per_dev_heap.size(); }
 
     bool is_chunk_available(const pg_id_t pg_id, const chunk_num_t v_chunk_id) const;
+
+    /**
+     * @brief Returns all the pdev ids that managed by this chunk selector.
+     */
+    std::list< uint32_t > get_pdev_ids() const;
+
+    /**
+     * @brief select an available chunk from the given pdev.
+     */
+    std::shared_ptr< ExtendedVChunk > select_empty_chunk_from_pdev(uint32_t pdev_id);
+
+    std::shared_ptr< ExtendedVChunk > select_specific_chunk_from_pdev(uint32_t pdev_id, const chunk_num_t chunk_id);
+
+    const std::unordered_map< chunk_num_t, homestore::cshared< ExtendedVChunk > >& get_all_chunks() const;
+
+    homestore::cshared< ExtendedVChunk > get_extend_vchunk(const chunk_num_t chunk_id) const;
 
 private:
     void add_chunk_internal(const chunk_num_t, bool add_to_heap = true);

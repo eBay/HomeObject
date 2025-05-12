@@ -29,6 +29,7 @@ target_sources("${PROJECT_NAME}_homestore" PRIVATE
     replication_state_machine.cpp
     hs_cp_callbacks.cpp
     hs_http_manager.cpp
+    gc_manager.cpp
     $<TARGET_OBJECTS:${PROJECT_NAME}_core>
 )
 target_link_libraries("${PROJECT_NAME}_homestore" PUBLIC
@@ -114,3 +115,11 @@ add_test(NAME HomestoreResyncTestWithLeaderRestart
         --override_config homestore_config.generic.repl_dev_cleanup_interval_sec=5
         --override_config homestore_config.consensus.max_grpc_message_size:138412032
         --gtest_filter=HomeObjectFixture.RestartLeader*)
+
+add_executable(homestore_test_gc)
+target_sources(homestore_test_gc PRIVATE $<TARGET_OBJECTS:homestore_tests_gc>)
+target_link_libraries(homestore_test_gc PUBLIC homeobject_homestore ${COMMON_TEST_DEPS})
+add_test(NAME HomestoreTestGC COMMAND homestore_test_pg -csv error --executor immediate --config_path ./
+        --override_config homestore_config.consensus.snapshot_freq_distance:0
+        --override_config homestore_config.consensus.max_grpc_message_size:138412032)
+

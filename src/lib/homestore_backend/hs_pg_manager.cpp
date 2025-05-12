@@ -171,8 +171,8 @@ folly::Expected< HSHomeObject::HS_PG*, PGError > HSHomeObject::local_create_pg(s
 
     auto local_chunk_size = chunk_selector()->get_chunk_size();
     if (pg_info.chunk_size != local_chunk_size) {
-        LOGE("Chunk sizes are inconsistent, leader_chunk_size={}, local_chunk_size={}, trace_id={}",
-             pg_info.chunk_size, local_chunk_size, tid);
+        LOGE("Chunk sizes are inconsistent, leader_chunk_size={}, local_chunk_size={}, trace_id={}", pg_info.chunk_size,
+             local_chunk_size, tid);
         return folly::makeUnexpected< PGError >(PGError::UNKNOWN);
     }
 
@@ -189,7 +189,7 @@ folly::Expected< HSHomeObject::HS_PG*, PGError > HSHomeObject::local_create_pg(s
     }
 
     // create index table and pg
-    auto index_table = create_index_table();
+    auto index_table = create_pg_index_table();
     auto uuid_str = boost::uuids::to_string(index_table->uuid());
 
     repl_dev->set_custom_rdev_name(fmt::format("rdev{}", pg_info.id));

@@ -12,8 +12,8 @@ namespace homeobject {
 
 SISL_LOGGING_DECL(shardmgr)
 
-#define SLOG(level, trace_id, shard_id, msg, ...)                                                                                \
-    LOG##level##MOD(shardmgr, "[trace_id={},shardID=0x{:x},pg={},shard=0x{:x}] " msg, trace_id, shard_id,                                    \
+#define SLOG(level, trace_id, shard_id, msg, ...)                                                                      \
+    LOG##level##MOD(shardmgr, "[trace_id={},shardID=0x{:x},pg={},shard=0x{:x}] " msg, trace_id, shard_id,              \
                     (shard_id >> homeobject::shard_width), (shard_id & homeobject::shard_mask), ##__VA_ARGS__)
 
 #define SLOGT(trace_id, shard_id, msg, ...) SLOG(TRACE, trace_id, shard_id, msg, ##__VA_ARGS__)
@@ -189,7 +189,7 @@ ShardManager::AsyncResult< ShardInfo > HSHomeObject::_create_shard(pg_id_t pg_ow
     req->add_data_sg(std::move(sb_blob));
 
     // replicate this create shard message to PG members;
-    repl_dev->async_alloc_write(req->cheader_buf(), sisl::blob{}, req->data_sgs(), req, false/* part_of_batch */, tid);
+    repl_dev->async_alloc_write(req->cheader_buf(), sisl::blob{}, req->data_sgs(), req, false /* part_of_batch */, tid);
     return req->result().deferValue(
         [this, req, repl_dev, tid](const auto& result) -> ShardManager::AsyncResult< ShardInfo > {
             if (result.hasError()) {
@@ -268,7 +268,7 @@ ShardManager::AsyncResult< ShardInfo > HSHomeObject::_seal_shard(ShardInfo const
     req->add_data_sg(std::move(sb_blob));
 
     // replicate this seal shard message to PG members;
-    repl_dev->async_alloc_write(req->cheader_buf(), sisl::blob{}, req->data_sgs(), req, false/* part_of_batch */, tid);
+    repl_dev->async_alloc_write(req->cheader_buf(), sisl::blob{}, req->data_sgs(), req, false /* part_of_batch */, tid);
     return req->result().deferValue(
         [this, req, repl_dev, tid](const auto& result) -> ShardManager::AsyncResult< ShardInfo > {
             if (result.hasError()) {
@@ -302,9 +302,7 @@ bool HSHomeObject::on_shard_message_pre_commit(int64_t lsn, sisl::blob const& he
     const ReplicationMessageHeader* msg_header = r_cast< const ReplicationMessageHeader* >(header.cbytes());
     if (msg_header->corrupted()) {
         LOGW("replication message header is corrupted with crc error, lsn={}, traceID={}", lsn, tid);
-        if (ctx) {
-            ctx->promise_.setValue(folly::makeUnexpected(ShardError::CRC_MISMATCH));
-        }
+        if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(ShardError::CRC_MISMATCH)); }
         // TODO::if fail to pre_commit, shuold we crash here?
 
         return false;
@@ -348,9 +346,7 @@ void HSHomeObject::on_shard_message_rollback(int64_t lsn, sisl::blob const& head
     const ReplicationMessageHeader* msg_header = r_cast< const ReplicationMessageHeader* >(header.cbytes());
     if (msg_header->corrupted()) {
         LOGW("replication message header is corrupted with crc error, lsn={}, traceID={}", lsn, tid);
-        if (ctx) {
-            ctx->promise_.setValue(folly::makeUnexpected(ShardError::CRC_MISMATCH));
-        }
+        if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(ShardError::CRC_MISMATCH)); }
         return;
     }
 
@@ -395,7 +391,8 @@ void HSHomeObject::on_shard_message_rollback(int64_t lsn, sisl::blob const& head
 }
 
 void HSHomeObject::local_create_shard(ShardInfo shard_info, homestore::chunk_num_t v_chunk_id,
-                                      homestore::chunk_num_t p_chunk_id, homestore::blk_count_t blk_count, trace_id_t tid) {
+                                      homestore::chunk_num_t p_chunk_id, homestore::blk_count_t blk_count,
+                                      trace_id_t tid) {
     bool shard_exist = false;
     {
         scoped_lock lock_guard(_shard_lock);
@@ -432,9 +429,7 @@ void HSHomeObject::on_shard_message_commit(int64_t lsn, sisl::blob const& h, hom
     auto header = r_cast< const ReplicationMessageHeader* >(h.cbytes());
     if (header->corrupted()) {
         LOGW("replication message header is corrupted with crc error, lsn={}, traceID={}", lsn, tid);
-        if (ctx) {
-            ctx->promise_.setValue(folly::makeUnexpected(ShardError::CRC_MISMATCH));
-        }
+        if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(ShardError::CRC_MISMATCH)); }
         // TODO::if fail to commit, shuold we crash here?
         return;
     }
@@ -449,18 +444,14 @@ void HSHomeObject::on_shard_message_commit(int64_t lsn, sisl::blob const& h, hom
     std::error_code err = repl_dev->async_read(blkids, value_sgs, value_blob.size()).get();
     if (err) {
         LOGW("failed to read data from homestore blks, lsn={}", lsn);
-        if (ctx) {
-            ctx->promise_.setValue(folly::makeUnexpected(ShardError::UNKNOWN));
-        }
+        if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(ShardError::UNKNOWN)); }
         return;
     }
 
     if (crc32_ieee(init_crc32, value.cbytes(), value.size()) != header->payload_crc) {
         // header & value is inconsistent;
         LOGW("replication message header is inconsistent with value, lsn={}", lsn);
-        if (ctx) {
-            ctx->promise_.setValue(folly::makeUnexpected(ShardError::CRC_MISMATCH));
-        }
+        if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(ShardError::CRC_MISMATCH)); }
         return;
     }
 #endif
@@ -535,18 +526,24 @@ void HSHomeObject::on_shard_meta_blk_recover_completed(bool success) {
     }
 }
 
-void HSHomeObject::add_new_shard_to_map(ShardPtr&& shard) {
+void HSHomeObject::add_new_shard_to_map(std::unique_ptr< HS_Shard > shard) {
     // TODO: We are taking a global lock for all pgs to create shard. Is it really needed??
     // We need to have fine grained per PG lock and take only that.
     std::scoped_lock lock_guard(_pg_lock, _shard_lock);
     auto hs_pg = const_cast< HS_PG* >(_get_hs_pg_unlocked(shard->info.placement_group));
     RELEASE_ASSERT(hs_pg, "Missing pg info, pg={}", shard->info.placement_group);
-
+    auto p_chunk_id = shard->p_chunk_id();
     auto& shards = hs_pg->shards_;
     auto shard_id = shard->info.id;
     auto iter = shards.emplace(shards.end(), std::move(shard));
     auto [_, happened] = _shard_map.emplace(shard_id, iter);
     RELEASE_ASSERT(happened, "shardID=0x{:x}, pg={}, shard=0x{:x}, duplicated shard info", shard_id,
+                   (shard_id >> homeobject::shard_width), (shard_id & homeobject::shard_mask));
+
+    const auto [it, h] = chunk_to_shards_map_.try_emplace(p_chunk_id, std::set< shard_id_t >());
+    auto per_chunk_shard_list = it->second;
+    const auto inserted = (per_chunk_shard_list.emplace(shard_id)).second;
+    RELEASE_ASSERT(inserted, "shardID=0x{:x}, pg={}, shard=0x{:x}, duplicated shard info", shard_id,
                    (shard_id >> homeobject::shard_width), (shard_id & homeobject::shard_mask));
 
     // following part gives follower members a chance to catch up shard sequence num;
@@ -561,6 +558,13 @@ void HSHomeObject::update_shard_in_map(const ShardInfo& shard_info) {
                    shard_info.id, (shard_info.id >> homeobject::shard_width), (shard_info.id & homeobject::shard_mask));
     auto hs_shard = d_cast< HS_Shard* >((*shard_iter->second).get());
     hs_shard->update_info(shard_info);
+}
+
+const Shard* HSHomeObject::_get_hs_shard(const shard_id_t shard_id) const {
+    std::scoped_lock lock_guard(_shard_lock);
+    auto shard_iter = _shard_map.find(shard_id);
+    if (shard_iter == _shard_map.end()) { return nullptr; }
+    return (*shard_iter->second).get();
 }
 
 std::optional< homestore::chunk_num_t > HSHomeObject::get_shard_p_chunk_id(shard_id_t id) const {
