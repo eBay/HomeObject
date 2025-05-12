@@ -316,16 +316,21 @@ std::shared_ptr< homestore::snapshot_context > ReplicationStateMachine::last_sna
 
 int ReplicationStateMachine::read_snapshot_obj(std::shared_ptr< homestore::snapshot_context > context,
                                                std::shared_ptr< homestore::snapshot_obj > snp_obj) {
-    HSHomeObject::PGBlobIterator* pg_iter = nullptr;
-
-    if (snp_obj->user_ctx == nullptr) {
-        // Create the pg blob iterator for the first time.
-        pg_iter = new HSHomeObject::PGBlobIterator(*home_object_, repl_dev()->group_id(), context->get_lsn());
-        snp_obj->user_ctx = (void*)pg_iter;
-        LOGD("Allocated new pg blob iterator={}, group={}, lsn={}", static_cast< void* >(pg_iter),
-             boost::uuids::to_string(repl_dev()->group_id()), context->get_lsn());
-    } else {
-        pg_iter = r_cast< HSHomeObject::PGBlobIterator* >(snp_obj->user_ctx);
+    std::shared_ptr< HSHomeObject::PGBlobIterator > pg_iter;
+    {
+        std::lock_guard lk(m_snp_sync_ctx_lock);
+        if (snp_obj->user_ctx == nullptr) {
+            // Create the pg blob iterator for the first time.
+            pg_iter = std::make_shared< HSHomeObject::PGBlobIterator >(*home_object_, repl_dev()->group_id(),
+                                                                       context->get_lsn());
+            auto pg_iter_ptr = new std::shared_ptr< HSHomeObject::PGBlobIterator >(pg_iter);
+            snp_obj->user_ctx = static_cast< void* >(pg_iter_ptr);
+            LOGD("Allocated new pg blob iterator={}, group={}, lsn={}", snp_obj->user_ctx,
+                 boost::uuids::to_string(repl_dev()->group_id()), context->get_lsn());
+        } else {
+            auto pg_iter_ptr = static_cast< std::shared_ptr< HSHomeObject::PGBlobIterator >* >(snp_obj->user_ctx);
+            pg_iter = *pg_iter_ptr;
+        }
     }
 
     // Nuraft uses obj_id as a way to track the state of the snapshot read and write.
@@ -357,6 +362,17 @@ int ReplicationStateMachine::read_snapshot_obj(std::shared_ptr< homestore::snaps
         LOGW("Invalid objId in snapshot read, {}, current shard_seq_num={}, current batch_num={}", log_str,
              pg_iter->cur_obj_id_.shard_seq_num, pg_iter->cur_obj_id_.batch_id);
         return -1;
+        // There is a known cornor case(not sure if it is the only case): If free_user_snp_ctx and read_snapshot_obj(we
+        // enable nuraft bg snapshot) occur at the same time, and free_user_snp_ctx is called first, pg_iter is
+        // released, and then in read_snapshot_obj, pg_iter will be created with cur_obj_id_ = 0|0 while the
+        //  next_obj_id will be x|y which may hit into invalid objId condition.
+        // If inconsistency happens, reset the cursor to the beginning(0|0), and let follower to validate(lsn may change) and reset
+        // its cursor to the checkpoint to proceed with snapshot resync.
+        LOGW("Invalid objId in snapshot read, {}, current shard_seq_num={}, current batch_num={}, reset cursor to the "
+             "beginning",
+             log_str, pg_iter->cur_obj_id_.shard_seq_num, pg_iter->cur_obj_id_.batch_id);
+        pg_iter->reset_cursor();
+        return 0;
     }
 
     // pg metadata message
@@ -532,11 +548,11 @@ void ReplicationStateMachine::free_user_snp_ctx(void*& user_snp_ctx) {
         LOGE("User snapshot context null group={}", boost::uuids::to_string(repl_dev()->group_id()));
         return;
     }
-
-    auto pg_iter = r_cast< HSHomeObject::PGBlobIterator* >(user_snp_ctx);
-    LOGD("Freeing snapshot iterator={}, pg={} group={}", static_cast< void* >(pg_iter), pg_iter->pg_id_,
-         boost::uuids::to_string(pg_iter->group_id_));
-    delete pg_iter;
+    std::lock_guard lk(m_snp_sync_ctx_lock);
+    auto pg_iter_ptr = static_cast<std::shared_ptr<HSHomeObject::PGBlobIterator>*>(user_snp_ctx);
+    LOGD("Freeing snapshot iterator={}, pg={} group={}", user_snp_ctx, (*pg_iter_ptr)->pg_id_,
+         boost::uuids::to_string((*pg_iter_ptr)->group_id_));
+    delete pg_iter_ptr;
     user_snp_ctx = nullptr;
 }
 

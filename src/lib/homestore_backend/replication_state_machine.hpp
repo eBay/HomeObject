@@ -225,6 +225,7 @@ private:
 
     std::shared_ptr< homestore::snapshot_context > m_snapshot_context;
     std::mutex m_snapshot_lock;
+    std::mutex m_snp_sync_ctx_lock;
 
     std::unique_ptr< HSHomeObject::SnapshotReceiveHandler > m_snp_rcv_handler;
 
