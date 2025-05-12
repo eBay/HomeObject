@@ -359,9 +359,6 @@ int ReplicationStateMachine::read_snapshot_obj(std::shared_ptr< homestore::snaps
     LOGD("read current snp obj {}", log_str)
     // invalid Id
     if (!pg_iter->update_cursor(obj_id)) {
-        LOGW("Invalid objId in snapshot read, {}, current shard_seq_num={}, current batch_num={}", log_str,
-             pg_iter->cur_obj_id_.shard_seq_num, pg_iter->cur_obj_id_.batch_id);
-        return -1;
         // There is a known cornor case(not sure if it is the only case): If free_user_snp_ctx and read_snapshot_obj(we
         // enable nuraft bg snapshot) occur at the same time, and free_user_snp_ctx is called first, pg_iter is
         // released, and then in read_snapshot_obj, pg_iter will be created with cur_obj_id_ = 0|0 while the
