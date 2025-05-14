@@ -88,8 +88,8 @@ bool GCManager::is_eligible_for_gc(std::shared_ptr< HeapChunkSelector::ExtendedV
 }
 
 void GCManager::scan_chunks_for_gc() {
-    // in every iteration, we will select at most RESERVED_CHUNK_NUM_PER_PDEV gc tasks
-    auto max_task_num = RESERVED_CHUNK_NUM_PER_PDEV;
+    // in every iteration, we will select at most 2 * RESERVED_CHUNK_NUM_PER_PDEV gc tasks
+    auto max_task_num = 2 * (RESERVED_CHUNK_NUM_PER_PDEV - RESERVED_CHUNK_NUM_DEDICATED_FOR_EGC);
 
     for (const auto& [_, chunk] : m_chunk_selector->get_all_chunks()) {
         if (is_eligible_for_gc(chunk)) {
