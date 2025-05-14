@@ -47,10 +47,7 @@ folly::SemiFuture< bool > GCManager::submit_gc_task(task_priority priority, chun
         return folly::makeFuture< bool >(false);
     }
     auto& actor = it->second;
-    auto [promise, future] = folly::makePromiseContract< bool >();
-    actor->add_gc_task(priority, {chunk_id, static_cast< uint8_t >(priority), std ::move(promise)});
-    LOGINFO("submit gc task for chunk_id: {}, pdev_id: {}", chunk_id, pdev_id);
-    return std::move(future);
+    return actor->add_gc_task(static_cast< uint8_t >(priority), chunk_id);
 }
 
 std::shared_ptr< GCManager::pdev_gc_actor >
@@ -91,17 +88,26 @@ bool GCManager::is_eligible_for_gc(std::shared_ptr< HeapChunkSelector::ExtendedV
 }
 
 void GCManager::scan_chunks_for_gc() {
+    // in every iteration, we will select at most RESERVED_CHUNK_NUM_PER_PDEV gc tasks
+    auto max_task_num = RESERVED_CHUNK_NUM_PER_PDEV;
+
     for (const auto& [_, chunk] : m_chunk_selector->get_all_chunks()) {
         if (is_eligible_for_gc(chunk)) {
             auto pdev_id = chunk->get_pdev_id();
             auto it = m_pdev_gc_actors.find(pdev_id);
             if (it != m_pdev_gc_actors.end()) {
                 auto& actor = it->second;
-                auto [promise, _ /* future */] = folly::makePromiseContract< bool >();
-                // TODO:: use the future to check if the normal task is completed when necessary
-                actor->add_gc_task(
-                    task_priority::normal,
-                    {chunk->get_chunk_id(), static_cast< uint8_t >(task_priority::normal), std ::move(promise)});
+                auto chunk_id = chunk->get_chunk_id();
+                auto future = actor->add_gc_task(static_cast< uint8_t >(task_priority::normal), chunk_id);
+                if (future.isReady()) {
+                    // future is not expected to be ready immediately. if it is ready here, it probably means failing to
+                    // add gc task. then we try to add one more.
+                    LOGWARN("failed to add gc task for chunk_id={} on pdev_id={}, return value= {}", chunk_id, pdev_id,
+                            future.value());
+                } else if (0 == --max_task_num) {
+                    LOGINFO("reached max gc task limit for pdev_id={}, stopping further gc task submissions", pdev_id);
+                    break;
+                }
             }
         }
     }
@@ -113,12 +119,9 @@ GCManager::pdev_gc_actor::pdev_gc_actor(uint32_t pdev_id, std::shared_ptr< HeapC
                                         std::shared_ptr< GCBlobIndexTable > index_table, HSHomeObject* homeobject) :
         m_pdev_id{pdev_id},
         m_chunk_selector{chunk_selector},
-        // we have a queue for each priority, so the size is the same as the number of priorities
-        m_gc_task_queue{static_cast< size_t >(task_priority::priority_count)},
         m_reserved_chunk_queue{RESERVED_CHUNK_NUM_PER_PDEV},
         m_index_table{index_table},
         m_hs_home_object{homeobject} {
-
     RELEASE_ASSERT(index_table, "index_table for a gc_actor should not be nullptr!!!");
 }
 
@@ -131,22 +134,6 @@ void GCManager::pdev_gc_actor::start() {
     // thread number is the same as reserved chunk, which can make sure every gc thread can take a reserved chunk
     // for gc
     m_gc_executor = std::make_shared< folly::IOThreadPoolExecutor >(RESERVED_CHUNK_NUM_PER_PDEV);
-    for (uint32_t i = 0; i < RESERVED_CHUNK_NUM_PER_PDEV; i++) {
-        m_gc_executor->add([this] {
-            while (!m_is_stopped.load(std::memory_order_relaxed)) {
-                GCManager::gc_task task;
-                if (m_gc_task_queue.try_dequeue(task)) {
-                    process_gc_task(task);
-                } else {
-                    // if we use a condition variable(cv), when stop, the cv might lost the notification. so, it`s
-                    // better to do sleep and check
-                    LOGINFO("no gc task found, sleep 1s!");
-                    std::this_thread::sleep_for(std::chrono::seconds(1));
-                }
-            }
-        });
-    }
-
     LOGINFO("pdev gc actor for pdev_id={} has started", m_pdev_id);
 }
 
@@ -166,8 +153,22 @@ void GCManager::pdev_gc_actor::add_reserved_chunk(chunk_id_t chunk_id) {
     m_reserved_chunk_queue.blockingWrite(chunk_id);
 }
 
-void GCManager::pdev_gc_actor::add_gc_task(task_priority priority, GCManager::gc_task gc_task) {
-    m_gc_task_queue.at_priority(static_cast< size_t >(priority)).enqueue(std::move(gc_task));
+folly::SemiFuture< bool > GCManager::pdev_gc_actor::add_gc_task(uint8_t priority, chunk_id_t move_from_chunk) {
+    if (m_chunk_selector->try_mark_chunk_to_gc_state(move_from_chunk,
+                                                     priority == static_cast< uint8_t >(task_priority::emergent))) {
+        auto [promise, future] = folly::makePromiseContract< bool >();
+        m_gc_executor->addWithPriority(
+            [this, priority, move_from_chunk, promise = std::move(promise)]() mutable {
+                LOGERROR("start gc task : move_from_chunk_id={}, priority={}", move_from_chunk, priority);
+                process_gc_task(move_from_chunk, priority, std::move(promise));
+            },
+            priority);
+
+        return std::move(future);
+    }
+
+    LOGWARN("fail to submit gc task for chunk_id={}, priority={}", move_from_chunk, priority);
+    return folly::makeSemiFuture< bool >(false);
 }
 
 // this method is expected to be called sequentially when replaying metablk, so we don't need to worry about the
@@ -192,8 +193,9 @@ void GCManager::pdev_gc_actor::handle_recovered_gc_task(const GCManager::gc_task
         m_reserved_chunk_queue.blockingWrite(reserved_chunk);
     }
 
-    // 2 we need to select the move_from_chunk out of per pg chunk heap in chunk selector if it is a gc task with normal
-    // priority. for the task with emergent priority, it is already selected since it is now used for an open shard.
+    // 2 we need to select the move_from_chunk out of per pg chunk heap in chunk selector if it is a gc task with
+    // normal priority. for the task with emergent priority, it is already selected since it is now used for an open
+    // shard.
 
     auto vchunk = m_chunk_selector->get_extend_vchunk(move_from_chunk);
     RELEASE_ASSERT(vchunk, "can not find vchunk for pchunk {} in chunk selector!", move_from_chunk);
@@ -202,11 +204,17 @@ void GCManager::pdev_gc_actor::handle_recovered_gc_task(const GCManager::gc_task
 
     m_chunk_selector->try_mark_chunk_to_gc_state(move_from_chunk, true /* force */);
     // 3 now we can switch the two chunks.
-    replace_blob_index(move_from_chunk, move_to_chunk, priority);
+    if (!replace_blob_index(move_from_chunk, move_to_chunk, priority)) {
+        RELEASE_ASSERT(false,
+                       "failed to handle recovered gc task for move_from_chunk={} to move_to_chunk={} with priority={}",
+                       move_from_chunk, move_to_chunk, priority);
+    }
 }
 
-void GCManager::pdev_gc_actor::replace_blob_index(chunk_id_t move_from_chunk, chunk_id_t move_to_chunk,
-                                                  uint8_t priority) {}
+bool GCManager::pdev_gc_actor::replace_blob_index(chunk_id_t move_from_chunk, chunk_id_t move_to_chunk,
+                                                  uint8_t priority) {
+    return true;
+}
 
 sisl::sg_list GCManager::pdev_gc_actor::generate_shard_super_blk_sg_list(shard_id_t shard_id) {
     // TODO: do the buffer check before using it.
@@ -254,9 +262,8 @@ void GCManager::pdev_gc_actor::purge_reserved_chunk(chunk_id_t chunk) {
     }
 }
 
-void GCManager::pdev_gc_actor::process_gc_task(gc_task& task) {
-    auto priority = task.get_priority();
-    auto move_from_chunk = task.get_move_from_chunk_id();
+void GCManager::pdev_gc_actor::process_gc_task(chunk_id_t move_from_chunk, uint8_t priority,
+                                               folly::Promise< bool > task) {
     auto move_from_vchunk = m_chunk_selector->get_extend_vchunk(move_from_chunk);
 
     LOGINFO("start process gc task for move_from_chunk={} with priority={} ", move_from_chunk, priority);
@@ -267,7 +274,7 @@ void GCManager::pdev_gc_actor::process_gc_task(gc_task& task) {
 
     if (!GCManager::is_eligible_for_gc(move_from_vchunk)) {
         LOGWARN("move_from_chunk={} is not eligible for gc, so we can not process the gc task", move_from_chunk);
-        task.complete(false);
+        task.setValue(false);
         return;
     }
 
@@ -277,10 +284,11 @@ void GCManager::pdev_gc_actor::process_gc_task(gc_task& task) {
     auto succeed = m_chunk_selector->try_mark_chunk_to_gc_state(
         move_from_chunk, priority == static_cast< uint8_t >(task_priority::emergent) /* force */);
 
-    // the move_from_chunk probably now is used by an open shard, so we need to check if it can be marked as gc state.
+    // the move_from_chunk probably now is used by an open shard, so we need to check if it can be marked as gc
+    // state.
     if (!succeed) {
         LOGWARN("move_from_chunk={} is expected to be mark as gc state, but not!", move_from_chunk);
-        task.complete(false);
+        task.setValue(false);
         return;
     }
 
@@ -295,7 +303,7 @@ void GCManager::pdev_gc_actor::process_gc_task(gc_task& task) {
     if (!copy_valid_data(move_from_chunk, move_to_chunk)) {
         LOGWARN("failed to copy data from move_from_chunk={} to move_to_chunk={} with priority={}", move_from_chunk,
                 move_to_chunk, priority);
-        task.complete(false);
+        task.setValue(false);
         return;
     }
 
@@ -318,11 +326,14 @@ void GCManager::pdev_gc_actor::process_gc_task(gc_task& task) {
     // after the data copy is done, we can switch the two chunks.
     LOGINFO("gc task for move_from_chunk={} to move_to_chunk={} with priority={} start switching chunk",
             move_from_chunk, move_to_chunk, priority);
-    replace_blob_index(move_from_chunk, move_to_chunk, priority);
+    if (replace_blob_index(move_from_chunk, move_to_chunk, priority)) {
+        // TODO: handle the error case if replace_blob_index fails
+    }
+    // TODO: change the chunk state of move_to_chunk to AVAILABLE so that it can be used for new shard.
 
     // now we can complete the task. for emergent gc, we need wait for the gc task to be completed
     gc_task_sb.destroy();
-    task.complete(true);
+    task.setValue(true);
     LOGINFO("gc task for move_from_chunk={} to move_to_chunk={} with priority={} is completed", move_from_chunk,
             move_to_chunk, priority);
 }

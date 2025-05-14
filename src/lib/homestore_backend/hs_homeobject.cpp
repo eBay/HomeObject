@@ -459,7 +459,7 @@ void HSHomeObject::init_gc() {
         },
         nullptr, true);
 
-    gc_mgr_->start();
+    //gc_mgr_->start();
 }
 
 void HSHomeObject::on_gc_task_meta_blk_found(sisl::byte_view const& buf, void* meta_cookie) {

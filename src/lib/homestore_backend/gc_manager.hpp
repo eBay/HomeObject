@@ -1,7 +1,6 @@
 #pragma once
 #include <string>
 
-#include <folly/concurrency/PriorityUnboundedQueueSet.h>
 #include <folly/concurrency/ConcurrentHashMap.h>
 #include <folly/executors/IOThreadPoolExecutor.h>
 #include <folly/MPMCQueue.h>
@@ -76,43 +75,6 @@ public:
 #pragma pack()
 
 public:
-    class gc_task {
-    public:
-        gc_task(chunk_id_t chunk_id, uint8_t priority, folly::Promise< bool > promise) :
-                move_from_chunk_id_{chunk_id}, priority_{priority}, promise_{std ::move(promise)} {};
-
-        gc_task() : move_from_chunk_id_{0}, priority_{0}, promise_{folly::Promise< bool >()} {};
-
-        gc_task(gc_task&& other) noexcept :
-                move_from_chunk_id_(other.move_from_chunk_id_),
-                priority_(other.priority_),
-                promise_(std::move(other.promise_)) {}
-
-        gc_task& operator=(gc_task&& other) noexcept {
-            if (this != &other) {
-                move_from_chunk_id_ = other.move_from_chunk_id_;
-                priority_ = other.priority_;
-                promise_ = std::move(other.promise_);
-            }
-            return *this;
-        }
-
-        // disallow copy
-        gc_task(const gc_task&) = delete;
-        gc_task& operator=(const gc_task&) = delete;
-
-    public:
-        chunk_id_t get_move_from_chunk_id() const { return move_from_chunk_id_; }
-        uint8_t get_priority() const { return priority_; }
-        void complete(bool success) { promise_.setValue(success); }
-
-    private:
-        chunk_id_t move_from_chunk_id_;
-        uint8_t priority_;
-        folly::Promise< bool > promise_;
-    };
-
-public:
     // TODO: refine the rate limiter, currently it is a simple token bucket implementation.
     class RateLimiter {
         // TODO::make ratelimiter perceptive to client io, so gc can take more io resource if the io traffic from cline
@@ -151,18 +113,18 @@ public:
 
     public:
         void add_reserved_chunk(chunk_id_t chunk_id);
-        void add_gc_task(task_priority priority, gc_task task);
+        folly::SemiFuture< bool > add_gc_task(uint8_t priority, chunk_id_t move_from_chunk);
         void handle_recovered_gc_task(const GCManager::gc_task_superblk* gc_task);
         void start();
         void stop();
 
     private:
-        void process_gc_task(gc_task& task);
+        void process_gc_task(chunk_id_t move_from_chunk, uint8_t priority, folly::Promise< bool > task);
 
         // this should be called only after gc_task meta blk is persisted. it will update the pg index table according
         // to the gc index table. return the move_to_chunk to chunkselector and put move_from_chunk to reserved chunk
         // queue.
-        void replace_blob_index(chunk_id_t move_from_chunk, chunk_id_t move_to_chunk, uint8_t priority);
+        bool replace_blob_index(chunk_id_t move_from_chunk, chunk_id_t move_to_chunk, uint8_t priority);
 
         // copy all the valid data from the move_from_chunk to move_to_chunk. valid data means those blobs that are not
         // tombstone in the pg index table
@@ -181,8 +143,6 @@ public:
     private:
         uint32_t m_pdev_id;
         std::shared_ptr< HeapChunkSelector > m_chunk_selector;
-        // multi producer , multi consumer , no-blocking priority task queue
-        folly::PriorityUMPMCQueueSet< gc_task, false > m_gc_task_queue;
         folly::MPMCQueue< chunk_id_t > m_reserved_chunk_queue;
         std::shared_ptr< GCBlobIndexTable > m_index_table;
         HSHomeObject* m_hs_home_object{nullptr};
