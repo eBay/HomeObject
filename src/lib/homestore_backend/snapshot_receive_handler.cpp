@@ -56,7 +56,7 @@ int HSHomeObject::SnapshotReceiveHandler::process_pg_snapshot_data(ResyncPGMetaD
         [&pg_meta](auto& de) { de.blob_sequence_num.store(pg_meta.blob_seq_num(), std::memory_order_relaxed); });
 
     // update metrics
-    std::unique_lock<std::shared_mutex> lock(mutex);
+    std::unique_lock< std::shared_mutex > lock(ctx_->progress_lock);
     ctx_->progress.start_time = std::chrono::duration_cast< std::chrono::seconds >(
         std::chrono::system_clock::now().time_since_epoch()).count();
     ctx_->progress.total_shards = ctx_->shard_list.size();
@@ -135,7 +135,6 @@ int HSHomeObject::SnapshotReceiveHandler::process_shard_snapshot_data(ResyncShar
     home_obj_.local_create_shard(shard_sb->info, shard_sb->v_chunk_id, shard_sb->p_chunk_id, blk_id.blk_count());
     ctx_->shard_cursor = shard_meta.shard_id();
     ctx_->cur_batch_num = 0;
-    std::unique_lock<std::shared_mutex> lock(mutex);
     return 0;
 }
 
@@ -144,7 +143,7 @@ int HSHomeObject::SnapshotReceiveHandler::process_blobs_snapshot_data(ResyncBlob
                                                                       bool is_last_batch) {
     //retry mesg, need to handle duplicate batch, reset progress
     if (ctx_->cur_batch_num == batch_num) {
-        std::unique_lock<std::shared_mutex> lock(mutex);
+        std::unique_lock< std::shared_mutex > lock(ctx_->progress_lock);
         ctx_->progress.complete_blobs -= ctx_->progress.cur_batch_blobs;
         ctx_->progress.complete_bytes -= ctx_->progress.cur_batch_bytes;
         ctx_->progress.cur_batch_blobs = 0;
@@ -199,7 +198,7 @@ int HSHomeObject::SnapshotReceiveHandler::process_blobs_snapshot_data(ResyncBlob
         if (blob->state() != static_cast< uint8_t >(ResyncBlobState::CORRUPTED)) {
             auto header = r_cast< BlobHeader const* >(blob_data);
             if (!header->valid()) {
-                std::unique_lock<std::shared_mutex> lock(mutex);
+                std::unique_lock< std::shared_mutex > lock(ctx_->progress_lock);
                 ctx_->progress.error_count++;
                 LOGE("Invalid header found for blob_id={}: [header={}]", blob->blob_id(), header->to_string());
                 return INVALID_BLOB_HEADER;
@@ -215,14 +214,14 @@ int HSHomeObject::SnapshotReceiveHandler::process_blobs_snapshot_data(ResyncBlob
             if (std::memcmp(computed_hash, header->hash, BlobHeader::blob_max_hash_len) != 0) {
                 LOGE("Hash mismatch for blob_id={}: header [{}] [computed={:np}]", blob->blob_id(), header->to_string(),
                      spdlog::to_hex(computed_hash, computed_hash + BlobHeader::blob_max_hash_len));
-                std::unique_lock<std::shared_mutex> lock(mutex);
+                std::unique_lock< std::shared_mutex > lock(ctx_->progress_lock);
                 ctx_->progress.error_count++;
                 return BLOB_DATA_CORRUPTED;
             }
         } else {
             LOGW("find corrupted_blobs={} in shardID=0x{:x}, pg={}, shard=0x{:x}", blob->blob_id(), ctx_->shard_cursor,
                  (ctx_->shard_cursor >> homeobject::shard_width), (ctx_->shard_cursor & homeobject::shard_mask));
-            std::unique_lock<std::shared_mutex> lock(mutex);
+            std::unique_lock< std::shared_mutex > lock(ctx_->progress_lock);
             ctx_->progress.corrupted_blobs++;
         }
 
@@ -238,7 +237,7 @@ int HSHomeObject::SnapshotReceiveHandler::process_blobs_snapshot_data(ResyncBlob
             LOGE("Failed to allocate blocks for shardID=0x{:x}, pg={}, shard=0x{:x} blob {}", ctx_->shard_cursor,
                  (ctx_->shard_cursor >> homeobject::shard_width), (ctx_->shard_cursor & homeobject::shard_mask),
                  blob->blob_id());
-            std::unique_lock<std::shared_mutex> lock(mutex);
+            std::unique_lock< std::shared_mutex > lock(ctx_->progress_lock);
             ctx_->progress.error_count++;
             return ALLOC_BLK_ERR;
         }
@@ -253,7 +252,7 @@ int HSHomeObject::SnapshotReceiveHandler::process_blobs_snapshot_data(ResyncBlob
 #ifdef _PRERELEASE
         if (iomgr_flip::instance()->test_flip("snapshot_receiver_blob_write_data_error")) {
             LOGW("Simulating blob snapshot write data error");
-            std::unique_lock<std::shared_mutex> lock(mutex);
+            std::unique_lock< std::shared_mutex > lock(ctx_->progress_lock);
             ctx_->progress.error_count++;
             free_allocated_blks();
             return WRITE_DATA_ERR;
@@ -274,13 +273,13 @@ int HSHomeObject::SnapshotReceiveHandler::process_blobs_snapshot_data(ResyncBlob
         if (ret.hasError()) {
             LOGE("Failed to write blob info of blob_id {} to blk_id={}", blob->blob_id(), blk_id.to_string());
             free_allocated_blks();
-            std::unique_lock<std::shared_mutex> lock(mutex);
+            std::unique_lock< std::shared_mutex > lock(ctx_->progress_lock);
             ctx_->progress.error_count++;
             return WRITE_DATA_ERR;
         }
         if (homestore::data_service().commit_blk(blk_id) != homestore::BlkAllocStatus::SUCCESS) {
             LOGE("Failed to commit blk_id={} for blob_id={}", blk_id.to_string(), blob->blob_id());
-            std::unique_lock<std::shared_mutex> lock(mutex);
+            std::unique_lock< std::shared_mutex > lock(ctx_->progress_lock);
             ctx_->progress.error_count++;
             free_allocated_blks();
             return COMMIT_BLK_ERR;
@@ -291,7 +290,7 @@ int HSHomeObject::SnapshotReceiveHandler::process_blobs_snapshot_data(ResyncBlob
             home_obj_.local_add_blob_info(ctx_->pg_id, BlobInfo{ctx_->shard_cursor, blob->blob_id(), blk_id});
         if (!success) {
             LOGE("Failed to add blob info for blob_id={}", blob->blob_id());
-            std::unique_lock<std::shared_mutex> lock(mutex);
+            std::unique_lock< std::shared_mutex > lock(ctx_->progress_lock);
             ctx_->progress.error_count++;
             free_allocated_blks();
             return ADD_BLOB_INDEX_ERR;
@@ -304,7 +303,7 @@ int HSHomeObject::SnapshotReceiveHandler::process_blobs_snapshot_data(ResyncBlob
 
     // update metrics
     {
-        std::unique_lock<std::shared_mutex> lock(mutex);
+        std::unique_lock< std::shared_mutex > lock(ctx_->progress_lock);
         ctx_->progress.cur_batch_blobs = data_blobs.blob_list()->size();
         ctx_->progress.cur_batch_bytes = total_bytes;
         ctx_->progress.complete_blobs += ctx_->progress.cur_batch_blobs;
@@ -323,7 +322,7 @@ int HSHomeObject::SnapshotReceiveHandler::process_blobs_snapshot_data(ResyncBlob
             home_obj_.chunk_selector()->release_chunk(ctx_->pg_id, v_chunk_id.value());
         }
         {
-            std::unique_lock<std::shared_mutex> lock(mutex);
+            std::unique_lock< std::shared_mutex > lock(ctx_->progress_lock);
             ctx_->progress.complete_shards++;
         }
         // We only update the snp info superblk on completion of each shard, since resumption is also shard-level
@@ -425,7 +424,7 @@ void HSHomeObject::SnapshotReceiveHandler::update_snp_info_sb(bool init) {
     sb->shard_cursor = get_next_shard();
 
     {
-        std::unique_lock<std::shared_mutex> lock(mutex);
+        std::unique_lock< std::shared_mutex > lock(ctx_->progress_lock);
         sb->progress.start_time = ctx_->progress.start_time;
         sb->progress.total_blobs = ctx_->progress.total_blobs;
         sb->progress.total_bytes = ctx_->progress.total_bytes;
