@@ -23,7 +23,9 @@ class HSHomeObject;
 // TODO:: make those #define below configurable
 
 // Default number of chunks reserved for GC per pdev
-#define RESERVED_CHUNK_NUM_PER_PDEV 4
+#define RESERVED_CHUNK_NUM_PER_PDEV 6
+// reserved chunk number dedicated for emergent GC
+#define RESERVED_CHUNK_NUM_DEDICATED_FOR_EGC 2
 // GC interval in seconds, this is used to schedule the GC timer
 #define GC_SCAN_INTERVAL_SEC 10llu
 // Garbage rate threshold, bigger than which, a gc task will be scheduled for a chunk
@@ -148,6 +150,7 @@ public:
         HSHomeObject* m_hs_home_object{nullptr};
         RateLimiter m_rate_limiter{MAX_READ_WRITE_BLOCK_COUNT_PER_SECOND};
         std::shared_ptr< folly::IOThreadPoolExecutor > m_gc_executor;
+        std::shared_ptr< folly::IOThreadPoolExecutor > m_egc_executor;
         std::atomic_bool m_is_stopped{true};
     };
 

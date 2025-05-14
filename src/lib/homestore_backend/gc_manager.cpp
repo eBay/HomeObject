@@ -131,9 +131,15 @@ void GCManager::pdev_gc_actor::start() {
         LOGERROR("pdev gc actor for pdev_id={} is already started, no need to start again!", m_pdev_id);
         return;
     }
+    RELEASE_ASSERT(RESERVED_CHUNK_NUM_PER_PDEV > RESERVED_CHUNK_NUM_DEDICATED_FOR_EGC,
+                   "reserved chunk number {} per pdev should be greater than {}", RESERVED_CHUNK_NUM_PER_PDEV,
+                   RESERVED_CHUNK_NUM_DEDICATED_FOR_EGC);
     // thread number is the same as reserved chunk, which can make sure every gc thread can take a reserved chunk
     // for gc
-    m_gc_executor = std::make_shared< folly::IOThreadPoolExecutor >(RESERVED_CHUNK_NUM_PER_PDEV);
+    m_gc_executor = std::make_shared< folly::IOThreadPoolExecutor >(RESERVED_CHUNK_NUM_PER_PDEV -
+                                                                    RESERVED_CHUNK_NUM_DEDICATED_FOR_EGC);
+    m_egc_executor = std::make_shared< folly::IOThreadPoolExecutor >(RESERVED_CHUNK_NUM_DEDICATED_FOR_EGC);
+
     LOGINFO("pdev gc actor for pdev_id={} has started", m_pdev_id);
 }
 
@@ -144,8 +150,10 @@ void GCManager::pdev_gc_actor::stop() {
         return;
     }
     m_gc_executor->stop();
-    m_gc_executor->join();
     m_gc_executor.reset();
+
+    m_egc_executor->stop();
+    m_egc_executor.reset();
     LOGINFO("pdev gc actor for pdev_id={} has stopped", m_pdev_id);
 }
 
@@ -157,13 +165,18 @@ folly::SemiFuture< bool > GCManager::pdev_gc_actor::add_gc_task(uint8_t priority
     if (m_chunk_selector->try_mark_chunk_to_gc_state(move_from_chunk,
                                                      priority == static_cast< uint8_t >(task_priority::emergent))) {
         auto [promise, future] = folly::makePromiseContract< bool >();
-        m_gc_executor->addWithPriority(
-            [this, priority, move_from_chunk, promise = std::move(promise)]() mutable {
+
+        if (sisl_unlikely(priority == static_cast< uint8_t >(task_priority::emergent))) {
+            m_egc_executor->add([this, priority, move_from_chunk, promise = std::move(promise)]() mutable {
                 LOGERROR("start gc task : move_from_chunk_id={}, priority={}", move_from_chunk, priority);
                 process_gc_task(move_from_chunk, priority, std::move(promise));
-            },
-            priority);
-
+            });
+        } else {
+            m_gc_executor->add([this, priority, move_from_chunk, promise = std::move(promise)]() mutable {
+                LOGERROR("start gc task : move_from_chunk_id={}, priority={}", move_from_chunk, priority);
+                process_gc_task(move_from_chunk, priority, std::move(promise));
+            });
+        }
         return std::move(future);
     }
 
