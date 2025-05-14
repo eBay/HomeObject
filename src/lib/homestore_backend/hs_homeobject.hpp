@@ -45,7 +45,7 @@ private:
     inline static auto const _snp_rcvr_meta_name = std::string("SnapshotReceiver");
     inline static auto const _snp_rcvr_shard_list_meta_name = std::string("SnapshotReceiverShardList");
     static constexpr uint64_t HS_CHUNK_SIZE = 2 * Gi;
-    static constexpr uint32_t _data_block_size = 1024;
+    static constexpr uint32_t _data_block_size = 4 * Ki;
     static uint64_t _hs_chunk_size;
     uint32_t _hs_reserved_blks = 0;
     ///
