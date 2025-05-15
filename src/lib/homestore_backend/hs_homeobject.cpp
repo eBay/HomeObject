@@ -271,9 +271,6 @@ void HSHomeObject::init_homestore() {
     recovery_done_ = true;
     LOGI("Initialize and start HomeStore is successfully");
 
-    // TODO::enable gc after we have data copy
-    // gc_mgr_->start();
-
     // Now cache the zero padding bufs to avoid allocating during IO time
     for (size_t i{0}; i < max_zpad_bufs; ++i) {
         size_t const size = io_align * (i + 1);
@@ -361,6 +358,9 @@ void HSHomeObject::init_gc() {
     HomeStore::instance()->meta_service().read_sub_sb(GCManager::_gc_actor_meta_name);
     HomeStore::instance()->meta_service().read_sub_sb(GCManager::_gc_reserved_chunk_meta_name);
     HomeStore::instance()->meta_service().read_sub_sb(GCManager::_gc_task_meta_name);
+
+    // TODO::enable gc after we have data copy
+    // gc_mgr_->start();
 }
 
 // void HSHomeObject::trigger_timed_events() { persist_pg_sb(); }

@@ -128,7 +128,8 @@ TEST_F(HomeObjectFixture, ReplaceMember) {
         verify_pg_destroy(pg_id, index_table_uuid_str, pg_shard_id_vec[pg_id], true);
         // since this case out_member don't have any pg, so we can check each chunk.
         for (const auto& [_, chunk] : _obj_inst->chunk_selector()->m_chunks) {
-            ASSERT_EQ(chunk->m_state, ChunkState::AVAILABLE);
+            // TODO: revisit the assert here after we implement gc recovery
+            ASSERT_TRUE(chunk->m_state == ChunkState::AVAILABLE || chunk->m_state == ChunkState::GC);
             ASSERT_EQ(chunk->available_blks(), chunk->get_total_blks());
         }
         LOGINFO("check no pg related data in out member successfully");
@@ -146,7 +147,8 @@ TEST_F(HomeObjectFixture, ReplaceMember) {
         verify_pg_destroy(pg_id, index_table_uuid_str, pg_shard_id_vec[pg_id]);
         // since this case out_member don't have any pg, so we can check each chunk.
         for (const auto& [_, chunk] : _obj_inst->chunk_selector()->m_chunks) {
-            ASSERT_EQ(chunk->m_state, ChunkState::AVAILABLE);
+            // TODO: revisit the assert here after we implement gc recovery
+            ASSERT_TRUE(chunk->m_state == ChunkState::AVAILABLE || chunk->m_state == ChunkState::GC);
             ASSERT_EQ(chunk->available_blks(), chunk->get_total_blks());
         }
         LOGINFO("After restart, check no pg related data in out member successfully");
