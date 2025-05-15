@@ -613,7 +613,7 @@ private:
     std::unordered_map< homestore::group_id_t, homestore::superblk< snapshot_ctx_superblk > > snp_ctx_sbs_;
     mutable std::shared_mutex snp_sbs_lock_;
     shared< HeapChunkSelector > chunk_selector_;
-    shared< GCManager > gc_mgr_;
+    std::unique_ptr< GCManager > gc_mgr_;
     unique< HttpManager > http_mgr_;
     bool recovery_done_{false};
 
@@ -650,7 +650,6 @@ private:
     // recover part
     void register_homestore_metablk_callback();
     void on_pg_meta_blk_found(sisl::byte_view const& buf, void* meta_cookie);
-    void on_pg_meta_blk_recover_completed(bool success);
     void on_shard_meta_blk_found(homestore::meta_blk* mblk, sisl::byte_view buf);
     void on_shard_meta_blk_recover_completed(bool success);
     void on_snp_ctx_meta_blk_found(homestore::meta_blk* mblk, sisl::byte_view buf);
@@ -659,9 +658,6 @@ private:
     void on_snp_rcvr_meta_blk_recover_completed(bool success);
     void on_snp_rcvr_shard_list_meta_blk_found(homestore::meta_blk* mblk, sisl::byte_view buf);
     void on_snp_rcvr_shard_list_meta_blk_recover_completed(bool success);
-    void on_gc_task_meta_blk_found(sisl::byte_view const& buf, void* meta_cookie);
-    void on_gc_actor_meta_found(sisl::byte_view const& buf, void* meta_cookie);
-    void on_reserved_chunk_meta_found(sisl::byte_view const& buf, void* meta_cookie);
 
     void persist_pg_sb();
 
@@ -678,11 +674,6 @@ public:
      */
     void init_homestore();
 
-    /**
-     * Initializes gc manager.
-     */
-    void init_gc();
-
 #if 0
     /**
      * @brief Initializes a timer thread.
@@ -696,6 +687,8 @@ public:
      *
      */
     void init_cp();
+
+    void init_gc();
 
     /**
      * @brief Callback function invoked when createPG message is committed on a shard.
@@ -842,6 +835,7 @@ public:
     void update_snapshot_sb(homestore::group_id_t group_id, std::shared_ptr< homestore::snapshot_context > ctx);
     void destroy_snapshot_sb(homestore::group_id_t group_id);
     const Shard* _get_hs_shard(const shard_id_t shard_id) const;
+    std::shared_ptr< GCBlobIndexTable > get_gc_index_table(std::string uuid) const;
 
 private:
     std::shared_ptr< BlobIndexTable > create_pg_index_table();

@@ -10,6 +10,7 @@
 
 #include <queue>
 #include <vector>
+#include <unordered_set>
 #include <mutex>
 #include <functional>
 #include <atomic>
@@ -128,7 +129,7 @@ public:
     bool recover_pg_chunks(pg_id_t pg_id, std::vector< chunk_num_t >&& p_chunk_ids);
 
     // this should be called after all pg meta blk recovered
-    void recover_per_dev_chunk_heap();
+    void build_pdev_available_chunk_heap();
 
     // this should be called after ShardManager is initialized and get all the open shards
     bool recover_pg_chunks_states(pg_id_t pg_id, const std::unordered_set< chunk_num_t >& excluding_v_chunk_ids);
@@ -193,16 +194,7 @@ public:
     /**
      * @brief Returns all the pdev ids that managed by this chunk selector.
      */
-    std::list< uint32_t > get_pdev_ids() const;
-
-    /**
-     * @brief select an available chunk from the given pdev.
-     */
-    std::shared_ptr< ExtendedVChunk > select_empty_chunk_from_pdev(uint32_t pdev_id);
-
-    std::shared_ptr< ExtendedVChunk > select_specific_chunk_from_pdev(uint32_t pdev_id, const chunk_num_t chunk_id);
-
-    const std::unordered_map< chunk_num_t, homestore::cshared< ExtendedVChunk > >& get_all_chunks() const;
+    std::unordered_map< uint32_t, std::vector< chunk_num_t > > get_pdev_chunks() const;
 
     homestore::cshared< ExtendedVChunk > get_extend_vchunk(const chunk_num_t chunk_id) const;
 

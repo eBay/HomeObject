@@ -173,15 +173,19 @@ public:
      */
     std::shared_ptr< pdev_gc_actor > try_create_pdev_gc_actor(uint32_t pdev_id,
                                                               std::shared_ptr< GCBlobIndexTable > index_table);
-    std::shared_ptr< pdev_gc_actor > get_pdev_gc_actor(uint32_t pdev_id);
 
-    static bool is_eligible_for_gc(std::shared_ptr< HeapChunkSelector::ExtendedVChunk > chunk);
+    bool is_eligible_for_gc(chunk_id_t chunk_id);
 
     void start();
     void stop();
 
 private:
     void scan_chunks_for_gc();
+
+    void on_gc_task_meta_blk_found(sisl::byte_view const& buf, void* meta_cookie);
+    void on_gc_actor_meta_blk_found(sisl::byte_view const& buf, void* meta_cookie);
+    void on_reserved_chunk_meta_blk_found(sisl::byte_view const& buf, void* meta_cookie);
+    std::shared_ptr< pdev_gc_actor > get_pdev_gc_actor(uint32_t pdev_id);
 
 private:
     std::shared_ptr< HeapChunkSelector > m_chunk_selector;

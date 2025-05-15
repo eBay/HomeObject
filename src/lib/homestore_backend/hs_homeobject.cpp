@@ -218,18 +218,16 @@ void HSHomeObject::init_homestore() {
                                   .chunk_sel_type = chunk_selector_type_t::CUSTOM}},
             });
         }
+
         // We dont have any repl dev now, explicitly call init_completed_cb() where we register PG/Shard meta types.
         repl_app->on_repl_devs_init_completed();
 
+        // we need to regitster the meta blk handlers after metaservice is ready.
+        gc_mgr_ = std::make_unique< GCManager >(chunk_selector_, this);
         // if this is the first time we are starting, we need to create gc metablk for each pdev， which record the
         // reserved chunks and indextable.
-        auto pdevs = chunk_selector_->get_pdev_ids();
-        // only after we register the handlers, can we write the metablks.
-        homestore::HomeStore::instance()->meta_service().register_handler(GCManager::_gc_actor_meta_name, nullptr,
-                                                                          nullptr, true);
-        homestore::HomeStore::instance()->meta_service().register_handler(GCManager::_gc_reserved_chunk_meta_name,
-                                                                          nullptr, nullptr, true);
-        for (auto const& pdev_id : pdevs) {
+        auto pdev_chunks = chunk_selector_->get_pdev_chunks();
+        for (auto const& [pdev_id, chunks] : pdev_chunks) {
             // 1 create gc index table for each pdev
             auto gc_index_table = create_gc_index_table();
             auto uuid = gc_index_table->uuid();
@@ -243,17 +241,17 @@ void HSHomeObject::init_homestore() {
             gc_actor_sb->index_table_uuid = uuid;
             gc_actor_sb.write();
 
+            RELEASE_ASSERT(chunks.size() > RESERVED_CHUNK_NUM_PER_PDEV,
+                           "pdev {} has {} chunks, but we need at least {} chunks for reserved chunk", pdev_id,
+                           chunks.size(), RESERVED_CHUNK_NUM_PER_PDEV);
+
             // 3 create reserved chunk meta blk for each pdev, which contains the reserved chunks.
             for (size_t i = 0; i < RESERVED_CHUNK_NUM_PER_PDEV; ++i) {
-                auto chunk = chunk_selector_->select_empty_chunk_from_pdev(pdev_id);
-                RELEASE_ASSERT(
-                    chunk, "can not select available chunk from pdev {} as reserved chunk when initialzing homeobject",
-                    pdev_id);
-
+                auto chunk = chunks[i];
                 homestore::superblk< GCManager::gc_reserved_chunk_superblk > reserved_chunk_sb{
                     GCManager::_gc_reserved_chunk_meta_name};
                 reserved_chunk_sb.create(sizeof(GCManager::gc_reserved_chunk_superblk));
-                reserved_chunk_sb->chunk_id = chunk->get_chunk_id();
+                reserved_chunk_sb->chunk_id = chunk;
                 reserved_chunk_sb.write();
             }
         }
@@ -263,7 +261,6 @@ void HSHomeObject::init_homestore() {
         svc_sb.create(sizeof(svc_info_superblk_t));
         svc_sb->svc_id_ = _our_id;
         svc_sb.write();
-
     } else {
         RELEASE_ASSERT(!_our_id.is_nil(), "No SvcId read after HomeStore recovery!");
         auto const new_id = app->discover_svcid(_our_id);
@@ -273,6 +270,9 @@ void HSHomeObject::init_homestore() {
 
     recovery_done_ = true;
     LOGI("Initialize and start HomeStore is successfully");
+
+    // TODO::enable gc after we have data copy
+    // gc_mgr_->start();
 
     // Now cache the zero padding bufs to avoid allocating during IO time
     for (size_t i{0}; i < max_zpad_bufs; ++i) {
@@ -292,7 +292,8 @@ void HSHomeObject::on_replica_restart() {
             [this](homestore::meta_blk* mblk, sisl::byte_view buf, size_t size) {
                 on_pg_meta_blk_found(std::move(buf), voidptr_cast(mblk));
             },
-            [this](bool success) { on_pg_meta_blk_recover_completed(success); }, true);
+            nullptr, true);
+
         HomeStore::instance()->meta_service().read_sub_sb(_pg_meta_name);
 
         // recover shard
@@ -350,6 +351,16 @@ void HSHomeObject::init_cp() {
     // Register to CP for flush dirty buffers;
     HomeStore::instance()->cp_mgr().register_consumer(cp_consumer_t::HS_CLIENT,
                                                       std::move(std::make_unique< MyCPCallbacks >(*this)));
+}
+
+void HSHomeObject::init_gc() {
+    using namespace homestore;
+    if (!gc_mgr_) gc_mgr_ = std::make_unique< GCManager >(chunk_selector_, this);
+    // when initializing, there is not gc task. we need to recover reserved chunks here, so that the reserved chunks
+    // will not be put into pdev heap when built
+    HomeStore::instance()->meta_service().read_sub_sb(GCManager::_gc_actor_meta_name);
+    HomeStore::instance()->meta_service().read_sub_sb(GCManager::_gc_reserved_chunk_meta_name);
+    HomeStore::instance()->meta_service().read_sub_sb(GCManager::_gc_task_meta_name);
 }
 
 // void HSHomeObject::trigger_timed_events() { persist_pg_sb(); }
@@ -432,91 +443,13 @@ bool HSHomeObject::pg_exists(pg_id_t pg_id) const {
     return _pg_map.contains(pg_id);
 }
 
-void HSHomeObject::init_gc() {
-    gc_mgr_ = std::make_unique< GCManager >(chunk_selector_, this);
-
-    // recover gc actor for each pdev
-    homestore::HomeStore::instance()->meta_service().register_handler(
-        GCManager::_gc_actor_meta_name,
-        [this](homestore::meta_blk* mblk, sisl::byte_view buf, size_t size) {
-            on_gc_actor_meta_found(std::move(buf), voidptr_cast(mblk));
-        },
-        nullptr, true);
-
-    // recover reserved chunk for each pdev
-    homestore::HomeStore::instance()->meta_service().register_handler(
-        GCManager::_gc_reserved_chunk_meta_name,
-        [this](homestore::meta_blk* mblk, sisl::byte_view buf, size_t size) {
-            on_reserved_chunk_meta_found(std::move(buf), voidptr_cast(mblk));
-        },
-        nullptr, true);
-
-    // recover pending gc task
-    homestore::HomeStore::instance()->meta_service().register_handler(
-        GCManager::_gc_task_meta_name,
-        [this](homestore::meta_blk* mblk, sisl::byte_view buf, size_t size) {
-            on_gc_task_meta_blk_found(std::move(buf), voidptr_cast(mblk));
-        },
-        nullptr, true);
-
-    //gc_mgr_->start();
-}
-
-void HSHomeObject::on_gc_task_meta_blk_found(sisl::byte_view const& buf, void* meta_cookie) {
-    homestore::superblk< GCManager::gc_task_superblk > gc_task_sb(GCManager::_gc_task_meta_name);
-    const auto pending_gc_task = gc_task_sb.load(buf, meta_cookie);
-
-    // if a gc_task_super blk is found, we can make sure that all the valid data in move_from_chunk has been copied to
-    // move_to_chunk, and all the blob -> (new pba) have been written to the gc index table. Now, what we need to do is
-    // just updating blob indexes in pg index table according to the blob indexes in gc index table.
-
-    // pg_index_table: [pg_id, shard_id, blob_id] -> old pba
-    // gc_index_table: [move_to_chunk_id, pg_id, shard_id, blob_id] -> new pba
-
-    // we need to find all keys with the prefix of move_to_chunk_id in gc index table, and update the corrsponding
-    // keys(same pg_id + shard_id + blob_id) in pg index table with the new pba.
-    auto pdev_id = chunk_selector()->get_extend_vchunk(pending_gc_task->move_from_chunk)->get_pdev_id();
-    auto gc_actor = gc_mgr_->get_pdev_gc_actor(pdev_id);
-    RELEASE_ASSERT(gc_actor, "can not get gc actor for pdev {}!", pdev_id);
-    gc_actor->handle_recovered_gc_task(pending_gc_task);
-
-    // delete gc task meta blk, so that it will not be recovered again if restart
-    gc_task_sb.destroy();
-}
-
-void HSHomeObject::on_gc_actor_meta_found(sisl::byte_view const& buf, void* meta_cookie) {
-    homestore::superblk< GCManager::gc_actor_superblk > gc_actor_sb(GCManager::_gc_actor_meta_name);
-    gc_actor_sb.load(buf, meta_cookie);
-    auto pdev_id = gc_actor_sb->pdev_id;
-    auto index_table_uuid = gc_actor_sb->index_table_uuid;
-
-    auto it = gc_index_table_map.find(boost::uuids::to_string(index_table_uuid));
-    RELEASE_ASSERT(it != gc_index_table_map.end(), "can not find gc index table for pdev {} with uuid {}!", pdev_id,
-                   boost::uuids::to_string(index_table_uuid));
-
-    auto gc_index_table = it->second;
-    RELEASE_ASSERT(gc_index_table, "can not get gc index table for pdev {} with uuid {}!", pdev_id,
-                   boost::uuids::to_string(index_table_uuid));
-
-    // create a gc actor for this pdev if not exists
-    auto gc_actor = gc_mgr_->try_create_pdev_gc_actor(pdev_id, gc_index_table);
-    RELEASE_ASSERT(gc_actor, "can not get gc actor for pdev {}!", pdev_id);
-}
-
-void HSHomeObject::on_reserved_chunk_meta_found(sisl::byte_view const& buf, void* meta_cookie) {
-    homestore::superblk< GCManager::gc_reserved_chunk_superblk > reserved_chunk_sb(
-        GCManager::_gc_reserved_chunk_meta_name);
-    reserved_chunk_sb.load(buf, meta_cookie);
-    auto chunk_id = reserved_chunk_sb->chunk_id;
-    auto pdev_id = chunk_selector()->get_extend_vchunk(chunk_id)->get_pdev_id();
-    auto gc_actor = gc_mgr_->get_pdev_gc_actor(pdev_id);
-    RELEASE_ASSERT(gc_actor, "can not get gc actor for pdev {}!", pdev_id);
-    gc_actor->add_reserved_chunk(chunk_id);
-    // if it is the first time we start, the chunk has already been seleted from the chunk selector in the
-    // init_homestore phase. so here we will get nullptr.
-    chunk_selector_->select_specific_chunk_from_pdev(pdev_id, chunk_id);
-    // mark a reserved chunk as gc state, so that it will not be selected as a gc candidate
-    chunk_selector_->try_mark_chunk_to_gc_state(chunk_id, true /* force */);
+std::shared_ptr< GCBlobIndexTable > HSHomeObject::get_gc_index_table(std::string uuid) const {
+    const auto it = gc_index_table_map.find(uuid);
+    if (it == gc_index_table_map.end()) {
+        LOGE("gc index table {} not found", uuid);
+        return nullptr;
+    }
+    return it->second;
 }
 
 } // namespace homeobject

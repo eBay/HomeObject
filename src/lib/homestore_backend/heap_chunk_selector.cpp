@@ -310,11 +310,11 @@ bool HeapChunkSelector::recover_pg_chunks(pg_id_t pg_id, std::vector< chunk_num_
     return true;
 }
 
-void HeapChunkSelector::recover_per_dev_chunk_heap() {
+void HeapChunkSelector::build_pdev_available_chunk_heap() {
     std::unique_lock lock_guard(m_chunk_selector_mtx);
     for (auto [p_chunk_id, chunk] : m_chunks) {
-        // if selected for pg, not add to pdev.
-        bool add_to_heap = !chunk->m_pg_id.has_value();
+        // if selected for pg, or it is marked as GC state(reserved chunk), not add to pdev.
+        bool add_to_heap = !chunk->m_pg_id.has_value() && chunk->m_state != ChunkState::GC;
         add_chunk_internal(p_chunk_id, add_to_heap);
     }
 }
@@ -438,85 +438,18 @@ uint64_t HeapChunkSelector::total_blks(uint32_t dev_id) const {
     return it->second->m_total_blks;
 }
 
-std::list< uint32_t > HeapChunkSelector::get_pdev_ids() const {
-    std::list< uint32_t > pdev_ids;
-    for (const auto& [pdev_id, _] : m_per_dev_heap) {
-        pdev_ids.emplace_back(pdev_id);
+std::unordered_map< uint32_t, std::vector< homestore::chunk_num_t > > HeapChunkSelector::get_pdev_chunks() const {
+    std::unordered_map< uint32_t, std::vector< homestore::chunk_num_t > > pdev_chunks;
+    for (const auto& [_, EXvchunk] : m_chunks) {
+        auto pdev_id = EXvchunk->get_pdev_id();
+        pdev_chunks.try_emplace(pdev_id, std::vector< homestore::chunk_num_t >());
+        pdev_chunks[pdev_id].emplace_back(EXvchunk->get_chunk_id());
     }
-    return pdev_ids;
-}
-
-std::shared_ptr< HeapChunkSelector::ExtendedVChunk > HeapChunkSelector::select_empty_chunk_from_pdev(uint32_t pdev_id) {
-    std::unique_lock lock_guard(m_chunk_selector_mtx);
-    auto it = m_per_dev_heap.find(pdev_id);
-    if (it == m_per_dev_heap.end()) {
-        LOGWARNMOD(homeobject, "No pdev heap found for pdev {}", pdev_id);
-        return nullptr;
-    }
-    auto pdev_heap = it->second;
-    std::unique_lock lock(pdev_heap->mtx);
-    if (pdev_heap->m_heap.empty()) {
-        LOGWARNMOD(homeobject, "No available chunk found for pdev {}", pdev_id);
-        return nullptr;
-    }
-    auto chunk = pdev_heap->m_heap.top();
-    pdev_heap->m_heap.pop();
-    pdev_heap->available_blk_count -= chunk->available_blks();
-    RELEASE_ASSERT(chunk->available_blks() == chunk->get_total_blks(),
-                   "the selected chunk should be empty, chunk_id={}, pdev_id={}", chunk->get_chunk_id(), pdev_id);
-    RELEASE_ASSERT(!chunk->m_pg_id.has_value(), "chunk {} is selected from pdev heap, but it has a pg_id {}!",
-                   chunk->get_chunk_id(), chunk->m_pg_id.value());
-
-    return chunk;
-}
-
-std::shared_ptr< HeapChunkSelector::ExtendedVChunk >
-HeapChunkSelector::select_specific_chunk_from_pdev(uint32_t pdev_id, const chunk_num_t chunk_id) {
-    std::unique_lock lock_guard(m_chunk_selector_mtx);
-    auto it = m_per_dev_heap.find(pdev_id);
-    if (it == m_per_dev_heap.end()) {
-        LOGWARNMOD(homeobject, "No pdev heap found for pdev {}", pdev_id);
-        return nullptr;
-    }
-    auto pdev_heap = it->second;
-    std::shared_ptr< HeapChunkSelector::ExtendedVChunk > EVchunk;
-    std::list< std::shared_ptr< HeapChunkSelector::ExtendedVChunk > > EVchunks;
-
-    std::unique_lock lock(pdev_heap->mtx);
-    for (; pdev_heap->m_heap.empty();) {
-        EVchunk = pdev_heap->m_heap.top();
-        pdev_heap->m_heap.pop();
-        if (EVchunk->get_chunk_id() == chunk_id) {
-            break;
-        } else {
-            EVchunks.emplace_back(EVchunk);
-        }
-    }
-
-    for (const auto& chunk : EVchunks) {
-        pdev_heap->m_heap.emplace(chunk);
-    }
-
-    if (!EVchunk) {
-        LOGWARNMOD(homeobject, "No available chunk found for pdev {}, chunk_id {}", pdev_id, chunk_id);
-        return nullptr;
-    }
-
-    pdev_heap->available_blk_count -= EVchunk->available_blks();
-
-    RELEASE_ASSERT(!EVchunk->m_pg_id.has_value(), "chunk {} is selected from pdev heap, but it has a pg_id {}!",
-                   EVchunk->get_chunk_id(), EVchunk->m_pg_id.value());
-
-    return EVchunk;
-}
-
-const std::unordered_map< homestore::chunk_num_t, homestore::cshared< HeapChunkSelector::ExtendedVChunk > >&
-HeapChunkSelector::get_all_chunks() const {
-    return m_chunks;
+    return pdev_chunks;
 }
 
 homestore::cshared< HeapChunkSelector::ExtendedVChunk >
-HeapChunkSelector::get_extend_vchunk(const chunk_num_t chunk_id) const {
+HeapChunkSelector::get_extend_vchunk(const homestore::chunk_num_t chunk_id) const {
     auto it = m_chunks.find(chunk_id);
     if (it != m_chunks.end()) { return it->second; }
     return nullptr;

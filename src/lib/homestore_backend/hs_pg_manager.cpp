@@ -154,7 +154,7 @@ PGManager::NullAsyncResult HSHomeObject::do_create_pg(cshared< homestore::ReplDe
 #endif
 
     // replicate this create pg message to all raft members of this group
-    repl_dev->async_alloc_write(req->header_buf(), sisl::blob{}, sisl::sg_list{}, req, false/* part_of_batch */, tid);
+    repl_dev->async_alloc_write(req->header_buf(), sisl::blob{}, sisl::sg_list{}, req, false /* part_of_batch */, tid);
     return req->result().deferValue([req](auto const& e) -> PGManager::NullAsyncResult {
         if (!e) { return folly::makeUnexpected(e.error()); }
         return folly::Unit();
@@ -504,8 +504,6 @@ void HSHomeObject::on_pg_meta_blk_found(sisl::byte_view const& buf, void* meta_c
 
     add_pg_to_map(std::move(hs_pg));
 }
-
-void HSHomeObject::on_pg_meta_blk_recover_completed(bool success) { chunk_selector_->recover_per_dev_chunk_heap(); }
 
 PGInfo HSHomeObject::HS_PG::pg_info_from_sb(homestore::superblk< pg_info_superblk > const& sb) {
     PGInfo pginfo{sb->id};

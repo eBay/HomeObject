@@ -7,14 +7,91 @@ namespace homeobject {
 /* GCManager */
 
 GCManager::GCManager(std::shared_ptr< HeapChunkSelector > chunk_selector, HSHomeObject* homeobject) :
-        m_chunk_selector{chunk_selector}, m_hs_home_object{homeobject} {}
+        m_chunk_selector{chunk_selector}, m_hs_home_object{homeobject} {
+    homestore::HomeStore::instance()->meta_service().register_handler(
+        GCManager::_gc_actor_meta_name,
+        [this](homestore::meta_blk* mblk, sisl::byte_view buf, size_t size) {
+            on_gc_actor_meta_blk_found(std::move(buf), voidptr_cast(mblk));
+        },
+        nullptr, true);
+
+    homestore::HomeStore::instance()->meta_service().register_handler(
+        GCManager::_gc_reserved_chunk_meta_name,
+        [this](homestore::meta_blk* mblk, sisl::byte_view buf, size_t size) {
+            on_reserved_chunk_meta_blk_found(std::move(buf), voidptr_cast(mblk));
+        },
+        [this](bool success) {
+            RELEASE_ASSERT(success, "Failed to recover all reserved chunk!!!");
+            // we need to guarantee that pg meta blk is recovered before we start recover reserved chunk
+            m_chunk_selector->build_pdev_available_chunk_heap();
+        },
+        true);
+
+    homestore::HomeStore::instance()->meta_service().register_handler(
+        GCManager::_gc_task_meta_name,
+        [this](homestore::meta_blk* mblk, sisl::byte_view buf, size_t size) {
+            on_gc_task_meta_blk_found(std::move(buf), voidptr_cast(mblk));
+        },
+        nullptr, true);
+}
+
+void GCManager::on_gc_task_meta_blk_found(sisl::byte_view const& buf, void* meta_cookie) {
+    homestore::superblk< GCManager::gc_task_superblk > gc_task_sb(GCManager::_gc_task_meta_name);
+    const auto pending_gc_task = gc_task_sb.load(buf, meta_cookie);
+
+    // if a gc_task_super blk is found, we can make sure that all the valid data in move_from_chunk has been copied to
+    // move_to_chunk, and all the blob -> (new pba) have been written to the gc index table. Now, what we need to do is
+    // just updating blob indexes in pg index table according to the blob indexes in gc index table.
+
+    // pg_index_table: [pg_id, shard_id, blob_id] -> old pba
+    // gc_index_table: [move_to_chunk_id, pg_id, shard_id, blob_id] -> new pba
+
+    // we need to find all keys with the prefix of move_to_chunk_id in gc index table, and update the corrsponding
+    // keys(same pg_id + shard_id + blob_id) in pg index table with the new pba.
+    auto pdev_id = m_chunk_selector->get_extend_vchunk(pending_gc_task->move_from_chunk)->get_pdev_id();
+    auto gc_actor = get_pdev_gc_actor(pdev_id);
+    RELEASE_ASSERT(gc_actor, "can not get gc actor for pdev {}!", pdev_id);
+    gc_actor->handle_recovered_gc_task(pending_gc_task);
+
+    // delete gc task meta blk, so that it will not be recovered again if restart
+    gc_task_sb.destroy();
+}
+
+void GCManager::on_gc_actor_meta_blk_found(sisl::byte_view const& buf, void* meta_cookie) {
+    homestore::superblk< GCManager::gc_actor_superblk > gc_actor_sb(GCManager::_gc_actor_meta_name);
+    gc_actor_sb.load(buf, meta_cookie);
+    auto pdev_id = gc_actor_sb->pdev_id;
+    auto index_table_uuid = gc_actor_sb->index_table_uuid;
+
+    auto gc_index_table = m_hs_home_object->get_gc_index_table(boost::uuids::to_string(index_table_uuid));
+
+    RELEASE_ASSERT(gc_index_table, "can not get gc index table for pdev {} with uuid {}!", pdev_id,
+                   boost::uuids::to_string(index_table_uuid));
+
+    // create a gc actor for this pdev if not exists
+    auto gc_actor = try_create_pdev_gc_actor(pdev_id, gc_index_table);
+    RELEASE_ASSERT(gc_actor, "can not get gc actor for pdev {}!", pdev_id);
+}
+
+void GCManager::on_reserved_chunk_meta_blk_found(sisl::byte_view const& buf, void* meta_cookie) {
+    homestore::superblk< GCManager::gc_reserved_chunk_superblk > reserved_chunk_sb(
+        GCManager::_gc_reserved_chunk_meta_name);
+    reserved_chunk_sb.load(buf, meta_cookie);
+    auto chunk_id = reserved_chunk_sb->chunk_id;
+    auto pdev_id = m_chunk_selector->get_extend_vchunk(chunk_id)->get_pdev_id();
+    auto gc_actor = get_pdev_gc_actor(pdev_id);
+    RELEASE_ASSERT(gc_actor, "can not get gc actor for pdev {}!", pdev_id);
+    gc_actor->add_reserved_chunk(chunk_id);
+    // mark a reserved chunk as gc state, so that it will not be selected as a gc candidate
+    m_chunk_selector->try_mark_chunk_to_gc_state(chunk_id, true /* force */);
+}
 
 GCManager::~GCManager() { stop(); }
 
 void GCManager::start() {
     for (const auto& [pdev_id, gc_actor] : m_pdev_gc_actors) {
         gc_actor->start();
-        LOGERROR("start gc actor for pdev={}", pdev_id);
+        LOGINFO("start gc actor for pdev={}", pdev_id);
     }
 
     m_gc_timer_hdl = iomanager.schedule_global_timer(
@@ -72,12 +149,22 @@ std::shared_ptr< GCManager::pdev_gc_actor > GCManager::get_pdev_gc_actor(uint32_
     return it->second;
 }
 
-bool GCManager::is_eligible_for_gc(std::shared_ptr< HeapChunkSelector::ExtendedVChunk > chunk) {
+bool GCManager::is_eligible_for_gc(chunk_id_t chunk_id) {
+    auto chunk = m_chunk_selector->get_extend_vchunk(chunk_id);
+
     // 1 if the chunk state is inuse, it is occupied by a open shard, so it can not be selected and we don't need gc it.
     // 2 if the chunk state is gc, it means this chunk is being gc, or this is a reserved chunk, so we don't need gc it.
-    if (chunk->m_state != ChunkState::AVAILABLE) return false;
+    if (chunk->m_state != ChunkState::AVAILABLE) {
+        LOGINFO("chunk_id={} state is {}, not eligible for gc", chunk_id, chunk->m_state)
+        return false;
+    }
     // it does not belong to any pg, so we don't need to gc it.
-    if (!chunk->m_pg_id.has_value()) return false;
+    if (!chunk->m_pg_id.has_value()) {
+        LOGINFO("chunk_id={} belongs to no pg, not eligible for gc", chunk_id)
+        return false;
+    }
+
+    LOGINFO("chunk_id={} is eligible for gc, belongs to pg {}", chunk_id, chunk->m_pg_id.value());
 
     auto defrag_blk_num = chunk->get_defrag_nblks();
     auto total_blk_num = chunk->get_total_blks();
@@ -88,21 +175,21 @@ bool GCManager::is_eligible_for_gc(std::shared_ptr< HeapChunkSelector::ExtendedV
 }
 
 void GCManager::scan_chunks_for_gc() {
-    // in every iteration, we will select at most 2 * RESERVED_CHUNK_NUM_PER_PDEV gc tasks
-    auto max_task_num = 2 * (RESERVED_CHUNK_NUM_PER_PDEV - RESERVED_CHUNK_NUM_DEDICATED_FOR_EGC);
+    for (const auto& [pdev_id, chunks] : m_chunk_selector->get_pdev_chunks()) {
+        // in every iteration, we will select at most 2 * RESERVED_CHUNK_NUM_PER_PDEV gc tasks
+        auto max_task_num = 2 * (RESERVED_CHUNK_NUM_PER_PDEV - RESERVED_CHUNK_NUM_DEDICATED_FOR_EGC);
+        auto it = m_pdev_gc_actors.find(pdev_id);
+        RELEASE_ASSERT(it != m_pdev_gc_actors.end(), "can not find gc actor for pdev_id {} when scanning chunks for gc",
+                       pdev_id);
+        auto& actor = it->second;
 
-    for (const auto& [_, chunk] : m_chunk_selector->get_all_chunks()) {
-        if (is_eligible_for_gc(chunk)) {
-            auto pdev_id = chunk->get_pdev_id();
-            auto it = m_pdev_gc_actors.find(pdev_id);
-            if (it != m_pdev_gc_actors.end()) {
-                auto& actor = it->second;
-                auto chunk_id = chunk->get_chunk_id();
+        for (const auto& chunk_id : chunks) {
+            if (is_eligible_for_gc(chunk_id)) {
                 auto future = actor->add_gc_task(static_cast< uint8_t >(task_priority::normal), chunk_id);
                 if (future.isReady()) {
                     // future is not expected to be ready immediately. if it is ready here, it probably means failing to
                     // add gc task. then we try to add one more.
-                    LOGWARN("failed to add gc task for chunk_id={} on pdev_id={}, return value= {}", chunk_id, pdev_id,
+                    LOGWARN("failed to add gc task for chunk_id={} on pdev_id={}, return value={}", chunk_id, pdev_id,
                             future.value());
                 } else if (0 == --max_task_num) {
                     LOGINFO("reached max gc task limit for pdev_id={}, stopping further gc task submissions", pdev_id);
@@ -146,7 +233,7 @@ void GCManager::pdev_gc_actor::start() {
 void GCManager::pdev_gc_actor::stop() {
     bool stopped = false;
     if (!m_is_stopped.compare_exchange_strong(stopped, true, std::memory_order_release, std::memory_order_relaxed)) {
-        LOGERROR("pdev gc actor for pdev_id={} is already stopped, no need to stop again!", m_pdev_id);
+        LOGWARN("pdev gc actor for pdev_id={} is already stopped, no need to stop again!", m_pdev_id);
         return;
     }
     m_gc_executor->stop();
@@ -168,12 +255,12 @@ folly::SemiFuture< bool > GCManager::pdev_gc_actor::add_gc_task(uint8_t priority
 
         if (sisl_unlikely(priority == static_cast< uint8_t >(task_priority::emergent))) {
             m_egc_executor->add([this, priority, move_from_chunk, promise = std::move(promise)]() mutable {
-                LOGERROR("start gc task : move_from_chunk_id={}, priority={}", move_from_chunk, priority);
+                LOGINFO("start emergent gc task : move_from_chunk_id={}, priority={}", move_from_chunk, priority);
                 process_gc_task(move_from_chunk, priority, std::move(promise));
             });
         } else {
             m_gc_executor->add([this, priority, move_from_chunk, promise = std::move(promise)]() mutable {
-                LOGERROR("start gc task : move_from_chunk_id={}, priority={}", move_from_chunk, priority);
+                LOGINFO("start gc task : move_from_chunk_id={}, priority={}", move_from_chunk, priority);
                 process_gc_task(move_from_chunk, priority, std::move(promise));
             });
         }
@@ -256,8 +343,8 @@ bool GCManager::pdev_gc_actor::copy_valid_data(chunk_id_t move_from_chunk, chunk
 
 void GCManager::pdev_gc_actor::purge_reserved_chunk(chunk_id_t chunk) {
     auto vchunk = m_chunk_selector->get_extend_vchunk(chunk);
-    RELEASE_ASSERT(!vchunk->m_pg_id.has_value(), "chunk_id={} is expected to a reserved chunk, and not belong to a pg",
-                   chunk);
+    RELEASE_ASSERT(!vchunk->m_pg_id.has_value(),
+                   "chunk_id={} is expected to be a reserved chunk, and not belong to a pg", chunk);
     vchunk->reset(); // reset the chunk to make sure it is empty
 
     // clear all the entries of this chunk in the gc index table
@@ -277,21 +364,7 @@ void GCManager::pdev_gc_actor::purge_reserved_chunk(chunk_id_t chunk) {
 
 void GCManager::pdev_gc_actor::process_gc_task(chunk_id_t move_from_chunk, uint8_t priority,
                                                folly::Promise< bool > task) {
-    auto move_from_vchunk = m_chunk_selector->get_extend_vchunk(move_from_chunk);
-
     LOGINFO("start process gc task for move_from_chunk={} with priority={} ", move_from_chunk, priority);
-
-    // we need to select the move_from_chunk out of the per pg chunk heap in chunk selector if it is a gc task with
-    // normal priority. for the task with emergent priority, it is already selected since it is now used for an open
-    // shard.
-
-    if (!GCManager::is_eligible_for_gc(move_from_vchunk)) {
-        LOGWARN("move_from_chunk={} is not eligible for gc, so we can not process the gc task", move_from_chunk);
-        task.setValue(false);
-        return;
-    }
-
-    LOGINFO("move_from_chunk={} belongs to pg {} ", move_from_chunk, move_from_vchunk->m_pg_id.value());
 
     // make chunk to gc state, so that it can be select for creating shard
     auto succeed = m_chunk_selector->try_mark_chunk_to_gc_state(
@@ -353,7 +426,7 @@ void GCManager::pdev_gc_actor::process_gc_task(chunk_id_t move_from_chunk, uint8
 
 GCManager::pdev_gc_actor::~pdev_gc_actor() {
     stop();
-    LOGINFO("pdev gc actor for pdev_id={} is destroyed", m_pdev_id);
+    LOGINFO("gc actor for pdev_id={} is destroyed", m_pdev_id);
 }
 
 /* RateLimiter */
