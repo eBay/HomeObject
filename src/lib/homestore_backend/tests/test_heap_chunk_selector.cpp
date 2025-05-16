@@ -100,7 +100,7 @@ protected:
         HCS.add_chunk(std::make_shared< Chunk >(3, 7, 1, 3));
         HCS.add_chunk(std::make_shared< Chunk >(3, 8, 2, 2));
         HCS.add_chunk(std::make_shared< Chunk >(3, 9, 3, 1));
-        HCS.recover_per_dev_chunk_heap();
+        HCS.build_pdev_available_chunk_heap();
         prepare_pg();
     };
 
@@ -334,8 +334,7 @@ TEST_F(HeapChunkSelectorTest, test_recovery) {
         }
     }
 
-    //  on_pg_meta_blk_recover_completed
-    HCS_recovery.recover_per_dev_chunk_heap();
+    HCS_recovery.build_pdev_available_chunk_heap();
     for (uint16_t pg_id = 1; pg_id < 4; ++pg_id) {
         // test recover pdev map size
         auto pdev_it = HCS_recovery.m_per_dev_heap.find(pg_id);

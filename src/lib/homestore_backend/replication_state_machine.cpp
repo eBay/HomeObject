@@ -602,6 +602,7 @@ folly::Future< std::error_code > ReplicationStateMachine::on_fetch_data(const in
                    msg_header->msg_type, total_size, sgs.size);
 
     auto given_buffer = (uint8_t*)(sgs.iovs[0].iov_base);
+    std::memset(given_buffer, 0, total_size);
 
     // in homeobject, we have three kinds of requests that will write data(thus fetch_data might happen) to a
     // chunk:
@@ -628,7 +629,6 @@ folly::Future< std::error_code > ReplicationStateMachine::on_fetch_data(const in
             msg_header->msg_type, expected_size, sgs.size);
 
         // TODO：：return error_code if assert fails, so it will not crash here because of the assert failure.
-
         std::memcpy(given_buffer, sb, raw_size);
         return folly::makeFuture< std::error_code >(std::error_code{});
     }

@@ -64,8 +64,26 @@ csharedChunk HeapChunkSelector::select_chunk(homestore::blk_count_t count, const
     }
 }
 
+bool HeapChunkSelector::try_mark_chunk_to_gc_state(const chunk_num_t chunk_id, bool force) {
+    std::unique_lock lock_guard(m_chunk_selector_mtx);
+    auto chunk_it = m_chunks.find(chunk_id);
+    if (chunk_it == m_chunks.end()) {
+        LOGWARNMOD(homeobject, "No chunk found for chunk_id={}", chunk_id);
+        return false;
+    }
+
+    auto& chunk_state = chunk_it->second->m_state;
+    if (chunk_state == ChunkState::INUSE && !force) {
+        LOGWARNMOD(homeobject, "Chunk is inuse, chunk_id={}", chunk_id);
+        return false;
+    }
+
+    chunk_state = ChunkState::GC;
+    return true;
+}
+
 csharedChunk HeapChunkSelector::select_specific_chunk(const pg_id_t pg_id, const chunk_num_t v_chunk_id) {
-    std::shared_lock lock_guard(m_chunk_selector_mtx);
+    std::unique_lock lock_guard(m_chunk_selector_mtx);
     auto pg_it = m_per_pg_chunks.find(pg_id);
     if (pg_it == m_per_pg_chunks.end()) {
         LOGWARNMOD(homeobject, "No pg found for pg={}", pg_id);
@@ -96,7 +114,7 @@ void HeapChunkSelector::foreach_chunks(std::function< void(csharedChunk&) >&& cb
 }
 
 bool HeapChunkSelector::release_chunk(const pg_id_t pg_id, const chunk_num_t v_chunk_id) {
-    std::shared_lock lock_guard(m_chunk_selector_mtx);
+    std::unique_lock lock_guard(m_chunk_selector_mtx);
     auto pg_it = m_per_pg_chunks.find(pg_id);
     if (pg_it == m_per_pg_chunks.end()) {
         LOGWARNMOD(homeobject, "No pg found for pg={}", pg_id);
@@ -120,7 +138,7 @@ bool HeapChunkSelector::release_chunk(const pg_id_t pg_id, const chunk_num_t v_c
 }
 
 bool HeapChunkSelector::reset_pg_chunks(pg_id_t pg_id) {
-    std::shared_lock lock_guard(m_chunk_selector_mtx);
+    std::unique_lock lock_guard(m_chunk_selector_mtx);
     auto pg_it = m_per_pg_chunks.find(pg_id);
     if (pg_it == m_per_pg_chunks.end()) {
         LOGWARNMOD(homeobject, "No pg found for pg={}", pg_id);
@@ -292,11 +310,11 @@ bool HeapChunkSelector::recover_pg_chunks(pg_id_t pg_id, std::vector< chunk_num_
     return true;
 }
 
-void HeapChunkSelector::recover_per_dev_chunk_heap() {
+void HeapChunkSelector::build_pdev_available_chunk_heap() {
     std::unique_lock lock_guard(m_chunk_selector_mtx);
     for (auto [p_chunk_id, chunk] : m_chunks) {
-        // if selected for pg, not add to pdev.
-        bool add_to_heap = !chunk->m_pg_id.has_value();
+        // if selected for pg, or it is marked as GC state(reserved chunk), not add to pdev.
+        bool add_to_heap = !chunk->m_pg_id.has_value() && chunk->m_state != ChunkState::GC;
         add_chunk_internal(p_chunk_id, add_to_heap);
     }
 }
@@ -348,8 +366,7 @@ std::shared_ptr< const std::vector< homestore::chunk_num_t > > HeapChunkSelector
     return p_chunk_ids;
 }
 
-std::optional< homestore::chunk_num_t >
-HeapChunkSelector::get_most_available_blk_chunk(uint64_t ctx, pg_id_t pg_id) {
+std::optional< homestore::chunk_num_t > HeapChunkSelector::get_most_available_blk_chunk(uint64_t ctx, pg_id_t pg_id) {
     std::shared_lock lock_guard(m_chunk_selector_mtx);
     auto pg_it = m_per_pg_chunks.find(pg_id);
     if (pg_it == m_per_pg_chunks.end()) {
@@ -419,6 +436,23 @@ uint64_t HeapChunkSelector::total_blks(uint32_t dev_id) const {
     }
 
     return it->second->m_total_blks;
+}
+
+std::unordered_map< uint32_t, std::vector< homestore::chunk_num_t > > HeapChunkSelector::get_pdev_chunks() const {
+    std::unordered_map< uint32_t, std::vector< homestore::chunk_num_t > > pdev_chunks;
+    for (const auto& [_, EXvchunk] : m_chunks) {
+        auto pdev_id = EXvchunk->get_pdev_id();
+        pdev_chunks.try_emplace(pdev_id, std::vector< homestore::chunk_num_t >());
+        pdev_chunks[pdev_id].emplace_back(EXvchunk->get_chunk_id());
+    }
+    return pdev_chunks;
+}
+
+homestore::cshared< HeapChunkSelector::ExtendedVChunk >
+HeapChunkSelector::get_extend_vchunk(const homestore::chunk_num_t chunk_id) const {
+    auto it = m_chunks.find(chunk_id);
+    if (it != m_chunks.end()) { return it->second; }
+    return nullptr;
 }
 
 } // namespace homeobject

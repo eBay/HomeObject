@@ -10,13 +10,14 @@
 
 #include <queue>
 #include <vector>
+#include <unordered_set>
 #include <mutex>
 #include <functional>
 #include <atomic>
 
 namespace homeobject {
 
-ENUM(ChunkState, uint8_t, AVAILABLE = 0, INUSE);
+ENUM(ChunkState, uint8_t, AVAILABLE = 0, INUSE, GC);
 
 using csharedChunk = homestore::cshared< homestore::Chunk >;
 
@@ -75,6 +76,16 @@ public:
     // be responsible to use release_chunk() interface to release it when no longer to use the chunk anymore.
     csharedChunk select_specific_chunk(const pg_id_t pg_id, const chunk_num_t v_chunk_id);
 
+    /**
+     * try to mark a chunk as gc state, so that it will not be selected by any creating shard.
+     *
+     * @param chunk_id
+     * @param force if the current state is inuse, should we force to mark it as gc. this is used for the emergent gc
+     * case
+     * @return true if success, false if the chunk is not inuse or not found.
+     */
+    bool try_mark_chunk_to_gc_state(const chunk_num_t chunk_id, bool force = false);
+
     // This function returns a chunk back to ChunkSelector.
     // It is used in two scenarios: 1. seal shard  2. create shard rollback
     bool release_chunk(const pg_id_t pg_id, const chunk_num_t v_chunk_id);
@@ -118,7 +129,7 @@ public:
     bool recover_pg_chunks(pg_id_t pg_id, std::vector< chunk_num_t >&& p_chunk_ids);
 
     // this should be called after all pg meta blk recovered
-    void recover_per_dev_chunk_heap();
+    void build_pdev_available_chunk_heap();
 
     // this should be called after ShardManager is initialized and get all the open shards
     bool recover_pg_chunks_states(pg_id_t pg_id, const std::unordered_set< chunk_num_t >& excluding_v_chunk_ids);
@@ -179,6 +190,13 @@ public:
     uint32_t total_disks() const { return m_per_dev_heap.size(); }
 
     bool is_chunk_available(const pg_id_t pg_id, const chunk_num_t v_chunk_id) const;
+
+    /**
+     * @brief Returns all the pdev ids that managed by this chunk selector.
+     */
+    std::unordered_map< uint32_t, std::vector< chunk_num_t > > get_pdev_chunks() const;
+
+    homestore::cshared< ExtendedVChunk > get_extend_vchunk(const chunk_num_t chunk_id) const;
 
 private:
     void add_chunk_internal(const chunk_num_t, bool add_to_heap = true);

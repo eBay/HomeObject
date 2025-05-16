@@ -13,6 +13,7 @@
 #include "replication_message.hpp"
 #include "homeobject/common.hpp"
 #include "index_kv.hpp"
+#include "gc_manager.hpp"
 #include "generated/resync_pg_data_generated.h"
 #include "generated/resync_shard_data_generated.h"
 #include "generated/resync_blob_data_generated.h"
@@ -25,8 +26,10 @@ class IndexTableBase;
 namespace homeobject {
 
 class BlobRouteKey;
+class BlobRouteByChunkKey;
 class BlobRouteValue;
 using BlobIndexTable = homestore::IndexTable< BlobRouteKey, BlobRouteValue >;
+
 class HttpManager;
 
 static constexpr uint64_t io_align{512};
@@ -48,7 +51,6 @@ private:
     static constexpr uint32_t _data_block_size = 4 * Ki;
     static uint64_t _hs_chunk_size;
     uint32_t _hs_reserved_blks = 0;
-    ///
 
     /// Overridable Helpers
     ShardManager::AsyncResult< ShardInfo > _create_shard(pg_id_t, uint64_t size_bytes, trace_id_t tid) override;
@@ -59,7 +61,8 @@ private:
                                                trace_id_t tid) const override;
     BlobManager::NullAsyncResult _del_blob(ShardInfo const&, blob_id_t, trace_id_t tid) override;
 
-    PGManager::NullAsyncResult _create_pg(PGInfo&& pg_info, std::set< peer_id_t > const& peers, trace_id_t tid) override;
+    PGManager::NullAsyncResult _create_pg(PGInfo&& pg_info, std::set< peer_id_t > const& peers,
+                                          trace_id_t tid) override;
     PGManager::NullAsyncResult _replace_member(pg_id_t id, peer_id_t const& old_member, PGMember const& new_member,
                                                uint32_t commit_quorum, trace_id_t tid) override;
 
@@ -75,7 +78,11 @@ private:
         std::shared_ptr< BlobIndexTable > index_table;
     };
     std::unordered_map< std::string, PgIndexTable > index_table_pg_map_;
+    std::unordered_map< std::string, std::shared_ptr< GCBlobIndexTable > > gc_index_table_map;
     std::once_flag replica_restart_flag_;
+
+    // mapping from chunk to shard list.
+    folly::ConcurrentHashMap< homestore::chunk_num_t, std::set< shard_id_t > > chunk_to_shards_map_;
 
 public:
 #pragma pack(1)
@@ -606,6 +613,7 @@ private:
     std::unordered_map< homestore::group_id_t, homestore::superblk< snapshot_ctx_superblk > > snp_ctx_sbs_;
     mutable std::shared_mutex snp_sbs_lock_;
     shared< HeapChunkSelector > chunk_selector_;
+    std::unique_ptr< GCManager > gc_mgr_;
     unique< HttpManager > http_mgr_;
     bool recovery_done_{false};
 
@@ -635,14 +643,13 @@ private:
     static ShardInfo deserialize_shard_info(const char* shard_info_str, size_t size);
     static std::string serialize_shard_info(const ShardInfo& info);
     void local_create_shard(ShardInfo shard_info, homestore::chunk_num_t v_chunk_id, homestore::chunk_num_t p_chunk_id,
-                            homestore::blk_count_t blk_count, trace_id_t tid=0);
-    void add_new_shard_to_map(ShardPtr&& shard);
+                            homestore::blk_count_t blk_count, trace_id_t tid = 0);
+    void add_new_shard_to_map(std::unique_ptr< HS_Shard > shard);
     void update_shard_in_map(const ShardInfo& shard_info);
 
     // recover part
     void register_homestore_metablk_callback();
     void on_pg_meta_blk_found(sisl::byte_view const& buf, void* meta_cookie);
-    void on_pg_meta_blk_recover_completed(bool success);
     void on_shard_meta_blk_found(homestore::meta_blk* mblk, sisl::byte_view buf);
     void on_shard_meta_blk_recover_completed(bool success);
     void on_snp_ctx_meta_blk_found(homestore::meta_blk* mblk, sisl::byte_view buf);
@@ -680,6 +687,8 @@ public:
      *
      */
     void init_cp();
+
+    void init_gc();
 
     /**
      * @brief Callback function invoked when createPG message is committed on a shard.
@@ -808,23 +817,29 @@ public:
                             const homestore::MultiBlkId& pbas, cintrusive< homestore::repl_req_ctx >& hs_ctx);
     void on_blob_del_commit(int64_t lsn, sisl::blob const& header, sisl::blob const& key,
                             cintrusive< homestore::repl_req_ctx >& hs_ctx);
-    bool local_add_blob_info(pg_id_t pg_id, BlobInfo const& blob_info, trace_id_t tid=0);
+    bool local_add_blob_info(pg_id_t pg_id, BlobInfo const& blob_info, trace_id_t tid = 0);
     homestore::ReplResult< homestore::blk_alloc_hints >
     blob_put_get_blk_alloc_hints(sisl::blob const& header, cintrusive< homestore::repl_req_ctx >& ctx);
     void compute_blob_payload_hash(BlobHeader::HashAlgorithm algorithm, const uint8_t* blob_bytes, size_t blob_size,
                                    const uint8_t* user_key_bytes, size_t user_key_size, uint8_t* hash_bytes,
                                    size_t hash_len) const;
 
-    std::shared_ptr< BlobIndexTable > recover_index_table(homestore::superblk< homestore::index_table_sb >&& sb);
+    std::shared_ptr< homestore::IndexTableBase >
+    recover_index_table(homestore::superblk< homestore::index_table_sb >&& sb);
     std::optional< pg_id_t > get_pg_id_with_group_id(homestore::group_id_t group_id) const;
+
+    const auto get_shards_in_chunk(homestore::chunk_num_t chunk_id) const { return chunk_to_shards_map_.at(chunk_id); }
 
     // Snapshot persistence related
     sisl::io_blob_safe get_snapshot_sb_data(homestore::group_id_t group_id);
     void update_snapshot_sb(homestore::group_id_t group_id, std::shared_ptr< homestore::snapshot_context > ctx);
     void destroy_snapshot_sb(homestore::group_id_t group_id);
+    const Shard* _get_hs_shard(const shard_id_t shard_id) const;
+    std::shared_ptr< GCBlobIndexTable > get_gc_index_table(std::string uuid) const;
 
 private:
-    std::shared_ptr< BlobIndexTable > create_index_table();
+    std::shared_ptr< BlobIndexTable > create_pg_index_table();
+    std::shared_ptr< GCBlobIndexTable > create_gc_index_table();
 
     std::pair< bool, homestore::btree_status_t > add_to_index_table(shared< BlobIndexTable > index_table,
                                                                     const BlobInfo& blob_info);
@@ -898,13 +913,13 @@ private:
 
     // only leader will call incr and decr pending request num
     void incr_pending_request_num() const {
-        uint64_t now=pending_request_num.fetch_add(1);
+        uint64_t now = pending_request_num.fetch_add(1);
         LOGT("inc pending req, was {}", now);
     }
-        void decr_pending_request_num() const {
+    void decr_pending_request_num() const {
         uint64_t now = pending_request_num.fetch_sub(1);
         LOGT("desc pending req, was {}", now);
-        DEBUG_ASSERT(now>0, "pending == 0 ");
+        DEBUG_ASSERT(now > 0, "pending == 0 ");
     }
 };
 

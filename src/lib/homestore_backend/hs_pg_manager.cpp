@@ -154,7 +154,7 @@ PGManager::NullAsyncResult HSHomeObject::do_create_pg(cshared< homestore::ReplDe
 #endif
 
     // replicate this create pg message to all raft members of this group
-    repl_dev->async_alloc_write(req->header_buf(), sisl::blob{}, sisl::sg_list{}, req, false/* part_of_batch */, tid);
+    repl_dev->async_alloc_write(req->header_buf(), sisl::blob{}, sisl::sg_list{}, req, false /* part_of_batch */, tid);
     return req->result().deferValue([req](auto const& e) -> PGManager::NullAsyncResult {
         if (!e) { return folly::makeUnexpected(e.error()); }
         return folly::Unit();
@@ -171,8 +171,8 @@ folly::Expected< HSHomeObject::HS_PG*, PGError > HSHomeObject::local_create_pg(s
 
     auto local_chunk_size = chunk_selector()->get_chunk_size();
     if (pg_info.chunk_size != local_chunk_size) {
-        LOGE("Chunk sizes are inconsistent, leader_chunk_size={}, local_chunk_size={}, trace_id={}",
-             pg_info.chunk_size, local_chunk_size, tid);
+        LOGE("Chunk sizes are inconsistent, leader_chunk_size={}, local_chunk_size={}, trace_id={}", pg_info.chunk_size,
+             local_chunk_size, tid);
         return folly::makeUnexpected< PGError >(PGError::UNKNOWN);
     }
 
@@ -189,7 +189,7 @@ folly::Expected< HSHomeObject::HS_PG*, PGError > HSHomeObject::local_create_pg(s
     }
 
     // create index table and pg
-    auto index_table = create_index_table();
+    auto index_table = create_pg_index_table();
     auto uuid_str = boost::uuids::to_string(index_table->uuid());
 
     repl_dev->set_custom_rdev_name(fmt::format("rdev{}", pg_info.id));
@@ -504,8 +504,6 @@ void HSHomeObject::on_pg_meta_blk_found(sisl::byte_view const& buf, void* meta_c
 
     add_pg_to_map(std::move(hs_pg));
 }
-
-void HSHomeObject::on_pg_meta_blk_recover_completed(bool success) { chunk_selector_->recover_per_dev_chunk_heap(); }
 
 PGInfo HSHomeObject::HS_PG::pg_info_from_sb(homestore::superblk< pg_info_superblk > const& sb) {
     PGInfo pginfo{sb->id};
