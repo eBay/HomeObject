@@ -187,10 +187,16 @@ void GCManager::scan_chunks_for_gc() {
             if (is_eligible_for_gc(chunk_id)) {
                 auto future = actor->add_gc_task(static_cast< uint8_t >(task_priority::normal), chunk_id);
                 if (future.isReady()) {
-                    // future is not expected to be ready immediately. if it is ready here, it probably means failing to
-                    // add gc task. then we try to add one more.
-                    LOGWARN("failed to add gc task for chunk_id={} on pdev_id={}, return value={}", chunk_id, pdev_id,
-                            future.value());
+                    if (future.value()) {
+                        LOGINFO("gc task for chunk_id={} on pdev_id={} has been submitted and successfully completed "
+                                "shortly",
+                                chunk_id, pdev_id);
+                    } else {
+                        LOGWARN("got false after add_gc_task for chunk_id={} on pdev_id={}, it means we cannot mark "
+                                "this chunk to gc state(there is an open shard on this chunk ATM) or this task is "
+                                "executed shortly but fails(fail to copy data or update gc index table) ",
+                                chunk_id, pdev_id);
+                    }
                 } else if (0 == --max_task_num) {
                     LOGINFO("reached max gc task limit for pdev_id={}, stopping further gc task submissions", pdev_id);
                     break;
@@ -412,8 +418,9 @@ void GCManager::pdev_gc_actor::process_gc_task(chunk_id_t move_from_chunk, uint8
     // after the data copy is done, we can switch the two chunks.
     LOGINFO("gc task for move_from_chunk={} to move_to_chunk={} with priority={} start switching chunk",
             move_from_chunk, move_to_chunk, priority);
-    if (replace_blob_index(move_from_chunk, move_to_chunk, priority)) {
-        // TODO: handle the error case if replace_blob_index fails
+    if (!replace_blob_index(move_from_chunk, move_to_chunk, priority)) {
+        RELEASE_ASSERT(false, "failed to replace blob index, move_from_chunk={} to move_to_chunk={} with priority={}",
+                       move_from_chunk, move_to_chunk, priority);
     }
     // TODO: change the chunk state of move_to_chunk to AVAILABLE so that it can be used for new shard.
 
