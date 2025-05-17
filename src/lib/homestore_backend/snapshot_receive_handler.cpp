@@ -257,7 +257,7 @@ int HSHomeObject::SnapshotReceiveHandler::process_blobs_snapshot_data(ResyncBlob
                  blob->blob_id());
             std::unique_lock< std::shared_mutex > lock(ctx_->progress_lock);
             ctx_->progress.error_count++;
-            return ALLOC_BLK_ERR;
+            break;
         }
 
 #ifdef _PRERELEASE
@@ -305,9 +305,15 @@ int HSHomeObject::SnapshotReceiveHandler::process_blobs_snapshot_data(ResyncBlob
         total_bytes += data_size;
     }
     auto ec = collect_all_futures(futs).get();
+    // when there is a allocation failure it breaks the while loop earlier.
+    auto all_io_submitted = (futs.size() == data_blobs.blob_list()->size());
 
-    if (ec != std::error_code{}) {
-        LOGE("Errors in writing this batch, code={}, message={}", ec.value(), ec.message());
+    if (!all_io_submitted || ec != std::error_code{}) {
+        if (!all_io_submitted) {
+            LOGE("Errors in submitting the batch, expect {} blobs, submitted {}.", data_blobs.blob_list()->size(), futs.size());
+        } else {
+            LOGE("Errors in writing this batch, code={}, message={}", ec.value(), ec.message());
+        }
         std::unique_lock< std::shared_mutex > lock(ctx_->progress_lock);
         ctx_->progress.error_count++;
         return WRITE_DATA_ERR;
