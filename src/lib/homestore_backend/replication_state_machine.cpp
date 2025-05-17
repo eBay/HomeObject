@@ -486,7 +486,7 @@ void ReplicationStateMachine::write_snapshot_obj(std::shared_ptr< homestore::sna
         }
         snp_obj->offset =
             objId(HSHomeObject::get_sequence_num_from_shard_id(m_snp_rcv_handler->get_next_shard()), 0).value;
-        LOGD("Write snapshot, processed PG data pg={} {}", pg_data->pg_id(), log_suffix);
+        LOGI("Write snapshot, processed PG data pg={} {}", pg_data->pg_id(), log_suffix);
         return;
     }
 

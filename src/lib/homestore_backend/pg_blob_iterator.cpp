@@ -90,8 +90,8 @@ void HSHomeObject::PGBlobIterator::reset_cursor() {
     cur_obj_id_ = {0, 0};
     cur_shard_idx_ = -1;
     std::vector< BlobInfo > cur_blob_list_{0};
-    cur_start_blob_idx_=0;
-    cur_batch_blob_count_=0;
+    cur_start_blob_idx_ = 0;
+    cur_batch_blob_count_ = 0;
     cur_batch_start_time_ = Clock::time_point{};
 }
 
@@ -187,8 +187,8 @@ bool HSHomeObject::PGBlobIterator::create_shard_snapshot_data(sisl::io_blob_safe
     return true;
 }
 
-BlobManager::AsyncResult< sisl::io_blob_safe > HSHomeObject::PGBlobIterator::load_blob_data(const BlobInfo& blob_info,
-                                                                                            ResyncBlobState& state) {
+BlobManager::AsyncResult< HSHomeObject::PGBlobIterator::blob_read_result >
+HSHomeObject::PGBlobIterator::load_blob_data(const BlobInfo& blob_info) {
     auto shard_id = blob_info.shard_id;
     auto blob_id = blob_info.blob_id;
     auto blkid = blob_info.pbas;
@@ -202,8 +202,8 @@ BlobManager::AsyncResult< sisl::io_blob_safe > HSHomeObject::PGBlobIterator::loa
     LOGD("Blob get request: shardID=0x{:x}, pg={}, shard=0x{:x}, blob_id={}, blkid={}", shard_id,
          (shard_id >> homeobject::shard_width), (shard_id & homeobject::shard_mask), blob_id, blkid.to_string());
     return repl_dev_->async_read(blkid, sgs, total_size)
-        .thenValue([this, blob_id, shard_id, &state, read_buf = std::move(read_buf)](
-                       auto&& result) mutable -> BlobManager::AsyncResult< sisl::io_blob_safe > {
+        .thenValue([this, blob_id, shard_id, read_buf = std::move(read_buf)](
+                       auto&& result) mutable -> BlobManager::AsyncResult< HSHomeObject::PGBlobIterator::blob_read_result > {
             if (result) {
                 LOGE("Failed to get blob, shardID=0x{:x}, pg={}, shard=0x{:x}, blob_id={}, err={}", shard_id,
                      (shard_id >> homeobject::shard_width), (shard_id & homeobject::shard_mask), blob_id,
@@ -217,8 +217,7 @@ BlobManager::AsyncResult< sisl::io_blob_safe > HSHomeObject::PGBlobIterator::loa
                 LOGE("Invalid header found, shardID=0x{:x}, pg={}, shard=0x{:x}, blob_id={}, [header={}]", shard_id,
                      (shard_id >> homeobject::shard_width), (shard_id & homeobject::shard_mask), blob_id,
                      header->to_string());
-                state = ResyncBlobState::CORRUPTED;
-                return std::move(read_buf);
+                return HSHomeObject::PGBlobIterator::blob_read_result(std::move(read_buf), ResyncBlobState::CORRUPTED);
             }
 
             if (header->shard_id != shard_id) {
@@ -226,8 +225,7 @@ BlobManager::AsyncResult< sisl::io_blob_safe > HSHomeObject::PGBlobIterator::loa
                 LOGE("Invalid shard_id in header, shardID=0x{:x}, pg={}, shard=0x{:x}, blob_id={}, [header={}]",
                      shard_id, (shard_id >> homeobject::shard_width), (shard_id & homeobject::shard_mask), blob_id,
                      header->to_string());
-                state = ResyncBlobState::CORRUPTED;
-                return std::move(read_buf);
+                return HSHomeObject::PGBlobIterator::blob_read_result(std::move(read_buf), ResyncBlobState::CORRUPTED);
             }
 
             std::string user_key = header->user_key_size
@@ -244,12 +242,12 @@ BlobManager::AsyncResult< sisl::io_blob_safe > HSHomeObject::PGBlobIterator::loa
                      "[{}] [computed={:np}]",
                      shard_id, (shard_id >> homeobject::shard_width), (shard_id & homeobject::shard_mask), blob_id,
                      header->to_string(), spdlog::to_hex(computed_hash, computed_hash + BlobHeader::blob_max_hash_len));
-                state = ResyncBlobState::CORRUPTED;
+                return HSHomeObject::PGBlobIterator::blob_read_result(std::move(read_buf), ResyncBlobState::CORRUPTED);
             }
 
             LOGD("Blob get success: shardID=0x{:x}, pg={}, shard=0x{:x}, blob_id={}", shard_id,
                  (shard_id >> homeobject::shard_width), (shard_id & homeobject::shard_mask), blob_id);
-            return std::move(read_buf);
+            return HSHomeObject::PGBlobIterator::blob_read_result(std::move(read_buf), ResyncBlobState::NORMAL);
         });
 }
 
@@ -289,16 +287,23 @@ bool HSHomeObject::PGBlobIterator::create_blobs_snapshot_data(sisl::io_blob_safe
         }
 #endif
         sisl::io_blob_safe blob;
+
+        struct blob_read_result {
+            sisl::io_blob_safe blob;
+            int state;
+        };
+
         uint8_t retries = HS_BACKEND_DYNAMIC_CONFIG(snapshot_blob_load_retry);
         for (int i = 0; i < retries; i++) {
-            auto result = load_blob_data(info, state).get();
+            auto result = load_blob_data(info).get();
             if (result.hasError() && result.error().code == BlobErrorCode::READ_FAILED) {
                 LOGW("Failed to retrieve blob for shardID=0x{:x}, pg={}, shard=0x{:x} blob={} pbas={}, err={}, "
                      "attempt={}",
                      info.shard_id, (info.shard_id >> homeobject::shard_width),
                      (info.shard_id & homeobject::shard_mask), info.blob_id, info.pbas.to_string(), result.error(), i);
             } else {
-                blob = std::move(result.value());
+                blob = std::move(result.value().blob_);
+                state = result.value().state_;
                 break;
             }
         }

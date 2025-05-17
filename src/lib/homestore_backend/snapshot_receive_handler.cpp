@@ -280,7 +280,7 @@ int HSHomeObject::SnapshotReceiveHandler::process_blobs_snapshot_data(ResyncBlob
                     // TODO: do we need to update repl_dev metrics?
                     if (err) {
                         LOGE("Failed to write blob info to blk_id={}, free the blk.", blk_id.to_string());
-                        homestore::data_service().async_free_blk(*rit).get();
+                        homestore::data_service().async_free_blk(blk_id).get();
                         return err;
                     }
                     LOGD("Blob {} written to blk_id={}", blob_id, blk_id.to_string());
