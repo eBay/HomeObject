@@ -441,14 +441,18 @@ public:
     inline const static homestore::MultiBlkId tombstone_pbas{0, 0, 0};
 
     struct PGBlobIterator {
+        struct blob_read_result {
+            sisl::io_blob_safe blob_;
+            ResyncBlobState state_;
+	    blob_read_result(sisl::io_blob_safe&& blob, ResyncBlobState state): blob_(std::move(blob)), state_(state) {}
+        };
         PGBlobIterator(HSHomeObject& home_obj, homestore::group_id_t group_id, uint64_t upto_lsn = 0);
         PG* get_pg_metadata();
         bool update_cursor(objId id);
         void reset_cursor();
         objId expected_next_obj_id();
         bool generate_shard_blob_list();
-        BlobManager::AsyncResult< sisl::io_blob_safe > load_blob_data(const BlobInfo& blob_info,
-                                                                      ResyncBlobState& state);
+        BlobManager::AsyncResult< blob_read_result > load_blob_data(const BlobInfo& blob_info);
         bool create_pg_snapshot_data(sisl::io_blob_safe& meta_blob);
         bool create_shard_snapshot_data(sisl::io_blob_safe& meta_blob);
         bool create_blobs_snapshot_data(sisl::io_blob_safe& data_blob);
