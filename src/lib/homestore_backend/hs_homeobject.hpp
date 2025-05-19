@@ -442,9 +442,11 @@ public:
 
     struct PGBlobIterator {
         struct blob_read_result {
+            blob_id_t blob_id_;
             sisl::io_blob_safe blob_;
             ResyncBlobState state_;
-	    blob_read_result(sisl::io_blob_safe&& blob, ResyncBlobState state): blob_(std::move(blob)), state_(state) {}
+            blob_read_result(blob_id_t blob_id, sisl::io_blob_safe&& blob, ResyncBlobState state) :
+                    blob_id_(blob_id), blob_(std::move(blob)), state_(state) {}
         };
         PGBlobIterator(HSHomeObject& home_obj, homestore::group_id_t group_id, uint64_t upto_lsn = 0);
         PG* get_pg_metadata();
