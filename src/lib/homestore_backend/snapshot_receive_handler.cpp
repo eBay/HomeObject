@@ -175,12 +175,14 @@ int HSHomeObject::SnapshotReceiveHandler::process_blobs_snapshot_data(ResyncBlob
     std::vector< folly::Future< std::error_code > > futs;
     std::vector< std::shared_ptr< sisl::io_blob_safe > > data_bufs;
 
+    auto skipped_blobs = 0;
     for (unsigned int i = 0; i < data_blobs.blob_list()->size(); i++) {
         const auto blob = data_blobs.blob_list()->Get(i);
 
         // Skip deleted blobs
         if (blob->state() == static_cast< uint8_t >(ResyncBlobState::DELETED)) {
             LOGD("Skip deleted blob_id={}", blob->blob_id());
+            skipped_blobs++;
             continue;
         }
 
@@ -205,6 +207,7 @@ int HSHomeObject::SnapshotReceiveHandler::process_blobs_snapshot_data(ResyncBlob
         RELEASE_ASSERT(ctx_->index_table != nullptr, "Index table instance null");
         if (home_obj_.get_blob_from_index_table(ctx_->index_table, ctx_->shard_cursor, blob->blob_id())) {
             LOGD("Skip already persisted blob_id={}", blob->blob_id());
+            skipped_blobs++;
             continue;
         }
 
@@ -306,7 +309,7 @@ int HSHomeObject::SnapshotReceiveHandler::process_blobs_snapshot_data(ResyncBlob
     }
     auto ec = collect_all_futures(futs).get();
     // when there is a allocation failure it breaks the while loop earlier.
-    auto all_io_submitted = (futs.size() == data_blobs.blob_list()->size());
+    auto all_io_submitted = (futs.size() + skipped_blobs == data_blobs.blob_list()->size());
 
     if (!all_io_submitted || ec != std::error_code{}) {
         if (!all_io_submitted) {
