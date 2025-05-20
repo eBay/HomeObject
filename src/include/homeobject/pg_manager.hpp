@@ -65,6 +65,21 @@ struct PGStats {
         std::tuple< peer_id_t, std::string, uint64_t /* last_commit_lsn */, uint64_t /* last_succ_resp_us_ */ > >
         members;
 
+    PGStats() :
+            id{0},
+            replica_set_uuid{},
+            leader_id{},
+            num_members{0},
+            total_shards{0},
+            open_shards{0},
+            avail_open_shards{0},
+            used_bytes{0},
+            avail_bytes{0},
+            num_active_objects{0},
+            num_tombstone_objects{0},
+            pg_state{0},
+            members{} {}
+
     std::string to_string() {
         std::string members_str;
         uint32_t i = 0ul;
