@@ -260,15 +260,18 @@ bool HSHomeObject::PGBlobIterator::create_blobs_snapshot_data(sisl::io_blob_safe
     auto idx = cur_start_blob_idx_;
 
     std::vector< BlobManager::AsyncResult< blob_read_result > > futs;
-    folly::InlineExecutor executor;
+    auto total_blobs = 0;
+    auto skipped_blobs = 0;
     while (total_bytes < max_batch_size_ && idx < cur_blob_list_.size()) {
         auto info = cur_blob_list_[idx++];
+        total_blobs++;
         // handle deleted object
         if (info.pbas == tombstone_pbas) {
             LOGT("Blob is deleted: shardID=0x{:x}, pg={}, shard=0x{:x}, blob_id={}, blkid={}", info.shard_id,
                  (info.shard_id >> homeobject::shard_width), (info.shard_id & homeobject::shard_mask), info.blob_id,
                  info.pbas.to_string());
             // ignore
+            skipped_blobs++;
             continue;
         }
 
@@ -276,7 +279,7 @@ bool HSHomeObject::PGBlobIterator::create_blobs_snapshot_data(sisl::io_blob_safe
         if (iomgr_flip::instance()->test_flip("pg_blob_iterator_load_blob_data_error")) {
             LOGW("Simulating loading blob data error");
             futs.emplace_back(folly::makeUnexpected(BlobError(BlobErrorCode::READ_FAILED)));
-            return false;
+            continue;
         }
         auto delay = iomgr_flip::instance()->get_test_flip< long >("simulate_read_snapshot_load_blob_delay",
                                                                    static_cast< long >(info.blob_id));
@@ -287,20 +290,21 @@ bool HSHomeObject::PGBlobIterator::create_blobs_snapshot_data(sisl::io_blob_safe
         }
 #endif
         auto blob_start = Clock::now();
-        auto executorKeepAlive = folly::getKeepAliveToken(executor);
 
+        LOGT("submitting io for blob {}", info.blob_id);
         // Fixme: Re-enable retries uint8_t retries = HS_BACKEND_DYNAMIC_CONFIG(snapshot_blob_load_retry);
         futs.emplace_back(
             std::move(load_blob_data(info))
-                .via(std::move(executorKeepAlive))
+                .via(folly::getKeepAliveToken(folly::InlineExecutor::instance()))
                 .thenValue(
-                    [this, info, blob_start](auto&& result) mutable -> BlobManager::AsyncResult< blob_read_result > {
+                    [&, info, blob_start](auto&& result) mutable -> BlobManager::AsyncResult< blob_read_result > {
                         if (result.hasError() && result.error().code == BlobErrorCode::READ_FAILED) {
                             LOGE("Failed to retrieve blob for shardID=0x{:x}, pg={}, shard=0x{:x} blob={} pbas={}",
                                  info.shard_id, (info.shard_id >> homeobject::shard_width),
                                  (info.shard_id & homeobject::shard_mask), info.blob_id, info.pbas.to_string());
                             COUNTER_INCREMENT(*metrics_, snp_dnr_error_count, 1);
                         } else {
+                            LOGT("retrieved blob,  blob={} pbas={}", info.blob_id, info.pbas.to_string());
                             HISTOGRAM_OBSERVE(*metrics_, snp_dnr_blob_process_latency, get_elapsed_time_us(blob_start));
                         }
                         return result;
@@ -310,12 +314,26 @@ bool HSHomeObject::PGBlobIterator::create_blobs_snapshot_data(sisl::io_blob_safe
         total_bytes += expect_blob_size;
     }
     // collect futs and add to flatbuffer.
+    bool hit_error = false;
+    if (skipped_blobs + (long)futs.size() != total_blobs) {
+        LOGE("total {} blobs, skipped {}, expect {} but only has {} futs", total_blobs, skipped_blobs,
+             total_blobs - skipped_blobs, futs.size());
+        hit_error = true;
+    }
     for (auto it = futs.begin(); it != futs.end(); it++) {
         auto res = std::move(*it).get();
-        // fail whole batch.
-        if (res.hasError()) { return false; }
-        std::vector< uint8_t > data(res->blob_.cbytes(), res->blob_.cbytes() + res->blob_.size());
-        blob_entries.push_back(CreateResyncBlobDataDirect(builder_, res->blob_id_, (uint8_t)res->state_, &data));
+        // Although we fail the whole batch if single blob failed, however we still need to wait till all in-flight ops
+        // finished, because the iterator might be released by nuraft after returning an error, however the "thenValue"
+        // still access the metrics ptr.
+        if (res.hasError()) { hit_error = true; }
+        if (!hit_error) {
+            std::vector< uint8_t > data(res->blob_.cbytes(), res->blob_.cbytes() + res->blob_.size());
+            blob_entries.push_back(CreateResyncBlobDataDirect(builder_, res->blob_id_, (uint8_t)res->state_, &data));
+        }
+    }
+    if (hit_error) {
+        builder_.Clear();
+        return false;
     }
     // should include the deleted blobs
     cur_batch_blob_count_ = idx - cur_start_blob_idx_;
