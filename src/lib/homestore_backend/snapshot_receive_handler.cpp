@@ -252,8 +252,19 @@ int HSHomeObject::SnapshotReceiveHandler::process_blobs_snapshot_data(ResyncBlob
         data_bufs.emplace_back(aligned_buf);
 
         homestore::MultiBlkId blk_id;
-        auto status = homestore::data_service().alloc_blks(
+        homestore::BlkAllocStatus status;
+#ifdef _PRERELEASE
+        if (iomgr_flip::instance()->test_flip("snapshot_receiver_blk_allocation_error")) {
+            LOGW("Simulating blob snapshot allocation error");
+            status = homestore::BlkAllocStatus::SPACE_FULL;
+        } else {
+            status = homestore::data_service().alloc_blks(
+                sisl::round_up(aligned_buf->size(), homestore::data_service().get_blk_size()), hints, blk_id);
+        }
+#else
+        status = homestore::data_service().alloc_blks(
             sisl::round_up(aligned_buf->size(), homestore::data_service().get_blk_size()), hints, blk_id);
+#endif
         if (status != homestore::BlkAllocStatus::SUCCESS) {
             LOGE("Failed to allocate blocks for shardID=0x{:x}, pg={}, shard=0x{:x} blob {}", ctx_->shard_cursor,
                  (ctx_->shard_cursor >> homeobject::shard_width), (ctx_->shard_cursor & homeobject::shard_mask),
@@ -290,6 +301,7 @@ int HSHomeObject::SnapshotReceiveHandler::process_blobs_snapshot_data(ResyncBlob
 
                     if (homestore::data_service().commit_blk(blk_id) != homestore::BlkAllocStatus::SUCCESS) {
                         LOGE("Failed to commit blk_id={} for blob_id={}", blk_id.to_string(), blob_id);
+                        homestore::data_service().async_free_blk(blk_id).get();
                         return err;
                     }
                     // Add local blob info to index & PG
@@ -297,6 +309,7 @@ int HSHomeObject::SnapshotReceiveHandler::process_blobs_snapshot_data(ResyncBlob
                         home_obj_.local_add_blob_info(ctx_->pg_id, BlobInfo{ctx_->shard_cursor, blob_id, blk_id});
                     if (!success) {
                         LOGE("Failed to add blob info for blob_id={}", blob_id);
+                        homestore::data_service().async_free_blk(blk_id).get();
                         return err;
                     }
 
@@ -313,7 +326,8 @@ int HSHomeObject::SnapshotReceiveHandler::process_blobs_snapshot_data(ResyncBlob
 
     if (!all_io_submitted || ec != std::error_code{}) {
         if (!all_io_submitted) {
-            LOGE("Errors in submitting the batch, expect {} blobs, submitted {}.", data_blobs.blob_list()->size(), futs.size());
+            LOGE("Errors in submitting the batch, expect {} blobs, submitted {}.", data_blobs.blob_list()->size(),
+                 futs.size());
         } else {
             LOGE("Errors in writing this batch, code={}, message={}", ec.value(), ec.message());
         }
