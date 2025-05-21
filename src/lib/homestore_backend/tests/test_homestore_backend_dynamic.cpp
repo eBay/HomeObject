@@ -90,6 +90,7 @@ TEST_F(HomeObjectFixture, ReplaceMember) {
     set_basic_flip("snapshot_receiver_pg_error", 1);                   // simulate pg creation error
     set_basic_flip("snapshot_receiver_shard_write_data_error", 2, 33); // simulate shard write data error
     set_basic_flip("snapshot_receiver_blob_write_data_error", 4, 15);  // simulate blob write data error
+    set_basic_flip("snapshot_receiver_blk_allocation_error", 4, 15);  // simulate blob allocation error
 #endif
 
     run_on_pg_leader(pg_id, [&]() {
