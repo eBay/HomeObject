@@ -162,6 +162,7 @@ int HSHomeObject::SnapshotReceiveHandler::process_blobs_snapshot_data(ResyncBlob
         ctx_->progress.cur_batch_bytes = 0;
     }
     ctx_->cur_batch_num = batch_num;
+    auto batch_start = Clock::now();
 
     // Find physical chunk id for current shard
     auto v_chunk_id = home_obj_.get_shard_v_chunk_id(ctx_->shard_cursor);
@@ -366,6 +367,7 @@ int HSHomeObject::SnapshotReceiveHandler::process_blobs_snapshot_data(ResyncBlob
         update_snp_info_sb(ctx_->shard_cursor == ctx_->shard_list.front());
     }
 
+    HISTOGRAM_OBSERVE(*metrics_, snp_rcvr_batch_process_time, get_elapsed_time_us(batch_start));
     return 0;
 }
 

@@ -575,6 +575,9 @@ public:
                 REGISTER_HISTOGRAM(snp_rcvr_blob_process_time,
                                    "Time cost(us) of successfully process a blob in baseline resync",
                                    HistogramBucketsType(DefaultBuckets));
+                REGISTER_HISTOGRAM(snp_rcvr_batch_process_time,
+                                   "Time cost(ms) of successfully process a batch in baseline resync",
+                                   HistogramBucketsType(DefaultBuckets));
 
                 attach_gather_cb(std::bind(&ReceiverSnapshotMetrics::on_gather, this));
                 register_me_to_farm();
