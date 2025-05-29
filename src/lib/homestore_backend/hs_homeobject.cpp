@@ -380,7 +380,16 @@ void HSHomeObject::register_homestore_metablk_callback() {
 }
 
 HSHomeObject::~HSHomeObject() {
-    LOGI("HomeObject start destructing");
+    LOGI("HSHomeObject: Executing destruct procedure");
+}
+
+void HSHomeObject::shutdown() {
+    if (is_shutting_down()) {
+        LOGI("HomeObject is already shutting down");
+        return;
+    }
+
+    LOGI("start shutting down HomeObject");
 #if 0
     if (ho_timer_thread_handle_.first) {
         iomanager.cancel_timer(ho_timer_thread_handle_, true);
@@ -397,7 +406,6 @@ HSHomeObject::~HSHomeObject() {
         LOGI("waiting for {} pending requests to complete", pending_reqs);
         std::this_thread::sleep_for(std::chrono::milliseconds(1000));
     }
-    LOGI("start shutting down HomeStore");
     gc_mgr_.reset();
 
     LOGI("start shutting down HomeStore");
