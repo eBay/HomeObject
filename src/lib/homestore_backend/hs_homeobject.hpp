@@ -677,6 +677,7 @@ public:
     using HomeObjectImpl::HomeObjectImpl;
     HSHomeObject();
     ~HSHomeObject() override;
+    void shutdown() override final;
 
     /**
      * Initializes the homestore.

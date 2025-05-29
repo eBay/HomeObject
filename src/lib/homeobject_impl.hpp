@@ -143,6 +143,7 @@ public:
     /// Returns the UUID of this HomeObject.
     peer_id_t our_uuid() const final { return _our_id; }
     HomeObjectStats get_stats() const final { return _get_stats(); }
+    void shutdown() { LOGI("HomeObjectImpl: Executing shutdown procedure"); };
 
     /// PgManager
     PGManager::NullAsyncResult create_pg(PGInfo&& pg_info, trace_id_t tid) final;

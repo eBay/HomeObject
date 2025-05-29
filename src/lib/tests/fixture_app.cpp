@@ -86,7 +86,13 @@ void TestFixture::SetUp() {
     homeobj_->pg_manager()->get_pg_ids(pg_ids);
 }
 
-void TestFixture::TearDown() { std::dynamic_pointer_cast< FixtureApp >(app)->clean(); }
+void TestFixture::TearDown() {
+    if (homeobj_ && homeobj_.get()) {
+        homeobj_->shutdown();
+        homeobj_.reset();
+    }
+    std::dynamic_pointer_cast< FixtureApp >(app)->clean();
+}
 
 int main(int argc, char* argv[]) {
     int parsed_argc = argc;
