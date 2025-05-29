@@ -59,6 +59,7 @@ class MemoryHomeObject : public HomeObjectImpl {
 public:
     MemoryHomeObject(std::weak_ptr< HomeObjectApplication >&& application);
     ~MemoryHomeObject() override = default;
+    void shutdown() override final;
 };
 
 } // namespace homeobject

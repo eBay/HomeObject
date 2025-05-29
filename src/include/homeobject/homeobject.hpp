@@ -76,6 +76,7 @@ public:
     virtual std::shared_ptr< PGManager > pg_manager() = 0;
     virtual std::shared_ptr< ShardManager > shard_manager() = 0;
     virtual HomeObjectStats get_stats() const = 0;
+    virtual void shutdown() = 0;
 };
 
 extern std::shared_ptr< HomeObject > init_homeobject(std::weak_ptr< HomeObjectApplication >&& application);

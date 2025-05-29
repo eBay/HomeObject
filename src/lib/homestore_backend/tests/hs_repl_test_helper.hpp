@@ -311,6 +311,7 @@ public:
 
     void delete_homeobject() {
         LOGINFO("Clearing Homeobject replica={}", replica_num_);
+        homeobj_->shutdown();
         homeobj_.reset();
         remove_test_files();
     }
@@ -319,6 +320,7 @@ public:
                                                       uint32_t restart_delay_secs = 0u) {
         if (shutdown_delay_secs > 0) { std::this_thread::sleep_for(std::chrono::seconds(shutdown_delay_secs)); }
         LOGINFO("Stoping homeobject after {} secs, replica={}", shutdown_delay_secs, replica_num_);
+        homeobj_->shutdown();
         homeobj_.reset();
         if (restart_delay_secs > 0) { std::this_thread::sleep_for(std::chrono::seconds(restart_delay_secs)); }
         LOGINFO("Starting homeobject after {} secs, replica={}", restart_delay_secs, replica_num_);
