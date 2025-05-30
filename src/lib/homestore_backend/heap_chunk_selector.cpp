@@ -263,6 +263,31 @@ std::optional< uint32_t > HeapChunkSelector::select_chunks_for_pg(pg_id_t pg_id,
     return num_chunk;
 }
 
+void HeapChunkSelector::switch_chunks_for_pg(const pg_id_t pg_id, const chunk_num_t old_chunk_id,
+                                             const chunk_num_t new_chunk_id) {
+    auto EXVchunk_old = get_extend_vchunk(old_chunk_id);
+    RELEASE_ASSERT(EXVchunk_old->m_v_chunk_id.has_value(), "old_chunk_id={} should has a vchunk_id", old_chunk_id);
+    RELEASE_ASSERT(EXVchunk_old->m_pg_id.has_value(), "old_chunk_id={} should belongs to a pg", old_chunk_id);
+    RELEASE_ASSERT(EXVchunk_old->m_pg_id.value() == pg_id, "old_chunk_id={} should belongs to pg={}", old_chunk_id,
+                   pg_id);
+
+    auto v_chunk_id = EXVchunk_old->m_v_chunk_id.value();
+
+    std::unique_lock lock_guard(m_chunk_selector_mtx);
+    auto pg_it = m_per_pg_chunks.find(pg_id);
+    RELEASE_ASSERT(pg_it != m_per_pg_chunks.end(), "No pg_chunk_collection found for pg={}", pg_id);
+    auto& pg_chunk_collection = pg_it->second;
+    auto& pg_chunks = pg_chunk_collection->m_pg_chunks;
+    std::scoped_lock lock(pg_chunk_collection->mtx);
+    auto old_available_blks = pg_chunks[v_chunk_id]->available_blks();
+    pg_chunks[v_chunk_id] = get_extend_vchunk(new_chunk_id);
+    pg_chunks[v_chunk_id]->m_pg_id = pg_id;
+    pg_chunks[v_chunk_id]->m_v_chunk_id = v_chunk_id;
+    auto new_available_blks = pg_chunks[v_chunk_id]->available_blks();
+
+    pg_chunk_collection->available_blk_count += new_available_blks - old_available_blks;
+}
+
 bool HeapChunkSelector::recover_pg_chunks(pg_id_t pg_id, std::vector< chunk_num_t >&& p_chunk_ids) {
     std::unique_lock lock_guard(m_chunk_selector_mtx);
     // check pg exist
