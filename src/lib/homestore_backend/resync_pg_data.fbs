@@ -12,6 +12,7 @@ table ResyncPGMetaData {
     pg_id : uint16;                        // only low 16 bit is used for pg_id;
     replica_set_uuid : [ubyte];    // uuid of replica set
     pg_size : uint64;                   // pg size;
+    expected_member_num: uint32;      // expected number of members in the pg;
     chunk_size : uint64;              // chunk size;
     blob_seq_num : uint64;        // blob sequence number, used to assign next blob id;
     shard_seq_num: uint64;       // shard sequence number, used to assign next shard id;

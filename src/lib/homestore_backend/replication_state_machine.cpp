@@ -78,8 +78,12 @@ bool ReplicationStateMachine::on_pre_commit(int64_t lsn, sisl::blob const& heade
     // For shard creation, since homestore repldev inside will write shard header to data service first before this
     // function is called. So there is nothing is needed to do and we can get the binding chunk_id with the newly shard
     // from the blkid in on_commit()
-    if (ctx->op_code() == homestore::journal_type_t::HS_CTRL_REPLACE) {
-        LOGI("pre_commit replace member log entry, lsn={}", lsn);
+    if (ctx->op_code() == homestore::journal_type_t::HS_CTRL_START_REPLACE) {
+        LOGI("pre_commit HS_CTRL_START_REPLACE log entry, lsn={}", lsn);
+        return true;
+    }
+    if (ctx->op_code() == homestore::journal_type_t::HS_CTRL_COMPLETE_REPLACE) {
+        LOGI("pre_commit HS_CTRL_COMPLETE_REPLACE log entry, lsn={}", lsn);
         return true;
     }
 
@@ -263,9 +267,14 @@ ReplicationStateMachine::get_blk_alloc_hints(sisl::blob const& header, uint32_t 
     return homestore::blk_alloc_hints();
 }
 
-void ReplicationStateMachine::on_replace_member(const homestore::replica_member_info& member_out,
-                                                const homestore::replica_member_info& member_in) {
-    home_object_->on_pg_replace_member(repl_dev()->group_id(), member_out, member_in);
+void ReplicationStateMachine::on_start_replace_member(const homestore::replica_member_info& member_out,
+                                                const homestore::replica_member_info& member_in, trace_id_t tid) {
+    home_object_->on_pg_start_replace_member(repl_dev()->group_id(), member_out, member_in, tid);
+}
+
+void ReplicationStateMachine::on_complete_replace_member(const homestore::replica_member_info& member_out,
+                                                const homestore::replica_member_info& member_in, trace_id_t tid) {
+    home_object_->on_pg_complete_replace_member(repl_dev()->group_id(), member_out, member_in, tid);
 }
 
 void ReplicationStateMachine::on_destroy(const homestore::group_id_t& group_id) {
@@ -511,10 +520,17 @@ void ReplicationStateMachine::write_snapshot_obj(std::shared_ptr< homestore::sna
     }
 
     // Blob data message
-    // TODO: enhance error handling for wrong shard id - what may cause this?
-    RELEASE_ASSERT(obj_id.shard_seq_num ==
-                       HSHomeObject::get_sequence_num_from_shard_id(m_snp_rcv_handler->get_shard_cursor()),
-                   "Shard id not matching with the current shard cursor");
+    // There is a case will cause this, when the follower is killed after finishes a shard(have updated the shard in
+    // sb), but the leader doesn't receive the response. Then follower starts immediately within sync ctx timeout, then
+    // leader retries the prior batch.
+    if (obj_id.shard_seq_num != HSHomeObject::get_sequence_num_from_shard_id(m_snp_rcv_handler->get_shard_cursor())) {
+        snp_obj->offset =
+            objId(HSHomeObject::get_sequence_num_from_shard_id(m_snp_rcv_handler->get_shard_cursor()), 0).value;
+        LOGW("Shard id not matching with the current shard cursor, resume from previous context breakpoint, lsn={} "
+             "next_shard:0x{:x}, shard_cursor:0x{:x}",
+             context->get_lsn(), m_snp_rcv_handler->get_next_shard(), m_snp_rcv_handler->get_shard_cursor());
+        return;
+    }
     auto blob_batch = GetSizePrefixedResyncBlobDataBatch(data_buf);
     auto ret =
         m_snp_rcv_handler->process_blobs_snapshot_data(*blob_batch, obj_id.batch_id, blob_batch->is_last_batch());

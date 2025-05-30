@@ -6,7 +6,6 @@
 #include <boost/uuid/uuid_io.hpp>
 #include <sisl/utility/enum.hpp>
 #include <sisl/logging/logging.h>
-
 #include "common.hpp"
 
 namespace homeobject {
@@ -43,9 +42,19 @@ struct PGInfo {
     peer_id_t replica_set_uuid;
     uint64_t size;
     uint64_t chunk_size;
+    // The expected member count, this is a fixed value decided by pg creation.
+    uint32_t expected_member_num = 0;
 
     auto operator<=>(PGInfo const& rhs) const { return id <=> rhs.id; }
     auto operator==(PGInfo const& rhs) const { return id == rhs.id; }
+};
+
+struct peer_info {
+    peer_id_t id;
+    std::string name;
+    uint64_t last_commit_lsn{0}; // last commit lsn from this peer
+    uint64_t last_succ_resp_us{0};
+    bool can_vote = true;
 };
 
 struct PGStats {
@@ -61,9 +70,7 @@ struct PGStats {
     uint64_t num_active_objects;    // total number of active objects on this PG;
     uint64_t num_tombstone_objects; // total number of tombstone objects on this PG;
     uint64_t pg_state;              // PG state;
-    std::vector<
-        std::tuple< peer_id_t, std::string, uint64_t /* last_commit_lsn */, uint64_t /* last_succ_resp_us_ */ > >
-        members;
+    std::vector< peer_info > members;
 
     PGStats() :
             id{0},
@@ -85,9 +92,9 @@ struct PGStats {
         uint32_t i = 0ul;
         for (auto const& m : members) {
             if (i++ > 0) { members_str += ", "; };
-            members_str += fmt::format("member-{}: id={}, name={}, last_commit_lsn={}， last_succ_resp_us_={}", i,
-                                       boost::uuids::to_string(std::get< 0 >(m)), std::get< 1 >(m), std::get< 2 >(m),
-                                       std::get< 3 >(m));
+            members_str +=
+                fmt::format("member-{}: id={}, name={}, last_commit_lsn={}, last_succ_resp_us={}, can_vote={}", i,
+                            boost::uuids::to_string(m.id), m.name, m.last_commit_lsn, m.last_succ_resp_us, m.can_vote);
         }
 
         return fmt::format(

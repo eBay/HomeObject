@@ -153,7 +153,7 @@ bool HSHomeObject::PGBlobIterator::create_pg_snapshot_data(sisl::io_blob_safe& m
         shard_ids.push_back(shard.info.id);
     }
 
-    auto pg_entry = CreateResyncPGMetaDataDirect(builder_, pg_info.id, &uuid, pg_info.size, pg_info.chunk_size,
+    auto pg_entry = CreateResyncPGMetaDataDirect(builder_, pg_info.id, &uuid, pg_info.size, pg_info.expected_member_num, pg_info.chunk_size,
                                                  pg->durable_entities().blob_sequence_num, pg->shard_sequence_num_,
                                                  &members, &shard_ids, total_blobs, total_bytes);
     builder_.FinishSizePrefixed(pg_entry);

@@ -83,7 +83,7 @@ public:
         LOGINFO("Metrics={}", sisl::MetricsFarm::getInstance().get_result_in_json().dump(2));
         _obj_inst.reset();
         g_helper->homeobj_.reset();
-        sleep(120);
+        sleep(10);
     }
 
     void start() {
@@ -254,10 +254,8 @@ public:
                         auto tid = generateRandomTraceId();
 
                         LOGINFO("Put blob pg={} shard {} blob {} size {} data {} trace_id={}", pg_id, shard_id,
-                                current_blob_id,
-                                put_blob.body.size(),
-                                hex_bytes(put_blob.body.cbytes(), std::min(10u, put_blob.body.size())),
-                                tid);
+                                current_blob_id, put_blob.body.size(),
+                                hex_bytes(put_blob.body.cbytes(), std::min(10u, put_blob.body.size())), tid);
 
                         auto b = _obj_inst->blob_manager()->put(shard_id, std::move(put_blob), tid).get();
 
@@ -278,7 +276,8 @@ public:
             auto shard_id = shard_vec.back();
             pg_blob_id[pg_id] = current_blob_id;
             auto last_blob_id = pg_blob_id[pg_id] - 1;
-            while (!blob_exist(shard_id, last_blob_id)) {
+            // In replace_member test, the time to remove learner is uncertain, so the out member may be stuck here.
+            while (am_i_in_pg(pg_id) && !blob_exist(shard_id, last_blob_id)) {
                 LOGINFO("waiting for pg={} blob {} to be created locally", pg_id, last_blob_id);
                 std::this_thread::sleep_for(std::chrono::milliseconds(1000));
             }
@@ -344,8 +343,8 @@ public:
             for (const auto& shard_id : shard_vec) {
                 for (uint64_t k = 0; k < num_blobs_per_shard; k++) {
                     auto tid = generateRandomTraceId();
-                    LOGDEBUG("going to verify blob pg={} shard {} blob {} trace_id={}",
-                             pg_id, shard_id, current_blob_id, tid);
+                    LOGDEBUG("going to verify blob pg={} shard {} blob {} trace_id={}", pg_id, shard_id,
+                             current_blob_id, tid);
                     auto blob = build_blob(current_blob_id);
                     len = blob.body.size();
                     if (use_random_offset) {
@@ -430,7 +429,8 @@ public:
         auto rhs = rhs_pg->pg_sb_.get();
 
         EXPECT_EQ(lhs->id, rhs->id);
-        EXPECT_EQ(lhs->num_members, rhs->num_members);
+        EXPECT_EQ(lhs->num_expected_members, rhs->num_expected_members);
+        EXPECT_EQ(lhs->num_dynamic_members, rhs->num_dynamic_members);
         EXPECT_EQ(lhs->num_chunks, rhs->num_chunks);
         EXPECT_EQ(lhs->chunk_size, rhs->chunk_size);
         EXPECT_EQ(lhs->pg_size, rhs->pg_size);
@@ -441,7 +441,7 @@ public:
         EXPECT_EQ(lhs->tombstone_blob_count, rhs->tombstone_blob_count);
         EXPECT_EQ(lhs->total_occupied_blk_count, rhs->total_occupied_blk_count);
         EXPECT_EQ(lhs->tombstone_blob_count, rhs->tombstone_blob_count);
-        for (uint32_t i = 0; i < lhs->num_members; i++) {
+        for (uint32_t i = 0; i < lhs->num_dynamic_members; i++) {
             EXPECT_EQ(lhs->get_pg_members()[i].id, rhs->get_pg_members()[i].id);
             EXPECT_EQ(lhs->get_pg_members()[i].priority, rhs->get_pg_members()[i].priority);
             EXPECT_EQ(0, std::strcmp(lhs->get_pg_members()[i].name, rhs->get_pg_members()[i].name));
@@ -469,6 +469,40 @@ public:
         EXPECT_EQ(lhs.total_capacity_bytes, rhs.total_capacity_bytes);
         EXPECT_EQ(lhs.deleted_capacity_bytes, rhs.deleted_capacity_bytes);
         EXPECT_EQ(lhs.current_leader, rhs.current_leader);
+    }
+
+    bool verify_start_replace_member_result(pg_id_t pg_id, peer_id_t out_member, peer_id_t in_member) {
+        auto hs_pg = _obj_inst->get_hs_pg(pg_id);
+        RELEASE_ASSERT(hs_pg, "PG not found");
+        auto in = hs_pg->pg_info_.members.find(PGMember(in_member, "in_member"));
+        auto out = hs_pg->pg_info_.members.find(PGMember(out_member, "out_member"));
+        RELEASE_ASSERT(hs_pg->pg_info_.members.size() == 4, "Invalid pg member size");
+        if (in == hs_pg->pg_info_.members.end()) {
+            LOGERROR("in_member not found, in_member={}", boost::uuids::to_string(in_member));
+            return false;
+        }
+        if (out == hs_pg->pg_info_.members.end()) {
+            LOGERROR("out_member not found, out_member={}", boost::uuids::to_string(out_member));
+            return false;
+        }
+        return true;
+    }
+    bool verify_complete_replace_member_result(pg_id_t pg_id, peer_id_t out_member, peer_id_t in_member) {
+        auto hs_pg = _obj_inst->get_hs_pg(pg_id);
+        RELEASE_ASSERT(hs_pg, "PG not found");
+        RELEASE_ASSERT(hs_pg->pg_info_.members.size() == 3, "Invalid pg member size");
+        auto in = hs_pg->pg_info_.members.find(PGMember(in_member, "in_member"));
+        auto out = hs_pg->pg_info_.members.find(PGMember(out_member, "out_member"));
+
+        if (in == hs_pg->pg_info_.members.end()) {
+            LOGERROR("in_member not found, in_member={}", boost::uuids::to_string(in_member));
+            return false;
+        }
+        if (out != hs_pg->pg_info_.members.end()) {
+            LOGERROR("Out member still exists in PG");
+            return false;
+        }
+        return true;
     }
 
     void run_on_pg_leader(pg_id_t pg_id, auto&& lambda) {
@@ -512,7 +546,7 @@ public:
         auto res = _obj_inst->pg_manager()->get_stats(pg_id, pg_stats);
         if (!res) return false;
         for (const auto& member : pg_stats.members) {
-            if (std::get< 0 >(member) == g_helper->my_replica_id()) return true;
+            if (member.id == g_helper->my_replica_id()) return true;
         }
         return false;
     }
