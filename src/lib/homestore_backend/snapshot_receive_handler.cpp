@@ -25,6 +25,7 @@ int HSHomeObject::SnapshotReceiveHandler::process_pg_snapshot_data(ResyncPGMetaD
     // Create local PG
     PGInfo pg_info(pg_meta.pg_id());
     pg_info.size = pg_meta.pg_size();
+    pg_info.expected_member_num = pg_meta.expected_member_num();
     pg_info.chunk_size = pg_meta.chunk_size();
     std::copy_n(pg_meta.replica_set_uuid()->data(), 16, pg_info.replica_set_uuid.begin());
     for (unsigned int i = 0; i < pg_meta.members()->size(); i++) {
@@ -36,6 +37,7 @@ int HSHomeObject::SnapshotReceiveHandler::process_pg_snapshot_data(ResyncPGMetaD
         pg_member.priority = member->priority();
         pg_info.members.insert(pg_member);
     }
+    LOGI("PG expected member num={}, actual members num={}", pg_info.expected_member_num, pg_meta.members()->size())
 
 #ifdef _PRERELEASE
     if (iomgr_flip::instance()->test_flip("snapshot_receiver_pg_error")) {

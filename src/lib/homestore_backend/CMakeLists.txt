@@ -89,7 +89,9 @@ add_test(NAME HomestoreTestReplaceMember
         --override_config homestore_config.consensus.snapshot_freq_distance:0
         --gtest_filter=HomeObjectFixture.ReplaceMember
         --override_config homestore_config.generic.repl_dev_cleanup_interval_sec=5
-        --override_config homestore_config.consensus.max_grpc_message_size:138412032)
+        --override_config homestore_config.consensus.max_grpc_message_size:138412032
+        --override_config homestore_config.consensus.replace_member_sync_check_interval_ms=1000
+        --override_config homestore_config.consensus.laggy_threshold=0)
 # To test both baseline & incremental resync functionality, we use 13 to minimize the likelihood of it being a divisor of the total LSN (currently 30)
 add_test(NAME HomestoreTestReplaceMemberWithBaselineResync
         COMMAND homestore_test_dynamic -csv error --executor immediate --config_path ./
@@ -98,6 +100,8 @@ add_test(NAME HomestoreTestReplaceMemberWithBaselineResync
         --override_config homestore_config.consensus.snapshot_sync_ctx_timeout_ms=5000
         --override_config homestore_config.generic.repl_dev_cleanup_interval_sec=5
         --override_config homestore_config.consensus.max_grpc_message_size:138412032
+        --override_config homestore_config.consensus.replace_member_sync_check_interval_ms=1000
+        --override_config homestore_config.consensus.laggy_threshold=0
         --gtest_filter=HomeObjectFixture.ReplaceMember)
 add_test(NAME HomestoreResyncTestWithFollowerRestart
         COMMAND homestore_test_dynamic -csv error --executor immediate --config_path ./
@@ -106,6 +110,8 @@ add_test(NAME HomestoreResyncTestWithFollowerRestart
         --override_config homestore_config.consensus.snapshot_sync_ctx_timeout_ms=5000
         --override_config homestore_config.generic.repl_dev_cleanup_interval_sec=5
         --override_config homestore_config.consensus.max_grpc_message_size:138412032
+        --override_config homestore_config.consensus.replace_member_sync_check_interval_ms=1000
+        --override_config homestore_config.consensus.laggy_threshold=0
         --gtest_filter=HomeObjectFixture.RestartFollower*)
 add_test(NAME HomestoreResyncTestWithLeaderRestart
         COMMAND homestore_test_dynamic -csv error --executor immediate --config_path ./
@@ -114,6 +120,8 @@ add_test(NAME HomestoreResyncTestWithLeaderRestart
         --override_config homestore_config.consensus.snapshot_sync_ctx_timeout_ms=5000
         --override_config homestore_config.generic.repl_dev_cleanup_interval_sec=5
         --override_config homestore_config.consensus.max_grpc_message_size:138412032
+        --override_config homestore_config.consensus.replace_member_sync_check_interval_ms=1000
+        --override_config homestore_config.consensus.laggy_threshold=0
         --gtest_filter=HomeObjectFixture.RestartLeader*)
 
 add_executable(homestore_test_gc)

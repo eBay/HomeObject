@@ -90,6 +90,7 @@ PGManager::NullAsyncResult HSHomeObject::_create_pg(PGInfo&& pg_info, std::set< 
         decr_pending_request_num();
         return folly::makeUnexpected(PGError::NO_SPACE_LEFT);
     }
+    if (pg_info.expected_member_num == 0) { pg_info.expected_member_num = pg_info.members.size(); }
     pg_info.chunk_size = chunk_size;
     pg_info.replica_set_uuid = boost::uuids::random_generator()();
     const auto repl_dev_group_id = pg_info.replica_set_uuid;
@@ -249,6 +250,10 @@ void HSHomeObject::on_create_pg_message_commit(int64_t lsn, sisl::blob const& he
     }
 }
 
+// HS's replace_member will have two phases:
+// 1. Set the old member to learner and add the new member. This step will call `on_pg_start_replace_member`.
+// 2. HS takes the responsiblity to track the replication progress, and complete the replace member(remove the old
+// member) when the new member is fully synced.  This step will call `on_pg_complete_replace_member`.
 PGManager::NullAsyncResult HSHomeObject::_replace_member(pg_id_t pg_id, peer_id_t const& old_member_id,
                                                          PGMember const& new_member, uint32_t commit_quorum,
                                                          trace_id_t tid) {
@@ -292,16 +297,23 @@ PGManager::NullAsyncResult HSHomeObject::_replace_member(pg_id_t pg_id, peer_id_
         });
 }
 
-void HSHomeObject::on_pg_replace_member(homestore::group_id_t group_id, const replica_member_info& member_out,
-                                        const replica_member_info& member_in) {
+PGMember to_pg_member(const homestore::replica_member_info& replica_info) {
+    PGMember pg_member(replica_info.id);
+    pg_member.name = std::string(replica_info.name);
+    pg_member.priority = replica_info.priority;
+    return pg_member;
+}
+
+void HSHomeObject::on_pg_start_replace_member(group_id_t group_id, const replica_member_info& member_out,
+                                              const replica_member_info& member_in, trace_id_t tid) {
     auto lg = std::shared_lock(_pg_lock);
     for (const auto& iter : _pg_map) {
         auto& pg = iter.second;
         if (pg_repl_dev(*pg).group_id() == group_id) {
             // Remove the old member and add the new member
             auto hs_pg = static_cast< HSHomeObject::HS_PG* >(pg.get());
-            pg->pg_info_.members.erase(PGMember(member_out.id));
-            pg->pg_info_.members.emplace(PGMember(member_in.id, member_in.name, member_in.priority));
+            pg->pg_info_.members.emplace(std::move(to_pg_member(member_in)));
+            pg->pg_info_.members.emplace(std::move(to_pg_member(member_out)));
 
             uint32_t i{0};
             pg_members* sb_members = hs_pg->pg_sb_->get_pg_members_mutable();
@@ -314,20 +326,56 @@ void HSHomeObject::on_pg_replace_member(homestore::group_id_t group_id, const re
                 sb_members[i].priority = m.priority;
                 ++i;
             }
-
+            hs_pg->pg_sb_->num_dynamic_members = pg->pg_info_.members.size();
             // Update the latest membership info to pg superblk.
             hs_pg->pg_sb_.write();
-            LOGI("PG replace member done member_out={} member_in={}", boost::uuids::to_string(member_out.id),
-                 boost::uuids::to_string(member_in.id));
+            LOGI("PG start replace member done member_out={} member_in={}, member_nums={}, trace_id={}",
+                 boost::uuids::to_string(member_out.id), boost::uuids::to_string(member_in.id),
+                 pg->pg_info_.members.size(), tid);
             return;
         }
     }
 
-    LOGE("PG replace member failed member_out={} member_in={}", boost::uuids::to_string(member_out.id),
-         boost::uuids::to_string(member_in.id));
+    LOGE("PG replace member failed member_out={} member_in={}, trace_id={}", boost::uuids::to_string(member_out.id),
+         boost::uuids::to_string(member_in.id), tid);
 }
 
-std::optional< pg_id_t > HSHomeObject::get_pg_id_with_group_id(homestore::group_id_t group_id) const {
+void HSHomeObject::on_pg_complete_replace_member(group_id_t group_id, const replica_member_info& member_out,
+                                                 const replica_member_info& member_in, trace_id_t tid) {
+    auto lg = std::shared_lock(_pg_lock);
+    for (const auto& iter : _pg_map) {
+        auto& pg = iter.second;
+        if (pg_repl_dev(*pg).group_id() == group_id) {
+            // Remove the old member and add the new member
+            auto hs_pg = static_cast< HSHomeObject::HS_PG* >(pg.get());
+            pg->pg_info_.members.erase(PGMember(member_out.id));
+            pg->pg_info_.members.emplace(std::move(to_pg_member(member_in)));
+
+            uint32_t i{0};
+            pg_members* sb_members = hs_pg->pg_sb_->get_pg_members_mutable();
+            for (auto const& m : pg->pg_info_.members) {
+                sb_members[i].id = m.id;
+                DEBUG_ASSERT(m.name.size() <= PGMember::max_name_len, "member name exceeds max len, name={}", m.name);
+                auto name_len = std::min(m.name.size(), PGMember::max_name_len);
+                std::strncpy(sb_members[i].name, m.name.c_str(), name_len);
+                sb_members[i].name[name_len] = '\0';
+                sb_members[i].priority = m.priority;
+                ++i;
+            }
+            hs_pg->pg_sb_->num_dynamic_members = pg->pg_info_.members.size();
+            // Update the latest membership info to pg superblk.
+            hs_pg->pg_sb_.write();
+            LOGI("PG complete replace member done member_out={} member_in={}, member_nums={}, trace_id={}",
+                 boost::uuids::to_string(member_out.id), boost::uuids::to_string(member_in.id),
+                 pg->pg_info_.members.size(), tid);
+            return;
+        }
+    }
+    LOGE("PG complete replace member failed member_out={} member_in={}, trace_id={}",
+         boost::uuids::to_string(member_out.id), boost::uuids::to_string(member_in.id), tid);
+}
+
+std::optional< pg_id_t > HSHomeObject::get_pg_id_with_group_id(group_id_t group_id) const {
     auto lg = std::shared_lock(_pg_lock);
     auto iter = std::find_if(_pg_map.begin(), _pg_map.end(), [group_id](const auto& entry) {
         return pg_repl_dev(*entry.second).group_id() == group_id;
@@ -421,6 +469,7 @@ void HSHomeObject::destroy_pg_superblk(pg_id_t pg_id) {
 
         // erase pg in pg map
         auto iter = _pg_map.find(pg_id);
+        RELEASE_ASSERT(iter != _pg_map.end(), "Failed to find pg in pg map");
         _pg_map.erase(iter);
     }
 }
@@ -439,6 +488,7 @@ std::string HSHomeObject::serialize_pg_info(const PGInfo& pginfo) {
     nlohmann::json j;
     j["pg_info"]["pg_id_t"] = pginfo.id;
     j["pg_info"]["pg_size"] = pginfo.size;
+    j["pg_info"]["expected_member_num"] = pginfo.expected_member_num;
     j["pg_info"]["chunk_size"] = pginfo.chunk_size;
     j["pg_info"]["repl_uuid"] = boost::uuids::to_string(pginfo.replica_set_uuid);
 
@@ -459,6 +509,7 @@ PGInfo HSHomeObject::deserialize_pg_info(const unsigned char* json_str, size_t s
 
     PGInfo pg_info(pg_json["pg_info"]["pg_id_t"].get< pg_id_t >());
     pg_info.size = pg_json["pg_info"]["pg_size"].get< uint64_t >();
+    pg_info.expected_member_num = pg_json["pg_info"]["expected_member_num"].get< uint32_t >();
     pg_info.chunk_size = pg_json["pg_info"]["chunk_size"].get< uint64_t >();
     pg_info.replica_set_uuid = boost::uuids::string_generator()(pg_json["pg_info"]["repl_uuid"].get< std::string >());
 
@@ -508,12 +559,13 @@ void HSHomeObject::on_pg_meta_blk_found(sisl::byte_view const& buf, void* meta_c
 PGInfo HSHomeObject::HS_PG::pg_info_from_sb(homestore::superblk< pg_info_superblk > const& sb) {
     PGInfo pginfo{sb->id};
     const pg_members* sb_members = sb->get_pg_members();
-    for (uint32_t i{0}; i < sb->num_members; ++i) {
+    for (uint32_t i{0}; i < sb->num_dynamic_members; ++i) {
         pginfo.members.emplace(sb_members[i].id, std::string(sb_members[i].name), sb_members[i].priority);
     }
     pginfo.size = sb->pg_size;
     pginfo.replica_set_uuid = sb->replica_set_uuid;
     pginfo.chunk_size = sb->chunk_size;
+    pginfo.expected_member_num = sb->num_expected_members;
     return pginfo;
 }
 
@@ -528,11 +580,12 @@ HSHomeObject::HS_PG::HS_PG(PGInfo info, shared< homestore::ReplDev > rdev, share
         snp_rcvr_shard_list_sb_{_snp_rcvr_shard_list_meta_name} {
     RELEASE_ASSERT(pg_chunk_ids != nullptr, "PG chunks null, pg={}", pg_info_.id);
     const uint32_t num_chunks = pg_chunk_ids->size();
-    pg_sb_.create(sizeof(pg_info_superblk) - sizeof(char) + pg_info_.members.size() * sizeof(pg_members) +
+    pg_sb_.create(sizeof(pg_info_superblk) - sizeof(char) + 2 * pg_info_.expected_member_num * sizeof(pg_members) +
                   num_chunks * sizeof(homestore::chunk_num_t));
     pg_sb_->id = pg_info_.id;
     pg_sb_->state = PGState::ALIVE;
-    pg_sb_->num_members = pg_info_.members.size();
+    pg_sb_->num_expected_members = pg_info_.expected_member_num;
+    pg_sb_->num_dynamic_members = pg_info_.members.size();
     pg_sb_->num_chunks = num_chunks;
     pg_sb_->chunk_size = pg_info_.chunk_size;
     pg_sb_->pg_size = pg_info_.size;
@@ -604,17 +657,17 @@ bool HSHomeObject::_get_stats(pg_id_t id, PGStats& stats) const {
 
     auto const replication_status = hs_pg->repl_dev_->get_replication_status();
     for (auto const& m : hs_pg->pg_info_.members) {
-        auto last_commit_lsn = 0ul;
-        auto last_succ_resp_us = 0ul;
         // replication_status can be empty in follower
+        auto peer = peer_info{.id = m.id, .name = m.name};
         for (auto const& r : replication_status) {
             if (r.id_ == m.id) {
-                last_commit_lsn = r.replication_idx_;
-                last_succ_resp_us = r.last_succ_resp_us_;
+                peer.can_vote = r.can_vote;
+                peer.last_commit_lsn = r.replication_idx_;
+                peer.last_succ_resp_us = r.last_succ_resp_us_;
                 break;
             }
         }
-        stats.members.emplace_back(std::make_tuple(m.id, m.name, last_commit_lsn, last_succ_resp_us));
+        stats.members.emplace_back(peer);
     }
 
     stats.avail_open_shards = chunk_selector()->avail_num_chunks(hs_pg->pg_info_.id);

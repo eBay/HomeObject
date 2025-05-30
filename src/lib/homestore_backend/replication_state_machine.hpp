@@ -171,9 +171,13 @@ public:
     get_blk_alloc_hints(sisl::blob const& header, uint32_t data_size,
                         cintrusive< homestore::repl_req_ctx >& hs_ctx) override;
 
-    /// @brief Called when replication module is replacing an existing member with a new member
-    void on_replace_member(const homestore::replica_member_info& member_out,
-                           const homestore::replica_member_info& member_in) override;
+    /// @brief Called when start replacing an existing member with a new member
+    void on_start_replace_member(const homestore::replica_member_info& member_out,
+                                 const homestore::replica_member_info& member_in, trace_id_t tid = 0) override;
+
+    /// @brief Called when complete replacing an existing member with a new member
+    void on_complete_replace_member(const homestore::replica_member_info& member_out,
+                                    const homestore::replica_member_info& member_in, trace_id_t tid = 0) override;
 
     /// @brief Called when the replica is being destroyed by nuraft;
     void on_destroy(const homestore::group_id_t& group_id) override;

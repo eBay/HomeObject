@@ -223,14 +223,14 @@ TEST_F(HomeObjectFixture, SnapshotReceiveHandler) {
     std::vector< flatbuffers::Offset< Member > > members;
     std::vector uuid(stats.replica_set_uuid.begin(), stats.replica_set_uuid.end());
     for (auto& member : stats.members) {
-        auto id = std::vector< std::uint8_t >(std::get< 0 >(member).begin(), std::get< 0 >(member).end());
-        members.push_back(CreateMemberDirect(builder, &id, std::get< 1 >(member).c_str(), 100));
+        auto id = std::vector< std::uint8_t >(member.id.begin(), member.id.end());
+        members.push_back(CreateMemberDirect(builder, &id, member.name.c_str(), 100));
     }
     std::vector< uint64_t > shard_ids;
     for (uint64_t i = 1; i <= num_shards_per_pg; i++) {
         shard_ids.push_back(i);
     }
-    auto pg_entry = CreateResyncPGMetaDataDirect(builder, pg_id, &uuid, pg->pg_info_.size, pg->pg_info_.chunk_size,
+    auto pg_entry = CreateResyncPGMetaDataDirect(builder, pg_id, &uuid, pg->pg_info_.size, pg->pg_info_.expected_member_num, pg->pg_info_.chunk_size,
                                                  blob_seq_num, num_shards_per_pg, &members, &shard_ids);
     builder.Finish(pg_entry);
     auto pg_meta = GetResyncPGMetaData(builder.GetBufferPointer());

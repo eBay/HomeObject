@@ -14,6 +14,7 @@
 #include "homeobject/common.hpp"
 #include "index_kv.hpp"
 #include "gc_manager.hpp"
+#include "hs_backend_config.hpp"
 #include "generated/resync_pg_data_generated.h"
 #include "generated/resync_shard_data_generated.h"
 #include "generated/resync_blob_data_generated.h"
@@ -96,7 +97,10 @@ public:
     struct pg_info_superblk {
         pg_id_t id;
         PGState state;
-        uint32_t num_members;
+        // num_expected_members means how many members a  pg should have, while num_dynamic_members is the actual members count,
+        // as members might float during member replacement.
+        uint32_t num_expected_members;
+        uint32_t num_dynamic_members;
         uint32_t num_chunks;
         uint64_t chunk_size;
         peer_id_t replica_set_uuid;
@@ -109,14 +113,15 @@ public:
         char data[1];                      // ISO C++ forbids zero-size array
         // Data layout inside 'data':
         // First, an array of 'pg_members' structures:
-        // | pg_members[0] | pg_members[1] | ... | pg_members[num_members-1] |
+        // | pg_members[0] | pg_members[1] | ... | pg_members[num_dynamic_members-1] | reserved pg_members[num_dynamic_members]...|
+        // reserved pg_members[2*num_expected_members-1]
         // Immediately followed by an array of 'chunk_num_t' values (representing physical chunkID):
         // | chunk_num_t[0] | chunk_num_t[1] | ... | chunk_num_t[num_chunks-1] |
         // Here, 'chunk_num_t[i]' represents the p_chunk_id for the v_chunk_id 'i', where v_chunk_id starts from 0 and
         // increases sequentially.
-
+        uint32_t pg_members_space_size() const { return 2 * num_expected_members * sizeof(pg_members); }
         uint32_t size() const {
-            return sizeof(pg_info_superblk) - sizeof(char) + num_members * sizeof(pg_members) +
+            return sizeof(pg_info_superblk) - sizeof(char) + this->pg_members_space_size() +
                 num_chunks * sizeof(homestore::chunk_num_t);
         }
         static std::string name() { return _pg_meta_name; }
@@ -127,14 +132,15 @@ public:
         pg_info_superblk& operator=(pg_info_superblk const& rhs) {
             id = rhs.id;
             state = rhs.state;
-            num_members = rhs.num_members;
+            num_expected_members = rhs.num_expected_members;
+            num_dynamic_members = rhs.num_dynamic_members;
             num_chunks = rhs.num_chunks;
             pg_size = rhs.pg_size;
             replica_set_uuid = rhs.replica_set_uuid;
             index_table_uuid = rhs.index_table_uuid;
             blob_sequence_num = rhs.blob_sequence_num;
 
-            memcpy(get_pg_members_mutable(), rhs.get_pg_members(), sizeof(pg_members) * num_members);
+            memcpy(get_pg_members_mutable(), rhs.get_pg_members(), this->pg_members_space_size());
             memcpy(get_chunk_ids_mutable(), rhs.get_chunk_ids(), sizeof(homestore::chunk_num_t) * num_chunks);
             return *this;
         }
@@ -145,10 +151,10 @@ public:
         const pg_members* get_pg_members() const { return reinterpret_cast< const pg_members* >(data); }
 
         homestore::chunk_num_t* get_chunk_ids_mutable() {
-            return reinterpret_cast< homestore::chunk_num_t* >(data + num_members * sizeof(pg_members));
+            return reinterpret_cast< homestore::chunk_num_t* >(data + this->pg_members_space_size());
         }
         const homestore::chunk_num_t* get_chunk_ids() const {
-            return reinterpret_cast< const homestore::chunk_num_t* >(data + num_members * sizeof(pg_members));
+            return reinterpret_cast< const homestore::chunk_num_t* >(data + this->pg_members_space_size());
         }
     };
 
@@ -711,14 +717,24 @@ public:
                                      cintrusive< homestore::repl_req_ctx >& hs_ctx);
 
     /**
-     * @brief Function invoked when a member is replaced by a new member
+     * @brief Function invoked when start a member replacement
      *
      * @param group_id The group id of replication device.
      * @param member_out Member which is removed from group
      * @param member_in Member which is added to group
      * */
-    void on_pg_replace_member(homestore::group_id_t group_id, const homestore::replica_member_info& member_out,
-                              const homestore::replica_member_info& member_in);
+    void on_pg_start_replace_member(homestore::group_id_t group_id, const homestore::replica_member_info& member_out,
+                              const homestore::replica_member_info& member_in, trace_id_t tid);
+
+    /**
+     * @brief Function invoked when complete a member replacement
+     *
+     * @param group_id The group id of replication device.
+     * @param member_out Member which is removed from group
+     * @param member_in Member which is added to group
+     * */
+    void on_pg_complete_replace_member(homestore::group_id_t group_id, const homestore::replica_member_info& member_out,
+                              const homestore::replica_member_info& member_in, trace_id_t tid);
 
     /**
      * @brief Cleans up and recycles resources for the PG identified by the given pg_id on the current node.
