@@ -459,8 +459,8 @@ void ReplicationStateMachine::write_snapshot_obj(std::shared_ptr< homestore::sna
     }
     auto data_buf = snp_obj->blob.cbytes() + sizeof(SyncMessageHeader);
 
+    // Case 1: PG metadata & shard list message
     if (obj_id.shard_seq_num == 0) {
-        // PG metadata & shard list message
         RELEASE_ASSERT(obj_id.batch_id == 0, "Invalid obj_id");
 
         auto pg_data = GetSizePrefixedResyncPGMetaData(data_buf);
@@ -499,10 +499,23 @@ void ReplicationStateMachine::write_snapshot_obj(std::shared_ptr< homestore::sna
         return;
     }
 
+    // There can be obj id mismatch if the follower crashes and restarts immediately within the sync_ctx_timeout.
+    // The leader will continue with the previous request, which could be the same message the follower received before
+    // the crash or the next message.
+    // But anyway, all the follower needs is to simply resume from the beginning of its shard cursor if it's not valid.
+    if (!m_snp_rcv_handler->is_valid_obj_id(obj_id)) {
+        snp_obj->offset =
+            objId(HSHomeObject::get_sequence_num_from_shard_id(m_snp_rcv_handler->get_shard_cursor()), 0).value;
+        LOGW("Obj id not matching with the current shard/blob cursor, resume from previous context breakpoint, lsn={} "
+             "next_shard:0x{:x}, shard_cursor:0x{:x}",
+             context->get_lsn(), m_snp_rcv_handler->get_next_shard(), m_snp_rcv_handler->get_shard_cursor());
+        return;
+    }
+
     RELEASE_ASSERT(m_snp_rcv_handler->get_context_lsn() == context->get_lsn(), "Snapshot context lsn not matching");
 
+    // Case 2: Shard metadata message
     if (obj_id.batch_id == 0) {
-        // Shard metadata message
         RELEASE_ASSERT(obj_id.shard_seq_num != 0, "Invalid obj_id");
 
         auto shard_data = GetSizePrefixedResyncShardMetaData(data_buf);
@@ -519,18 +532,7 @@ void ReplicationStateMachine::write_snapshot_obj(std::shared_ptr< homestore::sna
         return;
     }
 
-    // Blob data message
-    // There is a case will cause this, when the follower is killed after finishes a shard(have updated the shard in
-    // sb), but the leader doesn't receive the response. Then follower starts immediately within sync ctx timeout, then
-    // leader retries the prior batch.
-    if (obj_id.shard_seq_num != HSHomeObject::get_sequence_num_from_shard_id(m_snp_rcv_handler->get_shard_cursor())) {
-        snp_obj->offset =
-            objId(HSHomeObject::get_sequence_num_from_shard_id(m_snp_rcv_handler->get_shard_cursor()), 0).value;
-        LOGW("Shard id not matching with the current shard cursor, resume from previous context breakpoint, lsn={} "
-             "next_shard:0x{:x}, shard_cursor:0x{:x}",
-             context->get_lsn(), m_snp_rcv_handler->get_next_shard(), m_snp_rcv_handler->get_shard_cursor());
-        return;
-    }
+    // Case 3: Blob data message
     auto blob_batch = GetSizePrefixedResyncBlobDataBatch(data_buf);
     auto ret =
         m_snp_rcv_handler->process_blobs_snapshot_data(*blob_batch, obj_id.batch_id, blob_batch->is_last_batch());
