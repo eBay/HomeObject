@@ -463,6 +463,7 @@ public:
         BlobManager::AsyncResult< blob_read_result > load_blob_data(const BlobInfo& blob_info);
         bool create_pg_snapshot_data(sisl::io_blob_safe& meta_blob);
         bool create_shard_snapshot_data(sisl::io_blob_safe& meta_blob);
+	bool prefetch_blobs_snapshot_data();
         bool create_blobs_snapshot_data(sisl::io_blob_safe& data_blob);
         void pack_resync_message(sisl::io_blob_safe& dest_blob, SyncMessageType type);
         bool end_of_scan() const;
@@ -503,6 +504,8 @@ public:
         objId cur_obj_id_{0, 0};
         int64_t cur_shard_idx_{-1};
         std::vector< BlobInfo > cur_blob_list_{0};
+        uint64_t inflight_prefetch_bytes{0};
+        std::map < blob_id_t, BlobManager::AsyncResult< blob_read_result >> prefetched_blobs;
         uint64_t cur_start_blob_idx_{0};
         uint64_t cur_batch_blob_count_{0};
         Clock::time_point cur_batch_start_time_;

@@ -153,9 +153,10 @@ bool HSHomeObject::PGBlobIterator::create_pg_snapshot_data(sisl::io_blob_safe& m
         shard_ids.push_back(shard.info.id);
     }
 
-    auto pg_entry = CreateResyncPGMetaDataDirect(builder_, pg_info.id, &uuid, pg_info.size, pg_info.expected_member_num, pg_info.chunk_size,
-                                                 pg->durable_entities().blob_sequence_num, pg->shard_sequence_num_,
-                                                 &members, &shard_ids, total_blobs, total_bytes);
+    auto pg_entry =
+        CreateResyncPGMetaDataDirect(builder_, pg_info.id, &uuid, pg_info.size, pg_info.expected_member_num,
+                                     pg_info.chunk_size, pg->durable_entities().blob_sequence_num,
+                                     pg->shard_sequence_num_, &members, &shard_ids, total_blobs, total_bytes);
     builder_.FinishSizePrefixed(pg_entry);
 
     pack_resync_message(meta_blob, SyncMessageType::PG_META);
@@ -251,18 +252,15 @@ BlobManager::AsyncResult< blob_read_result > HSHomeObject::PGBlobIterator::load_
         });
 }
 
-bool HSHomeObject::PGBlobIterator::create_blobs_snapshot_data(sisl::io_blob_safe& data_blob) {
-    auto batch_start = Clock::now();
-    std::vector< ::flatbuffers::Offset< ResyncBlobData > > blob_entries;
-
-    bool end_of_shard = false;
-    uint64_t total_bytes = 0;
-    auto idx = cur_start_blob_idx_;
-
-    std::vector< BlobManager::AsyncResult< blob_read_result > > futs;
+bool HSHomeObject::PGBlobIterator::prefetch_blobs_snapshot_data() {
     auto total_blobs = 0;
     auto skipped_blobs = 0;
-    while (total_bytes < max_batch_size_ && idx < cur_blob_list_.size()) {
+    // limit inflight prefect data to 2x of max_batch_size.
+    std::vector< BlobInfo > prefetch_list;
+    LOGD("prefetch_blobs_snapshot_data, inflight={}, idx={}, max_batch_size * 2 = {}", inflight_prefetch_bytes,
+         cur_start_blob_idx_, max_batch_size_ * 2);
+    auto idx = cur_start_blob_idx_;
+    while (inflight_prefetch_bytes < max_batch_size_ * 2 && idx < cur_blob_list_.size()) {
         auto info = cur_blob_list_[idx++];
         total_blobs++;
         // handle deleted object
@@ -274,11 +272,25 @@ bool HSHomeObject::PGBlobIterator::create_blobs_snapshot_data(sisl::io_blob_safe
             skipped_blobs++;
             continue;
         }
+        if (prefetched_blobs.contains(info.blob_id)) {
+            LOGT("Blob {} has prefetched, skipping", info.blob_id);
+            skipped_blobs++;
+            continue;
+        }
+        auto expect_blob_size = info.pbas.blk_count() * repl_dev_->get_blk_size();
+        inflight_prefetch_bytes += expect_blob_size;
+        LOGD("will preftch {}", info.blob_id);
+        prefetch_list.emplace_back(info);
+    }
+    // POC: sort the prefetch_list by pbas, trying to let IO submitted to disk more sequential.
+    std::sort(prefetch_list.begin(), prefetch_list.end(),
+              [](const BlobInfo& a, const BlobInfo& b) { return a.pbas < b.pbas; });
 
+    for (auto info : prefetch_list) {
 #ifdef _PRERELEASE
         if (iomgr_flip::instance()->test_flip("pg_blob_iterator_load_blob_data_error")) {
             LOGW("Simulating loading blob data error");
-            futs.emplace_back(folly::makeUnexpected(BlobError(BlobErrorCode::READ_FAILED)));
+            prefetched_blobs.emplace(info.blob_id, folly::makeUnexpected(BlobError(BlobErrorCode::READ_FAILED)));
             continue;
         }
         auto delay = iomgr_flip::instance()->get_test_flip< long >("simulate_read_snapshot_load_blob_delay",
@@ -293,7 +305,8 @@ bool HSHomeObject::PGBlobIterator::create_blobs_snapshot_data(sisl::io_blob_safe
 
         LOGT("submitting io for blob {}", info.blob_id);
         // Fixme: Re-enable retries uint8_t retries = HS_BACKEND_DYNAMIC_CONFIG(snapshot_blob_load_retry);
-        futs.emplace_back(
+        prefetched_blobs.emplace(
+            info.blob_id,
             std::move(load_blob_data(info))
                 .via(folly::getKeepAliveToken(folly::InlineExecutor::instance()))
                 .thenValue(
@@ -309,30 +322,76 @@ bool HSHomeObject::PGBlobIterator::create_blobs_snapshot_data(sisl::io_blob_safe
                         }
                         return result;
                     }));
-
-        auto const expect_blob_size = info.pbas.blk_count() * repl_dev_->get_blk_size();
-        total_bytes += expect_blob_size;
     }
-    // collect futs and add to flatbuffer.
+    return true;
+}
+
+bool HSHomeObject::PGBlobIterator::create_blobs_snapshot_data(sisl::io_blob_safe& data_blob) {
+    auto batch_start = Clock::now();
+    // prefetch blobs
+    prefetch_blobs_snapshot_data();
+    std::vector< ::flatbuffers::Offset< ResyncBlobData > > blob_entries;
+
+    bool end_of_shard = false;
+    uint64_t total_bytes = 0;
+    auto idx = cur_start_blob_idx_;
+
+    std::vector< BlobManager::AsyncResult< blob_read_result > > futs;
+    auto total_blobs = 0;
+    auto skipped_blobs = 0;
+    auto fetched_blobs = 0;
     bool hit_error = false;
-    if (skipped_blobs + (long)futs.size() != total_blobs) {
-        LOGE("total {} blobs, skipped {}, expect {} but only has {} futs", total_blobs, skipped_blobs,
-             total_blobs - skipped_blobs, futs.size());
+    while (total_bytes < max_batch_size_ && idx < cur_blob_list_.size()) {
+        auto info = cur_blob_list_[idx++];
+        total_blobs++;
+        // handle deleted object
+        if (info.pbas == tombstone_pbas) {
+            LOGT("Blob is deleted: shardID=0x{:x}, pg={}, shard=0x{:x}, blob_id={}, blkid={}", info.shard_id,
+                 (info.shard_id >> homeobject::shard_width), (info.shard_id & homeobject::shard_mask), info.blob_id,
+                 info.pbas.to_string());
+            // ignore
+            skipped_blobs++;
+            continue;
+        }
+
+        LOGT("Getting prefetched data for blob {}", info.blob_id);
+        auto it = prefetched_blobs.find(info.blob_id);
+        if (it == prefetched_blobs.end()) {
+            hit_error = true;
+            LOGE("blob {} not found in prefetched blob map", info.blob_id);
+            break;
+        }
+        auto res = std::move(it->second).get();
+        prefetched_blobs.erase(it);
+
+        if (res.hasError()) {
+            LOGE("blob {} hit error {}", info.blob_id, res.error());
+            hit_error = true;
+            break;
+        }
+        std::vector< uint8_t > data(res->blob_.cbytes(), res->blob_.cbytes() + res->blob_.size());
+        blob_entries.push_back(CreateResyncBlobDataDirect(builder_, res->blob_id_, (uint8_t)res->state_, &data));
+        auto const expect_blob_size = info.pbas.blk_count() * repl_dev_->get_blk_size();
+        inflight_prefetch_bytes -= expect_blob_size;
+        total_bytes += expect_blob_size;
+        fetched_blobs++;
+    }
+
+    if (skipped_blobs + fetched_blobs != total_blobs) {
+        LOGE("total {} blobs, skipped {}, expect {} but only get {} blobs", total_blobs, skipped_blobs,
+             total_blobs - skipped_blobs, fetched_blobs);
         hit_error = true;
     }
-    for (auto it = futs.begin(); it != futs.end(); it++) {
-        auto res = std::move(*it).get();
-        // Although we fail the whole batch if single blob failed, however we still need to wait till all in-flight ops
-        // finished, because the iterator might be released by nuraft after returning an error, however the "thenValue"
-        // still access the metrics ptr.
-        if (res.hasError()) { hit_error = true; }
-        if (!hit_error) {
-            std::vector< uint8_t > data(res->blob_.cbytes(), res->blob_.cbytes() + res->blob_.size());
-            blob_entries.push_back(CreateResyncBlobDataDirect(builder_, res->blob_id_, (uint8_t)res->state_, &data));
-        }
-    }
+
     if (hit_error) {
         builder_.Clear();
+        // drain the prefetched data before return which destroy the iterator.
+        for (auto& blob : prefetched_blobs) {
+            LOGD("Waiting Blob {} ready and drain it", blob.first);
+            std::move(blob.second).get();
+        }
+        prefetched_blobs.clear();
+        inflight_prefetch_bytes = 0;
         return false;
     }
     // should include the deleted blobs
