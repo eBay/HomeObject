@@ -223,10 +223,11 @@ void HSHomeObject::init_homestore() {
         repl_app->on_repl_devs_init_completed();
 
         // we need to regitster the meta blk handlers after metaservice is ready.
-        gc_mgr_ = std::make_unique< GCManager >(chunk_selector_, this);
+        gc_mgr_ = std::make_shared< GCManager >(chunk_selector_, this);
         // if this is the first time we are starting, we need to create gc metablk for each pdev， which record the
         // reserved chunks and indextable.
         auto pdev_chunks = chunk_selector_->get_pdev_chunks();
+        const auto reserved_chunk_num_per_pdev = HS_BACKEND_DYNAMIC_CONFIG(reserved_chunk_num_per_pdev);
         for (auto const& [pdev_id, chunks] : pdev_chunks) {
             // 1 create gc index table for each pdev
             auto gc_index_table = create_gc_index_table();
@@ -241,12 +242,12 @@ void HSHomeObject::init_homestore() {
             gc_actor_sb->index_table_uuid = uuid;
             gc_actor_sb.write();
 
-            RELEASE_ASSERT(chunks.size() > RESERVED_CHUNK_NUM_PER_PDEV,
+            RELEASE_ASSERT(chunks.size() > reserved_chunk_num_per_pdev,
                            "pdev {} has {} chunks, but we need at least {} chunks for reserved chunk", pdev_id,
-                           chunks.size(), RESERVED_CHUNK_NUM_PER_PDEV);
+                           chunks.size(), reserved_chunk_num_per_pdev);
 
             // 3 create reserved chunk meta blk for each pdev, which contains the reserved chunks.
-            for (size_t i = 0; i < RESERVED_CHUNK_NUM_PER_PDEV; ++i) {
+            for (size_t i = 0; i < reserved_chunk_num_per_pdev; ++i) {
                 auto chunk = chunks[i];
                 homestore::superblk< GCManager::gc_reserved_chunk_superblk > reserved_chunk_sb{
                     GCManager::_gc_reserved_chunk_meta_name};
@@ -352,15 +353,21 @@ void HSHomeObject::init_cp() {
 
 void HSHomeObject::init_gc() {
     using namespace homestore;
-    if (!gc_mgr_) gc_mgr_ = std::make_unique< GCManager >(chunk_selector_, this);
+    if (!gc_mgr_) gc_mgr_ = std::make_shared< GCManager >(chunk_selector_, this);
     // when initializing, there is not gc task. we need to recover reserved chunks here, so that the reserved chunks
     // will not be put into pdev heap when built
     HomeStore::instance()->meta_service().read_sub_sb(GCManager::_gc_actor_meta_name);
     HomeStore::instance()->meta_service().read_sub_sb(GCManager::_gc_reserved_chunk_meta_name);
     HomeStore::instance()->meta_service().read_sub_sb(GCManager::_gc_task_meta_name);
 
-    // TODO::enable gc after we have data copy
-    // gc_mgr_->start();
+    const auto enable_gc = HS_BACKEND_DYNAMIC_CONFIG(enable_gc);
+
+    if (enable_gc) {
+        LOGI("Starting GC");
+        gc_mgr_->start();
+    } else {
+        LOGI("GC is disabled");
+    }
 }
 
 // void HSHomeObject::trigger_timed_events() { persist_pg_sb(); }
@@ -458,6 +465,15 @@ std::shared_ptr< GCBlobIndexTable > HSHomeObject::get_gc_index_table(std::string
         return nullptr;
     }
     return it->second;
+}
+
+void HSHomeObject::trigger_immediate_gc() {
+    if (!gc_mgr_) {
+        LOGI("scan chunks for gc immediately");
+        gc_mgr_->scan_chunks_for_gc();
+    } else {
+        LOGE("GC is not enabled");
+    }
 }
 
 } // namespace homeobject

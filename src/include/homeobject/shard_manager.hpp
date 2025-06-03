@@ -27,7 +27,6 @@ struct ShardInfo {
     uint64_t last_modified_time;
     uint64_t available_capacity_bytes;
     uint64_t total_capacity_bytes;
-    uint64_t deleted_capacity_bytes;
     std::optional< peer_id_t > current_leader{std::nullopt};
 
     auto operator<=>(ShardInfo const& rhs) const { return id <=> rhs.id; }
