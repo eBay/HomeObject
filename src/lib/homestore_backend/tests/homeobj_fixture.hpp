@@ -238,24 +238,24 @@ public:
     }
 
     // TODO:make this run in parallel
-    void put_blobs(std::map< pg_id_t, std::vector< shard_id_t > > const& pg_shard_id_vec,
-                   uint64_t const num_blobs_per_shard, std::map< pg_id_t, blob_id_t >& pg_blob_id,
-                   bool need_sync_before_start = true) {
+    std::map< shard_id_t, std::map< blob_id_t, uint64_t > >
+    put_blobs(std::map< pg_id_t, std::vector< shard_id_t > > const& pg_shard_id_vec, uint64_t const num_blobs_per_shard,
+              std::map< pg_id_t, blob_id_t >& pg_blob_id, bool need_sync_before_start = true) {
         g_helper->sync();
+        std::map< shard_id_t, std::map< blob_id_t, uint64_t > > shard_blob_ids_map;
         for (const auto& [pg_id, shard_vec] : pg_shard_id_vec) {
             if (!am_i_in_pg(pg_id)) continue;
             // the blob_id of a pg is a continuous number starting from 0 and increasing by 1
             blob_id_t current_blob_id{pg_blob_id[pg_id]};
-
             for (const auto& shard_id : shard_vec) {
                 for (uint64_t k = 0; k < num_blobs_per_shard; k++) {
                     run_on_pg_leader(pg_id, [&]() {
                         auto put_blob = build_blob(current_blob_id);
                         auto tid = generateRandomTraceId();
 
-                        LOGINFO("Put blob pg={} shard {} blob {} size {} data {} trace_id={}", pg_id, shard_id,
-                                current_blob_id, put_blob.body.size(),
-                                hex_bytes(put_blob.body.cbytes(), std::min(10u, put_blob.body.size())), tid);
+                        LOGDEBUG("Put blob pg={} shard {} blob {} size {} data {} trace_id={}", pg_id, shard_id,
+                                 current_blob_id, put_blob.body.size(),
+                                 hex_bytes(put_blob.body.cbytes(), std::min(10u, put_blob.body.size())), tid);
 
                         auto b = _obj_inst->blob_manager()->put(shard_id, std::move(put_blob), tid).get();
 
@@ -267,7 +267,9 @@ public:
                         auto blob_id = b.value();
                         ASSERT_EQ(blob_id, current_blob_id) << "the predicted blob id is not correct!";
                     });
-
+                    auto [it, _] = shard_blob_ids_map.try_emplace(shard_id, std::map< blob_id_t, uint64_t >());
+                    auto& blob_ids = it->second;
+                    blob_ids[current_blob_id] = actual_written_blk_count_for_blob(current_blob_id);
                     current_blob_id++;
                 }
             }
@@ -284,6 +286,8 @@ public:
             LOGINFO("shard {} blob {} is created locally, which means all the blob before {} are created", shard_id,
                     last_blob_id, last_blob_id);
         }
+
+        return shard_blob_ids_map;
     }
 
     void del_blob(pg_id_t pg_id, shard_id_t shard_id, blob_id_t blob_id) {
@@ -296,6 +300,29 @@ public:
         });
         while (blob_exist(shard_id, blob_id)) {
             LOGINFO("waiting for shard {} blob {} to be deleted locally, trace_id={}", shard_id, blob_id, tid);
+            std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+        }
+    }
+
+    void del_blobs(pg_id_t pg_id, std::map< shard_id_t, std::set< blob_id_t > > const& shard_blob_ids_map) {
+        g_helper->sync();
+        auto tid = generateRandomTraceId();
+        for (const auto& [shard_id, blob_ids] : shard_blob_ids_map) {
+            for (const auto& blob_id : blob_ids) {
+                run_on_pg_leader(pg_id, [&]() {
+                    auto g = _obj_inst->blob_manager()->del(shard_id, blob_id, tid).get();
+                    ASSERT_TRUE(g);
+                    LOGDEBUG("delete blob, pg={} shard {} blob {} trace_id={}", pg_id, shard_id, blob_id, tid);
+                });
+            }
+        }
+
+        auto last_shard_id = shard_blob_ids_map.rbegin()->first;
+        auto last_blob_id = *(shard_blob_ids_map.rbegin()->second.rbegin());
+        // wait for the last blob to be deleted locally
+
+        while (blob_exist(last_shard_id, last_blob_id)) {
+            LOGINFO("waiting for shard {} blob {} to be deleted locally", last_shard_id, last_blob_id);
             std::this_thread::sleep_for(std::chrono::milliseconds(1000));
         }
     }
@@ -327,6 +354,34 @@ public:
                 std::this_thread::sleep_for(std::chrono::milliseconds(1000));
             }
         }
+    }
+
+    uint32_t get_valid_blob_count_in_pg(const pg_id_t pg_id) {
+        auto hs_pg = _obj_inst->get_hs_pg(pg_id);
+        if (!hs_pg) {
+            LOGERROR("failed to get hs_pg for pg_id={}", pg_id);
+            return 0;
+        }
+
+        auto start_key =
+            BlobRouteKey{BlobRoute{uint64_t(pg_id) << homeobject::shard_width, std::numeric_limits< uint64_t >::min()}};
+        auto end_key = BlobRouteKey{
+            BlobRoute{uint64_t(pg_id + 1) << homeobject::shard_width, std::numeric_limits< uint64_t >::min()}};
+
+        homestore::BtreeQueryRequest< BlobRouteKey > query_req{
+            homestore::BtreeKeyRange< BlobRouteKey >{std::move(start_key), true /* inclusive */, std::move(end_key),
+                                                     false /* inclusive */},
+            homestore::BtreeQueryType::SWEEP_NON_INTRUSIVE_PAGINATION_QUERY,
+            std::numeric_limits< uint32_t >::max() /* blob count in a shard will not exceed uint32_t_max*/,
+            [](homestore::BtreeKey const& key, homestore::BtreeValue const& value) -> bool {
+                BlobRouteValue existing_value{value};
+                if (existing_value.pbas() == HSHomeObject::tombstone_pbas) { return false; }
+                return true;
+            }};
+
+        std::vector< std::pair< BlobRouteKey, BlobRouteValue > > valid_blob_indexes;
+        hs_pg->index_table_->query(query_req, valid_blob_indexes);
+        return valid_blob_indexes.size();
     }
 
     // TODO:make this run in parallel
@@ -375,6 +430,40 @@ public:
                     EXPECT_EQ(blob.object_off, result.object_off);
                     current_blob_id++;
                 }
+            }
+        }
+    }
+
+    void verify_shard_blobs(const std::map< shard_id_t, std::set< blob_id_t > >& shard_blobs,
+                            bool const use_random_offset = false) {
+        uint32_t off = 0, len = 0;
+        for (const auto& [shard_id, blob_ids] : shard_blobs) {
+            for (const auto& blob_id : blob_ids) {
+                auto tid = generateRandomTraceId();
+                LOGDEBUG("going to verify blob shard {} blob {} trace_id={}", shard_id, blob_id, tid);
+                auto blob = build_blob(blob_id);
+                len = blob.body.size();
+                if (use_random_offset) {
+                    std::uniform_int_distribution< uint32_t > rand_off_gen{0u, len - 1u};
+                    std::uniform_int_distribution< uint32_t > rand_len_gen{1u, len};
+
+                    off = rand_off_gen(rnd_engine);
+                    len = rand_len_gen(rnd_engine);
+                    if ((off + len) >= blob.body.size()) { len = blob.body.size() - off; }
+                }
+
+                auto g = _obj_inst->blob_manager()->get(shard_id, blob_id, off, len, tid).get();
+                ASSERT_TRUE(!!g) << "get blob fail, shard_id " << shard_id << " blob_id " << blob_id
+                                 << " replica number " << g_helper->replica_num();
+                auto result = std::move(g.value());
+                LOGDEBUG("get shard {} blob {} off {} len {} data {}", shard_id, blob_id, off, len,
+                         hex_bytes(result.body.cbytes(), std::min(len, 10u)));
+
+                EXPECT_EQ(result.body.size(), len);
+                EXPECT_EQ(std::memcmp(result.body.bytes(), blob.body.cbytes() + off, result.body.size()), 0);
+                EXPECT_EQ(result.user_key.size(), blob.user_key.size());
+                EXPECT_EQ(blob.user_key, result.user_key);
+                EXPECT_EQ(blob.object_off, result.object_off);
             }
         }
     }
@@ -467,7 +556,6 @@ public:
         EXPECT_EQ(lhs.last_modified_time, rhs.last_modified_time);
         EXPECT_EQ(lhs.available_capacity_bytes, rhs.available_capacity_bytes);
         EXPECT_EQ(lhs.total_capacity_bytes, rhs.total_capacity_bytes);
-        EXPECT_EQ(lhs.deleted_capacity_bytes, rhs.deleted_capacity_bytes);
         EXPECT_EQ(lhs.current_leader, rhs.current_leader);
     }
 
@@ -611,6 +699,27 @@ private:
         BitsGenerator::gen_blob_bits(blob.body, blob_id);
         return blob;
     }
+
+    uint64_t actual_written_blk_count_for_blob(blob_id_t blob_id) {
+        using homeobject::io_align;
+        auto blob = build_blob(blob_id);
+        auto blob_size = blob.body.size();
+
+        uint64_t actual_written_size{
+            uint32_cast(sisl::round_up(sizeof(HSHomeObject::BlobHeader) + blob.user_key.size(), io_align))};
+
+        if (((r_cast< uintptr_t >(blob.body.cbytes()) % io_align) != 0) || ((blob_size % io_align) != 0)) {
+            blob_size = sisl::round_up(blob_size, io_align);
+        }
+
+        actual_written_size += blob_size;
+
+        auto pad_len = sisl::round_up(actual_written_size, HSHomeObject::_data_block_size) - actual_written_size;
+        if (pad_len) { actual_written_size += pad_len; }
+
+        return actual_written_size / HSHomeObject::_data_block_size;
+    }
+
 #ifdef _PRERELEASE
     void set_basic_flip(const std::string flip_name, int count = 1, uint32_t percent = 100) {
         flip::FlipCondition null_cond;

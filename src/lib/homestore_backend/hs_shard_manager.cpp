@@ -86,7 +86,6 @@ std::string HSHomeObject::serialize_shard_info(const ShardInfo& info) {
     j["shard_info"]["modified_time"] = info.last_modified_time;
     j["shard_info"]["total_capacity"] = info.total_capacity_bytes;
     j["shard_info"]["available_capacity"] = info.available_capacity_bytes;
-    j["shard_info"]["deleted_capacity"] = info.deleted_capacity_bytes;
     return j.dump();
 }
 
@@ -101,7 +100,6 @@ ShardInfo HSHomeObject::deserialize_shard_info(const char* json_str, size_t str_
     shard_info.last_modified_time = shard_json["shard_info"]["modified_time"].get< uint64_t >();
     shard_info.available_capacity_bytes = shard_json["shard_info"]["available_capacity"].get< uint64_t >();
     shard_info.total_capacity_bytes = shard_json["shard_info"]["total_capacity"].get< uint64_t >();
-    shard_info.deleted_capacity_bytes = shard_json["shard_info"]["deleted_capacity"].get< uint64_t >();
     return shard_info;
 }
 
@@ -163,8 +161,7 @@ ShardManager::AsyncResult< ShardInfo > HSHomeObject::_create_shard(pg_id_t pg_ow
                          .created_time = create_time,
                          .last_modified_time = create_time,
                          .available_capacity_bytes = size_bytes,
-                         .total_capacity_bytes = size_bytes,
-                         .deleted_capacity_bytes = 0};
+                         .total_capacity_bytes = size_bytes};
     sb->p_chunk_id = 0;
     sb->v_chunk_id = v_chunkID.value();
 
@@ -497,6 +494,13 @@ void HSHomeObject::on_shard_message_commit(int64_t lsn, sisl::blob const& h, hom
         if (ctx) { ctx->promise_.setValue(ShardManager::Result< ShardInfo >(shard_info)); }
         SLOGD(tid, shard_info.id, "Commit done for sealing shard");
 
+        auto hs_pg = get_hs_pg(shard_info.placement_group);
+        RELEASE_ASSERT(hs_pg != nullptr, "shardID=0x{:x}, pg={}, shard=0x{:x}, PG not found", shard_info.id,
+                       (shard_info.id >> homeobject::shard_width), (shard_info.id & homeobject::shard_mask));
+        const_cast< HS_PG* >(hs_pg)->durable_entities_update(
+            // shard_footer will also occupy one blk.
+            [](auto& de) { de.total_occupied_blk_count.fetch_add(1, std::memory_order_relaxed); });
+
         break;
     }
     default:
@@ -541,7 +545,8 @@ void HSHomeObject::add_new_shard_to_map(std::unique_ptr< HS_Shard > shard) {
                    (shard_id >> homeobject::shard_width), (shard_id & homeobject::shard_mask));
 
     const auto [it, h] = chunk_to_shards_map_.try_emplace(p_chunk_id, std::set< shard_id_t >());
-    auto per_chunk_shard_list = it->second;
+    if (h) { LOGDEBUG("chunk_id={} is not in chunk_to_shards_map, add it", p_chunk_id); }
+    auto& per_chunk_shard_list = it->second;
     const auto inserted = (per_chunk_shard_list.emplace(shard_id)).second;
     RELEASE_ASSERT(inserted, "shardID=0x{:x}, pg={}, shard=0x{:x}, duplicated shard info", shard_id,
                    (shard_id >> homeobject::shard_width), (shard_id & homeobject::shard_mask));
@@ -573,6 +578,49 @@ std::optional< homestore::chunk_num_t > HSHomeObject::get_shard_p_chunk_id(shard
     if (shard_iter == _shard_map.end()) { return std::nullopt; }
     auto hs_shard = d_cast< HS_Shard* >((*shard_iter->second).get());
     return std::make_optional< homestore::chunk_num_t >(hs_shard->sb_->p_chunk_id);
+}
+
+const std::set< shard_id_t > HSHomeObject::get_shards_in_chunk(homestore::chunk_num_t chunk_id) const {
+    const auto it = chunk_to_shards_map_.find(chunk_id);
+    if (it == chunk_to_shards_map_.cend()) {
+        LOGW("chunk_id={} not found in chunk_to_shards_map", chunk_id);
+        return {};
+    }
+    return it->second;
+}
+
+void HSHomeObject::update_shard_meta_after_gc(const homestore::chunk_num_t move_from_chunk,
+                                              const homestore::chunk_num_t move_to_chunk) {
+    auto shards = get_shards_in_chunk(move_from_chunk);
+
+    // TODO::optimize this lock
+    std::scoped_lock lock_guard(_shard_lock);
+    for (const auto& shard_id : shards) {
+        auto shard_iter = _shard_map.find(shard_id);
+        RELEASE_ASSERT(shard_iter != _shard_map.end(), "shard {} does not exist!!", shard_id);
+        auto hs_shard = d_cast< HS_Shard* >((*shard_iter->second).get());
+        if (hs_shard->p_chunk_id() == move_to_chunk) {
+            // this might happens when crash recovery. the crash happens after shard metablk is updated but before gc
+            // task metablk is updated.
+            LOGD("the pchunk_id for shard_id={} for is already {}, skip update shard metablk", shard_id, move_to_chunk);
+        }
+
+        auto shard_info = hs_shard->info;
+        shard_info.last_modified_time = get_current_timestamp();
+        if (shard_info.state == ShardInfo::State::SEALED) { shard_info.available_capacity_bytes = 0; }
+
+        // total_capacity_bytes and available_capacity_bytes are not used since we never set a limitation for shard
+        // capacity
+
+        hs_shard->update_info(shard_info, move_to_chunk);
+        LOGD("update shard={} pchunk from {} to {}", shard_id, move_from_chunk, move_to_chunk);
+    }
+
+    // switch chunk id in chunk_to_shards_map
+    auto iter = chunk_to_shards_map_.find(move_from_chunk);
+    RELEASE_ASSERT(iter != chunk_to_shards_map_.end(), "can not find old chunk_id={}", move_from_chunk);
+    chunk_to_shards_map_.emplace(move_to_chunk, std::move(iter->second));
+    chunk_to_shards_map_.erase(iter);
 }
 
 std::optional< homestore::chunk_num_t > HSHomeObject::get_shard_v_chunk_id(shard_id_t id) const {
@@ -670,7 +718,9 @@ HSHomeObject::HS_Shard::HS_Shard(ShardInfo shard_info, homestore::chunk_num_t p_
 HSHomeObject::HS_Shard::HS_Shard(homestore::superblk< shard_info_superblk >&& sb) :
         Shard(sb->info), sb_(std::move(sb)) {}
 
-void HSHomeObject::HS_Shard::update_info(const ShardInfo& shard_info) {
+void HSHomeObject::HS_Shard::update_info(const ShardInfo& shard_info,
+                                         std::optional< homestore::chunk_num_t > p_chunk_id) {
+    if (p_chunk_id != std::nullopt) { sb_->p_chunk_id = p_chunk_id.value(); }
     info = shard_info;
     sb_->info = info;
     sb_.write();

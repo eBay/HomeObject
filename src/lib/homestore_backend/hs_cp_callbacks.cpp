@@ -32,20 +32,21 @@ std::unique_ptr< CPContext > HSHomeObject::MyCPCallbacks::on_switchover_cp(CP* c
 folly::Future< bool > HSHomeObject::MyCPCallbacks::cp_flush(CP* cp) {
     std::vector< HSHomeObject::HS_PG* > dirty_pg_list;
     dirty_pg_list.reserve(home_obj_._pg_map.size());
-    {
-        std::shared_lock lock_guard(home_obj_._pg_lock);
-        for (auto const& [id, pg] : home_obj_._pg_map) {
-            auto hs_pg = static_cast< HSHomeObject::HS_PG* >(pg.get());
 
-            // All dirty durable entries are updated in the superblk. We persist outside the pg_lock
-            if (!hs_pg->is_dirty_.exchange(false)) { continue; }
+    // the metablk update in cp flush might have a confict with gc, which will also try to update metablk, so we need
+    // hold the unique lock until all the updates are completed
+    std::unique_lock lock_guard(home_obj_._pg_lock);
+    for (auto const& [id, pg] : home_obj_._pg_map) {
+        auto hs_pg = static_cast< HSHomeObject::HS_PG* >(pg.get());
 
-            hs_pg->pg_sb_->blob_sequence_num = hs_pg->durable_entities().blob_sequence_num.load();
-            hs_pg->pg_sb_->active_blob_count = hs_pg->durable_entities().active_blob_count.load();
-            hs_pg->pg_sb_->tombstone_blob_count = hs_pg->durable_entities().tombstone_blob_count.load();
-            hs_pg->pg_sb_->total_occupied_blk_count = hs_pg->durable_entities().total_occupied_blk_count.load();
-            dirty_pg_list.push_back(hs_pg);
-        }
+        // All dirty durable entries are updated in the superblk. We persist outside the pg_lock
+        if (!hs_pg->is_dirty_.exchange(false)) { continue; }
+
+        hs_pg->pg_sb_->blob_sequence_num = hs_pg->durable_entities().blob_sequence_num.load();
+        hs_pg->pg_sb_->active_blob_count = hs_pg->durable_entities().active_blob_count.load();
+        hs_pg->pg_sb_->tombstone_blob_count = hs_pg->durable_entities().tombstone_blob_count.load();
+        hs_pg->pg_sb_->total_occupied_blk_count = hs_pg->durable_entities().total_occupied_blk_count.load();
+        dirty_pg_list.push_back(hs_pg);
     }
 
     for (auto& hs_pg : dirty_pg_list) {

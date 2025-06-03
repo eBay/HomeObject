@@ -83,7 +83,7 @@ private:
     std::once_flag replica_restart_flag_;
 
     // mapping from chunk to shard list.
-    folly::ConcurrentHashMap< homestore::chunk_num_t, std::set< shard_id_t > > chunk_to_shards_map_;
+    std::unordered_map< homestore::chunk_num_t, std::set< shard_id_t > > chunk_to_shards_map_;
 
 public:
 #pragma pack(1)
@@ -353,7 +353,7 @@ public:
         HS_Shard(homestore::superblk< shard_info_superblk >&& sb);
         ~HS_Shard() override = default;
 
-        void update_info(const ShardInfo& info);
+        void update_info(const ShardInfo& info, std::optional< homestore::chunk_num_t > p_chunk_id = std::nullopt);
         auto p_chunk_id() const { return sb_->p_chunk_id; }
     };
 
@@ -629,7 +629,7 @@ private:
     std::unordered_map< homestore::group_id_t, homestore::superblk< snapshot_ctx_superblk > > snp_ctx_sbs_;
     mutable std::shared_mutex snp_sbs_lock_;
     shared< HeapChunkSelector > chunk_selector_;
-    std::unique_ptr< GCManager > gc_mgr_;
+    shared< GCManager > gc_mgr_;
     unique< HttpManager > http_mgr_;
     bool recovery_done_{false};
 
@@ -784,6 +784,9 @@ public:
      */
     std::optional< homestore::chunk_num_t > get_shard_p_chunk_id(shard_id_t id) const;
 
+    void update_shard_meta_after_gc(const homestore::chunk_num_t move_from_chunk,
+                                    const homestore::chunk_num_t move_to_chunk);
+
     /**
      * @brief Retrieves the chunk number associated with the given shard ID.
      *
@@ -836,6 +839,7 @@ public:
                                        cintrusive< homestore::repl_req_ctx >& hs_ctx);
 
     cshared< HeapChunkSelector > chunk_selector() const { return chunk_selector_; }
+    cshared< GCManager > gc_manager() const { return gc_mgr_; }
 
     // Blob manager related.
     void on_blob_message_rollback(int64_t lsn, sisl::blob const& header, sisl::blob const& key,
@@ -855,7 +859,12 @@ public:
     recover_index_table(homestore::superblk< homestore::index_table_sb >&& sb);
     std::optional< pg_id_t > get_pg_id_with_group_id(homestore::group_id_t group_id) const;
 
-    const auto get_shards_in_chunk(homestore::chunk_num_t chunk_id) const { return chunk_to_shards_map_.at(chunk_id); }
+    const std::set< shard_id_t > get_shards_in_chunk(homestore::chunk_num_t chunk_id) const;
+
+    void update_pg_meta_after_gc(const pg_id_t pg_id, const homestore::chunk_num_t move_from_chunk,
+                                 const homestore::chunk_num_t move_to_chunk);
+
+    uint32_t get_pg_tombstone_blob_count(pg_id_t pg_id) const;
 
     // Snapshot persistence related
     sisl::io_blob_safe get_snapshot_sb_data(homestore::group_id_t group_id);
@@ -863,6 +872,7 @@ public:
     void destroy_snapshot_sb(homestore::group_id_t group_id);
     const Shard* _get_hs_shard(const shard_id_t shard_id) const;
     std::shared_ptr< GCBlobIndexTable > get_gc_index_table(std::string uuid) const;
+    void trigger_immediate_gc();
 
 private:
     std::shared_ptr< BlobIndexTable > create_pg_index_table();

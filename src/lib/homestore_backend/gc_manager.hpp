@@ -16,24 +16,11 @@
 
 #include "heap_chunk_selector.h"
 #include "index_kv.hpp"
+#include "hs_backend_config.hpp"
 
 namespace homeobject {
 
 class HSHomeObject;
-// TODO:: make those #define below configurable
-
-// Default number of chunks reserved for GC per pdev
-#define RESERVED_CHUNK_NUM_PER_PDEV 6
-// reserved chunk number dedicated for emergent GC
-#define RESERVED_CHUNK_NUM_DEDICATED_FOR_EGC 2
-// GC interval in seconds, this is used to schedule the GC timer
-#define GC_SCAN_INTERVAL_SEC 10llu
-// Garbage rate threshold, bigger than which, a gc task will be scheduled for a chunk
-#define GC_GARBAGE_RATE_THRESHOLD 80
-// limit the io resource that gc thread can take, so that it will not impact the client io.
-// assuming the throughput of a HDD is 300M/s(including read and write) and gc can take 10% of the io resource, which is
-// 30M/s. A block is 4K, so gc can read/write 30M/s / 4K = 7680 blocks per second.
-#define MAX_READ_WRITE_BLOCK_COUNT_PER_SECOND 7680
 
 ENUM(task_priority, uint8_t, emergent = 0, normal, priority_count);
 
@@ -72,7 +59,7 @@ public:
 
     struct gc_reserved_chunk_superblk {
         chunk_id_t chunk_id;
-        static std::string name() { return _gc_actor_meta_name; }
+        static std::string name() { return _gc_reserved_chunk_meta_name; }
     };
 #pragma pack()
 
@@ -114,7 +101,7 @@ public:
         pdev_gc_actor& operator=(pdev_gc_actor&&) = delete;
 
     public:
-        void add_reserved_chunk(chunk_id_t chunk_id);
+        void add_reserved_chunk(homestore::superblk< GCManager::gc_reserved_chunk_superblk > reserved_chunk_sb);
         folly::SemiFuture< bool > add_gc_task(uint8_t priority, chunk_id_t move_from_chunk);
         void handle_recovered_gc_task(const GCManager::gc_task_superblk* gc_task);
         void start();
@@ -136,7 +123,7 @@ public:
         // before we select a reserved chunk and start gc, we need:
         //  1 clear all the entries of this chunk in the gc index table
         //  2 reset this chunk to make sure it is empty.
-        void purge_reserved_chunk(chunk_id_t move_to_chunk);
+        bool purge_reserved_chunk(chunk_id_t move_to_chunk);
 
     private:
         // utils
@@ -148,10 +135,18 @@ public:
         folly::MPMCQueue< chunk_id_t > m_reserved_chunk_queue;
         std::shared_ptr< GCBlobIndexTable > m_index_table;
         HSHomeObject* m_hs_home_object{nullptr};
-        RateLimiter m_rate_limiter{MAX_READ_WRITE_BLOCK_COUNT_PER_SECOND};
+
+        // limit the io resource that gc thread can take, so that it will not impact the client io.
+        // assuming the throughput of a HDD is 300M/s(including read and write) and gc can take 10% of the io resource,
+        // which is 30M/s. A block is 4K, so gc can read/write 30M/s / 4K = 7680 blocks per second.
+        RateLimiter m_rate_limiter{HS_BACKEND_DYNAMIC_CONFIG(max_read_write_block_count_per_second)};
+
         std::shared_ptr< folly::IOThreadPoolExecutor > m_gc_executor;
         std::shared_ptr< folly::IOThreadPoolExecutor > m_egc_executor;
         std::atomic_bool m_is_stopped{true};
+        // since we have a very small number of reserved chunks, a vector is enough
+        // TODO:: use a map if we have a large number of reserved chunks
+        std::vector< homestore::superblk< GCManager::gc_reserved_chunk_superblk > > m_reserved_chunks;
     };
 
 public:
@@ -179,9 +174,9 @@ public:
     void start();
     void stop();
 
-private:
     void scan_chunks_for_gc();
 
+private:
     void on_gc_task_meta_blk_found(sisl::byte_view const& buf, void* meta_cookie);
     void on_gc_actor_meta_blk_found(sisl::byte_view const& buf, void* meta_cookie);
     void on_reserved_chunk_meta_blk_found(sisl::byte_view const& buf, void* meta_cookie);

@@ -18,6 +18,26 @@ table HSBackendSettings {
 
     //Reserved space in a chunk
     reserved_bytes_in_chunk: uint64 = 16777216 (hotswap);
+
+    //Enable GC
+    //TODO: make this hotswap after gc is well tested
+    enable_gc: bool = false;
+
+    //Total reserved chunk num (dedicated for gc/egc) per pdev 
+    reserved_chunk_num_per_pdev: uint8 = 6;
+
+    //Reserved chunk number (dedicated for egc) per pdev
+    reserved_chunk_num_per_pdev_for_egc: uint8 = 2;
+
+    //GC scan interval(second)
+    gc_scan_interval_sec: uint64 = 60;
+
+    //GC garbage rate threshold, upon which a chunk will be selected for gc
+    gc_garbage_rate_threshold: uint8 = 80;
+
+    //max read/write block count per second, which is used by ratelimiter to limit the io resource taken by gc
+    max_read_write_block_count_per_second: uint16 = 7680;
+
 }
 
 root_type HSBackendSettings;
