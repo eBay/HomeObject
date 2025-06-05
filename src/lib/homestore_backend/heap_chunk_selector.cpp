@@ -295,9 +295,9 @@ void HeapChunkSelector::switch_chunks_for_pg(const pg_id_t pg_id, const chunk_nu
 
     pg_chunks[v_chunk_id] = EXVchunk_new;
 
-    LOGWARNMOD(homeobject,
-               "vchunk in pg_chunk_collection for pg_id={} has been update from pchunk_id={} to pchunk_id={}", pg_id,
-               old_chunk_id, new_chunk_id);
+    LOGINFOMOD(homeobject,
+               "vchunk={} in pg_chunk_collection for pg_id={} has been update from pchunk_id={} to pchunk_id={}",
+               v_chunk_id, pg_id, old_chunk_id, new_chunk_id);
 
     pg_chunk_collection->available_blk_count += new_available_blks - old_available_blks;
 }
@@ -393,7 +393,7 @@ std::shared_ptr< const std::vector< homestore::chunk_num_t > > HeapChunkSelector
         LOGWARNMOD(homeobject, "pg={} had never been created", pg_id);
         return nullptr;
     }
-    
+
     auto pg_chunk_collection = pg_it->second;
     auto& pg_chunks = pg_chunk_collection->m_pg_chunks;
     std::scoped_lock lock(pg_chunk_collection->mtx);
