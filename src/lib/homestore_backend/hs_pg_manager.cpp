@@ -726,4 +726,120 @@ void HSHomeObject::on_create_pg_message_rollback(int64_t lsn, sisl::blob const& 
     }
 }
 
+uint32_t HSHomeObject::get_pg_tombstone_blob_count(pg_id_t pg_id) const {
+    // caller should hold the _pg_lock
+    auto hs_pg = _get_hs_pg_unlocked(pg_id);
+    if (hs_pg == nullptr) {
+        LOGW("get pg tombstone blob count with unknown pg={}", pg_id);
+        return 0;
+    }
+
+    uint32_t tombstone_blob_count{0};
+
+    auto start_key =
+        BlobRouteKey{BlobRoute{uint64_t(pg_id) << homeobject::shard_width, std::numeric_limits< uint64_t >::min()}};
+    auto end_key =
+        BlobRouteKey{BlobRoute{uint64_t(pg_id + 1) << homeobject::shard_width, std::numeric_limits< uint64_t >::min()}};
+
+    homestore::BtreeQueryRequest< BlobRouteKey > query_req{
+        homestore::BtreeKeyRange< BlobRouteKey >{std::move(start_key), true /* inclusive */, std::move(end_key),
+                                                 false /* inclusive */},
+        homestore::BtreeQueryType::SWEEP_NON_INTRUSIVE_PAGINATION_QUERY,
+        std::numeric_limits< uint32_t >::max() /* blob count in a shard will not exceed uint32_t_max*/,
+        [&tombstone_blob_count](homestore::BtreeKey const& key, homestore::BtreeValue const& value) mutable -> bool {
+            BlobRouteValue existing_value{value};
+            if (existing_value.pbas() == HSHomeObject::tombstone_pbas) { tombstone_blob_count++; }
+            return false;
+        }};
+
+    std::vector< std::pair< BlobRouteKey, BlobRouteValue > > valid_blob_indexes;
+
+    auto const status = hs_pg->index_table_->query(query_req, valid_blob_indexes);
+    if (status != homestore::btree_status_t::success && status != homestore::btree_status_t::has_more) {
+        LOGERROR("Failed to query blobs in index table for pg={}", pg_id);
+        return 0;
+    }
+    // we should not have any valid blob indexes in tombstone query
+    RELEASE_ASSERT(valid_blob_indexes.empty(), "we only query tombstone in pg={}, but got vaild blob in return value",
+                   pg_id);
+
+    return tombstone_blob_count;
+}
+
+void HSHomeObject::update_pg_meta_after_gc(const pg_id_t pg_id, const homestore::chunk_num_t move_from_chunk,
+                                           const homestore::chunk_num_t move_to_chunk) {
+    // 1 update pg metrics
+    std::unique_lock lck(_pg_lock);
+    auto iter = _pg_map.find(pg_id);
+    // TODO:: revisit here with the considering of destroying pg
+    RELEASE_ASSERT(iter != _pg_map.end(), "can not find pg_id={} in pg_map", pg_id);
+    auto hs_pg = dynamic_cast< HS_PG* >(iter->second.get());
+    auto move_from_v_chunk = chunk_selector()->get_extend_vchunk(move_from_chunk);
+
+    // TODO:: for now, when updating pchunk for a vchunk, we have to update the whole pg super blk. we can optimize this
+    // by persist a single superblk for each vchunk in the pg, so that we only need to update the vchunk superblk
+    // itself.
+
+    auto pg_chunks = hs_pg->pg_sb_->get_chunk_ids_mutable();
+
+    RELEASE_ASSERT(move_from_v_chunk != nullptr, "can not find EXVchunk for chunk={}", move_from_chunk);
+    RELEASE_ASSERT(move_from_v_chunk->m_v_chunk_id.has_value(), "can not find vchunk for chunk={}, pg_id={}",
+                   move_from_chunk, pg_id);
+    auto v_chunk_id = move_from_v_chunk->m_v_chunk_id.value();
+
+    RELEASE_ASSERT(pg_chunks[v_chunk_id] == move_from_chunk,
+                   "vchunk_id={} chunk_id={} is not equal to move_from_chunk={} for pg={}", v_chunk_id,
+                   pg_chunks[v_chunk_id], move_from_chunk, pg_id);
+
+    if (pg_chunks[v_chunk_id] == move_to_chunk) {
+        // this might happens when crash recovery. the crash happens after pg metablk is updated but before gc task
+        // metablk is updated.
+        LOGD("the pchunk_id for vchunk_id={} for pg_id={} is already {}, skip update pg metablk", v_chunk_id, pg_id,
+             move_to_chunk);
+    }
+
+    LOGD("pchunk for vchunk={} of pg_id={} is updated from {} to {}", v_chunk_id, pg_id, move_from_chunk,
+         move_to_chunk);
+    // update the vchunk to new pchunk(move_to_chunk)
+    pg_chunks[v_chunk_id] = move_to_chunk;
+
+    // TODO:hs_pg->shards_.size() will be decreased by 1 in delete_shard if gc finds a empty shard, which will be
+    // implemented later
+    hs_pg->durable_entities_update([this, move_from_v_chunk, &move_to_chunk, &move_from_chunk, &pg_id](auto& de) {
+        // active_blob_count is updated by put/delete blob, not change it here.
+
+        // considering the complexity of gc crash recovery for tombstone_blob_count, we get it directly from index table
+        // , which is the most accurate.
+
+        // TODO::do we need this as durable entity? remove it and got all the from pg index in real time.
+        de.tombstone_blob_count = get_pg_tombstone_blob_count(pg_id);
+
+        auto move_to_v_chunk = chunk_selector()->get_extend_vchunk(move_to_chunk);
+
+        auto total_occupied_blk_count_by_move_from_chunk =
+            move_from_v_chunk->get_total_blks() - move_from_v_chunk->available_blks();
+        auto total_occupied_blk_count_by_move_to_chunk =
+            move_to_v_chunk->get_total_blks() - move_to_v_chunk->available_blks();
+
+        de.total_occupied_blk_count -=
+            total_occupied_blk_count_by_move_from_chunk - total_occupied_blk_count_by_move_to_chunk;
+
+        LOGD("move_from_chunk={}, total_occupied_blk_count_by_move_from_chunk={}, move_to_chunk={}, "
+             "total_occupied_blk_count_by_move_to_chunk={}, total_occupied_blk_count={}",
+             move_from_chunk, total_occupied_blk_count_by_move_from_chunk, move_to_chunk,
+             total_occupied_blk_count_by_move_to_chunk, de.total_occupied_blk_count.load());
+    });
+
+    hs_pg->pg_sb_->total_occupied_blk_count =
+        hs_pg->durable_entities().total_occupied_blk_count.load(std::memory_order_relaxed);
+
+    hs_pg->pg_sb_->tombstone_blob_count =
+        hs_pg->durable_entities().tombstone_blob_count.load(std::memory_order_relaxed);
+
+    hs_pg->pg_sb_.write();
+
+    // 2 change the pg_chunkcollection in chunk selector.
+    chunk_selector()->switch_chunks_for_pg(pg_id, move_from_chunk, move_to_chunk);
+}
+
 } // namespace homeobject

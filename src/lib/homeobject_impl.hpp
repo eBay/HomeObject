@@ -162,8 +162,8 @@ public:
 
     /// BlobManager
     BlobManager::AsyncResult< blob_id_t > put(shard_id_t shard, Blob&&, trace_id_t tid) final;
-    BlobManager::AsyncResult< Blob > get(shard_id_t shard, blob_id_t const& blob, uint64_t off,
-                                         uint64_t len, trace_id_t tid) const final;
+    BlobManager::AsyncResult< Blob > get(shard_id_t shard, blob_id_t const& blob, uint64_t off, uint64_t len,
+                                         trace_id_t tid) const final;
     BlobManager::NullAsyncResult del(shard_id_t shard, blob_id_t const& blob, trace_id_t tid) final;
 };
 
