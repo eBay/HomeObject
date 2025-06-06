@@ -425,6 +425,24 @@ void HSHomeObject::SnapshotReceiveHandler::destroy_context_and_metrics() {
     ctx_.reset();
 }
 
+bool HSHomeObject::SnapshotReceiveHandler::is_valid_obj_id(const objId& obj_id) const {
+    // If the context is not initialized, only pg meta message is valid.
+    if (ctx_ == nullptr) { return obj_id.shard_seq_num == 0; }
+
+    // A valid obj id should be like
+    //   1. shard_seq_num == 0 (PG meta message)
+    //   2. shard_seq_num == next shard cursor and batch_id == 0 (shard meta message)
+    //   3. shard_seq_num == current shard cursor and
+    //      a. batch_id == 0 (shard-level retry message)
+    //      b. batch_id == current batch num (blob batch retry message)
+    //      c. batch_id == next batch num (blob batch message)
+    return obj_id.shard_seq_num == 0 ||
+        (obj_id.shard_seq_num == get_sequence_num_from_shard_id(get_next_shard()) && obj_id.batch_id == 0) ||
+        (obj_id.shard_seq_num == get_sequence_num_from_shard_id(ctx_->shard_cursor) &&
+         (obj_id.batch_id == 0 || obj_id.batch_id == ctx_->cur_batch_num ||
+          obj_id.batch_id == ctx_->cur_batch_num + 1));
+}
+
 shard_id_t HSHomeObject::SnapshotReceiveHandler::get_shard_cursor() const { return ctx_->shard_cursor; }
 
 shard_id_t HSHomeObject::SnapshotReceiveHandler::get_next_shard() const {

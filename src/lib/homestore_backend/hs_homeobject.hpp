@@ -548,6 +548,7 @@ public:
         // Reset the context for a new snapshot, should be called before each new snapshot transmission
         void reset_context_and_metrics(int64_t lsn, pg_id_t pg_id);
         void destroy_context_and_metrics();
+        bool is_valid_obj_id(const objId& obj_id) const;
 
         shard_id_t get_shard_cursor() const;
         shard_id_t get_next_shard() const;

@@ -218,6 +218,8 @@ TEST_F(HomeObjectFixture, SnapshotReceiveHandler) {
     // Step 1: Test write pg meta - cannot test full logic since the PG already exists
     // Generate ResyncPGMetaData message
     LOGINFO("TESTING: applying meta for pg={}", pg_id);
+    ASSERT_TRUE(handler->is_valid_obj_id(objId(0, 0)));
+
     constexpr auto blob_seq_num = num_shards_per_pg * num_batches_per_shard * num_blobs_per_batch;
     flatbuffers::FlatBufferBuilder builder;
     std::vector< flatbuffers::Offset< Member > > members;
@@ -247,6 +249,7 @@ TEST_F(HomeObjectFixture, SnapshotReceiveHandler) {
     blob_id_t cur_blob_id{0};
     for (uint64_t i = 1; i <= num_shards_per_pg; i++) {
         LOGINFO("TESTING: applying meta for shard {}", i);
+        ASSERT_TRUE(handler->is_valid_obj_id(objId(HSHomeObject::get_sequence_num_from_shard_id(i), 0)));
 
         // Step 2-1: Test write shard meta
         // Generate ResyncShardMetaData message
@@ -288,6 +291,8 @@ TEST_F(HomeObjectFixture, SnapshotReceiveHandler) {
         // Generate ResyncBlobDataBatch message
         std::map< blob_id_t, std::tuple< Blob, bool > > blob_map;
         for (uint64_t j = 1; j <= num_batches_per_shard; j++) {
+            ASSERT_TRUE(handler->is_valid_obj_id(objId(HSHomeObject::get_sequence_num_from_shard_id(shard.id), j)));
+
             // Don't test unexpected corruption on the last batch, since for simplicity we're not simulating resending
             bool is_corrupted_batch =
                 j < num_batches_per_shard && corrupt_dis(gen) <= unexpected_corrupted_batch_percentage;
