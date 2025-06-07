@@ -623,6 +623,7 @@ public:
 
         std::shared_ptr< SnapshotContext > ctx_;
         std::unique_ptr< ReceiverSnapshotMetrics > metrics_;
+        folly::Future< bool > cp_fut;
 
         // Update the snp_info superblock
         void update_snp_info_sb(bool init = false);
