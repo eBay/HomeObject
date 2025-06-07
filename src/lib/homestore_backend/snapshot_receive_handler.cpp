@@ -10,7 +10,7 @@
 namespace homeobject {
 HSHomeObject::SnapshotReceiveHandler::SnapshotReceiveHandler(HSHomeObject& home_obj,
                                                              shared< homestore::ReplDev > repl_dev) :
-        home_obj_(home_obj), repl_dev_(std::move(repl_dev)) {}
+        home_obj_(home_obj), repl_dev_(std::move(repl_dev)), cp_fut(folly::makeFuture<bool>(true)) {}
 
 int HSHomeObject::SnapshotReceiveHandler::process_pg_snapshot_data(ResyncPGMetaData const& pg_meta) {
     LOGI("process_pg_snapshot_data pg={}", pg_meta.pg_id());
@@ -459,45 +459,48 @@ shard_id_t HSHomeObject::SnapshotReceiveHandler::get_next_shard() const {
 }
 
 void HSHomeObject::SnapshotReceiveHandler::update_snp_info_sb(bool init) {
-    auto hs_pg = home_obj_.get_hs_pg(ctx_->pg_id);
-    RELEASE_ASSERT(hs_pg != nullptr, "PG not found, pg={}", ctx_->pg_id);
-
-    auto* sb = hs_pg->snp_rcvr_info_sb_.get();
-    if (init) {
-        if (!hs_pg->snp_rcvr_info_sb_.is_empty()) { hs_pg->snp_rcvr_info_sb_.destroy(); }
-        if (!hs_pg->snp_rcvr_shard_list_sb_.is_empty()) { hs_pg->snp_rcvr_shard_list_sb_.destroy(); }
-        sb = hs_pg->snp_rcvr_info_sb_.create(sizeof(snapshot_rcvr_info_superblk));
-
-        auto lst_sb = hs_pg->snp_rcvr_shard_list_sb_.create(sizeof(snapshot_rcvr_shard_list_superblk) +
-                                                            (ctx_->shard_list.size() - 1) * sizeof(shard_id_t));
-        lst_sb->pg_id = ctx_->pg_id;
-        lst_sb->snp_lsn = ctx_->snp_lsn;
-        lst_sb->shard_cnt = ctx_->shard_list.size();
-        std::copy(ctx_->shard_list.begin(), ctx_->shard_list.end(), lst_sb->shard_list);
-        hs_pg->snp_rcvr_shard_list_sb_.write();
-    }
-    RELEASE_ASSERT(sb != nullptr, "Snapshot info superblk not found");
-    sb->snp_lsn = ctx_->snp_lsn;
-    sb->pg_id = ctx_->pg_id;
-    sb->shard_cursor = get_next_shard();
-
-    {
-        std::unique_lock< std::shared_mutex > lock(ctx_->progress_lock);
-        sb->progress.start_time = ctx_->progress.start_time;
-        sb->progress.total_blobs = ctx_->progress.total_blobs;
-        sb->progress.total_bytes = ctx_->progress.total_bytes;
-        sb->progress.total_shards = ctx_->progress.total_shards;
-        sb->progress.complete_shards = ctx_->progress.complete_shards;
-        sb->progress.complete_bytes = ctx_->progress.complete_bytes;
-        sb->progress.complete_blobs = ctx_->progress.complete_blobs;
-        sb->progress.corrupted_blobs = ctx_->progress.corrupted_blobs;
-    }
-
-    hs_pg->snp_rcvr_info_sb_.write();
-
+    RELEASE_ASSERT(home_obj_.get_hs_pg(ctx_->pg_id) != nullptr, "PG not found, pg={}", ctx_->pg_id);
+    // ensure previous cp finished.
+    std::move(cp_fut).get();
     // Ensure all the superblk & corresponding index/data update have been written to disk
-    auto fut = homestore::hs()->cp_mgr().trigger_cp_flush(true /* force */);
-    LOGINFO("Update snp_info sb, CP Flush {}", std::move(fut).get() ? "success" : "failed");
+    // then update the superblock.
+    cp_fut = homestore::hs()->cp_mgr().trigger_cp_flush(true /* force */).thenValue([this, init](auto success) -> bool {
+        RELEASE_ASSERT(success, "CP flush failure");
+        LOGINFO("Update snp_info sb, CP Flush {}", success ? "success" : "failed");
+        auto hs_pg = home_obj_.get_hs_pg(ctx_->pg_id);
+        auto* sb = hs_pg->snp_rcvr_info_sb_.get();
+        if (init) {
+            if (!hs_pg->snp_rcvr_info_sb_.is_empty()) { hs_pg->snp_rcvr_info_sb_.destroy(); }
+            if (!hs_pg->snp_rcvr_shard_list_sb_.is_empty()) { hs_pg->snp_rcvr_shard_list_sb_.destroy(); }
+            sb = hs_pg->snp_rcvr_info_sb_.create(sizeof(snapshot_rcvr_info_superblk));
+
+            auto lst_sb = hs_pg->snp_rcvr_shard_list_sb_.create(sizeof(snapshot_rcvr_shard_list_superblk) +
+                                                                (ctx_->shard_list.size() - 1) * sizeof(shard_id_t));
+            lst_sb->pg_id = ctx_->pg_id;
+            lst_sb->snp_lsn = ctx_->snp_lsn;
+            lst_sb->shard_cnt = ctx_->shard_list.size();
+            std::copy(ctx_->shard_list.begin(), ctx_->shard_list.end(), lst_sb->shard_list);
+            hs_pg->snp_rcvr_shard_list_sb_.write();
+        }
+        RELEASE_ASSERT(sb != nullptr, "Snapshot info superblk not found");
+        sb->snp_lsn = ctx_->snp_lsn;
+        sb->pg_id = ctx_->pg_id;
+        sb->shard_cursor = get_next_shard();
+
+        {
+            std::unique_lock< std::shared_mutex > lock(ctx_->progress_lock);
+            sb->progress.start_time = ctx_->progress.start_time;
+            sb->progress.total_blobs = ctx_->progress.total_blobs;
+            sb->progress.total_bytes = ctx_->progress.total_bytes;
+            sb->progress.total_shards = ctx_->progress.total_shards;
+            sb->progress.complete_shards = ctx_->progress.complete_shards;
+            sb->progress.complete_bytes = ctx_->progress.complete_bytes;
+            sb->progress.complete_blobs = ctx_->progress.complete_blobs;
+            sb->progress.corrupted_blobs = ctx_->progress.corrupted_blobs;
+        }
+        hs_pg->snp_rcvr_info_sb_.write();
+        return success;
+    });
 }
 
 void HSHomeObject::on_snp_rcvr_meta_blk_found(homestore::meta_blk* mblk, sisl::byte_view buf) {
