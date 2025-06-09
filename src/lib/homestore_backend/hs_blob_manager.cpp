@@ -527,12 +527,17 @@ void HSHomeObject::on_blob_del_commit(int64_t lsn, sisl::blob const& header, sis
         if (recovery_done_) {
             BLOGE(tid, blob_info.shard_id, blob_info.blob_id, "Failed to move blob to tombstone, error={}", r.error());
             if (ctx) ctx->promise_.setValue(folly::makeUnexpected(r.error()));
-            return;
         } else {
             if (ctx) ctx->promise_.setValue(BlobManager::Result< BlobInfo >(blob_info));
-            return;
         }
+
+        // if we return directly, for the perspective of statemachin, this lsn has been committed successfully. so there
+        // will be no more deletion for this blob, and as a result , blob leak happens
+        RELEASE_ASSERT(false, "fail to commit delete blob log for pg={}, shard={}, blob={}", msg_header->pg_id,
+                       msg_header->shard_id, blob_info.blob_id);
     }
+
+    LOGD("shard_id={}, blob_id={} has been moved to tombstone, lsn={}", blob_info.shard_id, blob_info.blob_id, lsn);
 
     auto& multiBlks = r.value();
     if (multiBlks != tombstone_pbas) {

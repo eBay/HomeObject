@@ -597,7 +597,12 @@ void HSHomeObject::update_shard_meta_after_gc(const homestore::chunk_num_t move_
     std::scoped_lock lock_guard(_shard_lock);
     for (const auto& shard_id : shards) {
         auto shard_iter = _shard_map.find(shard_id);
-        RELEASE_ASSERT(shard_iter != _shard_map.end(), "shard {} does not exist!!", shard_id);
+
+        RELEASE_ASSERT(
+            shard_iter != _shard_map.end(),
+            "try to update shard meta blk after gc, but shard {} does not exist!! move_from_chunk={}, move_to_chunk={}",
+            shard_id, move_from_chunk, move_to_chunk);
+
         auto hs_shard = d_cast< HS_Shard* >((*shard_iter->second).get());
         if (hs_shard->p_chunk_id() == move_to_chunk) {
             // this might happens when crash recovery. the crash happens after shard metablk is updated but before gc

@@ -43,7 +43,6 @@ void ReplicationStateMachine::on_commit(int64_t lsn, const sisl::blob& header, c
 }
 
 void ReplicationStateMachine::notify_committed_lsn(int64_t lsn) {
-    LOGD("got committed lsn notification , lsn={}", lsn);
     // handle no_space_left error if we have any
     const auto [target_lsn, chunk_id] = get_no_space_left_error_info();
     if (std::numeric_limits< homestore::repl_lsn_t >::max() == target_lsn) {
@@ -268,12 +267,13 @@ ReplicationStateMachine::get_blk_alloc_hints(sisl::blob const& header, uint32_t 
 }
 
 void ReplicationStateMachine::on_start_replace_member(const homestore::replica_member_info& member_out,
-                                                const homestore::replica_member_info& member_in, trace_id_t tid) {
+                                                      const homestore::replica_member_info& member_in, trace_id_t tid) {
     home_object_->on_pg_start_replace_member(repl_dev()->group_id(), member_out, member_in, tid);
 }
 
 void ReplicationStateMachine::on_complete_replace_member(const homestore::replica_member_info& member_out,
-                                                const homestore::replica_member_info& member_in, trace_id_t tid) {
+                                                         const homestore::replica_member_info& member_in,
+                                                         trace_id_t tid) {
     home_object_->on_pg_complete_replace_member(repl_dev()->group_id(), member_out, member_in, tid);
 }
 
@@ -372,8 +372,8 @@ int ReplicationStateMachine::read_snapshot_obj(std::shared_ptr< homestore::snaps
         // enable nuraft bg snapshot) occur at the same time, and free_user_snp_ctx is called first, pg_iter is
         // released, and then in read_snapshot_obj, pg_iter will be created with cur_obj_id_ = 0|0 while the
         //  next_obj_id will be x|y which may hit into invalid objId condition.
-        // If inconsistency happens, reset the cursor to the beginning(0|0), and let follower to validate(lsn may change) and reset
-        // its cursor to the checkpoint to proceed with snapshot resync.
+        // If inconsistency happens, reset the cursor to the beginning(0|0), and let follower to validate(lsn may
+        // change) and reset its cursor to the checkpoint to proceed with snapshot resync.
         LOGW("Invalid objId in snapshot read, {}, current shard_seq_num={}, current batch_num={}, reset cursor to the "
              "beginning",
              log_str, pg_iter->cur_obj_id_.shard_seq_num, pg_iter->cur_obj_id_.batch_id);
@@ -564,7 +564,7 @@ void ReplicationStateMachine::free_user_snp_ctx(void*& user_snp_ctx) {
         return;
     }
     std::lock_guard lk(m_snp_sync_ctx_lock);
-    auto pg_iter_ptr = static_cast<std::shared_ptr<HSHomeObject::PGBlobIterator>*>(user_snp_ctx);
+    auto pg_iter_ptr = static_cast< std::shared_ptr< HSHomeObject::PGBlobIterator >* >(user_snp_ctx);
     LOGD("Freeing snapshot iterator={}, pg={} group={}", user_snp_ctx, (*pg_iter_ptr)->pg_id_,
          boost::uuids::to_string((*pg_iter_ptr)->group_id_));
     delete pg_iter_ptr;

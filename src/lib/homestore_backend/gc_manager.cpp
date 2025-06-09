@@ -179,7 +179,7 @@ bool GCManager::is_eligible_for_gc(chunk_id_t chunk_id) {
 
     // defrag_blk_num > (GC_THRESHOLD_PERCENT/100) * total_blk_num, to avoid floating point number calculation
     // TODO: avoid overflow here.
-    return 100 * defrag_blk_num > total_blk_num * gc_garbage_rate_threshold;
+    return 100 * defrag_blk_num >= total_blk_num * gc_garbage_rate_threshold;
 }
 
 void GCManager::scan_chunks_for_gc() {
@@ -368,7 +368,7 @@ bool GCManager::pdev_gc_actor::replace_blob_index(chunk_id_t move_from_chunk, ch
     auto pg_id = move_from_vchunk->m_pg_id.value();
     auto hs_pg = m_hs_home_object->get_hs_pg(pg_id);
 
-    // TODO:: add logic to handle pg_index_table is nullptr if destroying pg happens when baseline resync
+    // TODO:: add logic to handle pg_index_table is nullptr if destroying pg happens when GC
     RELEASE_ASSERT(hs_pg, "Unknown PG for pg_id={}", pg_id);
     auto pg_index_table = hs_pg->index_table_;
     RELEASE_ASSERT(pg_index_table, "Index table not found for PG pg_id={}", pg_id);
@@ -380,32 +380,49 @@ bool GCManager::pdev_gc_actor::replace_blob_index(chunk_id_t move_from_chunk, ch
 
     // TODO:: optimization, concurrently update pg index table.
     for (const auto& [k, v] : valid_blob_indexes) {
-        BlobRouteKey index_key{BlobRoute{k.key().shard, k.key().blob}};
+        const auto& shard = k.key().shard;
+        const auto& blob = k.key().blob;
+        BlobRouteKey index_key{BlobRoute{shard, blob}};
 
         homestore::BtreeSinglePutRequest update_req{
             &index_key, &v, homestore::btree_put_type::UPDATE, nullptr,
-            [](homestore::BtreeKey const& key, homestore::BtreeValue const& value_in_btree,
-               homestore::BtreeValue const& new_value) -> homestore::put_filter_decision {
+            [&pg_id, &shard, &blob](homestore::BtreeKey const& key, homestore::BtreeValue const& value_in_btree,
+                                    homestore::BtreeValue const& new_value) -> homestore::put_filter_decision {
                 BlobRouteValue existing_value{value_in_btree};
                 if (existing_value.pbas() == HSHomeObject::tombstone_pbas) {
-                    //  if the blob has been deleted and the value is tombstone, we should not use a valid pba to update
-                    //  a tombstone. this case might happen when the blob is deleted by client after we finish data copy
+                    LOGDEBUG(
+                        "remove tombstone when updating pg index after data copy , pg_id={}, shard_id={}, blob_id={}",
+                        pg_id, shard, blob);
+                    BlobRouteValue new_pba_value{new_value};
+                    homestore::data_service().async_free_blk(new_pba_value.pbas());
                     return homestore::put_filter_decision::remove;
                 }
                 return homestore::put_filter_decision::replace;
             }};
 
         ret = pg_index_table->put(update_req);
-        LOGDEBUG("update index table for pg={}, ret={}, move_from_chunk={}, move_to_chunk={}", pg_id, ret,
-                 move_from_chunk, move_to_chunk);
 
-        if (ret != homestore::btree_status_t::success && ret != homestore::btree_status_t::filtered_out) {
+        // 1 if the key exist, and the filter returns homestore::put_filter_decision::replace, then ret will be
+        // homestore::btree_status_t::success
+
+        // 2 if the key exist , and the filter returns homestore::put_filter_decision::remove,  the ret will be
+        // homestore::btree_status_t::filtered_out.(this might happen is a key is deleted after data copy but before
+        // replace index)
+
+        // 3 if the key doest not exist, the ret will be homestore::btree_status_t::not_found(this might
+        // happen when crash recovery)
+
+        if (ret != homestore::btree_status_t::success && ret != homestore::btree_status_t::filtered_out &&
+            ret != homestore::btree_status_t::not_found) {
             LOGERROR(
                 "Failed to update blob in pg index table for move_from_chunk={}, error status = {}, move_to_chunk={}",
                 move_from_chunk, ret, move_to_chunk);
-            m_reserved_chunk_queue.blockingWrite(move_to_chunk);
+            // pg index table might be partial updated, we can not put move_to_chunk back to the queue
+            // m_reserved_chunk_queue.blockingWrite(move_to_chunk);
             return false;
         }
+        LOGDEBUG("update index table for pg={}, ret={}, move_from_chunk={}, move_to_chunk={}, shard={}, blob={}", pg_id,
+                 ret, move_from_chunk, move_to_chunk, shard, blob);
     }
 
     // TODO:: revisit the following part with the consideration of persisting order for recovery.
@@ -517,7 +534,16 @@ bool GCManager::pdev_gc_actor::copy_valid_data(chunk_id_t move_from_chunk, chunk
         auto start_key = BlobRouteKey{BlobRoute{shard_id, std::numeric_limits< uint64_t >::min()}};
         auto end_key = BlobRouteKey{BlobRoute{shard_id, std::numeric_limits< uint64_t >::max()}};
 
-        // delete all the tombstone keys in pg index table and get the valid blob keys
+#if 0
+        // range_remove will hit "Node lock and refresh failed" in some case and reture a not_found even if some key has
+        // been remove, then
+        // 1 we can not know whether should we try , it will not return retry.
+        // 2 if not_found happens, whether it means the shard is empty, or just a failure when searching.
+        // 3 valid_blob_indexes will lost some keys since "Node lock and refresh failed" happen and the call will return
+        // in advance
+
+        // so not use this until index svc has fixed this. delete all the tombstone keys in pg index table
+        // and get the valid blob keys
         homestore::BtreeRangeRemoveRequest< BlobRouteKey > range_remove_req{
             homestore::BtreeKeyRange< BlobRouteKey >{
                 std::move(start_key), true /* inclusive */, std::move(end_key), true /* inclusive */
@@ -539,28 +565,27 @@ bool GCManager::pdev_gc_actor::copy_valid_data(chunk_id_t move_from_chunk, chunk
             LOGWARN("can not range remove blobs with tombstone in pg index table , pg_id={}, status={}", pg_id, status);
             return false;
         }
+#endif
 
-#if 0
+        // query will never hit "Node lock and refresh failed" and never need to retry
         homestore::BtreeQueryRequest< BlobRouteKey > query_req{
             homestore::BtreeKeyRange< BlobRouteKey >{std::move(start_key), true /* inclusive */, std::move(end_key),
                                                      true /* inclusive */},
             homestore::BtreeQueryType::SWEEP_NON_INTRUSIVE_PAGINATION_QUERY,
             std::numeric_limits< uint32_t >::max() /* blob count in a shard will not exceed uint32_t_max*/,
-            [](homestore::BtreeKey const& key,
-                                          homestore::BtreeValue const& value) -> bool {
+            [](homestore::BtreeKey const& key, homestore::BtreeValue const& value) -> bool {
                 BlobRouteValue existing_value{value};
-                if (existing_value.pbas() == HSHomeObject::tombstone_pbas) {
-                    return false;
-                }
+                if (existing_value.pbas() == HSHomeObject::tombstone_pbas) { return false; }
                 return true;
             }};
 
         auto const status = pg_index_table->query(query_req, valid_blob_indexes);
-        if (status != homestore::btree_status_t::success && status != homestore::btree_status_t::has_more) {
+        if (status != homestore::btree_status_t::success) {
             LOGERROR("Failed to query blobs in index table for status={} shard={}", status, shard_id);
             return false;
         }
-#endif
+
+        auto is_last_shard_in_emergent_chunk = is_emergent && is_last_shard;
 
         if (valid_blob_indexes.empty()) {
             LOGDEBUG("empty shard found in move_from_chunk, chunk_id={}, shard_id={}", move_from_chunk, shard_id);
@@ -568,12 +593,21 @@ bool GCManager::pdev_gc_actor::copy_valid_data(chunk_id_t move_from_chunk, chunk
             // shard becomes empty, need to handle this case
 
             // we should always write a shard header for the last shard of emergent gc.
-            if (!is_emergent || !is_last_shard) continue;
+            if (!is_last_shard_in_emergent_chunk) continue;
+        } else {
+            LOGDEBUG("{} valid blobs found in move_from_chunk, chunk_id={}, shard_id={}", valid_blob_indexes.size(),
+                     move_from_chunk, shard_id);
         }
 
         // prepare a shard header for this shard in move_to_chunk
         sisl::sg_list header_sgs = generate_shard_super_blk_sg_list(shard_id);
-        if (!is_emergent) {
+
+        // we ignore the state in shard header blk. we never read a shard header since we don`t know where it is(nor
+        // record the pba in indextable)
+#if 0
+        // we now generate shard header from metablk. the shard state in shard header blk should be open, but for sealed
+        // shard, the state in the generated in-memory header_sgs is sealed.
+        if (!is_last_shard_in_emergent_chunk) {
             // for the sealed shard, the shard state in header should also be open.now, the written header is the same
             // as footer except the shard state, so we lost the original header.
             r_cast< HSHomeObject::shard_info_superblk* >(header_sgs.iovs[0].iov_base)->info.state =
@@ -587,6 +621,8 @@ bool GCManager::pdev_gc_actor::copy_valid_data(chunk_id_t move_from_chunk, chunk
             uint64_t total_capacity_bytes;
             */
         }
+#endif
+
         // for emergent gc, we directly use the current shard header as the new header
 
         // TODO::involve ratelimiter in the following code, where read/write are scheduled. or do we need a central
@@ -744,6 +780,37 @@ bool GCManager::pdev_gc_actor::copy_valid_data(chunk_id_t move_from_chunk, chunk
     if (data_service.commit_blk(commit_blk_id) != homestore::BlkAllocStatus::SUCCESS) {
         LOGERROR("fail to commit_blk for move_to_chunk={}, move_from_chunk={}", move_to_chunk, move_from_chunk);
         return false;
+    }
+
+    // remove all the tombstone keys in pg index table for this chunk
+    // TODO:: we can enable the range_remove above and delete this part after the indexsvc issue is fixed
+    for (const auto& shard_id : shards) {
+        auto start_key = BlobRouteKey{BlobRoute{shard_id, std::numeric_limits< uint64_t >::min()}};
+        auto end_key = BlobRouteKey{BlobRoute{shard_id, std::numeric_limits< uint64_t >::max()}};
+        homestore::BtreeRangeRemoveRequest< BlobRouteKey > range_remove_req{
+            homestore::BtreeKeyRange< BlobRouteKey >{
+                std::move(start_key), true /* inclusive */, std::move(end_key), true /* inclusive */
+            },
+            nullptr, std::numeric_limits< uint32_t >::max(),
+            [](homestore::BtreeKey const& key, homestore::BtreeValue const& value) -> bool {
+                BlobRouteValue existing_value{value};
+                if (existing_value.pbas() == HSHomeObject::tombstone_pbas) {
+                    // delete tombstone key value
+                    return true;
+                }
+                return false;
+            }};
+
+        auto status = pg_index_table->remove(range_remove_req);
+        if (status != homestore::btree_status_t::success &&
+            status != homestore::btree_status_t::not_found /*empty shard*/) {
+            // if fail to remove tombstone, it does not matter and they will be removed in the next gc task.
+            LOGWARN("fail to remove tombstone for shard={}, pg_id={}, status={}", shard_id, pg_id, status);
+        }
+        // TODO:: after the completion of indexsvc, we need to retry according to the returned status.
+
+        LOGDEBUG("remove tombstone for pg={}, shard={}, ret={}, move_from_chunk={}, move_to_chunk={},", pg_id, shard_id,
+                 status, move_from_chunk, move_to_chunk);
     }
 
     return true;
