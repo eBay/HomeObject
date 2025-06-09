@@ -128,7 +128,7 @@ public:
     // this should be called on each pg meta blk found
     bool recover_pg_chunks(pg_id_t pg_id, std::vector< chunk_num_t >&& p_chunk_ids);
 
-    // this should be called after all pg meta blk recovered
+    // this should be called after all pg meta blk and gc reserved chunk recovered
     void build_pdev_available_chunk_heap();
 
     // this should be called after ShardManager is initialized and get all the open shards
@@ -197,6 +197,8 @@ public:
     std::unordered_map< uint32_t, std::vector< chunk_num_t > > get_pdev_chunks() const;
 
     homestore::cshared< ExtendedVChunk > get_extend_vchunk(const chunk_num_t chunk_id) const;
+
+    void switch_chunks_for_pg(const pg_id_t pg_id, const chunk_num_t old_chunk_id, const chunk_num_t new_chunk_id);
 
 private:
     void add_chunk_internal(const chunk_num_t, bool add_to_heap = true);

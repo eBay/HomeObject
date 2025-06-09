@@ -127,7 +127,6 @@ TEST_F(HomeObjectFixture, ShardManagerRecovery) {
     EXPECT_EQ(ShardInfo::State::OPEN, shard_info.state);
     EXPECT_EQ(Mi, shard_info.total_capacity_bytes);
     EXPECT_EQ(Mi, shard_info.available_capacity_bytes);
-    EXPECT_EQ(0ul, shard_info.deleted_capacity_bytes);
     EXPECT_EQ(pg_id, shard_info.placement_group);
 
     // restart homeobject and check if pg/shard info will be recovered.

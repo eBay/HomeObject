@@ -127,7 +127,10 @@ add_test(NAME HomestoreResyncTestWithLeaderRestart
 add_executable(homestore_test_gc)
 target_sources(homestore_test_gc PRIVATE $<TARGET_OBJECTS:homestore_tests_gc>)
 target_link_libraries(homestore_test_gc PUBLIC homeobject_homestore ${COMMON_TEST_DEPS})
-add_test(NAME HomestoreTestGC COMMAND homestore_test_pg -csv error --executor immediate --config_path ./
-        --override_config homestore_config.consensus.snapshot_freq_distance:0
-        --override_config homestore_config.consensus.max_grpc_message_size:138412032)
+add_test(NAME HomestoreTestGC COMMAND homestore_test_gc -csv error --executor immediate --config_path ./
+        --override_config hs_backend_config.enable_gc=true 
+        --override_config hs_backend_config.gc_garbage_rate_threshold=0 
+        --override_config hs_backend_config.gc_scan_interval_sec=5
+        # remove this until gc supports baseline resync
+        --override_config homestore_config.consensus.snapshot_freq_distance:0)
 
