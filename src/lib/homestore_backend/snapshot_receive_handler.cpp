@@ -501,6 +501,10 @@ void HSHomeObject::SnapshotReceiveHandler::update_snp_info_sb(bool init) {
         hs_pg->snp_rcvr_info_sb_.write();
         return success;
     });
+    // sync wait for last shard before returning LAST_OBJ_ID.
+    if (get_next_shard() == shard_list_end_marker) {
+	    std::move(cp_fut).get();
+    }
 }
 
 void HSHomeObject::on_snp_rcvr_meta_blk_found(homestore::meta_blk* mblk, sisl::byte_view buf) {
