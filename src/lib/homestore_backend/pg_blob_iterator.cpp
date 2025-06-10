@@ -185,6 +185,7 @@ bool HSHomeObject::PGBlobIterator::create_shard_snapshot_data(sisl::io_blob_safe
     builder_.FinishSizePrefixed(shard_entry);
 
     pack_resync_message(meta_blob, SyncMessageType::SHARD_META);
+    prefetch_blobs_snapshot_data();
     return true;
 }
 
@@ -279,7 +280,7 @@ bool HSHomeObject::PGBlobIterator::prefetch_blobs_snapshot_data() {
         }
         auto expect_blob_size = info.pbas.blk_count() * repl_dev_->get_blk_size();
         inflight_prefetch_bytes += expect_blob_size;
-        LOGD("will preftch {}", info.blob_id);
+        LOGD("will prefetch {}", info.blob_id);
         prefetch_list.emplace_back(info);
     }
     // POC: sort the prefetch_list by pbas, trying to let IO submitted to disk more sequential.
