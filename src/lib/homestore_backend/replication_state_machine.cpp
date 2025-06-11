@@ -504,11 +504,18 @@ void ReplicationStateMachine::write_snapshot_obj(std::shared_ptr< homestore::sna
     // the crash or the next message.
     // But anyway, all the follower needs is to simply resume from the beginning of its shard cursor if it's not valid.
     if (!m_snp_rcv_handler->is_valid_obj_id(obj_id)) {
-        snp_obj->offset =
-            objId(HSHomeObject::get_sequence_num_from_shard_id(m_snp_rcv_handler->get_shard_cursor()), 0).value;
-        LOGW("Obj id not matching with the current shard/blob cursor, resume from previous context breakpoint, lsn={} "
-             "next_shard:0x{:x}, shard_cursor:0x{:x}",
-             context->get_lsn(), m_snp_rcv_handler->get_next_shard(), m_snp_rcv_handler->get_shard_cursor());
+        if (m_snp_rcv_handler->get_shard_cursor() == HSHomeObject::SnapshotReceiveHandler::shard_list_end_marker) {
+            snp_obj->offset = LAST_OBJ_ID;
+            LOGW("Leader resending last batch , we already done. Setting offset to LAST_OBJ_ID", context->get_lsn(),
+                 m_snp_rcv_handler->get_next_shard(), m_snp_rcv_handler->get_shard_cursor());
+        } else {
+            snp_obj->offset =
+                objId(HSHomeObject::get_sequence_num_from_shard_id(m_snp_rcv_handler->get_shard_cursor()), 0).value;
+            LOGW("Obj id not matching with the current shard/blob cursor, resume from previous context breakpoint, "
+                 "lsn={} "
+                 "next_shard:0x{:x}, shard_cursor:0x{:x}",
+                 context->get_lsn(), m_snp_rcv_handler->get_next_shard(), m_snp_rcv_handler->get_shard_cursor());
+        }
         return;
     }
 
@@ -668,9 +675,9 @@ folly::Future< std::error_code > ReplicationStateMachine::on_fetch_data(const in
                 // io error
                 if (err) throw std::system_error(err);
 
-                // folly future has no machenism to bypass the later thenValue in the then value chain. so for all the
-                // case that no need to schedule the later async_read, we throw a system_error with no error code to
-                // bypass the next thenValue.
+            // folly future has no machenism to bypass the later thenValue in the then value chain. so for all the
+            // case that no need to schedule the later async_read, we throw a system_error with no error code to
+            // bypass the next thenValue.
 #ifdef _PRERELEASE
                 if (iomgr_flip::instance()->test_flip("local_blk_data_invalid")) {
                     LOGI("Simulating forcing to read by indextable");

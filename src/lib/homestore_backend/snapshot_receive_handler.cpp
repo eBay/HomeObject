@@ -10,7 +10,7 @@
 namespace homeobject {
 HSHomeObject::SnapshotReceiveHandler::SnapshotReceiveHandler(HSHomeObject& home_obj,
                                                              shared< homestore::ReplDev > repl_dev) :
-        home_obj_(home_obj), repl_dev_(std::move(repl_dev)), cp_fut(folly::makeFuture<bool>(true)) {}
+        home_obj_(home_obj), repl_dev_(std::move(repl_dev)), cp_fut(folly::makeFuture< bool >(true)) {}
 
 int HSHomeObject::SnapshotReceiveHandler::process_pg_snapshot_data(ResyncPGMetaData const& pg_meta) {
     LOGI("process_pg_snapshot_data pg={}", pg_meta.pg_id());
@@ -503,7 +503,8 @@ void HSHomeObject::SnapshotReceiveHandler::update_snp_info_sb(bool init) {
     });
     // sync wait for last shard before returning LAST_OBJ_ID.
     if (get_next_shard() == shard_list_end_marker) {
-	    std::move(cp_fut).get();
+        std::move(cp_fut).get();
+        cp_fut = folly::makeFuture< bool >(true);
     }
 }
 
