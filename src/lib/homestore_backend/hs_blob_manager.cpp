@@ -511,8 +511,9 @@ void HSHomeObject::on_blob_del_commit(int64_t lsn, sisl::blob const& header, sis
         return;
     }
 
-    auto hs_pg = get_hs_pg(msg_header->pg_id);
-    RELEASE_ASSERT(hs_pg, "PG not found, pg={}", msg_header->pg_id);
+    const auto pg_id = msg_header->pg_id;
+    auto hs_pg = get_hs_pg(pg_id);
+    RELEASE_ASSERT(hs_pg, "PG not found, pg={}", pg_id);
     auto index_table = hs_pg->index_table_;
     auto repl_dev = hs_pg->repl_dev_;
     RELEASE_ASSERT(index_table != nullptr, "Index table not intialized");
@@ -529,35 +530,41 @@ void HSHomeObject::on_blob_del_commit(int64_t lsn, sisl::blob const& header, sis
                                                 &existing_value};
 
     auto status = index_table->put(update_req);
-    if (status != homestore::btree_status_t::success) {
+
+    if (sisl_unlikely(status == homestore::btree_status_t::not_found)) {
+        // in baseline resync case, the blob might has already been deleted at leader and follower deos not receives
+        // this blob, so when committing this log,  not_found will happpen.
+        LOGW("shard_id={}, blob_id={} not found, probably already deleted, lsn={}", shard_id, blob_id, lsn);
+    } else if (sisl_unlikely(status != homestore::btree_status_t::success)) {
         // if we return directly, for the perspective of statemachine, this lsn has been committed successfully. so
         // there will be no more deletion for this blob, and as a result , blob leak happens
-        RELEASE_ASSERT(false, "fail to commit delete_blob log for pg={}, shard={}, blob={}, lsn={}", msg_header->pg_id,
-                       msg_header->shard_id, blob_id, lsn);
-    }
-
-    LOGD("shard_id={}, blob_id={} has been moved to tombstone, lsn={}", shard_id, blob_id, lsn);
-
-    auto existing_pbas = existing_value.pbas();
-    if (sisl_likely(existing_pbas != tombstone_pbas)) {
-        repl_dev->async_free_blks(lsn, existing_pbas).thenValue([hs_pg](auto&& err) {
-            if (err) {
-                // even if async_free_blks fails, as the blob is already updated to tombstone, it will be gc eventually.
-                LOGE("Failed to free blocks for tombstoned blob, error={}", err.value());
-            }
-            const_cast< HS_PG* >(hs_pg)->durable_entities_update([](auto& de) {
-                de.active_blob_count.fetch_sub(1, std::memory_order_relaxed);
-                de.tombstone_blob_count.fetch_add(1, std::memory_order_relaxed);
-            });
-        });
+        RELEASE_ASSERT(false, "fail to commit delete_blob log for pg={}, shard={}, blob={}, lsn={}", pg_id, shard_id,
+                       blob_id, lsn);
     } else {
-        LOGW("shard_id={}, blob_id={} already tombstoned, lsn={}", shard_id, blob_id, lsn);
+        LOGD("shard_id={}, blob_id={} has been moved to tombstone, lsn={}", shard_id, blob_id, lsn);
+
+        auto existing_pbas = existing_value.pbas();
+        if (sisl_likely(existing_pbas != tombstone_pbas)) {
+            repl_dev->async_free_blks(lsn, existing_pbas).thenValue([hs_pg](auto&& err) {
+                if (err) {
+                    // even if async_free_blks fails, as the blob is already updated to tombstone, it will be gc
+                    // eventually.
+                    LOGE("Failed to free blocks for tombstoned blob, error={}", err.value());
+                }
+                const_cast< HS_PG* >(hs_pg)->durable_entities_update([](auto& de) {
+                    de.active_blob_count.fetch_sub(1, std::memory_order_relaxed);
+                    de.tombstone_blob_count.fetch_add(1, std::memory_order_relaxed);
+                });
+            });
+        } else {
+            LOGW("shard_id={}, blob_id={} already tombstoned, lsn={}", shard_id, blob_id, lsn);
+        }
     }
 
     if (ctx) { ctx->promise_.setValue(BlobManager::Result< BlobInfo >({shard_id, blob_id, tombstone_pbas})); }
 }
 
-void HSHomeObject::compute_blob_payload_hash(BlobHeader::HashAlgorithm algorithm, const uint8_t* blob_bytes,
+void HSHomeObject::compute_blob_payload_hash(Blob`Header::HashAlgorithm algorithm, const uint8_t* blob_bytes,
                                              size_t blob_size, const uint8_t* user_key_bytes, size_t user_key_size,
                                              uint8_t* hash_bytes, size_t hash_len) const {
     std::memset(hash_bytes, 0, hash_len);
