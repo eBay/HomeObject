@@ -90,7 +90,7 @@ TEST_F(HomeObjectFixture, ReplaceMember) {
     set_basic_flip("snapshot_receiver_pg_error", 1);                   // simulate pg creation error
     set_basic_flip("snapshot_receiver_shard_write_data_error", 2, 33); // simulate shard write data error
     set_basic_flip("snapshot_receiver_blob_write_data_error", 4, 15);  // simulate blob write data error
-    set_basic_flip("snapshot_receiver_blk_allocation_error", 4, 15);  // simulate blob allocation error
+    set_basic_flip("snapshot_receiver_blk_allocation_error", 4, 15);   // simulate blob allocation error
 #endif
     LOGINFO("start replace member, pg={}", pg_id);
     run_on_pg_leader(pg_id, [&]() {
@@ -121,9 +121,9 @@ TEST_F(HomeObjectFixture, ReplaceMember) {
     });
 
     g_helper->sync();
-    // Because we don't know when hs triggers complete_replace_member, so it's hard to find an accurate time slot to verify
-    // verify_start_replace_member_result(pg_id, out_member_id, in_member_id);
-    // step 5: Verify no pg related data in out_member
+    // Because we don't know when hs triggers complete_replace_member, so it's hard to find an accurate time slot to
+    // verify verify_start_replace_member_result(pg_id, out_member_id, in_member_id); step 5: Verify no pg related data
+    // in out_member
     if (out_member_id == g_helper->my_replica_id()) {
         while (am_i_in_pg(pg_id)) {
             std::this_thread::sleep_for(std::chrono::milliseconds(1000));
@@ -204,10 +204,10 @@ TEST_F(HomeObjectFixture, RestartFollowerAfterBaselineResync) {
 // }
 
 // Test case to restart new member during baseline resync, it will start 4 process to simulate the 4 replicas, let's say
-// P0, P1, P2 and P3. P0, P1, P2 are the original members of the pg, P3 is the spare replica. After the start_replace_member
-// happens, P3 will join the pg, and then kill itself(sigkill) to simulate the restart during baseline resync. As P0 is
-// the original process who spawn the other 3 processes, so P0 will also help to spawn a new process to simulate the new
-// member restart.
+// P0, P1, P2 and P3. P0, P1, P2 are the original members of the pg, P3 is the spare replica. After the
+// start_replace_member happens, P3 will join the pg, and then kill itself(sigkill) to simulate the restart during
+// baseline resync. As P0 is the original process who spawn the other 3 processes, so P0 will also help to spawn a new
+// process to simulate the new member restart.
 void HomeObjectFixture::RestartFollowerDuringBaselineResyncUsingSigKill(uint64_t flip_delay, uint64_t restart_interval,
                                                                         string restart_phase) {
     LOGINFO("HomeObject replica={} setup completed", g_helper->replica_num());
@@ -447,7 +447,7 @@ TEST_F(HomeObjectFixture, RestartFollowerDuringBaselineResyncUsingGracefulShutdo
         LOGDEBUG("wait for the data[shard={}, blob={}] replicated to the new member", kill_until_shard,
                  kill_until_blob);
         wait_for_blob(kill_until_shard, kill_until_blob);
-        //SyncPoint2
+        // SyncPoint2
         g_helper->sync();
         LOGINFO("about to restart new member")
         restart();
@@ -682,8 +682,6 @@ void HomeObjectFixture::RestartLeaderDuringBaselineResyncUsingSigKill(uint64_t f
     }
     g_helper->sync();
 }
-
-
 
 SISL_OPTION_GROUP(
     test_homeobject_repl_common,
