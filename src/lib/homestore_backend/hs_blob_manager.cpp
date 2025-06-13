@@ -564,7 +564,7 @@ void HSHomeObject::on_blob_del_commit(int64_t lsn, sisl::blob const& header, sis
     if (ctx) { ctx->promise_.setValue(BlobManager::Result< BlobInfo >({shard_id, blob_id, tombstone_pbas})); }
 }
 
-void HSHomeObject::compute_blob_payload_hash(Blob`Header::HashAlgorithm algorithm, const uint8_t* blob_bytes,
+void HSHomeObject::compute_blob_payload_hash(BlobHeader::HashAlgorithm algorithm, const uint8_t* blob_bytes,
                                              size_t blob_size, const uint8_t* user_key_bytes, size_t user_key_size,
                                              uint8_t* hash_bytes, size_t hash_len) const {
     std::memset(hash_bytes, 0, hash_len);

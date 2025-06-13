@@ -138,6 +138,17 @@ TEST_F(HomeObjectFixture, BasicPutGetDelBlobWithRestart) {
     verify_obj_count(num_pgs, num_blobs_per_shard * 2, num_shards_per_pg, true /* deleted */);
 }
 
+TEST_F(HomeObjectFixture, DeleteNonExistBlob) {
+    // create a empty pg, no shard and no blob
+    const auto pg_id = 1;
+    create_pg(pg_id);
+    const auto shard_id = create_shard(1, 64 * Mi).id;
+    verify_obj_count(1, 1, 0, false /* deleted */);
+
+    // delete a non-exist blob, everything should goes well
+    del_blob(1, shard_id, 1);
+}
+
 #ifdef _PRERELEASE
 TEST_F(HomeObjectFixture, BasicPutGetBlobWithPushDataDisabled) {
     // disable leader push data. As a result, followers have to fetch data to exercise the fetch_data implementation of
