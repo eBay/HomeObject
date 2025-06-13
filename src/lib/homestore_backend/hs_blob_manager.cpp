@@ -532,8 +532,8 @@ void HSHomeObject::on_blob_del_commit(int64_t lsn, sisl::blob const& header, sis
     auto status = index_table->put(update_req);
 
     if (sisl_unlikely(status == homestore::btree_status_t::not_found)) {
-        // in baseline resync case, the blob might has already been deleted at leader and follower deos not receives
-        // this blob, so when committing this log,  not_found will happpen.
+        // in baseline resync case, the blob might have already been deleted at leader and follower does not receive
+        // this blob, so when committing this log, not_found will happen.
         LOGW("shard_id={}, blob_id={} not found, probably already deleted, lsn={}", shard_id, blob_id, lsn);
     } else if (sisl_unlikely(status != homestore::btree_status_t::success)) {
         // if we return directly, for the perspective of statemachine, this lsn has been committed successfully. so
