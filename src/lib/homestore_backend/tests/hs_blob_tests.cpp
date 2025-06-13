@@ -139,13 +139,13 @@ TEST_F(HomeObjectFixture, BasicPutGetDelBlobWithRestart) {
 }
 
 TEST_F(HomeObjectFixture, DeleteNonExistBlob) {
-    // create a empty pg, no shard and no blob
+    // create a pg with one shard
     const auto pg_id = 1;
     create_pg(pg_id);
     const auto shard_id = create_shard(1, 64 * Mi).id;
     verify_obj_count(1, 1, 0, false /* deleted */);
 
-    // delete a non-exist blob, everything should goes well
+    // do not put any blob to exercise deleting a non-exist blob, everything should goes well
     del_blob(1, shard_id, 1);
 }
 

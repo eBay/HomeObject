@@ -289,15 +289,26 @@ void HeapChunkSelector::switch_chunks_for_pg(const pg_id_t pg_id, const chunk_nu
     std::unique_lock lk(pg_chunk_collection->mtx);
     auto& pg_chunks = pg_chunk_collection->m_pg_chunks;
 
-    RELEASE_ASSERT(pg_chunks[v_chunk_id]->get_chunk_id() == old_chunk_id,
-                   "vchunk={} for pg={} should have a pchunk={} , but have a pchunk={}", v_chunk_id, pg_id,
-                   old_chunk_id, pg_chunks[v_chunk_id]->get_chunk_id());
+    if (sisl_unlikely(pg_chunks[v_chunk_id]->get_chunk_id() == new_chunk_id)) {
+        // this might happens when crash recovery. the crash happens after pg metablk is updated but before gc task
+        // metablk is destroyed.
+        LOGDEBUGMOD(
+            homeobject,
+            "the pchunk_id for vchunk_id={} in chunkselector for pg_id={} is already {},  skip switching chunks!",
+            v_chunk_id, pg_id, new_chunk_id);
 
-    pg_chunks[v_chunk_id] = EXVchunk_new;
+        return;
+    } else {
+        RELEASE_ASSERT(pg_chunks[v_chunk_id]->get_chunk_id() == old_chunk_id,
+                       "vchunk={} for pg={} in chunkselector should have a pchunk={} , but have a pchunk={}",
+                       v_chunk_id, pg_id, old_chunk_id, pg_chunks[v_chunk_id]->get_chunk_id());
 
-    LOGINFOMOD(homeobject,
-               "vchunk={} in pg_chunk_collection for pg_id={} has been update from pchunk_id={} to pchunk_id={}",
-               v_chunk_id, pg_id, old_chunk_id, new_chunk_id);
+        pg_chunks[v_chunk_id] = EXVchunk_new;
+
+        LOGDEBUGMOD(homeobject,
+                    "vchunk={} in pg_chunk_collection for pg_id={} has been update from pchunk_id={} to pchunk_id={}",
+                    v_chunk_id, pg_id, old_chunk_id, new_chunk_id);
+    }
 
     pg_chunk_collection->available_blk_count += new_available_blks - old_available_blks;
 }

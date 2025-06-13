@@ -64,6 +64,7 @@ int main(int argc, char* argv[]) {
 
     g_helper = std::make_unique< test_common::HSReplTestHelper >("test_homeobject", args, orig_argv);
     g_helper->setup(SISL_OPTIONS["replicas"].as< uint8_t >());
+    // g_helper->setup(1);
     auto ret = RUN_ALL_TESTS();
     g_helper->teardown();
     return ret;
