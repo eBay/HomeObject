@@ -838,59 +838,57 @@ void HSHomeObject::update_pg_meta_after_gc(const pg_id_t pg_id, const homestore:
                    move_from_chunk, pg_id);
     auto v_chunk_id = move_from_v_chunk->m_v_chunk_id.value();
 
-    RELEASE_ASSERT(pg_chunks[v_chunk_id] == move_from_chunk,
-                   "vchunk_id={} chunk_id={} is not equal to move_from_chunk={} for pg={}", v_chunk_id,
-                   pg_chunks[v_chunk_id], move_from_chunk, pg_id);
-
-    if (pg_chunks[v_chunk_id] == move_to_chunk) {
+    if (sisl_unlikely(pg_chunks[v_chunk_id] == move_to_chunk)) {
         // this might happens when crash recovery. the crash happens after pg metablk is updated but before gc task
-        // metablk is updated.
-        LOGD("the pchunk_id for vchunk_id={} for pg_id={} is already {}, skip update pg metablk", v_chunk_id, pg_id,
+        // metablk is destroyed.
+        LOGD("the pchunk_id for vchunk_id={} for pg_id={} is already {},  update pg metablk again!", v_chunk_id, pg_id,
              move_to_chunk);
+    } else {
+        RELEASE_ASSERT(pg_chunks[v_chunk_id] == move_from_chunk,
+                       "vchunk_id={} chunk_id={} is not equal to move_from_chunk={} for pg={}", v_chunk_id,
+                       pg_chunks[v_chunk_id], move_from_chunk, pg_id);
+        // update the vchunk to new pchunk(move_to_chunk)
+        pg_chunks[v_chunk_id] = move_to_chunk;
+        LOGD("pchunk for vchunk={} of pg_id={} is updated from {} to {}", v_chunk_id, pg_id, move_from_chunk,
+             move_to_chunk);
+
+        // TODO:hs_pg->shards_.size() will be decreased by 1 in delete_shard if gc finds a empty shard, which will be
+        // implemented later
+        hs_pg->durable_entities_update([this, move_from_v_chunk, &move_to_chunk, &move_from_chunk, &pg_id](auto& de) {
+            // active_blob_count is updated by put/delete blob, not change it here.
+
+            // considering the complexity of gc crash recovery for tombstone_blob_count, we get it directly from index
+            // table , which is the most accurate.
+
+            // TODO::do we need this as durable entity? remove it and got all the from pg index in real time.
+            de.tombstone_blob_count = get_pg_tombstone_blob_count(pg_id);
+
+            auto move_to_v_chunk = chunk_selector()->get_extend_vchunk(move_to_chunk);
+
+            auto total_occupied_blk_count_by_move_from_chunk = move_from_v_chunk->get_used_blks();
+            auto total_occupied_blk_count_by_move_to_chunk = move_to_v_chunk->get_used_blks();
+
+            // TODO::in recovery case , this might be updated again , fix me later.
+            de.total_occupied_blk_count -=
+                total_occupied_blk_count_by_move_from_chunk - total_occupied_blk_count_by_move_to_chunk;
+
+            LOGD("move_from_chunk={}, total_occupied_blk_count_by_move_from_chunk={}, move_to_chunk={}, "
+                 "total_occupied_blk_count_by_move_to_chunk={}, total_occupied_blk_count={}",
+                 move_from_chunk, total_occupied_blk_count_by_move_from_chunk, move_to_chunk,
+                 total_occupied_blk_count_by_move_to_chunk, de.total_occupied_blk_count.load());
+        });
+
+        hs_pg->pg_sb_->total_occupied_blk_count =
+            hs_pg->durable_entities().total_occupied_blk_count.load(std::memory_order_relaxed);
+
+        hs_pg->pg_sb_->tombstone_blob_count =
+            hs_pg->durable_entities().tombstone_blob_count.load(std::memory_order_relaxed);
+
+        hs_pg->pg_sb_.write();
+
+        // 2 change the pg_chunkcollection in chunk selector.
+        chunk_selector()->switch_chunks_for_pg(pg_id, move_from_chunk, move_to_chunk);
     }
-
-    LOGD("pchunk for vchunk={} of pg_id={} is updated from {} to {}", v_chunk_id, pg_id, move_from_chunk,
-         move_to_chunk);
-    // update the vchunk to new pchunk(move_to_chunk)
-    pg_chunks[v_chunk_id] = move_to_chunk;
-
-    // TODO:hs_pg->shards_.size() will be decreased by 1 in delete_shard if gc finds a empty shard, which will be
-    // implemented later
-    hs_pg->durable_entities_update([this, move_from_v_chunk, &move_to_chunk, &move_from_chunk, &pg_id](auto& de) {
-        // active_blob_count is updated by put/delete blob, not change it here.
-
-        // considering the complexity of gc crash recovery for tombstone_blob_count, we get it directly from index table
-        // , which is the most accurate.
-
-        // TODO::do we need this as durable entity? remove it and got all the from pg index in real time.
-        de.tombstone_blob_count = get_pg_tombstone_blob_count(pg_id);
-
-        auto move_to_v_chunk = chunk_selector()->get_extend_vchunk(move_to_chunk);
-
-        auto total_occupied_blk_count_by_move_from_chunk =
-            move_from_v_chunk->get_total_blks() - move_from_v_chunk->available_blks();
-        auto total_occupied_blk_count_by_move_to_chunk =
-            move_to_v_chunk->get_total_blks() - move_to_v_chunk->available_blks();
-
-        de.total_occupied_blk_count -=
-            total_occupied_blk_count_by_move_from_chunk - total_occupied_blk_count_by_move_to_chunk;
-
-        LOGD("move_from_chunk={}, total_occupied_blk_count_by_move_from_chunk={}, move_to_chunk={}, "
-             "total_occupied_blk_count_by_move_to_chunk={}, total_occupied_blk_count={}",
-             move_from_chunk, total_occupied_blk_count_by_move_from_chunk, move_to_chunk,
-             total_occupied_blk_count_by_move_to_chunk, de.total_occupied_blk_count.load());
-    });
-
-    hs_pg->pg_sb_->total_occupied_blk_count =
-        hs_pg->durable_entities().total_occupied_blk_count.load(std::memory_order_relaxed);
-
-    hs_pg->pg_sb_->tombstone_blob_count =
-        hs_pg->durable_entities().tombstone_blob_count.load(std::memory_order_relaxed);
-
-    hs_pg->pg_sb_.write();
-
-    // 2 change the pg_chunkcollection in chunk selector.
-    chunk_selector()->switch_chunks_for_pg(pg_id, move_from_chunk, move_to_chunk);
 }
 
 } // namespace homeobject

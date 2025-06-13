@@ -249,6 +249,7 @@ void HSHomeObject::init_homestore() {
             // 3 create reserved chunk meta blk for each pdev, which contains the reserved chunks.
             for (size_t i = 0; i < reserved_chunk_num_per_pdev; ++i) {
                 auto chunk = chunks[i];
+                LOGD("chunk_id={} /={}", chunk, pdev_id);
                 homestore::superblk< GCManager::gc_reserved_chunk_superblk > reserved_chunk_sb{
                     GCManager::_gc_reserved_chunk_meta_name};
                 reserved_chunk_sb.create(sizeof(GCManager::gc_reserved_chunk_superblk));
@@ -359,10 +360,10 @@ void HSHomeObject::init_gc() {
     HomeStore::instance()->meta_service().read_sub_sb(GCManager::_gc_reserved_chunk_meta_name);
     HomeStore::instance()->meta_service().read_sub_sb(GCManager::_gc_task_meta_name);
 
-    const auto enable_gc = HS_BACKEND_DYNAMIC_CONFIG(enable_gc);
+    gc_mgr_->handle_all_recovered_gc_tasks();
 
-    if (enable_gc) {
-        LOGI("Starting GC");
+    if (HS_BACKEND_DYNAMIC_CONFIG(enable_gc)) {
+        LOGI("Starting GC manager");
         gc_mgr_->start();
     } else {
         LOGI("GC is disabled");
@@ -385,9 +386,7 @@ void HSHomeObject::register_homestore_metablk_callback() {
         nullptr, true);
 }
 
-HSHomeObject::~HSHomeObject() {
-    LOGI("HSHomeObject: Executing destruct procedure");
-}
+HSHomeObject::~HSHomeObject() { LOGI("HSHomeObject: Executing destruct procedure"); }
 
 void HSHomeObject::shutdown() {
     if (is_shutting_down()) {

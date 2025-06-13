@@ -804,6 +804,8 @@ private:
     void RestartLeaderDuringBaselineResyncUsingSigKill(uint64_t flip_delay, uint64_t restart_interval,
                                                        string restart_phase);
 
+    void EmergentGC(bool with_crash_recovery);
+
 private:
     std::random_device rnd{};
     std::default_random_engine rnd_engine{rnd()};

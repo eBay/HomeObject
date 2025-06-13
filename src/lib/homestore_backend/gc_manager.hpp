@@ -53,6 +53,8 @@ public:
     struct gc_task_superblk {
         chunk_id_t move_from_chunk;
         chunk_id_t move_to_chunk;
+        chunk_id_t vchunk_id;
+        pg_id_t pg_id;
         uint8_t priority;
         static std::string name() { return _gc_task_meta_name; }
     };
@@ -103,7 +105,7 @@ public:
     public:
         void add_reserved_chunk(homestore::superblk< GCManager::gc_reserved_chunk_superblk > reserved_chunk_sb);
         folly::SemiFuture< bool > add_gc_task(uint8_t priority, chunk_id_t move_from_chunk);
-        void handle_recovered_gc_task(const GCManager::gc_task_superblk* gc_task);
+        void handle_recovered_gc_task(homestore::superblk< GCManager::gc_task_superblk >& gc_task_sb);
         void start();
         void stop();
 
@@ -113,7 +115,9 @@ public:
         // this should be called only after gc_task meta blk is persisted. it will update the pg index table according
         // to the gc index table. return the move_to_chunk to chunkselector and put move_from_chunk to reserved chunk
         // queue.
-        bool replace_blob_index(chunk_id_t move_from_chunk, chunk_id_t move_to_chunk, uint8_t priority);
+        bool
+        replace_blob_index(chunk_id_t move_from_chunk, chunk_id_t move_to_chunk,
+                           const std::vector< std::pair< BlobRouteByChunkKey, BlobRouteValue > >& valid_blob_indexes);
 
         // copy all the valid data from the move_from_chunk to move_to_chunk. valid data means those blobs that are not
         // tombstone in the pg index table
@@ -124,6 +128,13 @@ public:
         //  1 clear all the entries of this chunk in the gc index table
         //  2 reset this chunk to make sure it is empty.
         bool purge_reserved_chunk(chunk_id_t move_to_chunk);
+
+        bool get_blobs_to_replace(chunk_id_t move_to_chunk,
+                                  std::vector< std::pair< BlobRouteByChunkKey, BlobRouteValue > >& valid_blob_indexes);
+
+        bool process_after_gc_metablk_persisted(
+            homestore::superblk< GCManager::gc_task_superblk >& gc_task_sb,
+            const std::vector< std::pair< BlobRouteByChunkKey, BlobRouteValue > >& valid_blob_indexes);
 
     private:
         // utils
@@ -173,8 +184,10 @@ public:
 
     void start();
     void stop();
+    bool is_started();
 
     void scan_chunks_for_gc();
+    void handle_all_recovered_gc_tasks();
 
 private:
     void on_gc_task_meta_blk_found(sisl::byte_view const& buf, void* meta_cookie);
@@ -187,6 +200,7 @@ private:
     folly::ConcurrentHashMap< uint32_t, std::shared_ptr< pdev_gc_actor > > m_pdev_gc_actors;
     iomgr::timer_handle_t m_gc_timer_hdl{iomgr::null_timer_handle};
     HSHomeObject* m_hs_home_object{nullptr};
+    std::list< homestore::superblk< GCManager::gc_task_superblk > > m_recovered_gc_tasks;
 };
 
 } // namespace homeobject

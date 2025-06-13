@@ -910,18 +910,30 @@ void ReplicationStateMachine::handle_no_space_left(homestore::repl_lsn_t lsn, ho
     // allocated from now on.
     repl_dev()->quiesce_reqs();
 
-    // 2 clear all the in-memeory rreqs that alrady allocated blocks on the chunk.
+    // 2 clear all the in-memeory rreqs that already allocated blocks on the chunk.
     repl_dev()->clear_chunk_req(chunk_id);
 
-    // 3 handling this error in the homeobject, do what ever you want.
-    // for homeobject, we will submit an emergent gc task to gc manager
-    // gc->summit_emergent_gc_task().wait();
-
-    //  4 start accepting new requests again.
-    repl_dev()->resume_accepting_reqs();
-
-    // TODO:: add step4 and reset_no_space_left_error_info into the thenValue of the returned future of
-    // summit_emergent_gc_task() , so that it will not block in handle_no_space_left
+    // 3 handling this error. for homeobject, we will submit an emergent gc task and wait for the completion.
+    auto gc_mgr = home_object_->gc_manager();
+    if (gc_mgr->is_started()) {
+        // FIXME:: there is a very corner case that when reaching this line, gc_mgr is stopped. fix this later.
+        gc_mgr->submit_gc_task(task_priority::emergent, chunk_id)
+            .via(&folly::InlineExecutor::instance())
+            .thenValue([this, lsn, chunk_id](auto&& res) {
+                if (!res) {
+                    RELEASE_ASSERT(false,
+                                   "failed to submit emergent gc task for chunk_id={} , lsn={} - fatal error, aborting",
+                                   chunk_id, lsn);
+                }
+                LOGD("successfully handle no_space_left error for chunk_id={} , lsn={}", chunk_id, lsn);
+                // start accepting new requests again.
+                repl_dev()->resume_accepting_reqs();
+            });
+    } else {
+        // start accepting new requests again.
+        LOGD("gc manager is not started, skip handle no_space_left for chunk={}, lsn={}", chunk_id, lsn);
+        repl_dev()->resume_accepting_reqs();
+    }
 }
 
 } // namespace homeobject
