@@ -511,44 +511,57 @@ void HSHomeObject::on_blob_del_commit(int64_t lsn, sisl::blob const& header, sis
         return;
     }
 
-    auto hs_pg = get_hs_pg(msg_header->pg_id);
-    RELEASE_ASSERT(hs_pg, "PG not found, pg={}", msg_header->pg_id);
+    const auto pg_id = msg_header->pg_id;
+    auto hs_pg = get_hs_pg(pg_id);
+    RELEASE_ASSERT(hs_pg, "PG not found, pg={}", pg_id);
     auto index_table = hs_pg->index_table_;
     auto repl_dev = hs_pg->repl_dev_;
     RELEASE_ASSERT(index_table != nullptr, "Index table not intialized");
     RELEASE_ASSERT(repl_dev != nullptr, "Repl dev instance null");
 
-    BlobInfo blob_info;
-    blob_info.shard_id = msg_header->shard_id;
-    blob_info.blob_id = *r_cast< blob_id_t const* >(key.cbytes());
+    const auto shard_id = msg_header->shard_id;
+    const auto blob_id = *r_cast< blob_id_t const* >(key.cbytes());
 
-    auto r = move_to_tombstone(index_table, blob_info);
-    if (!r) {
-        if (recovery_done_) {
-            BLOGE(tid, blob_info.shard_id, blob_info.blob_id, "Failed to move blob to tombstone, error={}", r.error());
-            if (ctx) ctx->promise_.setValue(folly::makeUnexpected(r.error()));
+    BlobRouteKey index_key{BlobRoute{shard_id, blob_id}};
+    BlobRouteValue index_value{tombstone_pbas};
+    BlobRouteValue existing_value;
+
+    homestore::BtreeSinglePutRequest update_req{&index_key, &index_value, homestore::btree_put_type::UPDATE,
+                                                &existing_value};
+
+    auto status = index_table->put(update_req);
+
+    if (sisl_unlikely(status == homestore::btree_status_t::not_found)) {
+        // in baseline resync case, the blob might have already been deleted at leader and follower does not receive
+        // this blob, so when committing this log, not_found will happen.
+        LOGW("shard_id={}, blob_id={} not found, probably already deleted, lsn={}", shard_id, blob_id, lsn);
+    } else if (sisl_unlikely(status != homestore::btree_status_t::success)) {
+        // if we return directly, for the perspective of statemachine, this lsn has been committed successfully. so
+        // there will be no more deletion for this blob, and as a result , blob leak happens
+        RELEASE_ASSERT(false, "fail to commit delete_blob log for pg={}, shard={}, blob={}, lsn={}", pg_id, shard_id,
+                       blob_id, lsn);
+    } else {
+        LOGD("shard_id={}, blob_id={} has been moved to tombstone, lsn={}", shard_id, blob_id, lsn);
+
+        auto existing_pbas = existing_value.pbas();
+        if (sisl_likely(existing_pbas != tombstone_pbas)) {
+            repl_dev->async_free_blks(lsn, existing_pbas).thenValue([hs_pg](auto&& err) {
+                if (err) {
+                    // even if async_free_blks fails, as the blob is already updated to tombstone, it will be gc
+                    // eventually.
+                    LOGE("Failed to free blocks for tombstoned blob, error={}", err.value());
+                }
+                const_cast< HS_PG* >(hs_pg)->durable_entities_update([](auto& de) {
+                    de.active_blob_count.fetch_sub(1, std::memory_order_relaxed);
+                    de.tombstone_blob_count.fetch_add(1, std::memory_order_relaxed);
+                });
+            });
         } else {
-            if (ctx) ctx->promise_.setValue(BlobManager::Result< BlobInfo >(blob_info));
+            LOGW("shard_id={}, blob_id={} already tombstoned, lsn={}", shard_id, blob_id, lsn);
         }
-
-        // if we return directly, for the perspective of statemachin, this lsn has been committed successfully. so there
-        // will be no more deletion for this blob, and as a result , blob leak happens
-        RELEASE_ASSERT(false, "fail to commit delete blob log for pg={}, shard={}, blob={}", msg_header->pg_id,
-                       msg_header->shard_id, blob_info.blob_id);
     }
 
-    LOGD("shard_id={}, blob_id={} has been moved to tombstone, lsn={}", blob_info.shard_id, blob_info.blob_id, lsn);
-
-    auto& multiBlks = r.value();
-    if (multiBlks != tombstone_pbas) {
-        repl_dev->async_free_blks(lsn, multiBlks);
-        const_cast< HS_PG* >(hs_pg)->durable_entities_update([](auto& de) {
-            de.active_blob_count.fetch_sub(1, std::memory_order_relaxed);
-            de.tombstone_blob_count.fetch_add(1, std::memory_order_relaxed);
-        });
-    }
-
-    if (ctx) { ctx->promise_.setValue(BlobManager::Result< BlobInfo >(blob_info)); }
+    if (ctx) { ctx->promise_.setValue(BlobManager::Result< BlobInfo >({shard_id, blob_id, tombstone_pbas})); }
 }
 
 void HSHomeObject::compute_blob_payload_hash(BlobHeader::HashAlgorithm algorithm, const uint8_t* blob_bytes,

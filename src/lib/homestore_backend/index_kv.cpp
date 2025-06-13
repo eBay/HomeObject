@@ -112,28 +112,6 @@ HSHomeObject::get_blob_from_index_table(shared< BlobIndexTable > index_table, sh
     return folly::makeUnexpected(BlobError(BlobErrorCode::UNKNOWN_BLOB));
 }
 
-BlobManager::Result< homestore::MultiBlkId > HSHomeObject::move_to_tombstone(shared< BlobIndexTable > index_table,
-                                                                             const BlobInfo& blob_info) {
-    BlobRouteKey index_key{BlobRoute{blob_info.shard_id, blob_info.blob_id}};
-    BlobRouteValue index_value_get;
-    homestore::BtreeSingleGetRequest get_req{&index_key, &index_value_get};
-    auto status = index_table->get(get_req);
-    if (status != homestore::btree_status_t::success) {
-        LOGE("Failed to get from index table [route={}]", index_key);
-        return folly::makeUnexpected(BlobError(BlobErrorCode::UNKNOWN_BLOB));
-    }
-
-    BlobRouteValue index_value_put{tombstone_pbas};
-    homestore::BtreeSinglePutRequest put_req{&index_key, &index_value_put, homestore::btree_put_type::UPDATE};
-    status = index_table->put(put_req);
-    if (status != homestore::btree_status_t::success) {
-        LOGDEBUG("Failed to move blob to tombstone in index table [route={}]", index_key);
-        return folly::makeUnexpected(BlobError(BlobErrorCode::INDEX_ERROR));
-    }
-
-    return index_value_get.pbas();
-}
-
 void HSHomeObject::print_btree_index(pg_id_t pg_id) const {
     auto hs_pg = get_hs_pg(pg_id);
     RELEASE_ASSERT(hs_pg != nullptr, "Unknown PG");

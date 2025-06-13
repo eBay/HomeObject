@@ -97,8 +97,8 @@ public:
     struct pg_info_superblk {
         pg_id_t id;
         PGState state;
-        // num_expected_members means how many members a  pg should have, while num_dynamic_members is the actual members count,
-        // as members might float during member replacement.
+        // num_expected_members means how many members a  pg should have, while num_dynamic_members is the actual
+        // members count, as members might float during member replacement.
         uint32_t num_expected_members;
         uint32_t num_dynamic_members;
         uint32_t num_chunks;
@@ -113,12 +113,11 @@ public:
         char data[1];                      // ISO C++ forbids zero-size array
         // Data layout inside 'data':
         // First, an array of 'pg_members' structures:
-        // | pg_members[0] | pg_members[1] | ... | pg_members[num_dynamic_members-1] | reserved pg_members[num_dynamic_members]...|
-        // reserved pg_members[2*num_expected_members-1]
-        // Immediately followed by an array of 'chunk_num_t' values (representing physical chunkID):
-        // | chunk_num_t[0] | chunk_num_t[1] | ... | chunk_num_t[num_chunks-1] |
-        // Here, 'chunk_num_t[i]' represents the p_chunk_id for the v_chunk_id 'i', where v_chunk_id starts from 0 and
-        // increases sequentially.
+        // | pg_members[0] | pg_members[1] | ... | pg_members[num_dynamic_members-1] | reserved
+        // pg_members[num_dynamic_members]...| reserved pg_members[2*num_expected_members-1] Immediately followed by an
+        // array of 'chunk_num_t' values (representing physical chunkID): | chunk_num_t[0] | chunk_num_t[1] | ... |
+        // chunk_num_t[num_chunks-1] | Here, 'chunk_num_t[i]' represents the p_chunk_id for the v_chunk_id 'i', where
+        // v_chunk_id starts from 0 and increases sequentially.
         uint32_t pg_members_space_size() const { return 2 * num_expected_members * sizeof(pg_members); }
         uint32_t size() const {
             return sizeof(pg_info_superblk) - sizeof(char) + this->pg_members_space_size() +
@@ -635,7 +634,6 @@ private:
     shared< HeapChunkSelector > chunk_selector_;
     shared< GCManager > gc_mgr_;
     unique< HttpManager > http_mgr_;
-    bool recovery_done_{false};
 
     static constexpr size_t max_zpad_bufs = _data_block_size / io_align;
     std::array< sisl::io_blob_safe, max_zpad_bufs > zpad_bufs_; // Zero padded buffers for blob payload.
@@ -730,7 +728,7 @@ public:
      * @param member_in Member which is added to group
      * */
     void on_pg_start_replace_member(homestore::group_id_t group_id, const homestore::replica_member_info& member_out,
-                              const homestore::replica_member_info& member_in, trace_id_t tid);
+                                    const homestore::replica_member_info& member_in, trace_id_t tid);
 
     /**
      * @brief Function invoked when complete a member replacement
@@ -740,7 +738,7 @@ public:
      * @param member_in Member which is added to group
      * */
     void on_pg_complete_replace_member(homestore::group_id_t group_id, const homestore::replica_member_info& member_out,
-                              const homestore::replica_member_info& member_in, trace_id_t tid);
+                                       const homestore::replica_member_info& member_in, trace_id_t tid);
 
     /**
      * @brief Cleans up and recycles resources for the PG identified by the given pg_id on the current node.
@@ -888,8 +886,6 @@ private:
     BlobManager::Result< homestore::MultiBlkId >
     get_blob_from_index_table(shared< BlobIndexTable > index_table, shard_id_t shard_id, blob_id_t blob_id) const;
 
-    BlobManager::Result< homestore::MultiBlkId > move_to_tombstone(shared< BlobIndexTable > index_table,
-                                                                   const BlobInfo& blob_info);
     void print_btree_index(pg_id_t pg_id) const;
 
     shared< BlobIndexTable > get_index_table(pg_id_t pg_id);

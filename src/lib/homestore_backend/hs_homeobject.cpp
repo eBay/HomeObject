@@ -269,7 +269,6 @@ void HSHomeObject::init_homestore() {
                        to_string(_our_id));
     }
 
-    recovery_done_ = true;
     LOGI("Initialize and start HomeStore is successfully");
 
     // Now cache the zero padding bufs to avoid allocating during IO time
