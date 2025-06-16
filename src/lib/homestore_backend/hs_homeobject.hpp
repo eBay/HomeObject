@@ -361,6 +361,8 @@ public:
     // Padding of zeroes is added to make sure the whole payload be aligned to device block size.
     struct BlobHeader : DataHeader {
         static constexpr uint64_t blob_max_hash_len = 32;
+        static constexpr uint64_t max_blocks = 64;
+        static constexpr uint64_t max_user_key_length = 1024 + 1;
 
         enum class HashAlgorithm : uint8_t {
             NONE = 0,
@@ -372,12 +374,14 @@ public:
         HashAlgorithm hash_algorithm;
         mutable uint8_t header_hash[blob_max_hash_len]{};
         uint8_t hash[blob_max_hash_len]{};
+        uint8_t block_hashes[max_blocks][blob_max_hash_len]{};
         shard_id_t shard_id;
         blob_id_t blob_id;
         uint32_t blob_size;
         uint64_t object_offset; // Offset of this blob in the object. Provided by GW.
         uint32_t data_offset;   // Offset of actual data blob stored after the metadata.
         uint32_t user_key_size; // Actual size of the user key.
+        uint8_t user_key[max_user_key_length]{};
 
         std::string to_string() const {
             return fmt::format("magic={:#x} version={} shard={:#x} blob_size={} user_size={} algo={} hash={:np}\n",
@@ -426,7 +430,8 @@ public:
         }
     };
 #pragma pack()
-
+    // size of BlobHeader should be smaller than _data_block_size
+    static_assert(sizeof(BlobHeader) < _data_block_size);
     struct BlobInfo {
         shard_id_t shard_id;
         blob_id_t blob_id;
@@ -462,7 +467,7 @@ public:
         BlobManager::AsyncResult< blob_read_result > load_blob_data(const BlobInfo& blob_info);
         bool create_pg_snapshot_data(sisl::io_blob_safe& meta_blob);
         bool create_shard_snapshot_data(sisl::io_blob_safe& meta_blob);
-	bool prefetch_blobs_snapshot_data();
+        bool prefetch_blobs_snapshot_data();
         bool create_blobs_snapshot_data(sisl::io_blob_safe& data_blob);
         void pack_resync_message(sisl::io_blob_safe& dest_blob, SyncMessageType type);
         bool end_of_scan() const;
@@ -504,7 +509,7 @@ public:
         int64_t cur_shard_idx_{-1};
         std::vector< BlobInfo > cur_blob_list_{0};
         uint64_t inflight_prefetch_bytes{0};
-        std::map < blob_id_t, BlobManager::AsyncResult< blob_read_result >> prefetched_blobs;
+        std::map< blob_id_t, BlobManager::AsyncResult< blob_read_result > > prefetched_blobs;
         uint64_t cur_start_blob_idx_{0};
         uint64_t cur_batch_blob_count_{0};
         Clock::time_point cur_batch_start_time_;
