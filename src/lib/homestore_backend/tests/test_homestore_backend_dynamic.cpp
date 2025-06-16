@@ -92,10 +92,11 @@ TEST_F(HomeObjectFixture, ReplaceMember) {
     set_basic_flip("snapshot_receiver_blob_write_data_error", 4, 15);  // simulate blob write data error
     set_basic_flip("snapshot_receiver_blk_allocation_error", 4, 15);  // simulate blob allocation error
 #endif
-    LOGINFO("start replace member, pg={}", pg_id);
+    auto task_id = boost::uuids::random_generator()();
+    LOGINFO("start replace member, pg={}, task_id={}", pg_id, task_id);
     run_on_pg_leader(pg_id, [&]() {
         auto r = _obj_inst->pg_manager()
-                     ->replace_member(pg_id, out_member_id, PGMember{in_member_id, "new_member", 0})
+                     ->replace_member(pg_id, task_id, out_member_id, PGMember{in_member_id, "new_member", 0})
                      .get();
         ASSERT_TRUE(r);
     });
@@ -287,10 +288,11 @@ void HomeObjectFixture::RestartFollowerDuringBaselineResyncUsingSigKill(uint64_t
         g_helper->sync();
 
         // ======== Stage 2: replace a member ========
-        LOGINFO("start replace member, pg={}", pg_id);
+        auto task_id = boost::uuids::random_generator()();
+        LOGINFO("start replace member, pg={}, task_id={}", pg_id, task_id);
         run_on_pg_leader(pg_id, [&]() {
             auto r = _obj_inst->pg_manager()
-                         ->replace_member(pg_id, out_member_id, PGMember{in_member_id, "new_member", 0})
+                         ->replace_member(pg_id, task_id, out_member_id, PGMember{in_member_id, "new_member", 0})
                          .get();
             ASSERT_TRUE(r);
         });
@@ -430,10 +432,10 @@ TEST_F(HomeObjectFixture, RestartFollowerDuringBaselineResyncUsingGracefulShutdo
     g_helper->sync();
 
     // ======== Stage 2: replace a member ========
-
+    auto task_id = boost::uuids::random_generator()();
     run_on_pg_leader(pg_id, [&]() {
         auto r = _obj_inst->pg_manager()
-                     ->replace_member(pg_id, out_member_id, PGMember{in_member_id, "new_member", 0})
+                     ->replace_member(pg_id, task_id, out_member_id, PGMember{in_member_id, "new_member", 0})
                      .get();
         ASSERT_TRUE(r);
     });
@@ -583,10 +585,10 @@ void HomeObjectFixture::RestartLeaderDuringBaselineResyncUsingSigKill(uint64_t f
         g_helper->sync();
 
         // ========Stage 2: replace a member========
-
+        auto task_id = boost::uuids::random_generator()();
         run_on_pg_leader(pg_id, [&]() {
             auto r = _obj_inst->pg_manager()
-                         ->replace_member(pg_id, out_member_id, PGMember{in_member_id, "new_member", 0})
+                         ->replace_member(pg_id, task_id, out_member_id, PGMember{in_member_id, "new_member", 0})
                          .get();
             ASSERT_TRUE(r);
         });

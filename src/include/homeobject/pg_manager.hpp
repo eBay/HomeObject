@@ -12,6 +12,7 @@ namespace homeobject {
 
 ENUM(PGError, uint16_t, UNKNOWN = 1, INVALID_ARG, TIMEOUT, UNKNOWN_PG, NOT_LEADER, UNKNOWN_PEER, UNSUPPORTED_OP,
      CRC_MISMATCH, NO_SPACE_LEFT, DRIVE_WRITE_ERROR, RETRY_REQUEST, SHUTTING_DOWN, ROLL_BACK);
+ENUM(PGReplaceMemberTaskStatus, uint16_t, COMPLETED = 0, IN_PROGRESS, NOT_LEADER, TASK_ID_MISMATCH, TASK_NOT_FOUND, UNKNOWN);
 
 struct PGMember {
     // Max length is based on homestore::replica_member_info::max_name_len - 1. Last byte is null terminated.
@@ -105,11 +106,22 @@ struct PGStats {
     }
 };
 
+struct PGReplaceMemberStatus {
+    uuid_t task_id;
+    PGReplaceMemberTaskStatus status = PGReplaceMemberTaskStatus::UNKNOWN;
+    std::vector< peer_info > members;
+    uint32_t resync_progress = 0;
+};
+
 class PGManager : public Manager< PGError > {
 public:
     virtual NullAsyncResult create_pg(PGInfo&& pg_info, trace_id_t tid = 0) = 0;
-    virtual NullAsyncResult replace_member(pg_id_t id, peer_id_t const& old_member, PGMember const& new_member,
+    virtual NullAsyncResult replace_member(pg_id_t id, uuid_t task_id, peer_id_t const& old_member, PGMember const& new_member,
                                            u_int32_t commit_quorum = 0, trace_id_t tid = 0) = 0;
+    virtual PGReplaceMemberStatus get_replace_member_status(pg_id_t id, uuid_t task_id, const PGMember& old_member,
+                                                          const PGMember& new_member,
+                                                          const std::vector< PGMember >& others,
+                                                          uint64_t trace_id = 0) const = 0;
 
     /**
      * Retrieves the statistics for a specific PG (Placement Group) identified by its ID.

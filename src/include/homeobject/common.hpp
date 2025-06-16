@@ -32,6 +32,7 @@ using shard_id_t = uint64_t;
 using snp_batch_id_t = uint16_t;
 using snp_obj_id_t = uint64_t;
 using trace_id_t = uint64_t;
+using uuid_t = boost::uuids::uuid;
 
 inline uint64_t generateRandomTraceId() {
     std::random_device rd;

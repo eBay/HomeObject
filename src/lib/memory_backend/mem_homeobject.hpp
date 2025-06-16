@@ -46,8 +46,12 @@ class MemoryHomeObject : public HomeObjectImpl {
 
     // PGManager
     PGManager::NullAsyncResult _create_pg(PGInfo&& pg_info, std::set< peer_id_t > const& peers, trace_id_t tid) override;
-    PGManager::NullAsyncResult _replace_member(pg_id_t id, peer_id_t const& old_member, PGMember const& new_member,
+    PGManager::NullAsyncResult _replace_member(pg_id_t id, uuid_t task_id, peer_id_t const& old_member, PGMember const& new_member,
                                                uint32_t commit_quorum, trace_id_t tid) override;
+    PGReplaceMemberStatus _get_replace_member_status(pg_id_t id, uuid_t task_id, const PGMember& old_member,
+                                                      const PGMember& new_member,
+                                                      const std::vector< PGMember >& others,
+                                                      uint64_t trace_id) const override;
 
     bool _get_stats(pg_id_t id, PGStats& stats) const override;
     void _get_pg_ids(std::vector< pg_id_t >& pg_ids) const override;
