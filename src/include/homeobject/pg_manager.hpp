@@ -13,6 +13,9 @@ namespace homeobject {
 ENUM(PGError, uint16_t, UNKNOWN = 1, INVALID_ARG, TIMEOUT, UNKNOWN_PG, NOT_LEADER, UNKNOWN_PEER, UNSUPPORTED_OP,
      CRC_MISMATCH, NO_SPACE_LEFT, DRIVE_WRITE_ERROR, RETRY_REQUEST, SHUTTING_DOWN, ROLL_BACK);
 ENUM(PGReplaceMemberTaskStatus, uint16_t, COMPLETED = 0, IN_PROGRESS, NOT_LEADER, TASK_ID_MISMATCH, TASK_NOT_FOUND, UNKNOWN);
+// https://github.corp.ebay.com/SDS/nuobject_proto/blob/main/src/proto/pg.proto#L52
+ENUM(PGStateMask, uint32_t, HEALTHY = 0, DISK_DOWN = 0x1, SCRUBBING = 0x2, BASELINE_RESYNC = 0x4, INCONSISTENT = 0x8,
+     REPAIR = 0x10, GC_IN_PROGRESS = 0x20, RESYNCING = 0x40);
 
 struct PGMember {
     // Max length is based on homestore::replica_member_info::max_name_len - 1. Last byte is null terminated.
@@ -58,6 +61,28 @@ struct peer_info {
     bool can_vote = true;
 };
 
+struct pg_state {
+    std::atomic<uint64_t> state{0};
+
+    explicit pg_state(uint64_t s) : state{s} {}
+
+    void set_state(PGStateMask mask) {
+        state.fetch_or(static_cast<uint64_t>(mask), std::memory_order_relaxed);
+    }
+
+    void clear_state(PGStateMask mask) {
+        state.fetch_and(~static_cast<uint64_t>(mask), std::memory_order_relaxed);
+    }
+
+    bool is_state_set(PGStateMask mask) const {
+        return (state.load(std::memory_order_relaxed) & static_cast<uint64_t>(mask)) != 0;
+    }
+
+    uint64_t get() const {
+        return state.load(std::memory_order_relaxed);
+    }
+};
+
 struct PGStats {
     pg_id_t id;
     peer_id_t replica_set_uuid;
@@ -71,6 +96,7 @@ struct PGStats {
     uint64_t num_active_objects;    // total number of active objects on this PG;
     uint64_t num_tombstone_objects; // total number of tombstone objects on this PG;
     uint64_t pg_state;              // PG state;
+    uint32_t snp_progress;          // snapshot progress, the value is set only when the peer is under baseline resync.
     std::vector< peer_info > members;
 
     PGStats() :
@@ -110,7 +136,6 @@ struct PGReplaceMemberStatus {
     uuid_t task_id;
     PGReplaceMemberTaskStatus status = PGReplaceMemberTaskStatus::UNKNOWN;
     std::vector< peer_info > members;
-    uint32_t resync_progress = 0;
 };
 
 class PGManager : public Manager< PGError > {

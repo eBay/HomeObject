@@ -434,6 +434,8 @@ void ReplicationStateMachine::write_snapshot_obj(std::shared_ptr< homestore::sna
     if (snp_obj->is_last_obj) {
         LOGD("Write snapshot reached is_last_obj true {}", log_suffix);
         set_snapshot_context(context); // Update the snapshot context in case apply_snapshot is not called
+        auto hs_pg = home_object_->get_hs_pg(m_snp_rcv_handler->get_context_pg_id());
+        hs_pg->pg_state_.clear_state(PGStateMask::BASELINE_RESYNC);
         return;
     }
 

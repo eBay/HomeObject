@@ -90,7 +90,7 @@ TEST_F(HomeObjectFixture, ReplaceMember) {
     set_basic_flip("snapshot_receiver_pg_error", 1);                   // simulate pg creation error
     set_basic_flip("snapshot_receiver_shard_write_data_error", 2, 33); // simulate shard write data error
     set_basic_flip("snapshot_receiver_blob_write_data_error", 4, 15);  // simulate blob write data error
-    set_basic_flip("snapshot_receiver_blk_allocation_error", 4, 15);  // simulate blob allocation error
+    set_basic_flip("snapshot_receiver_blk_allocation_error", 4, 15);   // simulate blob allocation error
 #endif
     auto task_id = boost::uuids::random_generator()();
     LOGINFO("start replace member, pg={}, task_id={}", pg_id, task_id);
@@ -122,9 +122,9 @@ TEST_F(HomeObjectFixture, ReplaceMember) {
     });
 
     g_helper->sync();
-    // Because we don't know when hs triggers complete_replace_member, so it's hard to find an accurate time slot to verify
-    // verify_start_replace_member_result(pg_id, out_member_id, in_member_id);
-    // step 5: Verify no pg related data in out_member
+    // Because we don't know when hs triggers complete_replace_member, so it's hard to find an accurate time slot to
+    // verify verify_start_replace_member_result(pg_id, out_member_id, in_member_id); step 5: Verify no pg related data
+    // in out_member
     if (out_member_id == g_helper->my_replica_id()) {
         while (am_i_in_pg(pg_id)) {
             std::this_thread::sleep_for(std::chrono::milliseconds(1000));
@@ -142,7 +142,7 @@ TEST_F(HomeObjectFixture, ReplaceMember) {
     } else {
         g_helper->sync();
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
-        verify_complete_replace_member_result(pg_id, out_member_id, in_member_id);
+        ASSERT_TRUE(verify_complete_replace_member_result(pg_id, task_id, out_member_id, in_member_id));
     }
 
     // Step 6: restart, verify the blobs again on all members, including the new spare replica, and out_member
@@ -163,7 +163,7 @@ TEST_F(HomeObjectFixture, ReplaceMember) {
         }
         LOGINFO("After restart, check no pg related data in out member successfully");
     } else {
-        verify_complete_replace_member_result(pg_id, out_member_id, in_member_id);
+        ASSERT_TRUE(verify_complete_replace_member_result(pg_id, task_id, out_member_id, in_member_id));
     }
 }
 
@@ -205,10 +205,10 @@ TEST_F(HomeObjectFixture, RestartFollowerAfterBaselineResync) {
 // }
 
 // Test case to restart new member during baseline resync, it will start 4 process to simulate the 4 replicas, let's say
-// P0, P1, P2 and P3. P0, P1, P2 are the original members of the pg, P3 is the spare replica. After the start_replace_member
-// happens, P3 will join the pg, and then kill itself(sigkill) to simulate the restart during baseline resync. As P0 is
-// the original process who spawn the other 3 processes, so P0 will also help to spawn a new process to simulate the new
-// member restart.
+// P0, P1, P2 and P3. P0, P1, P2 are the original members of the pg, P3 is the spare replica. After the
+// start_replace_member happens, P3 will join the pg, and then kill itself(sigkill) to simulate the restart during
+// baseline resync. As P0 is the original process who spawn the other 3 processes, so P0 will also help to spawn a new
+// process to simulate the new member restart.
 void HomeObjectFixture::RestartFollowerDuringBaselineResyncUsingSigKill(uint64_t flip_delay, uint64_t restart_interval,
                                                                         string restart_phase) {
     LOGINFO("HomeObject replica={} setup completed", g_helper->replica_num());
@@ -273,7 +273,7 @@ void HomeObjectFixture::RestartFollowerDuringBaselineResyncUsingSigKill(uint64_t
         }
     }
 #endif
-
+    auto task_id = boost::uuids::random_generator()();
     if (!is_restart) {
         for (uint64_t j = 0; j < num_shards_per_pg; j++)
             create_shard(pg_id, 64 * Mi);
@@ -288,7 +288,6 @@ void HomeObjectFixture::RestartFollowerDuringBaselineResyncUsingSigKill(uint64_t
         g_helper->sync();
 
         // ======== Stage 2: replace a member ========
-        auto task_id = boost::uuids::random_generator()();
         LOGINFO("start replace member, pg={}, task_id={}", pg_id, task_id);
         run_on_pg_leader(pg_id, [&]() {
             auto r = _obj_inst->pg_manager()
@@ -311,8 +310,11 @@ void HomeObjectFixture::RestartFollowerDuringBaselineResyncUsingSigKill(uint64_t
             // SyncPoint 1(new member): kill itself.
             g_helper->sync();
             // verify the intermediate result of replace_member
-            if (restart_phase == "RestartLeaderDuringBaselineResync") {
-                ASSERT_TRUE(verify_start_replace_member_result(pg_id, out_member_id, in_member_id));
+            if (restart_phase == RECEIVING_SNAPSHOT) {
+                ASSERT_TRUE(verify_start_replace_member_result(pg_id, task_id, out_member_id, in_member_id));
+                auto progress = get_br_progress(pg_id);
+                LOGDEBUG("baseline resync progress={}", progress);
+                ASSERT_GT(progress, 0);
             }
             kill();
         }
@@ -320,8 +322,8 @@ void HomeObjectFixture::RestartFollowerDuringBaselineResyncUsingSigKill(uint64_t
         // SyncPoint 1(others): wait for the new member stop, then P0 will help start it.
         LOGINFO("waiting for new member stop")
         g_helper->sync();
-        if (restart_phase == "RestartLeaderDuringBaselineResync") {
-            ASSERT_TRUE(verify_start_replace_member_result(pg_id, out_member_id, in_member_id));
+        if (restart_phase == RECEIVING_SNAPSHOT) {
+            ASSERT_TRUE(verify_start_replace_member_result(pg_id, task_id, out_member_id, in_member_id));
         }
         if (g_helper->replica_num() == 0) {
             // wait for kill
@@ -367,7 +369,7 @@ void HomeObjectFixture::RestartFollowerDuringBaselineResyncUsingSigKill(uint64_t
     } else {
         g_helper->sync();
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
-        verify_complete_replace_member_result(pg_id, out_member_id, in_member_id);
+        ASSERT_TRUE(verify_complete_replace_member_result(pg_id, task_id, out_member_id, in_member_id));
     }
 
     g_helper->sync();
@@ -449,7 +451,7 @@ TEST_F(HomeObjectFixture, RestartFollowerDuringBaselineResyncUsingGracefulShutdo
         LOGDEBUG("wait for the data[shard={}, blob={}] replicated to the new member", kill_until_shard,
                  kill_until_blob);
         wait_for_blob(kill_until_shard, kill_until_blob);
-        //SyncPoint2
+        // SyncPoint2
         g_helper->sync();
         LOGINFO("about to restart new member")
         restart();
@@ -462,7 +464,7 @@ TEST_F(HomeObjectFixture, RestartFollowerDuringBaselineResyncUsingGracefulShutdo
     } else {
         // SyncPoint2, verify intermediate status during replacement
         g_helper->sync();
-        verify_start_replace_member_result(pg_id, out_member_id, in_member_id);
+        ASSERT_TRUE(verify_start_replace_member_result(pg_id, task_id, out_member_id, in_member_id));
     }
     // SyncPoint3, after new member restart
     g_helper->sync();
@@ -479,7 +481,7 @@ TEST_F(HomeObjectFixture, RestartFollowerDuringBaselineResyncUsingGracefulShutdo
         // SyncPoint4, sync for verify_complete_replace_member_result
         g_helper->sync();
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
-        verify_complete_replace_member_result(pg_id, out_member_id, in_member_id);
+        ASSERT_TRUE(verify_complete_replace_member_result(pg_id, task_id, out_member_id, in_member_id));
     }
     g_helper->sync();
 }
@@ -542,7 +544,7 @@ void HomeObjectFixture::RestartLeaderDuringBaselineResyncUsingSigKill(uint64_t f
         auto hs_pg = _obj_inst->get_hs_pg(pg_id);
         index_table_uuid_str = uuids::to_string(hs_pg->pg_sb_->index_table_uuid);
     }
-
+    auto task_id = boost::uuids::random_generator()();
     if (!is_restart) {
         auto kill_until_shard = pg_shard_id_vec[pg_id].back();
         auto kill_until_blob = num_blobs_per_shard * num_shards_per_pg - 1;
@@ -585,7 +587,6 @@ void HomeObjectFixture::RestartLeaderDuringBaselineResyncUsingSigKill(uint64_t f
         g_helper->sync();
 
         // ========Stage 2: replace a member========
-        auto task_id = boost::uuids::random_generator()();
         run_on_pg_leader(pg_id, [&]() {
             auto r = _obj_inst->pg_manager()
                          ->replace_member(pg_id, task_id, out_member_id, PGMember{in_member_id, "new_member", 0})
@@ -606,15 +607,20 @@ void HomeObjectFixture::RestartLeaderDuringBaselineResyncUsingSigKill(uint64_t f
             // SyncPoint 1(leader)
             g_helper->sync();
             LOGINFO("going to kill leader");
-            if (restart_phase == "RestartLeaderDuringBaselineResync") {
-                ASSERT_TRUE(verify_start_replace_member_result(pg_id, out_member_id, in_member_id));
+            if (restart_phase == RECEIVING_SNAPSHOT) {
+                ASSERT_TRUE(verify_start_replace_member_result(pg_id, task_id, out_member_id, in_member_id));
             }
             kill();
         }
         // SyncPoint 1: tell leader to kill
         g_helper->sync();
-        if (restart_phase == "RestartLeaderDuringBaselineResync") {
-            ASSERT_TRUE(verify_start_replace_member_result(pg_id, out_member_id, in_member_id));
+        if (restart_phase == RECEIVING_SNAPSHOT) {
+            ASSERT_TRUE(verify_start_replace_member_result(pg_id, task_id, out_member_id, in_member_id));
+            if (in_member_id == g_helper->my_replica_id()) {
+                auto progress = get_br_progress(pg_id);
+                LOGDEBUG("baseline resync progress={}", progress);
+                ASSERT_GT(progress, 0);
+            }
         }
         // out member helps to spawn a new process to simulate the leader restart
         if (out_member_id == g_helper->my_replica_id()) {
@@ -680,12 +686,10 @@ void HomeObjectFixture::RestartLeaderDuringBaselineResyncUsingSigKill(uint64_t f
     } else {
         g_helper->sync();
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
-        verify_complete_replace_member_result(pg_id, out_member_id, in_member_id);
+        ASSERT_TRUE(verify_complete_replace_member_result(pg_id, task_id, out_member_id, in_member_id));
     }
     g_helper->sync();
 }
-
-
 
 SISL_OPTION_GROUP(
     test_homeobject_repl_common,

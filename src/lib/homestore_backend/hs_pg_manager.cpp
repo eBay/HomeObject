@@ -410,14 +410,13 @@ PGReplaceMemberStatus HSHomeObject::_get_replace_member_status(pg_id_t id, uuid_
         return ret;
     }
     std::vector< replica_member_info > other_replicas;
-    for (auto member : others) {
+    for (const auto& member : others) {
         other_replicas.push_back(to_replica_member_info(member));
     }
     ret.status = toPGReplaceMemberTaskStatus(hs_repl_service().get_replace_member_status(
         hs_pg->repl_dev_->group_id(), task_id, to_replica_member_info(old_member), to_replica_member_info(new_member),
         other_replicas, trace_id));
     hs_pg->get_peer_info(ret.members);
-    // TODO : add resync progress
     return ret;
 }
 
@@ -672,8 +671,9 @@ uint32_t HSHomeObject::HS_PG::open_shards() const {
     return std::count_if(shards_.begin(), shards_.end(), [](auto const& s) { return s->is_open(); });
 }
 
+// Return the percentage of snapshot progress
 uint32_t HSHomeObject::HS_PG::get_snp_progress() const {
-    return snp_rcvr_info_sb_->progress.complete_bytes / snp_rcvr_info_sb_->progress.total_bytes;
+    return 100 * snp_rcvr_info_sb_->progress.complete_bytes / snp_rcvr_info_sb_->progress.total_bytes;
 }
 
 void HSHomeObject::HS_PG::get_peer_info(std::vector< peer_info >& members) const {
@@ -712,6 +712,7 @@ bool HSHomeObject::_get_stats(pg_id_t id, PGStats& stats) const {
     stats.id = hs_pg->pg_info_.id;
     stats.replica_set_uuid = hs_pg->pg_info_.replica_set_uuid;
     stats.num_members = hs_pg->pg_info_.members.size();
+    stats.pg_state = hs_pg->pg_state_.get();
     stats.total_shards = hs_pg->total_shards();
     stats.open_shards = hs_pg->open_shards();
     stats.leader_id = hs_pg->repl_dev_->get_leader_id();
@@ -723,7 +724,7 @@ bool HSHomeObject::_get_stats(pg_id_t id, PGStats& stats) const {
     stats.avail_open_shards = chunk_selector()->avail_num_chunks(hs_pg->pg_info_.id);
     stats.avail_bytes = chunk_selector()->avail_blks(hs_pg->pg_info_.id) * blk_size;
     stats.used_bytes = hs_pg->durable_entities().total_occupied_blk_count.load(std::memory_order_relaxed) * blk_size;
-
+    if (!hs_pg->snp_rcvr_info_sb_.is_empty()) { stats.snp_progress = hs_pg->get_snp_progress(); }
     return true;
 }
 

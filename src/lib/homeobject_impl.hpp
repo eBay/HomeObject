@@ -151,12 +151,12 @@ public:
 
     /// PgManager
     PGManager::NullAsyncResult create_pg(PGInfo&& pg_info, trace_id_t tid) final;
-    PGManager::NullAsyncResult replace_member(pg_id_t id, uuid_t task_id, peer_id_t const& old_member, PGMember const& new_member,
-                                              u_int32_t commit_quorum, trace_id_t trace_id) final;
+    PGManager::NullAsyncResult replace_member(pg_id_t id, uuid_t task_id, peer_id_t const& old_member,
+                                              PGMember const& new_member, u_int32_t commit_quorum,
+                                              trace_id_t trace_id) final;
     PGReplaceMemberStatus get_replace_member_status(pg_id_t id, uuid_t task_id, const PGMember& member_out,
-                                                  const PGMember& member_in,
-                                                  const std::vector< PGMember >& others,
-                                                  uint64_t trace_id) const final;
+                                                    const PGMember& member_in, const std::vector< PGMember >& others,
+                                                    uint64_t trace_id) const final;
     // see api comments in base class;
     bool get_stats(pg_id_t id, PGStats& stats) const final;
     void get_pg_ids(std::vector< pg_id_t >& pg_ids) const final;
