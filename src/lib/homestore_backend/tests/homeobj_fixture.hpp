@@ -759,17 +759,14 @@ private:
         auto blob = build_blob(blob_id);
         auto blob_size = blob.body.size();
 
-        uint64_t actual_written_size{
-            uint32_cast(sisl::round_up(sizeof(HSHomeObject::BlobHeader) + blob.user_key.size(), io_align))};
+        uint64_t header_size{sisl::round_up(sizeof(HSHomeObject::BlobHeader), io_align)};
+        header_size = sisl::round_up(header_size, HSHomeObject::_data_block_size);
 
-        if (((r_cast< uintptr_t >(blob.body.cbytes()) % io_align) != 0) || ((blob_size % io_align) != 0)) {
-            blob_size = sisl::round_up(blob_size, io_align);
-        }
+        blob_size = sisl::round_up(blob_size, io_align);
+        blob_size = sisl::round_up(blob_size, HSHomeObject::_data_block_size);
 
-        actual_written_size += blob_size;
-
-        auto pad_len = sisl::round_up(actual_written_size, HSHomeObject::_data_block_size) - actual_written_size;
-        if (pad_len) { actual_written_size += pad_len; }
+        auto actual_written_size = header_size + blob_size;
+        EXPECT_EQ(actual_written_size % HSHomeObject::_data_block_size, 0);
 
         return actual_written_size / HSHomeObject::_data_block_size;
     }
