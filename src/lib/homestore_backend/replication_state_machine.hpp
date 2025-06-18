@@ -203,8 +203,8 @@ public:
 
     /// @brief ask upper layer to handle no_space_left event
     // @param lsn - on which repl_lsn no_space_left happened
-    // @param chunk_id - on which chunk no_space_left happened
-    void on_no_space_left(homestore::repl_lsn_t lsn, homestore::chunk_num_t chunk_id) override;
+    // @param header - on which header no_space_left happened when trying to allocate blk
+    void on_no_space_left(homestore::repl_lsn_t lsn, sisl::blob const& header) override;
 
     /// @brief Called when the config log entry has been rolled backed.
     ///

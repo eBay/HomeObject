@@ -865,7 +865,9 @@ void HSHomeObject::on_snp_ctx_meta_blk_recover_completed(bool success) {
     LOGI("Snapshot context meta blk recover completed");
 }
 
-void ReplicationStateMachine::on_no_space_left(homestore::repl_lsn_t lsn, homestore::chunk_num_t chunk_id) {
+void ReplicationStateMachine::on_no_space_left(homestore::repl_lsn_t lsn, sisl::blob const& header) {
+    // TODO unmarshal header
+    homestore::chunk_num_t chunk_id = 0;
     LOGD("got no_space_left error at lsn={}, chunk_id={}", lsn, chunk_id);
 
     const auto [target_lsn, error_chunk_id] = get_no_space_left_error_info();
