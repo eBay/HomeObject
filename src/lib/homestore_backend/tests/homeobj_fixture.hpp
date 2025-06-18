@@ -559,37 +559,81 @@ public:
         EXPECT_EQ(lhs.current_leader, rhs.current_leader);
     }
 
-    bool verify_start_replace_member_result(pg_id_t pg_id, peer_id_t out_member, peer_id_t in_member) {
+    bool verify_start_replace_member_result(pg_id_t pg_id, uuid_t task_id, peer_id_t out_member_id,
+                                            peer_id_t in_member_id) {
         auto hs_pg = _obj_inst->get_hs_pg(pg_id);
         RELEASE_ASSERT(hs_pg, "PG not found");
-        auto in = hs_pg->pg_info_.members.find(PGMember(in_member, "in_member"));
-        auto out = hs_pg->pg_info_.members.find(PGMember(out_member, "out_member"));
+        auto out_member = PGMember(out_member_id, "out_member");
+        auto in_member = PGMember(in_member_id, "in_member");
+        auto out = hs_pg->pg_info_.members.find(out_member);
+        auto in = hs_pg->pg_info_.members.find(in_member);
         RELEASE_ASSERT(hs_pg->pg_info_.members.size() == 4, "Invalid pg member size");
         if (in == hs_pg->pg_info_.members.end()) {
-            LOGERROR("in_member not found, in_member={}", boost::uuids::to_string(in_member));
+            LOGERROR("in_member not found, in_member={}", boost::uuids::to_string(in_member_id));
             return false;
         }
         if (out == hs_pg->pg_info_.members.end()) {
-            LOGERROR("out_member not found, out_member={}", boost::uuids::to_string(out_member));
+            LOGERROR("out_member not found, out_member={}", boost::uuids::to_string(out_member_id));
             return false;
         }
+        run_on_pg_leader(pg_id, [this, pg_id, task_id, &out_member, &in_member]() {
+            std::vector< PGMember > others;
+            for (auto m : g_helper->members_) {
+                if (m.first != out_member.id && m.first != in_member.id) { others.emplace_back(PGMember(m.first, "")); }
+            }
+            auto result = _obj_inst->get_replace_member_status(pg_id, task_id, out_member, in_member, others, 0);
+            ASSERT_EQ(result.task_id, task_id);
+            ASSERT_EQ(result.status, PGReplaceMemberTaskStatus::IN_PROGRESS);
+            ASSERT_EQ(result.members.size(), 4);
+            for (auto& p : result.members) {
+                if (p.id == out_member.id) { ASSERT_FALSE(p.can_vote); }
+                if (p.id == in_member.id) { ASSERT_TRUE(p.can_vote); }
+            }
+        });
         return true;
     }
-    bool verify_complete_replace_member_result(pg_id_t pg_id, peer_id_t out_member, peer_id_t in_member) {
+
+    uint32_t get_br_progress(pg_id_t pg_id) {
+        auto hs_pg = _obj_inst->get_hs_pg(pg_id);
+        RELEASE_ASSERT(hs_pg, "PG not found");
+        RELEASE_ASSERT(hs_pg->pg_state_.is_state_set(PGStateMask::BASELINE_RESYNC), "PG state is not in BR state");
+        return hs_pg->get_snp_progress();
+    }
+
+    bool verify_complete_replace_member_result(pg_id_t pg_id, uuid_t task_id, peer_id_t out_member_id, peer_id_t in_member_id) {
         auto hs_pg = _obj_inst->get_hs_pg(pg_id);
         RELEASE_ASSERT(hs_pg, "PG not found");
         RELEASE_ASSERT(hs_pg->pg_info_.members.size() == 3, "Invalid pg member size");
-        auto in = hs_pg->pg_info_.members.find(PGMember(in_member, "in_member"));
-        auto out = hs_pg->pg_info_.members.find(PGMember(out_member, "out_member"));
-
+        auto out_member = PGMember(out_member_id, "out_member");
+        auto in_member = PGMember(in_member_id, "in_member");
+        auto in = hs_pg->pg_info_.members.find(in_member);
+        auto out = hs_pg->pg_info_.members.find(out_member);
         if (in == hs_pg->pg_info_.members.end()) {
-            LOGERROR("in_member not found, in_member={}", boost::uuids::to_string(in_member));
+            LOGERROR("in_member not found, in_member={}", boost::uuids::to_string(in_member_id));
             return false;
         }
         if (out != hs_pg->pg_info_.members.end()) {
             LOGERROR("Out member still exists in PG");
             return false;
         }
+
+        if (g_helper->my_replica_id() == in_member_id && hs_pg->pg_state_.is_state_set(PGStateMask::BASELINE_RESYNC)) {
+            return false;
+        }
+
+        run_on_pg_leader(pg_id, [this, pg_id, task_id, &out_member, &in_member]() {
+            std::vector< PGMember > others;
+            for (auto m : g_helper->members_) {
+                if (m.first != out_member.id && m.first != in_member.id) { others.emplace_back(PGMember(m.first, "")); }
+            }
+            auto result = _obj_inst->get_replace_member_status(pg_id, task_id, out_member, in_member, others, 0);
+            ASSERT_EQ(result.task_id, task_id);
+            ASSERT_EQ(result.status, PGReplaceMemberTaskStatus::COMPLETED);
+            ASSERT_EQ(result.members.size(), 3);
+            for (auto& p : result.members) {
+                ASSERT_TRUE(p.can_vote);
+            }
+        });
         return true;
     }
 

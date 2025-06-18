@@ -9,7 +9,7 @@ PGManager::NullAsyncResult MemoryHomeObject::_create_pg(PGInfo&& pg_info, std::s
     return folly::makeSemiFuture< PGManager::NullResult >(folly::Unit());
 }
 
-PGManager::NullAsyncResult MemoryHomeObject::_replace_member(pg_id_t id, peer_id_t const& old_member,
+PGManager::NullAsyncResult MemoryHomeObject::_replace_member(pg_id_t id, uuid_t task_id, peer_id_t const& old_member,
                                                              PGMember const& new_member, uint32_t commit_quorum,
                                                              trace_id_t tid) {
     (void)old_member;
@@ -22,6 +22,18 @@ PGManager::NullAsyncResult MemoryHomeObject::_replace_member(pg_id_t id, peer_id
         return folly::makeSemiFuture< PGManager::NullResult >(folly::makeUnexpected(PGError::UNKNOWN_PG));
     }
     return folly::makeSemiFuture< PGManager::NullResult >(folly::makeUnexpected(PGError::UNSUPPORTED_OP));
+}
+
+PGReplaceMemberStatus MemoryHomeObject::_get_replace_member_status(pg_id_t id, uuid_t task_id, const PGMember& old_member,
+                                              const PGMember& new_member, const std::vector< PGMember >& others,
+                                              uint64_t trace_id) const {
+    (void)id;
+    (void)task_id;
+    (void)old_member;
+    (void)new_member;
+    (void)others;
+    (void)trace_id;
+    return PGReplaceMemberStatus{};
 }
 
 bool MemoryHomeObject::_get_stats(pg_id_t id, PGStats& stats) const {

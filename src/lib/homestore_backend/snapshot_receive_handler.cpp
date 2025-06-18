@@ -56,6 +56,7 @@ int HSHomeObject::SnapshotReceiveHandler::process_pg_snapshot_data(ResyncPGMetaD
     hs_pg->shard_sequence_num_ = pg_meta.shard_seq_num();
     hs_pg->durable_entities_update(
         [&pg_meta](auto& de) { de.blob_sequence_num.store(pg_meta.blob_seq_num(), std::memory_order_relaxed); });
+    hs_pg->pg_state_.set_state(PGStateMask::BASELINE_RESYNC);
 
     // update metrics
     std::unique_lock< std::shared_mutex > lock(ctx_->progress_lock);
@@ -286,7 +287,7 @@ int HSHomeObject::SnapshotReceiveHandler::process_blobs_snapshot_data(ResyncBlob
         }
 #endif
         auto blob_id = blob->blob_id();
-        LOGW("Writing Blob {} to blk_id {}", blob_id, blk_id.to_string());
+        LOGD("Writing Blob {} to blk_id {}", blob_id, blk_id.to_string());
 
         // ToDo: limit the max concurrent?
         futs.emplace_back(
@@ -402,6 +403,7 @@ bool HSHomeObject::SnapshotReceiveHandler::load_prev_context_and_metrics() {
     ctx_->shard_list = hs_pg->snp_rcvr_shard_list_sb_->get_shard_list();
     ctx_->progress = snapshot_progress(hs_pg->snp_rcvr_info_sb_->progress);
     metrics_ = std::make_unique< ReceiverSnapshotMetrics >(ctx_);
+    hs_pg->pg_state_.set_state(PGStateMask::BASELINE_RESYNC);
 
     LOGINFO("Resuming snapshot receiver context from lsn={} pg={} shardID=0x{:x}, pg={}, shard=0x{:x}", ctx_->snp_lsn,
             hs_pg->snp_rcvr_info_sb_->pg_id, ctx_->shard_cursor, (ctx_->shard_cursor >> homeobject::shard_width),

@@ -172,11 +172,11 @@ public:
                         cintrusive< homestore::repl_req_ctx >& hs_ctx) override;
 
     /// @brief Called when start replacing an existing member with a new member
-    void on_start_replace_member(const homestore::replica_member_info& member_out,
+    void on_start_replace_member(const uuid_t& task_id, const homestore::replica_member_info& member_out,
                                  const homestore::replica_member_info& member_in, trace_id_t tid = 0) override;
 
     /// @brief Called when complete replacing an existing member with a new member
-    void on_complete_replace_member(const homestore::replica_member_info& member_out,
+    void on_complete_replace_member(const uuid_t& task_id, const homestore::replica_member_info& member_out,
                                     const homestore::replica_member_info& member_in, trace_id_t tid = 0) override;
 
     /// @brief Called when the replica is being destroyed by nuraft;
@@ -203,8 +203,8 @@ public:
 
     /// @brief ask upper layer to handle no_space_left event
     // @param lsn - on which repl_lsn no_space_left happened
-    // @param chunk_id - on which chunk no_space_left happened
-    void on_no_space_left(homestore::repl_lsn_t lsn, homestore::chunk_num_t chunk_id) override;
+    // @param header - on which header no_space_left happened when trying to allocate blk
+    void on_no_space_left(homestore::repl_lsn_t lsn, sisl::blob const& header) override;
 
     /// @brief Called when the config log entry has been rolled backed.
     ///

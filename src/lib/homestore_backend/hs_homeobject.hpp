@@ -64,8 +64,12 @@ private:
 
     PGManager::NullAsyncResult _create_pg(PGInfo&& pg_info, std::set< peer_id_t > const& peers,
                                           trace_id_t tid) override;
-    PGManager::NullAsyncResult _replace_member(pg_id_t id, peer_id_t const& old_member, PGMember const& new_member,
-                                               uint32_t commit_quorum, trace_id_t tid) override;
+    PGManager::NullAsyncResult _replace_member(pg_id_t id, uuid_t task_id, peer_id_t const& old_member,
+                                               PGMember const& new_member, uint32_t commit_quorum,
+                                               trace_id_t tid) override;
+    PGReplaceMemberStatus _get_replace_member_status(pg_id_t id, uuid_t task_id, const PGMember& old_member,
+                                                     const PGMember& new_member, const std::vector< PGMember >& others,
+                                                     uint64_t trace_id) const override;
 
     bool _get_stats(pg_id_t id, PGStats& stats) const override;
     void _get_pg_ids(std::vector< pg_id_t >& pg_ids) const override;
@@ -314,6 +318,7 @@ public:
         shared< homestore::ReplDev > repl_dev_;
         std::shared_ptr< BlobIndexTable > index_table_;
         PGMetrics metrics_;
+        mutable pg_state pg_state_{0};
 
         // Snapshot receiver progress info, used as a checkpoint for recovery
         // Placed within HS_PG since HomeObject is unable to locate the ReplicationStateMachine
@@ -344,6 +349,11 @@ public:
          * Returns the progress of the baseline resync.
          */
         uint32_t get_snp_progress() const;
+
+        /**
+         * Returns all replication info of all peers.
+         */
+        void get_peer_info(std::vector< peer_info >& members) const;
     };
 
     struct HS_Shard : public Shard {
@@ -727,7 +737,7 @@ public:
      * @param member_out Member which is removed from group
      * @param member_in Member which is added to group
      * */
-    void on_pg_start_replace_member(homestore::group_id_t group_id, const homestore::replica_member_info& member_out,
+    void on_pg_start_replace_member(homestore::group_id_t group_id, uuid_t task_id, const homestore::replica_member_info& member_out,
                                     const homestore::replica_member_info& member_in, trace_id_t tid);
 
     /**
@@ -737,7 +747,7 @@ public:
      * @param member_out Member which is removed from group
      * @param member_in Member which is added to group
      * */
-    void on_pg_complete_replace_member(homestore::group_id_t group_id, const homestore::replica_member_info& member_out,
+    void on_pg_complete_replace_member(homestore::group_id_t group_id, uuid_t task_id, const homestore::replica_member_info& member_out,
                                        const homestore::replica_member_info& member_in, trace_id_t tid);
 
     /**
@@ -958,6 +968,8 @@ private:
         LOGT("desc pending req, was {}", now);
         DEBUG_ASSERT(now > 0, "pending == 0 ");
     }
+    homestore::replica_member_info to_replica_member_info(const PGMember& pg_member) const;
+    PGMember to_pg_member(const homestore::replica_member_info& replica_info) const;
 };
 
 class BlobIndexServiceCallbacks : public homestore::IndexServiceCallbacks {

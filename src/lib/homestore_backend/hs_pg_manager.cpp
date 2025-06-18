@@ -58,6 +58,23 @@ PGError toPgError(ReplServiceError const& e) {
     }
 }
 
+PGReplaceMemberTaskStatus toPGReplaceMemberTaskStatus(ReplaceMemberStatus const& status) {
+    switch (status) {
+    case ReplaceMemberStatus::COMPLETED:
+        return PGReplaceMemberTaskStatus::COMPLETED;
+    case ReplaceMemberStatus::IN_PROGRESS:
+        return PGReplaceMemberTaskStatus::IN_PROGRESS;
+    case ReplaceMemberStatus::NOT_LEADER:
+        return PGReplaceMemberTaskStatus::NOT_LEADER;
+    case ReplaceMemberStatus::TASK_ID_MISMATCH:
+        return PGReplaceMemberTaskStatus::TASK_ID_MISMATCH;
+    case ReplaceMemberStatus::TASK_NOT_FOUND:
+        return PGReplaceMemberTaskStatus::TASK_NOT_FOUND;
+    default:
+        return PGReplaceMemberTaskStatus::UNKNOWN;
+    }
+}
+
 [[maybe_unused]] static homestore::ReplDev& pg_repl_dev(PG const& pg) {
     return *(static_cast< HSHomeObject::HS_PG const& >(pg).repl_dev_);
 }
@@ -254,7 +271,7 @@ void HSHomeObject::on_create_pg_message_commit(int64_t lsn, sisl::blob const& he
 // 1. Set the old member to learner and add the new member. This step will call `on_pg_start_replace_member`.
 // 2. HS takes the responsiblity to track the replication progress, and complete the replace member(remove the old
 // member) when the new member is fully synced.  This step will call `on_pg_complete_replace_member`.
-PGManager::NullAsyncResult HSHomeObject::_replace_member(pg_id_t pg_id, peer_id_t const& old_member_id,
+PGManager::NullAsyncResult HSHomeObject::_replace_member(pg_id_t pg_id, uuid_t task_id, peer_id_t const& old_member_id,
                                                          PGMember const& new_member, uint32_t commit_quorum,
                                                          trace_id_t tid) {
     if (is_shutting_down()) {
@@ -280,15 +297,12 @@ PGManager::NullAsyncResult HSHomeObject::_replace_member(pg_id_t pg_id, peer_id_
     LOGI("PG replace member initated member_out={} member_in={} trace_id={}", boost::uuids::to_string(old_member_id),
          boost::uuids::to_string(new_member.id), tid);
 
-    replica_member_info in_replica, out_replica;
+    replica_member_info out_replica;
     out_replica.id = old_member_id;
-    in_replica.id = new_member.id;
-    in_replica.priority = new_member.priority;
-    std::strncpy(in_replica.name, new_member.name.data(), new_member.name.size());
-    in_replica.name[new_member.name.size()] = '\0';
+    replica_member_info in_replica = to_replica_member_info(new_member);
 
     return hs_repl_service()
-        .replace_member(group_id, out_replica, in_replica, commit_quorum, tid)
+        .replace_member(group_id, task_id, out_replica, in_replica, commit_quorum, tid)
         .via(executor_)
         .thenValue([this](auto&& v) mutable -> PGManager::NullAsyncResult {
             decr_pending_request_num();
@@ -297,14 +311,23 @@ PGManager::NullAsyncResult HSHomeObject::_replace_member(pg_id_t pg_id, peer_id_
         });
 }
 
-PGMember to_pg_member(const homestore::replica_member_info& replica_info) {
+PGMember HSHomeObject::to_pg_member(const replica_member_info& replica_info) const {
     PGMember pg_member(replica_info.id);
     pg_member.name = std::string(replica_info.name);
     pg_member.priority = replica_info.priority;
     return pg_member;
 }
 
-void HSHomeObject::on_pg_start_replace_member(group_id_t group_id, const replica_member_info& member_out,
+replica_member_info HSHomeObject::to_replica_member_info(const PGMember& pg_member) const {
+    replica_member_info replica_info;
+    replica_info.id = pg_member.id;
+    std::strncpy(replica_info.name, pg_member.name.data(), pg_member.name.size());
+    replica_info.name[pg_member.name.size()] = '\0';
+    replica_info.priority = pg_member.priority;
+    return replica_info;
+}
+
+void HSHomeObject::on_pg_start_replace_member(group_id_t group_id, uuid_t task_id, const replica_member_info& member_out,
                                               const replica_member_info& member_in, trace_id_t tid) {
     auto lg = std::shared_lock(_pg_lock);
     for (const auto& iter : _pg_map) {
@@ -340,7 +363,7 @@ void HSHomeObject::on_pg_start_replace_member(group_id_t group_id, const replica
          boost::uuids::to_string(member_in.id), tid);
 }
 
-void HSHomeObject::on_pg_complete_replace_member(group_id_t group_id, const replica_member_info& member_out,
+void HSHomeObject::on_pg_complete_replace_member(group_id_t group_id, uuid_t task_id, const replica_member_info& member_out,
                                                  const replica_member_info& member_in, trace_id_t tid) {
     auto lg = std::shared_lock(_pg_lock);
     for (const auto& iter : _pg_map) {
@@ -373,6 +396,28 @@ void HSHomeObject::on_pg_complete_replace_member(group_id_t group_id, const repl
     }
     LOGE("PG complete replace member failed member_out={} member_in={}, trace_id={}",
          boost::uuids::to_string(member_out.id), boost::uuids::to_string(member_in.id), tid);
+}
+
+PGReplaceMemberStatus HSHomeObject::_get_replace_member_status(pg_id_t id, uuid_t task_id, const PGMember& old_member,
+                                                               const PGMember& new_member,
+                                                               const std::vector< PGMember >& others,
+                                                               uint64_t trace_id) const {
+    PGReplaceMemberStatus ret;
+    ret.task_id = task_id;
+    auto hs_pg = get_hs_pg(id);
+    if (hs_pg == nullptr) {
+        ret.status = PGReplaceMemberTaskStatus::UNKNOWN;
+        return ret;
+    }
+    std::vector< replica_member_info > other_replicas;
+    for (const auto& member : others) {
+        other_replicas.push_back(to_replica_member_info(member));
+    }
+    ret.status = toPGReplaceMemberTaskStatus(hs_repl_service().get_replace_member_status(
+        hs_pg->repl_dev_->group_id(), task_id, to_replica_member_info(old_member), to_replica_member_info(new_member),
+        other_replicas, trace_id));
+    hs_pg->get_peer_info(ret.members);
+    return ret;
 }
 
 std::optional< pg_id_t > HSHomeObject::get_pg_id_with_group_id(group_id_t group_id) const {
@@ -626,8 +671,26 @@ uint32_t HSHomeObject::HS_PG::open_shards() const {
     return std::count_if(shards_.begin(), shards_.end(), [](auto const& s) { return s->is_open(); });
 }
 
+// Return the percentage of snapshot progress
 uint32_t HSHomeObject::HS_PG::get_snp_progress() const {
-    return snp_rcvr_info_sb_->progress.complete_bytes / snp_rcvr_info_sb_->progress.total_bytes;
+    return 100 * snp_rcvr_info_sb_->progress.complete_bytes / snp_rcvr_info_sb_->progress.total_bytes;
+}
+
+void HSHomeObject::HS_PG::get_peer_info(std::vector< peer_info >& members) const {
+    auto const replication_status = repl_dev_->get_replication_status();
+    for (auto const& m : pg_info_.members) {
+        // replication_status can be empty in follower
+        auto peer = peer_info{.id = m.id, .name = m.name};
+        for (auto const& r : replication_status) {
+            if (r.id_ == m.id) {
+                peer.can_vote = r.can_vote;
+                peer.last_commit_lsn = r.replication_idx_;
+                peer.last_succ_resp_us = r.last_succ_resp_us_;
+                break;
+            }
+        }
+        members.emplace_back(peer);
+    }
 }
 
 // NOTE: caller should hold the _pg_lock
@@ -649,31 +712,19 @@ bool HSHomeObject::_get_stats(pg_id_t id, PGStats& stats) const {
     stats.id = hs_pg->pg_info_.id;
     stats.replica_set_uuid = hs_pg->pg_info_.replica_set_uuid;
     stats.num_members = hs_pg->pg_info_.members.size();
+    stats.pg_state = hs_pg->pg_state_.get();
     stats.total_shards = hs_pg->total_shards();
     stats.open_shards = hs_pg->open_shards();
     stats.leader_id = hs_pg->repl_dev_->get_leader_id();
     stats.num_active_objects = hs_pg->durable_entities().active_blob_count.load(std::memory_order_relaxed);
     stats.num_tombstone_objects = hs_pg->durable_entities().tombstone_blob_count.load(std::memory_order_relaxed);
 
-    auto const replication_status = hs_pg->repl_dev_->get_replication_status();
-    for (auto const& m : hs_pg->pg_info_.members) {
-        // replication_status can be empty in follower
-        auto peer = peer_info{.id = m.id, .name = m.name};
-        for (auto const& r : replication_status) {
-            if (r.id_ == m.id) {
-                peer.can_vote = r.can_vote;
-                peer.last_commit_lsn = r.replication_idx_;
-                peer.last_succ_resp_us = r.last_succ_resp_us_;
-                break;
-            }
-        }
-        stats.members.emplace_back(peer);
-    }
+    hs_pg->get_peer_info(stats.members);
 
     stats.avail_open_shards = chunk_selector()->avail_num_chunks(hs_pg->pg_info_.id);
     stats.avail_bytes = chunk_selector()->avail_blks(hs_pg->pg_info_.id) * blk_size;
     stats.used_bytes = hs_pg->durable_entities().total_occupied_blk_count.load(std::memory_order_relaxed) * blk_size;
-
+    if (!hs_pg->snp_rcvr_info_sb_.is_empty()) { stats.snp_progress = hs_pg->get_snp_progress(); }
     return true;
 }
 
