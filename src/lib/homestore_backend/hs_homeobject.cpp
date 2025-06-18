@@ -249,7 +249,6 @@ void HSHomeObject::init_homestore() {
             // 3 create reserved chunk meta blk for each pdev, which contains the reserved chunks.
             for (size_t i = 0; i < reserved_chunk_num_per_pdev; ++i) {
                 auto chunk = chunks[i];
-                LOGD("chunk_id={} /={}", chunk, pdev_id);
                 homestore::superblk< GCManager::gc_reserved_chunk_superblk > reserved_chunk_sb{
                     GCManager::_gc_reserved_chunk_meta_name};
                 reserved_chunk_sb.create(sizeof(GCManager::gc_reserved_chunk_superblk));

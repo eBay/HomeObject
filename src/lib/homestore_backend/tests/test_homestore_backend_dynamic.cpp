@@ -22,150 +22,9 @@
 #define AFTER_BASELINE_RESYNC "AFTER_BASELINE_RESYNC"
 #define TRUNCATING_LOGS "TRUNCATING_LOGS"
 
-TEST_F(HomeObjectFixture, ReplaceMember) {
-    LOGINFO("HomeObject replica={} setup completed", g_helper->replica_num());
-    auto spare_num_replicas = SISL_OPTIONS["spare_replicas"].as< uint8_t >();
-    ASSERT_TRUE(spare_num_replicas > 0) << "we need spare replicas for homestore backend dynamic tests";
+TEST_F(HomeObjectFixture, ReplaceMember) { ReplaceMember(false); }
 
-    // step 1:  Create a pg without spare replicas.
-    auto num_replicas = SISL_OPTIONS["replicas"].as< uint8_t >();
-    std::unordered_set< uint8_t > excluding_replicas_in_pg;
-    for (size_t i = num_replicas; i < num_replicas + spare_num_replicas; i++)
-        excluding_replicas_in_pg.insert(i);
-
-    pg_id_t pg_id{1};
-    create_pg(pg_id, 0 /* pg_leader */, excluding_replicas_in_pg);
-
-    // step 2: create shard and put a blob in the pg
-    auto num_shards_per_pg = SISL_OPTIONS["num_shards"].as< uint64_t >();
-    auto num_blobs_per_shard = SISL_OPTIONS["num_blobs"].as< uint64_t >() / num_shards_per_pg;
-
-    // last shard is empty shard
-    for (uint64_t j = 0; j < num_shards_per_pg + 1; j++)
-        create_shard(pg_id, 64 * Mi);
-
-    // we can not share all the shard_id and blob_id among all the replicas including the spare ones, so we need to
-    // derive them by calculating.
-    // since shard_id = pg_id + shard_sequence_num, so we can derive shard_ids for all the shards in this pg, and these
-    // derived info is used by all replicas(including the newly added member) to verify the blobs.
-    std::map< pg_id_t, std::vector< shard_id_t > > pg_shard_id_vec;
-    std::map< pg_id_t, blob_id_t > pg_blob_id;
-    for (shard_id_t shard_id = 1; shard_id <= num_shards_per_pg; shard_id++) {
-        auto derived_shard_id = make_new_shard_id(pg_id, shard_id);
-        pg_shard_id_vec[pg_id].emplace_back(derived_shard_id);
-    }
-
-    // TODO:: if we add delete blobs case in baseline resync, we need also derive the last blob_id in this pg for spare
-    // replicas
-    pg_blob_id[pg_id] = 0;
-
-    // put and verify blobs in the pg, excluding the spare replicas
-    put_blobs(pg_shard_id_vec, num_blobs_per_shard, pg_blob_id);
-
-    verify_get_blob(pg_shard_id_vec, num_blobs_per_shard);
-    verify_obj_count(1, num_shards_per_pg, num_blobs_per_shard, false);
-
-    // all the replicas , including the spare ones, sync at this point
-    g_helper->sync();
-
-    // step 3: replace a member
-    auto out_member_id = g_helper->replica_id(num_replicas - 1);
-    auto in_member_id = g_helper->replica_id(num_replicas); /*spare replica*/
-
-    // get out_member's index_table_uuid with pg_id
-    string index_table_uuid_str;
-    if (out_member_id == g_helper->my_replica_id()) {
-        auto hs_pg = _obj_inst->get_hs_pg(pg_id);
-        RELEASE_ASSERT(hs_pg, "PG not found");
-        index_table_uuid_str = uuids::to_string(hs_pg->pg_sb_->index_table_uuid);
-    }
-
-#ifdef _PRERELEASE
-    // Set flips (name, count, percentage) to simulate different error scenarios
-    set_basic_flip("pg_blob_iterator_create_snapshot_data_error", 1);     // simulate read pg snapshot data error
-    set_basic_flip("pg_blob_iterator_generate_shard_blob_list_error", 1); // simulate generate shard blob list error
-    set_basic_flip("pg_blob_iterator_load_blob_data_error", 1, 10);       // simulate load blob data error
-
-    set_basic_flip("state_machine_write_corrupted_data", 3, 25);       // simulate random data corruption
-    set_basic_flip("snapshot_receiver_pg_error", 1);                   // simulate pg creation error
-    set_basic_flip("snapshot_receiver_shard_write_data_error", 2, 33); // simulate shard write data error
-    set_basic_flip("snapshot_receiver_blob_write_data_error", 4, 15);  // simulate blob write data error
-    set_basic_flip("snapshot_receiver_blk_allocation_error", 4, 15);   // simulate blob allocation error
-#endif
-    auto task_id = boost::uuids::random_generator()();
-    LOGINFO("start replace member, pg={}, task_id={}", pg_id, task_id);
-    run_on_pg_leader(pg_id, [&]() {
-        auto r = _obj_inst->pg_manager()
-                     ->replace_member(pg_id, task_id, out_member_id, PGMember{in_member_id, "new_member", 0})
-                     .get();
-        ASSERT_TRUE(r);
-    });
-
-    // the new member should wait until it joins the pg and all the blobs are replicated to it
-    if (in_member_id == g_helper->my_replica_id()) {
-        while (!am_i_in_pg(pg_id)) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-            LOGINFO("new member is waiting to become a member of pg={}", pg_id);
-        }
-
-        wait_for_blob(pg_shard_id_vec[pg_id].back() /*the last shard id in this pg*/,
-                      num_shards_per_pg * num_blobs_per_shard - 1 /*the last blob id in this pg*/);
-
-        sleep(5); // wait for incremental append-log requests to complete
-    }
-
-    // step 4: after completing replace member, verify the blob on all the members of this pg including the newly added
-    // spare replica,
-    run_if_in_pg(pg_id, [&]() {
-        verify_get_blob(pg_shard_id_vec, num_blobs_per_shard);
-        verify_obj_count(1, num_shards_per_pg, num_blobs_per_shard, false);
-    });
-
-    g_helper->sync();
-    // Because we don't know when hs triggers complete_replace_member, so it's hard to find an accurate time slot to
-    // verify verify_start_replace_member_result(pg_id, out_member_id, in_member_id); step 5: Verify no pg related data
-    // in out_member
-    if (out_member_id == g_helper->my_replica_id()) {
-        while (am_i_in_pg(pg_id)) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-            LOGINFO("old member is waiting to leave pg={}", pg_id);
-        }
-        verify_pg_destroy(pg_id, index_table_uuid_str, pg_shard_id_vec[pg_id], true);
-        // since this case out_member don't have any pg, so we can check each chunk.
-        for (const auto& [_, chunk] : _obj_inst->chunk_selector()->m_chunks) {
-            // TODO: revisit the assert here after we implement gc recovery
-            ASSERT_TRUE(chunk->m_state == ChunkState::AVAILABLE || chunk->m_state == ChunkState::GC);
-            ASSERT_EQ(chunk->available_blks(), chunk->get_total_blks());
-        }
-        LOGINFO("check no pg related data in out member successfully");
-        g_helper->sync();
-    } else {
-        g_helper->sync();
-        std::this_thread::sleep_for(std::chrono::milliseconds(500));
-        ASSERT_TRUE(verify_complete_replace_member_result(pg_id, task_id, out_member_id, in_member_id));
-    }
-
-    // Step 6: restart, verify the blobs again on all members, including the new spare replica, and out_member
-    restart();
-    run_if_in_pg(pg_id, [&]() {
-        verify_get_blob(pg_shard_id_vec, num_blobs_per_shard);
-        verify_obj_count(1, num_shards_per_pg, num_blobs_per_shard, false);
-        LOGINFO("After restart, check pg related data in pg members successfully");
-    });
-
-    if (out_member_id == g_helper->my_replica_id()) {
-        verify_pg_destroy(pg_id, index_table_uuid_str, pg_shard_id_vec[pg_id]);
-        // since this case out_member don't have any pg, so we can check each chunk.
-        for (const auto& [_, chunk] : _obj_inst->chunk_selector()->m_chunks) {
-            // TODO: revisit the assert here after we implement gc recovery
-            ASSERT_TRUE(chunk->m_state == ChunkState::AVAILABLE || chunk->m_state == ChunkState::GC);
-            ASSERT_EQ(chunk->available_blks(), chunk->get_total_blks());
-        }
-        LOGINFO("After restart, check no pg related data in out member successfully");
-    } else {
-        ASSERT_TRUE(verify_complete_replace_member_result(pg_id, task_id, out_member_id, in_member_id));
-    }
-}
+TEST_F(HomeObjectFixture, FetchDataWithOriginatorGC) { ReplaceMember(true); }
 
 // Restart during baseline resync
 TEST_F(HomeObjectFixture, RestartFollowerDuringBaselineResyncWithoutTimeout) {
@@ -496,6 +355,177 @@ TEST_F(HomeObjectFixture, RestartLeaderWhenApplySnapshot) {
 
 TEST_F(HomeObjectFixture, RestartLeaderAfterBaselineResync) {
     RestartLeaderDuringBaselineResyncUsingSigKill(10000, 1000, AFTER_BASELINE_RESYNC);
+}
+
+void HomeObjectFixture::ReplaceMember(bool withGC) {
+    LOGINFO("HomeObject replica={} setup completed", g_helper->replica_num());
+    auto spare_num_replicas = SISL_OPTIONS["spare_replicas"].as< uint8_t >();
+    ASSERT_TRUE(spare_num_replicas > 0) << "we need spare replicas for homestore backend dynamic tests";
+
+    // step 1:  Create a pg without spare replicas.
+    auto num_replicas = SISL_OPTIONS["replicas"].as< uint8_t >();
+    std::unordered_set< uint8_t > excluding_replicas_in_pg;
+    for (size_t i = num_replicas; i < num_replicas + spare_num_replicas; i++)
+        excluding_replicas_in_pg.insert(i);
+
+    pg_id_t pg_id{1};
+    create_pg(pg_id, 0 /* pg_leader */, excluding_replicas_in_pg);
+
+    // step 2: create shard and put a blob in the pg
+    auto num_shards_per_pg = SISL_OPTIONS["num_shards"].as< uint64_t >();
+    auto num_blobs_per_shard = SISL_OPTIONS["num_blobs"].as< uint64_t >() / num_shards_per_pg;
+
+    // last shard is empty shard
+    for (uint64_t j = 0; j < num_shards_per_pg + 1; j++)
+        create_shard(pg_id, 64 * Mi);
+
+    // we can not share all the shard_id and blob_id among all the replicas including the spare ones, so we need to
+    // derive them by calculating.
+    // since shard_id = pg_id + shard_sequence_num, so we can derive shard_ids for all the shards in this pg, and these
+    // derived info is used by all replicas(including the newly added member) to verify the blobs.
+    std::map< pg_id_t, std::vector< shard_id_t > > pg_shard_id_vec;
+    std::map< pg_id_t, blob_id_t > pg_blob_id;
+    for (shard_id_t shard_id = 1; shard_id <= num_shards_per_pg; shard_id++) {
+        auto derived_shard_id = make_new_shard_id(pg_id, shard_id);
+        pg_shard_id_vec[pg_id].emplace_back(derived_shard_id);
+    }
+
+    // TODO:: if we add delete blobs case in baseline resync, we need also derive the last blob_id in this pg for spare
+    // replicas
+    pg_blob_id[pg_id] = 0;
+
+    // put and verify blobs in the pg, excluding the spare replicas
+    put_blobs(pg_shard_id_vec, num_blobs_per_shard, pg_blob_id);
+
+    verify_get_blob(pg_shard_id_vec, num_blobs_per_shard);
+    verify_obj_count(1, num_shards_per_pg, num_blobs_per_shard, false);
+
+    if (withGC) {
+        run_if_in_pg(pg_id, [&]() {
+            auto gc_mgr = _obj_inst->gc_manager();
+            std::vector< folly::SemiFuture< bool > > futs;
+            for (const auto& [pg_id, shards] : pg_shard_id_vec) {
+                for (const auto& shard_id : shards) {
+                    auto chunk_id_opt = _obj_inst->get_shard_p_chunk_id(shard_id);
+                    RELEASE_ASSERT(chunk_id_opt.has_value(), "failed to get chunk_id for shard {}", shard_id);
+                    futs.emplace_back(gc_mgr->submit_gc_task(task_priority::emergent, chunk_id_opt.value()));
+                }
+            }
+            // wait for all egc completed
+            folly::collectAllUnsafe(futs)
+                .thenValue([](auto&& results) {
+                    for (auto const& ok : results) {
+                        ASSERT_TRUE(ok.hasValue());
+                        // all egc task should be completed
+                        ASSERT_TRUE(ok.value());
+                    }
+                })
+                .get();
+
+            futs.clear();
+        });
+    }
+
+    // all the replicas , including the spare ones, sync at this point
+    g_helper->sync();
+
+    // step 3: replace a member
+    auto out_member_id = g_helper->replica_id(num_replicas - 1);
+    auto in_member_id = g_helper->replica_id(num_replicas); /*spare replica*/
+
+    // get out_member's index_table_uuid with pg_id
+    string index_table_uuid_str;
+    if (out_member_id == g_helper->my_replica_id()) {
+        auto hs_pg = _obj_inst->get_hs_pg(pg_id);
+        RELEASE_ASSERT(hs_pg, "PG not found");
+        index_table_uuid_str = uuids::to_string(hs_pg->pg_sb_->index_table_uuid);
+    }
+
+#ifdef _PRERELEASE
+    // Set flips (name, count, percentage) to simulate different error scenarios
+    set_basic_flip("pg_blob_iterator_create_snapshot_data_error", 1);     // simulate read pg snapshot data error
+    set_basic_flip("pg_blob_iterator_generate_shard_blob_list_error", 1); // simulate generate shard blob list error
+    set_basic_flip("pg_blob_iterator_load_blob_data_error", 1, 10);       // simulate load blob data error
+
+    set_basic_flip("state_machine_write_corrupted_data", 3, 25);       // simulate random data corruption
+    set_basic_flip("snapshot_receiver_pg_error", 1);                   // simulate pg creation error
+    set_basic_flip("snapshot_receiver_shard_write_data_error", 2, 33); // simulate shard write data error
+    set_basic_flip("snapshot_receiver_blob_write_data_error", 4, 15);  // simulate blob write data error
+    set_basic_flip("snapshot_receiver_blk_allocation_error", 4, 15);   // simulate blob allocation error
+#endif
+    auto task_id = boost::uuids::random_generator()();
+    LOGINFO("start replace member, pg={}, task_id={}", pg_id, task_id);
+    run_on_pg_leader(pg_id, [&]() {
+        auto r = _obj_inst->pg_manager()
+                     ->replace_member(pg_id, task_id, out_member_id, PGMember{in_member_id, "new_member", 0})
+                     .get();
+        ASSERT_TRUE(r);
+    });
+
+    // the new member should wait until it joins the pg and all the blobs are replicated to it
+    if (in_member_id == g_helper->my_replica_id()) {
+        while (!am_i_in_pg(pg_id)) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+            LOGINFO("new member is waiting to become a member of pg={}", pg_id);
+        }
+
+        wait_for_blob(pg_shard_id_vec[pg_id].back() /*the last shard id in this pg*/,
+                      num_shards_per_pg * num_blobs_per_shard - 1 /*the last blob id in this pg*/);
+
+        sleep(5); // wait for incremental append-log requests to complete
+    }
+
+    // step 4: after completing replace member, verify the blob on all the members of this pg including the newly added
+    // spare replica,
+    run_if_in_pg(pg_id, [&]() {
+        verify_get_blob(pg_shard_id_vec, num_blobs_per_shard);
+        verify_obj_count(1, num_shards_per_pg, num_blobs_per_shard, false);
+    });
+
+    g_helper->sync();
+    // Because we don't know when hs triggers complete_replace_member, so it's hard to find an accurate time slot to
+    // verify verify_start_replace_member_result(pg_id, out_member_id, in_member_id); step 5: Verify no pg related data
+    // in out_member
+    if (out_member_id == g_helper->my_replica_id()) {
+        while (am_i_in_pg(pg_id)) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+            LOGINFO("old member is waiting to leave pg={}", pg_id);
+        }
+        verify_pg_destroy(pg_id, index_table_uuid_str, pg_shard_id_vec[pg_id], true);
+        // since this case out_member don't have any pg, so we can check each chunk.
+        for (const auto& [_, chunk] : _obj_inst->chunk_selector()->m_chunks) {
+            // TODO: revisit the assert here after we implement gc recovery
+            ASSERT_TRUE(chunk->m_state == ChunkState::AVAILABLE || chunk->m_state == ChunkState::GC);
+            if (!withGC) { ASSERT_EQ(chunk->available_blks(), chunk->get_total_blks()); }
+        }
+        LOGINFO("check no pg related data in out member successfully");
+        g_helper->sync();
+    } else {
+        g_helper->sync();
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        ASSERT_TRUE(verify_complete_replace_member_result(pg_id, task_id, out_member_id, in_member_id));
+    }
+
+    // Step 6: restart, verify the blobs again on all members, including the new spare replica, and out_member
+    restart();
+    run_if_in_pg(pg_id, [&]() {
+        verify_get_blob(pg_shard_id_vec, num_blobs_per_shard);
+        verify_obj_count(1, num_shards_per_pg, num_blobs_per_shard, false);
+        LOGINFO("After restart, check pg related data in pg members successfully");
+    });
+
+    if (out_member_id == g_helper->my_replica_id()) {
+        verify_pg_destroy(pg_id, index_table_uuid_str, pg_shard_id_vec[pg_id]);
+        // since this case out_member don't have any pg, so we can check each chunk.
+        for (const auto& [_, chunk] : _obj_inst->chunk_selector()->m_chunks) {
+            // TODO: revisit the assert here after we implement gc recovery
+            ASSERT_TRUE(chunk->m_state == ChunkState::AVAILABLE || chunk->m_state == ChunkState::GC);
+            if (!withGC) { ASSERT_EQ(chunk->available_blks(), chunk->get_total_blks()); }
+        }
+        LOGINFO("After restart, check no pg related data in out member successfully");
+    } else {
+        ASSERT_TRUE(verify_complete_replace_member_result(pg_id, task_id, out_member_id, in_member_id));
+    }
 }
 
 // Need to restart the leader for process sync

@@ -600,7 +600,8 @@ public:
         return hs_pg->get_snp_progress();
     }
 
-    bool verify_complete_replace_member_result(pg_id_t pg_id, uuid_t task_id, peer_id_t out_member_id, peer_id_t in_member_id) {
+    bool verify_complete_replace_member_result(pg_id_t pg_id, uuid_t task_id, peer_id_t out_member_id,
+                                               peer_id_t in_member_id) {
         auto hs_pg = _obj_inst->get_hs_pg(pg_id);
         RELEASE_ASSERT(hs_pg, "PG not found");
         RELEASE_ASSERT(hs_pg->pg_info_.members.size() == 3, "Invalid pg member size");
@@ -642,6 +643,14 @@ public:
         auto res = _obj_inst->pg_manager()->get_stats(pg_id, pg_stats);
         if (!res) return;
         if (g_helper->my_replica_id() == pg_stats.leader_id) { lambda(); }
+        // TODO: add logic for check and retry of leader change if necessary
+    }
+
+    void run_on_pg_follower(pg_id_t pg_id, auto&& lambda) {
+        PGStats pg_stats;
+        auto res = _obj_inst->pg_manager()->get_stats(pg_id, pg_stats);
+        if (!res) return;
+        if (g_helper->my_replica_id() != pg_stats.leader_id) { lambda(); }
         // TODO: add logic for check and retry of leader change if necessary
     }
 
@@ -803,6 +812,7 @@ private:
                                                          string restart_phase);
     void RestartLeaderDuringBaselineResyncUsingSigKill(uint64_t flip_delay, uint64_t restart_interval,
                                                        string restart_phase);
+    void ReplaceMember(bool withGC);
 
     void EmergentGC(bool with_crash_recovery);
 

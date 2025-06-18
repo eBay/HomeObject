@@ -305,6 +305,110 @@ TEST_F(HomeObjectFixture, BasicGC) {
     // TODO:add more check after we have delete shard implementation
 }
 
+TEST_F(HomeObjectFixture, HandlingNoSpaceLeft) {
+    const auto num_pgs = SISL_OPTIONS["num_pgs"].as< uint64_t >();
+    const auto num_shards_per_chunk = SISL_OPTIONS["num_shards"].as< uint64_t >();
+    const auto num_blobs_per_shard = 2 * SISL_OPTIONS["num_blobs"].as< uint64_t >();
+
+    std::map< pg_id_t, std::vector< shard_id_t > > total_pg_open_shard_id_vec;
+    std::map< pg_id_t, blob_id_t > pg_blob_id;
+    std::map< pg_id_t, uint64_t > pg_chunk_nums;
+    std::map< shard_id_t, std::set< blob_id_t > > shard_blob_ids_map;
+    auto chunk_selector = _obj_inst->chunk_selector();
+
+    // create pgs
+    for (uint64_t i = 1; i <= num_pgs; i++) {
+        create_pg(i);
+        auto hs_pg = _obj_inst->get_hs_pg(i);
+        ASSERT_TRUE(hs_pg != nullptr);
+        pg_blob_id[i] = 0;
+        pg_chunk_nums[i] = chunk_selector->get_pg_chunks(i)->size();
+    }
+
+    // create multiple shards for each chunk , we seal all shards except the last one
+    for (uint64_t i = 0; i < num_shards_per_chunk; i++) {
+        std::map< pg_id_t, std::vector< shard_id_t > > pg_open_shard_id_vec;
+
+        // create a shard for each chunk
+        for (const auto& [pg_id, chunk_num] : pg_chunk_nums) {
+            for (uint64_t j = 0; j < chunk_num; j++) {
+                auto shard = create_shard(pg_id, 64 * Mi);
+                pg_open_shard_id_vec[pg_id].emplace_back(shard.id);
+            }
+        }
+
+        // Put blob for all shards in all pg's.
+        auto new_shard_blob_ids_map = put_blobs(pg_open_shard_id_vec, num_blobs_per_shard, pg_blob_id);
+
+        for (const auto& [shard_id, blob_to_blk_count] : new_shard_blob_ids_map) {
+            for (const auto& [blob_id, _] : blob_to_blk_count)
+                shard_blob_ids_map[shard_id].insert(blob_id);
+        }
+
+        // seal all shards except the last one and check
+        for (const auto& [pg_id, shard_vec] : pg_open_shard_id_vec) {
+            auto pg_chunks = chunk_selector->get_pg_chunks(pg_id);
+            for (const auto& shard_id : shard_vec) {
+                auto chunk_opt = _obj_inst->get_shard_p_chunk_id(shard_id);
+                ASSERT_TRUE(chunk_opt.has_value());
+                auto chunk_id = chunk_opt.value();
+
+                auto EXVchunk = chunk_selector->get_extend_vchunk(chunk_id);
+                ASSERT_TRUE(EXVchunk != nullptr);
+                if (i < num_shards_per_chunk - 1) {
+                    // seal the shards so that they can be selected for gc
+                    auto shard_info = seal_shard(shard_id);
+                    EXPECT_EQ(ShardInfo::State::SEALED, shard_info.state);
+                    // if not the last shard, the chunk should be available
+                    ASSERT_EQ(EXVchunk->m_state, ChunkState::AVAILABLE);
+                } else {
+                    total_pg_open_shard_id_vec[pg_id].push_back(shard_id);
+                    // if the last shard, the chunk should be inuse
+                    ASSERT_EQ(EXVchunk->m_state, ChunkState::INUSE);
+                }
+            }
+        }
+    }
+
+    // now we set all the last offset of the blk allocator of all the chunks to the end to simulater no_space_left in
+    // all the followers.
+    for (uint64_t i = 1; i <= num_pgs; i++) {
+        run_on_pg_follower(i, [&]() {
+            auto& data_service = homestore::data_service();
+            auto blk_size = data_service.get_blk_size();
+            auto pg_chunks = _obj_inst->chunk_selector()->get_pg_chunks(i);
+
+            for (const auto& chunk : *(pg_chunks)) {
+                auto vchunk = chunk_selector->get_extend_vchunk(chunk);
+                ASSERT_TRUE(vchunk);
+                auto available_blk_num = vchunk->available_blks();
+
+                homestore::MultiBlkId all_remaining_blk;
+                homestore::blk_alloc_hints hints;
+                hints.chunk_id_hint = chunk;
+
+                // allocate all the remaining blocks, so that there is no space left on this chunk
+                const auto status = data_service.alloc_blks(available_blk_num * blk_size, hints, all_remaining_blk);
+
+                LOGINFO("Set chunk {} to no_space_left, total_blks={}, available_blks={}, used_blks={}", chunk,
+                        vchunk->get_total_blks(), vchunk->available_blks(), vchunk->get_used_blks());
+                ASSERT_TRUE(status == homestore::BlkAllocStatus::SUCCESS);
+                ASSERT_TRUE(vchunk->available_blks() == 0);
+            }
+        });
+    }
+
+    // now, trigger no space left in all chunks and all the put_blob should succeed
+    auto new_shard_blob_ids_map = put_blobs(total_pg_open_shard_id_vec, num_blobs_per_shard, pg_blob_id);
+
+    for (const auto& [shard_id, blob_to_blk_count] : new_shard_blob_ids_map) {
+        for (const auto& [blob_id, _] : blob_to_blk_count)
+            shard_blob_ids_map[shard_id].insert(blob_id);
+    }
+
+    verify_shard_blobs(shard_blob_ids_map);
+}
+
 TEST_F(HomeObjectFixture, BasicEGC) { EmergentGC(false); }
 
 TEST_F(HomeObjectFixture, EGCWithCrashRecovery) { EmergentGC(true); }

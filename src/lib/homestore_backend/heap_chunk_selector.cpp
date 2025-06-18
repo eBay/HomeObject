@@ -190,23 +190,29 @@ uint32_t HeapChunkSelector::get_chunk_size() const {
     return chunk->size();
 }
 
-bool HeapChunkSelector::is_chunk_available(const pg_id_t pg_id, const chunk_num_t v_chunk_id) const {
+homestore::cshared< HeapChunkSelector::ExtendedVChunk >
+HeapChunkSelector::get_pg_vchunk(const pg_id_t pg_id, const chunk_num_t v_chunk_id) const {
     std::shared_lock lock_guard(m_chunk_selector_mtx);
     auto pg_it = m_per_pg_chunks.find(pg_id);
     if (pg_it == m_per_pg_chunks.end()) {
         LOGWARNMOD(homeobject, "No pg found for pg={}", pg_id);
-        return false;
+        return nullptr;
     }
 
     auto pg_chunk_collection = pg_it->second;
     auto& pg_chunks = pg_chunk_collection->m_pg_chunks;
     if (v_chunk_id >= pg_chunks.size()) {
         LOGWARNMOD(homeobject, "No chunk found for v_chunk_id={}", v_chunk_id);
-        return false;
+        return nullptr;
     }
     std::scoped_lock lock(pg_chunk_collection->mtx);
-    auto chunk = pg_chunks[v_chunk_id];
-    return chunk->available();
+    return pg_chunks[v_chunk_id];
+}
+
+bool HeapChunkSelector::is_chunk_available(const pg_id_t pg_id, const chunk_num_t v_chunk_id) const {
+    auto Exvchunk = get_pg_vchunk(pg_id, v_chunk_id);
+    if (Exvchunk) return Exvchunk->available();
+    return false;
 }
 
 std::optional< uint32_t > HeapChunkSelector::select_chunks_for_pg(pg_id_t pg_id, uint64_t pg_size) {

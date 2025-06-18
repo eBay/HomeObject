@@ -641,7 +641,7 @@ void HSHomeObject::update_shard_meta_after_gc(const homestore::chunk_num_t move_
     chunk_to_shards_map_.erase(iter);
 }
 
-std::optional< homestore::chunk_num_t > HSHomeObject::get_shard_v_chunk_id(shard_id_t id) const {
+std::optional< homestore::chunk_num_t > HSHomeObject::get_shard_v_chunk_id(const shard_id_t id) const {
     std::scoped_lock lock_guard(_shard_lock);
     auto shard_iter = _shard_map.find(id);
     if (shard_iter == _shard_map.end()) { return std::nullopt; }

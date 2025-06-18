@@ -126,6 +126,7 @@ void GCManager::stop() {
 }
 
 folly::SemiFuture< bool > GCManager::submit_gc_task(task_priority priority, chunk_id_t chunk_id) {
+    if (!is_started()) return folly::makeFuture< bool >(false);
     auto pdev_id = m_chunk_selector->get_extend_vchunk(chunk_id)->get_pdev_id();
     auto it = m_pdev_gc_actors.find(pdev_id);
     if (it == m_pdev_gc_actors.end()) {
@@ -163,10 +164,7 @@ bool GCManager::is_eligible_for_gc(chunk_id_t chunk_id) {
 
     const auto defrag_blk_num = chunk->get_defrag_nblks();
 
-    if (!defrag_blk_num) {
-        LOGDEBUG("chunk_id={} has no defrag blk, skip gc", chunk_id);
-        return false;
-    }
+    if (!defrag_blk_num) return false;
 
     // 1 if the chunk state is inuse, it is occupied by a open shard, so it can not be selected and we don't need gc it.
     // 2 if the chunk state is gc, it means this chunk is being gc, or this is a reserved chunk, so we don't need gc it.
@@ -332,7 +330,7 @@ void GCManager::pdev_gc_actor::handle_recovered_gc_task(
     // crash might happen before and after reserved chunk metablk is updated, so at least we need find one of the two
     // chunks.
     RELEASE_ASSERT(chunk_id == move_to_chunk || chunk_id == move_from_chunk,
-                   "can not find both move_to_chunk={} and move_from_chunk={} in reserved chunk queue, priority={}",
+                   "can not find neither move_to_chunk={} nor move_from_chunk={} in reserved chunk queue, priority={}",
                    move_to_chunk, move_from_chunk, priority);
 
     // now we need to put the reserved chunks back to the reserved chunk queue
