@@ -191,6 +191,8 @@ public:
 
     bool is_chunk_available(const pg_id_t pg_id, const chunk_num_t v_chunk_id) const;
 
+    homestore::cshared< ExtendedVChunk > get_pg_vchunk(const pg_id_t pg_id, const chunk_num_t v_chunk_id) const;
+
     /**
      * @brief Returns all the pdev ids that managed by this chunk selector.
      */

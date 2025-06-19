@@ -351,8 +351,10 @@ void HSHomeObject::on_shard_message_rollback(int64_t lsn, sisl::blob const& head
     case ReplicationMessageType::CREATE_SHARD_MSG: {
         bool res = release_chunk_based_on_create_shard_message(header);
         if (!res) {
-            // FIXME: should we crash here?
-            SLOGW(tid, msg_header->shard_id, "failed to release chunk based on create shard msg");
+            RELEASE_ASSERT(false,
+                           "shardID=0x{:x}, pg={}, shard=0x{:x}, failed to release chunk based on create shard msg",
+                           msg_header->shard_id, (msg_header->shard_id >> homeobject::shard_width),
+                           (msg_header->shard_id & homeobject::shard_mask));
         }
         // TODO:set a proper error code
         if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(ShardError::RETRY_REQUEST)); }
@@ -595,7 +597,19 @@ void HSHomeObject::update_shard_meta_after_gc(const homestore::chunk_num_t move_
 
     // TODO::optimize this lock
     std::scoped_lock lock_guard(_shard_lock);
-    for (const auto& shard_id : shards) {
+
+    // if crash recovery happens, some shards(which existed in the move_from_chunk) had been updated to the
+    // move_to_chunk, but others might not
+
+    auto iter = chunk_to_shards_map_.find(move_from_chunk);
+    if (iter == chunk_to_shards_map_.end()) {
+        LOGW("find no shard in move_from_chunk={}, skip update shard meta blk after gc!", move_from_chunk);
+        return;
+    }
+
+    auto& shards_in_move_to_chunk = chunk_to_shards_map_[move_to_chunk];
+
+    for (const auto& shard_id : iter->second) {
         auto shard_iter = _shard_map.find(shard_id);
 
         RELEASE_ASSERT(
@@ -604,11 +618,13 @@ void HSHomeObject::update_shard_meta_after_gc(const homestore::chunk_num_t move_
             shard_id, move_from_chunk, move_to_chunk);
 
         auto hs_shard = d_cast< HS_Shard* >((*shard_iter->second).get());
-        if (hs_shard->p_chunk_id() == move_to_chunk) {
-            // this might happens when crash recovery. the crash happens after shard metablk is updated but before gc
-            // task metablk is updated.
-            LOGD("the pchunk_id for shard_id={} for is already {}, skip update shard metablk", shard_id, move_to_chunk);
-        }
+
+        RELEASE_ASSERT(
+            hs_shard->p_chunk_id() == move_from_chunk,
+            "shardID=0x{:x}, pg={}, shard=0x{:x}, "
+            "p_chunk_id={} is expected to exist in move_from_chunk={}, but exist in chunk={}, move_to_chunk={}",
+            shard_id, (shard_id >> homeobject::shard_width), (shard_id & homeobject::shard_mask),
+            hs_shard->p_chunk_id(), move_from_chunk, hs_shard->p_chunk_id(), move_to_chunk);
 
         auto shard_info = hs_shard->info;
         shard_info.last_modified_time = get_current_timestamp();
@@ -619,16 +635,13 @@ void HSHomeObject::update_shard_meta_after_gc(const homestore::chunk_num_t move_
 
         hs_shard->update_info(shard_info, move_to_chunk);
         LOGD("update shard={} pchunk from {} to {}", shard_id, move_from_chunk, move_to_chunk);
+        shards_in_move_to_chunk.insert(shard_id);
     }
 
-    // switch chunk id in chunk_to_shards_map
-    auto iter = chunk_to_shards_map_.find(move_from_chunk);
-    RELEASE_ASSERT(iter != chunk_to_shards_map_.end(), "can not find old chunk_id={}", move_from_chunk);
-    chunk_to_shards_map_.emplace(move_to_chunk, std::move(iter->second));
     chunk_to_shards_map_.erase(iter);
 }
 
-std::optional< homestore::chunk_num_t > HSHomeObject::get_shard_v_chunk_id(shard_id_t id) const {
+std::optional< homestore::chunk_num_t > HSHomeObject::get_shard_v_chunk_id(const shard_id_t id) const {
     std::scoped_lock lock_guard(_shard_lock);
     auto shard_iter = _shard_map.find(id);
     if (shard_iter == _shard_map.end()) { return std::nullopt; }

@@ -124,6 +124,14 @@ add_test(NAME HomestoreResyncTestWithLeaderRestart
         --override_config homestore_config.consensus.laggy_threshold=0
         --gtest_filter=HomeObjectFixture.RestartLeader*)
 
+# GC tests
+add_test(NAME FetchDataWithOriginatorGC
+        COMMAND homestore_test_dynamic -csv error --executor immediate --config_path ./
+        --override_config hs_backend_config.enable_gc=true 
+        # remove this until gc supports baseline resync
+        --override_config homestore_config.consensus.snapshot_freq_distance:0
+        --gtest_filter=HomeObjectFixture.FetchDataWithOriginatorGC)
+
 add_executable(homestore_test_gc)
 target_sources(homestore_test_gc PRIVATE $<TARGET_OBJECTS:homestore_tests_gc>)
 target_link_libraries(homestore_test_gc PUBLIC homeobject_homestore ${COMMON_TEST_DEPS})

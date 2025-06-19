@@ -190,23 +190,29 @@ uint32_t HeapChunkSelector::get_chunk_size() const {
     return chunk->size();
 }
 
-bool HeapChunkSelector::is_chunk_available(const pg_id_t pg_id, const chunk_num_t v_chunk_id) const {
+homestore::cshared< HeapChunkSelector::ExtendedVChunk >
+HeapChunkSelector::get_pg_vchunk(const pg_id_t pg_id, const chunk_num_t v_chunk_id) const {
     std::shared_lock lock_guard(m_chunk_selector_mtx);
     auto pg_it = m_per_pg_chunks.find(pg_id);
     if (pg_it == m_per_pg_chunks.end()) {
         LOGWARNMOD(homeobject, "No pg found for pg={}", pg_id);
-        return false;
+        return nullptr;
     }
 
     auto pg_chunk_collection = pg_it->second;
     auto& pg_chunks = pg_chunk_collection->m_pg_chunks;
     if (v_chunk_id >= pg_chunks.size()) {
         LOGWARNMOD(homeobject, "No chunk found for v_chunk_id={}", v_chunk_id);
-        return false;
+        return nullptr;
     }
     std::scoped_lock lock(pg_chunk_collection->mtx);
-    auto chunk = pg_chunks[v_chunk_id];
-    return chunk->available();
+    return pg_chunks[v_chunk_id];
+}
+
+bool HeapChunkSelector::is_chunk_available(const pg_id_t pg_id, const chunk_num_t v_chunk_id) const {
+    auto Exvchunk = get_pg_vchunk(pg_id, v_chunk_id);
+    if (Exvchunk) return Exvchunk->available();
+    return false;
 }
 
 std::optional< uint32_t > HeapChunkSelector::select_chunks_for_pg(pg_id_t pg_id, uint64_t pg_size) {
@@ -289,15 +295,26 @@ void HeapChunkSelector::switch_chunks_for_pg(const pg_id_t pg_id, const chunk_nu
     std::unique_lock lk(pg_chunk_collection->mtx);
     auto& pg_chunks = pg_chunk_collection->m_pg_chunks;
 
-    RELEASE_ASSERT(pg_chunks[v_chunk_id]->get_chunk_id() == old_chunk_id,
-                   "vchunk={} for pg={} should have a pchunk={} , but have a pchunk={}", v_chunk_id, pg_id,
-                   old_chunk_id, pg_chunks[v_chunk_id]->get_chunk_id());
+    if (sisl_unlikely(pg_chunks[v_chunk_id]->get_chunk_id() == new_chunk_id)) {
+        // this might happens when crash recovery. the crash happens after pg metablk is updated but before gc task
+        // metablk is destroyed.
+        LOGDEBUGMOD(
+            homeobject,
+            "the pchunk_id for vchunk_id={} in chunkselector for pg_id={} is already {},  skip switching chunks!",
+            v_chunk_id, pg_id, new_chunk_id);
 
-    pg_chunks[v_chunk_id] = EXVchunk_new;
+        return;
+    } else {
+        RELEASE_ASSERT(pg_chunks[v_chunk_id]->get_chunk_id() == old_chunk_id,
+                       "vchunk={} for pg={} in chunkselector should have a pchunk={} , but have a pchunk={}",
+                       v_chunk_id, pg_id, old_chunk_id, pg_chunks[v_chunk_id]->get_chunk_id());
 
-    LOGINFOMOD(homeobject,
-               "vchunk={} in pg_chunk_collection for pg_id={} has been update from pchunk_id={} to pchunk_id={}",
-               v_chunk_id, pg_id, old_chunk_id, new_chunk_id);
+        pg_chunks[v_chunk_id] = EXVchunk_new;
+
+        LOGDEBUGMOD(homeobject,
+                    "vchunk={} in pg_chunk_collection for pg_id={} has been update from pchunk_id={} to pchunk_id={}",
+                    v_chunk_id, pg_id, old_chunk_id, new_chunk_id);
+    }
 
     pg_chunk_collection->available_blk_count += new_available_blks - old_available_blks;
 }
