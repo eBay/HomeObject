@@ -255,3 +255,41 @@ TEST_F(HomeObjectFixture, SealShardWithRestart) {
         LOGINFO("Put blob {}", b.error());
     });
 }
+
+TEST_F(HomeObjectFixture, CreateShardOnDiskLostMemeber) {
+    pg_id_t pg_id{1};
+    pg_id_t degrade_pg_id{2};
+    create_pg(pg_id);
+    create_pg(degrade_pg_id);
+    std::map< pg_id_t, shard_id_t > pg_shard_id_map;
+    for (int i = 1; i <= 2; i++) {
+        auto shard_info = create_shard(i, 64 * Mi);
+        ASSERT_EQ(ShardInfo::State::OPEN, shard_info.state);
+        pg_shard_id_map[i] = shard_info.id;
+        LOGINFO("pg={} shard {}", i, shard_info.id);
+    }
+    /*
+     * restart with one member lost one disk, create or seal shard request should be refused on disk lost member
+     */
+    g_helper->sync();
+    const uint8_t lost_disk_replica_num = 2;
+    if (g_helper->replica_num() == lost_disk_replica_num) {
+        // reset with one member lost one disk
+        restart(0, 0, 1);
+
+        auto tid = generateRandomTraceId();
+        auto s = _obj_inst->shard_manager()->seal_shard(pg_shard_id_map[degrade_pg_id], tid).get();
+        ASSERT_TRUE(s.hasError()) << "degraded pg on error member should return seal shard fail, pg_id "
+                                  << degrade_pg_id << "shard_id " << pg_shard_id_map[degrade_pg_id]
+                                  << " replica number " << g_helper->replica_num();
+
+        tid = generateRandomTraceId();
+        s = _obj_inst->shard_manager()->create_shard(degrade_pg_id, 64 * Mi, tid).get();
+        ASSERT_TRUE(s.hasError()) << "degraded pg on error member should return create shard fail, pg_id "
+                                  << degrade_pg_id << " replica number " << g_helper->replica_num();
+    } else {
+        restart();
+        sleep(10);
+    }
+    g_helper->sync();
+}

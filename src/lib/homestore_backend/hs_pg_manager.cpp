@@ -327,7 +327,8 @@ replica_member_info HSHomeObject::to_replica_member_info(const PGMember& pg_memb
     return replica_info;
 }
 
-void HSHomeObject::on_pg_start_replace_member(group_id_t group_id, uuid_t task_id, const replica_member_info& member_out,
+void HSHomeObject::on_pg_start_replace_member(group_id_t group_id, uuid_t task_id,
+                                              const replica_member_info& member_out,
                                               const replica_member_info& member_in, trace_id_t tid) {
     auto lg = std::shared_lock(_pg_lock);
     for (const auto& iter : _pg_map) {
@@ -363,7 +364,8 @@ void HSHomeObject::on_pg_start_replace_member(group_id_t group_id, uuid_t task_i
          boost::uuids::to_string(member_in.id), tid);
 }
 
-void HSHomeObject::on_pg_complete_replace_member(group_id_t group_id, uuid_t task_id, const replica_member_info& member_out,
+void HSHomeObject::on_pg_complete_replace_member(group_id_t group_id, uuid_t task_id,
+                                                 const replica_member_info& member_out,
                                                  const replica_member_info& member_in, trace_id_t tid) {
     auto lg = std::shared_lock(_pg_lock);
     for (const auto& iter : _pg_map) {
@@ -582,9 +584,13 @@ void HSHomeObject::on_pg_meta_blk_found(sisl::byte_view const& buf, void* meta_c
     auto pg_id = pg_sb->id;
     std::vector< chunk_num_t > p_chunk_ids(pg_sb->get_chunk_ids(), pg_sb->get_chunk_ids() + pg_sb->num_chunks);
     bool set_pg_chunks_res = chunk_selector_->recover_pg_chunks(pg_id, std::move(p_chunk_ids));
-    RELEASE_ASSERT(set_pg_chunks_res, "Failed to set pg={} chunks", pg_id);
     auto uuid_str = boost::uuids::to_string(pg_sb->index_table_uuid);
     auto hs_pg = std::make_unique< HS_PG >(std::move(pg_sb), std::move(v.value()));
+    if (!set_pg_chunks_res) {
+        hs_pg->pg_state_.set_state(PGStateMask::DISK_DOWN);
+        hs_pg->repl_dev_->set_stage(homestore::repl_dev_stage_t::UNREADY);
+        LOGW("Failed to recover pg={} chunks,set pg_state to DISK_DOWN", pg_id);
+    }
     // During PG recovery check if index is already recoverd else
     // add entry in map, so that index recovery can update the PG.
     std::scoped_lock lg(index_lock_);
@@ -709,6 +715,12 @@ const HSHomeObject::HS_PG* HSHomeObject::get_hs_pg(pg_id_t pg_id) const {
 bool HSHomeObject::_get_stats(pg_id_t id, PGStats& stats) const {
     auto hs_pg = get_hs_pg(id);
     if (hs_pg == nullptr) return false;
+    if (hs_pg->pg_state_.is_state_set(PGStateMask::DISK_DOWN)) {
+        stats.id = hs_pg->pg_info_.id;
+        stats.pg_state = hs_pg->pg_state_.get();
+        stats.replica_set_uuid = hs_pg->pg_info_.replica_set_uuid;
+        return true;
+    }
     auto const blk_size = hs_pg->repl_dev_->get_blk_size();
 
     stats.id = hs_pg->pg_info_.id;
