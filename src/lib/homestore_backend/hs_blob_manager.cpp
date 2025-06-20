@@ -98,6 +98,11 @@ BlobManager::AsyncResult< blob_id_t > HSHomeObject::_put_blob(ShardInfo const& s
     {
         auto hs_pg = get_hs_pg(pg_id);
         RELEASE_ASSERT(hs_pg, "PG not found, pg={}", pg_id);
+        if (hs_pg->pg_state_.is_state_set(PGStateMask::DISK_DOWN)) {
+            LOGW("failed to put blob for pg={}, pg is disk down and not leader", pg_id);
+            decr_pending_request_num();
+            return folly::makeUnexpected(BlobErrorCode::NOT_LEADER);
+        }
         repl_dev = hs_pg->repl_dev_;
         const_cast< HS_PG* >(hs_pg)->durable_entities_update(
             [&new_blob_id](auto& de) { new_blob_id = de.blob_sequence_num.fetch_add(1, std::memory_order_relaxed); },
@@ -450,6 +455,13 @@ BlobManager::NullAsyncResult HSHomeObject::_del_blob(ShardInfo const& shard, blo
     auto& pg_id = shard.placement_group;
     auto hs_pg = get_hs_pg(pg_id);
     RELEASE_ASSERT(hs_pg, "PG not found");
+
+    if (hs_pg->pg_state_.is_state_set(PGStateMask::DISK_DOWN)) {
+        LOGW("failed to delete blob for pg={}, pg is disk down and not leader", pg_id);
+        decr_pending_request_num();
+        return folly::makeUnexpected(BlobErrorCode::NOT_LEADER);
+    }
+
     auto repl_dev = hs_pg->repl_dev_;
 
     RELEASE_ASSERT(repl_dev != nullptr, "Repl dev instance null");

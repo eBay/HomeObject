@@ -117,14 +117,21 @@ public:
             std::list< device_info_t > devs;
             LOGWARN("my_devices cnt {}, {}, {} ", helper_.dev_list_.size(), SISL_OPTIONS.count("device_list"),
                     use_file);
+            bool need_nvme_dev = true;
             if (helper_.dev_list_.size() > 0 && !use_file) {
-                for (const auto& dev : helper_.dev_list_) {
-                    LOGWARN("adding {}", dev);
-                    devs.emplace_back(dev, DevType::HDD);
+                for (size_t i = 0; i < helper_.dev_list_.size() - helper_.disk_lost_num_; ++i) {
+                    const auto& dev = helper_.dev_list_[i];
+                    LOGWARN("adding {} from dev_list", dev);
+                    devs.emplace_back(dev, need_nvme_dev ? DevType::NVME : DevType::HDD);
+                    need_nvme_dev = false;
                 }
             } else {
-                for (const auto& dev : helper_.generated_devs)
-                    devs.emplace_back(dev, DevType::HDD);
+                for (size_t i = 0; i < helper_.generated_devs.size() - helper_.disk_lost_num_; ++i) {
+                    const auto& dev = helper_.generated_devs[i];
+                    LOGWARN("adding {} from generated_devs", dev);
+                    devs.emplace_back(dev, need_nvme_dev ? DevType::NVME : DevType::HDD);
+                    need_nvme_dev = false;
+                }
             }
             return devs;
         }
@@ -189,6 +196,7 @@ public:
     void setup(uint8_t num_replicas) {
         total_replicas_nums_ = num_replicas;
         replica_num_ = SISL_OPTIONS["replica_num"].as< uint8_t >();
+        disk_lost_num_ = 0;
 
         sisl::logging::SetLogger(test_name_ + std::string("_replica_") + std::to_string(replica_num_));
         sisl::logging::SetLogPattern("[%D %T%z] [%^%L%$] [%n] [%t] %v");
@@ -317,14 +325,21 @@ public:
     }
 
     std::shared_ptr< homeobject::HomeObject > restart(uint32_t shutdown_delay_secs = 0u,
-                                                      uint32_t restart_delay_secs = 0u) {
+                                                      uint32_t restart_delay_secs = 0u, uint32_t disk_lost_num = 0u) {
+
         if (shutdown_delay_secs > 0) { std::this_thread::sleep_for(std::chrono::seconds(shutdown_delay_secs)); }
         LOGINFO("Stoping homeobject after {} secs, replica={}", shutdown_delay_secs, replica_num_);
         homeobj_->shutdown();
         homeobj_.reset();
         if (restart_delay_secs > 0) { std::this_thread::sleep_for(std::chrono::seconds(restart_delay_secs)); }
         LOGINFO("Starting homeobject after {} secs, replica={}", restart_delay_secs, replica_num_);
+        auto const ndevices = SISL_OPTIONS["num_devs"].as< uint32_t >();
+
+        // we support losing at most ndevices - 2 disks, because we need to guarantee ho has at least 2 disks to run
+        //  one for meta, index ,log, another for data.
+        disk_lost_num_ = disk_lost_num > ndevices - 2 ? ndevices - 2 : disk_lost_num;
         homeobj_ = init_homeobject(std::weak_ptr< TestReplApplication >(app));
+        disk_lost_num_ = 0;
         return homeobj_;
     }
 
@@ -460,6 +475,7 @@ private:
 private:
     uint8_t replica_num_;
     uint8_t total_replicas_nums_;
+    uint8_t disk_lost_num_;
     uint64_t sync_point_num{0};
     std::string name_;
     std::string test_name_;

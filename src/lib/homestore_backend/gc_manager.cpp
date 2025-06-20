@@ -85,10 +85,15 @@ void GCManager::on_reserved_chunk_meta_blk_found(sisl::byte_view const& buf, voi
     homestore::superblk< GCManager::gc_reserved_chunk_superblk > reserved_chunk_sb(
         GCManager::_gc_reserved_chunk_meta_name);
     auto chunk_id = reserved_chunk_sb.load(buf, meta_cookie)->chunk_id;
-    auto pdev_id = m_chunk_selector->get_extend_vchunk(chunk_id)->get_pdev_id();
-    auto gc_actor = get_pdev_gc_actor(pdev_id);
-    RELEASE_ASSERT(gc_actor, "can not get gc actor for pdev {}!", pdev_id);
-    gc_actor->add_reserved_chunk(std::move(reserved_chunk_sb));
+    auto EXVchunk = m_chunk_selector->get_extend_vchunk(chunk_id);
+    if (EXVchunk == nullptr) {
+        LOGW("the disk for chunk {} is not found, probably lost, skip recovering gc mateblk for this chunk!", chunk_id);
+    } else {
+        auto pdev_id = EXVchunk->get_pdev_id();
+        auto gc_actor = get_pdev_gc_actor(pdev_id);
+        RELEASE_ASSERT(gc_actor, "can not get gc actor for pdev {}!", pdev_id);
+        gc_actor->add_reserved_chunk(std::move(reserved_chunk_sb));
+    }
 }
 
 GCManager::~GCManager() { stop(); }

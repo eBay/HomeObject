@@ -118,6 +118,11 @@ ShardManager::AsyncResult< ShardInfo > HSHomeObject::_create_shard(pg_id_t pg_ow
         decr_pending_request_num();
         return folly::makeUnexpected(ShardError::UNKNOWN_PG);
     }
+    if (hs_pg->pg_state_.is_state_set(PGStateMask::DISK_DOWN)) {
+        LOGW("failed to create shard for pg={}, pg is disk down and not leader", pg_owner);
+        decr_pending_request_num();
+        return folly::makeUnexpected(ShardError::NOT_LEADER);
+    }
     auto repl_dev = hs_pg->repl_dev_;
 
     if (!repl_dev) {
@@ -218,6 +223,12 @@ ShardManager::AsyncResult< ShardInfo > HSHomeObject::_seal_shard(ShardInfo const
         SLOGW(tid, shard_id, "pg={} not found", pg_id);
         decr_pending_request_num();
         return folly::makeUnexpected(ShardError::UNKNOWN_PG);
+    }
+
+    if (hs_pg->pg_state_.is_state_set(PGStateMask::DISK_DOWN)) {
+        LOGW("failed to seal shard for pg={}, pg is disk down and not leader", pg_id);
+        decr_pending_request_num();
+        return folly::makeUnexpected(ShardError::NOT_LEADER);
     }
 
     auto repl_dev = hs_pg->repl_dev_;
@@ -520,6 +531,10 @@ void HSHomeObject::on_shard_meta_blk_recover_completed(bool success) {
     std::unordered_set< homestore::chunk_num_t > excluding_chunks;
     std::scoped_lock lock_guard(_pg_lock);
     for (auto& pair : _pg_map) {
+        if (dynamic_cast< HS_PG* >(pair.second.get())->pg_state_.is_state_set(PGStateMask::DISK_DOWN)) {
+            LOGW("pg={} is disk down, skip recover chunk state from shards", pair.first);
+            continue;
+        }
         excluding_chunks.clear();
         excluding_chunks.reserve(pair.second->shards_.size());
         for (auto& shard : pair.second->shards_) {
@@ -538,6 +553,10 @@ void HSHomeObject::add_new_shard_to_map(std::unique_ptr< HS_Shard > shard) {
     std::scoped_lock lock_guard(_pg_lock, _shard_lock);
     auto hs_pg = const_cast< HS_PG* >(_get_hs_pg_unlocked(shard->info.placement_group));
     RELEASE_ASSERT(hs_pg, "Missing pg info, pg={}", shard->info.placement_group);
+    if (hs_pg->pg_state_.is_state_set(PGStateMask::DISK_DOWN)) {
+        LOGW("pg={} is disk down, skip add shard to map, shardID=0x{:x}", shard->info.placement_group, shard->info.id);
+        return;
+    }
     auto p_chunk_id = shard->p_chunk_id();
     auto& shards = hs_pg->shards_;
     auto shard_id = shard->info.id;
