@@ -673,7 +673,9 @@ uint32_t HSHomeObject::HS_PG::open_shards() const {
 
 // Return the percentage of snapshot progress
 uint32_t HSHomeObject::HS_PG::get_snp_progress() const {
-    return 100 * snp_rcvr_info_sb_->progress.complete_bytes / snp_rcvr_info_sb_->progress.total_bytes;
+    return snp_rcvr_info_sb_->progress.total_bytes > 0
+        ? 100 * snp_rcvr_info_sb_->progress.complete_bytes / snp_rcvr_info_sb_->progress.total_bytes
+        : 0;
 }
 
 void HSHomeObject::HS_PG::get_peer_info(std::vector< peer_info >& members) const {
