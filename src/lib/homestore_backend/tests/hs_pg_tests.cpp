@@ -159,6 +159,81 @@ TEST_F(HomeObjectFixture, PGRecoveryTest) {
     }
 }
 
+TEST_F(HomeObjectFixture, PGRecoveryWithDiskLostTest) {
+    auto id = _obj_inst->our_uuid();
+    // test recovery with pristine state firstly
+    restart();
+    EXPECT_EQ(id, _obj_inst->our_uuid());
+
+    uint64_t num_pgs = 10;
+    // create 10 pg
+    for (pg_id_t i = 1; i <= num_pgs; i++) {
+        pg_id_t pg_id{i};
+        create_pg(pg_id);
+    }
+
+    // get pg map
+    std::map< pg_id_t, std::unique_ptr< PG > > pg_map;
+    pg_map.swap(_obj_inst->_pg_map);
+
+    // restart with one disk lost
+    restart(0, 0, 1);
+
+    std::set< pg_id_t > lost_disk_pg{2, 4, 6, 8, 10};
+    EXPECT_EQ(id, _obj_inst->our_uuid());
+
+    // verify pg map
+    EXPECT_EQ(10, _obj_inst->_pg_map.size());
+
+    for (auto const& [id, pg] : _obj_inst->_pg_map) {
+        EXPECT_TRUE(pg_map.contains(id));
+        auto reserved_pg = dynamic_cast< HSHomeObject::HS_PG* >(pg_map[id].get());
+        auto recovered_pg = dynamic_cast< HSHomeObject::HS_PG* >(pg.get());
+        EXPECT_TRUE(reserved_pg);
+        EXPECT_TRUE(recovered_pg);
+        verify_hs_pg(reserved_pg, recovered_pg);
+        PGStats stats;
+        bool res = _obj_inst->get_stats(id, stats);
+        EXPECT_TRUE(res) << "Failed to get stats pg={" << id << "}";
+        if (lost_disk_pg.contains(id)) {
+            // pg on lost disk should not have stats
+            EXPECT_EQ(stats.id, id);
+            EXPECT_NE(stats.pg_state & static_cast< uint64_t >(PGStateMask::DISK_DOWN), 0);
+            LOGI("PG {} is on lost disk, stats={}", id, stats.to_string());
+        } else {
+            LOGI("Test get stats after disklost, pg={} stats={}", id, stats.to_string());
+        }
+    }
+
+    // restart with disk back
+    restart();
+    EXPECT_EQ(id, _obj_inst->our_uuid());
+
+    // verify pg map
+    EXPECT_EQ(10, _obj_inst->_pg_map.size());
+
+    for (auto const& [id, pg] : _obj_inst->_pg_map) {
+        EXPECT_TRUE(pg_map.contains(id));
+        auto reserved_pg = dynamic_cast< HSHomeObject::HS_PG* >(pg_map[id].get());
+        auto recovered_pg = dynamic_cast< HSHomeObject::HS_PG* >(pg.get());
+        EXPECT_TRUE(reserved_pg);
+        EXPECT_TRUE(recovered_pg);
+        verify_hs_pg(reserved_pg, recovered_pg);
+        PGStats stats;
+        bool res = _obj_inst->get_stats(id, stats);
+        EXPECT_TRUE(res) << "Failed to get stats pg={" << id << "}";
+        if (lost_disk_pg.contains(id)) {
+            // pg on lost disk should not have stats
+            EXPECT_EQ(stats.id, id);
+            EXPECT_EQ(stats.pg_state & static_cast< uint64_t >(PGStateMask::DISK_DOWN), 0);
+
+            LOGI("PG {} on lost disk is back, stats={}", id, stats.to_string());
+        } else {
+            LOGI("Test get stats after disklost, pg={} stats={}", id, stats.to_string());
+        }
+    }
+}
+
 TEST_F(HomeObjectFixture, ConcurrencyCreatePG) {
     g_helper->sync();
 
