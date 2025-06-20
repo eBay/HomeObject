@@ -520,6 +520,10 @@ void HSHomeObject::on_shard_meta_blk_recover_completed(bool success) {
     std::unordered_set< homestore::chunk_num_t > excluding_chunks;
     std::scoped_lock lock_guard(_pg_lock);
     for (auto& pair : _pg_map) {
+        if (dynamic_cast< HS_PG* >(pair.second.get())->pg_state_.is_state_set(PGStateMask::DISK_DOWN)) {
+            LOGW("pg={} is DISK_DOWN, skip recover chunk state from shards", pair.first);
+            continue;
+        }
         excluding_chunks.clear();
         excluding_chunks.reserve(pair.second->shards_.size());
         for (auto& shard : pair.second->shards_) {
