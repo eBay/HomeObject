@@ -550,8 +550,11 @@ void HSHomeObject::add_new_shard_to_map(std::unique_ptr< HS_Shard > shard) {
     if (h) { LOGDEBUG("chunk_id={} is not in chunk_to_shards_map, add it", p_chunk_id); }
     auto& per_chunk_shard_list = it->second;
     const auto inserted = (per_chunk_shard_list.emplace(shard_id)).second;
-    RELEASE_ASSERT(inserted, "shardID=0x{:x}, pg={}, shard=0x{:x}, duplicated shard info", shard_id,
-                   (shard_id >> homeobject::shard_width), (shard_id & homeobject::shard_mask));
+
+    RELEASE_ASSERT(inserted,
+                   "shardID=0x{:x}, pg={}, shard=0x{:x}, duplicated shard info found when inserting into "
+                   "per_chunk_shard_list for chunk_id={}",
+                   shard_id, (shard_id >> homeobject::shard_width), (shard_id & homeobject::shard_mask), p_chunk_id);
 
     // following part gives follower members a chance to catch up shard sequence num;
     auto sequence_num = get_sequence_num_from_shard_id(shard_id);
@@ -583,6 +586,7 @@ std::optional< homestore::chunk_num_t > HSHomeObject::get_shard_p_chunk_id(shard
 }
 
 const std::set< shard_id_t > HSHomeObject::get_shards_in_chunk(homestore::chunk_num_t chunk_id) const {
+    std::scoped_lock lock_guard(_shard_lock);
     const auto it = chunk_to_shards_map_.find(chunk_id);
     if (it == chunk_to_shards_map_.cend()) {
         LOGW("chunk_id={} not found in chunk_to_shards_map", chunk_id);
@@ -715,6 +719,7 @@ void HSHomeObject::destroy_shards(pg_id_t pg_id) {
 
     for (auto& shard : hs_pg->shards_) {
         auto hs_shard = s_cast< HS_Shard* >(shard.get());
+        chunk_to_shards_map_.erase(hs_shard->p_chunk_id());
         // destroy shard super blk
         hs_shard->sb_.destroy();
         // erase shard in shard map
