@@ -550,10 +550,11 @@ void HSHomeObject::add_new_shard_to_map(std::unique_ptr< HS_Shard > shard) {
     if (h) { LOGDEBUG("chunk_id={} is not in chunk_to_shards_map, add it", p_chunk_id); }
     auto& per_chunk_shard_list = it->second;
     const auto inserted = (per_chunk_shard_list.emplace(shard_id)).second;
-    RELEASE_ASSERT(
-        inserted,
-        "shardID=0x{:x}, pg={}, shard=0x{:x}, duplicated shard info found when inserting into per_chunk_shard_list",
-        shard_id, (shard_id >> homeobject::shard_width), (shard_id & homeobject::shard_mask));
+
+    RELEASE_ASSERT(inserted,
+                   "shardID=0x{:x}, pg={}, shard=0x{:x}, duplicated shard info found when inserting into "
+                   "per_chunk_shard_list for chunk_id={}",
+                   shard_id, (shard_id >> homeobject::shard_width), (shard_id & homeobject::shard_mask), p_chunk_id);
 
     // following part gives follower members a chance to catch up shard sequence num;
     auto sequence_num = get_sequence_num_from_shard_id(shard_id);
