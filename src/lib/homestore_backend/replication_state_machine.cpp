@@ -190,13 +190,7 @@ void ReplicationStateMachine::on_error(ReplServiceError error, const sisl::blob&
         result_ctx->promise_.setValue(folly::makeUnexpected(toShardError(error)));
         break;
     }
-
-    case ReplicationMessageType::PUT_BLOB_MSG: {
-        auto result_ctx =
-            boost::static_pointer_cast< repl_result_ctx< BlobManager::Result< HSHomeObject::BlobInfo > > >(ctx).get();
-        result_ctx->promise_.setValue(folly::makeUnexpected(toBlobError(error)));
-        break;
-    }
+    case ReplicationMessageType::PUT_BLOB_MSG:
     case ReplicationMessageType::DEL_BLOB_MSG: {
         auto result_ctx =
             boost::static_pointer_cast< repl_result_ctx< BlobManager::Result< HSHomeObject::BlobInfo > > >(ctx).get();

@@ -41,6 +41,8 @@ BlobError toBlobError(ReplServiceError const& e) {
         [[fallthrough]];
     case ReplServiceError::TERM_MISMATCH:
         [[fallthrough]];
+    case ReplServiceError::NO_SPACE_LEFT:
+        return BlobError(BlobErrorCode::NO_SPACE_LEFT);
     case ReplServiceError::DATA_DUPLICATED:
         return BlobError(BlobErrorCode::REPLICATION_ERROR);
     case ReplServiceError::NOT_LEADER:

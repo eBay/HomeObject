@@ -11,7 +11,7 @@ namespace homeobject {
 
 ENUM(BlobErrorCode, uint16_t, UNKNOWN = 1, TIMEOUT, INVALID_ARG, UNSUPPORTED_OP, NOT_LEADER, REPLICATION_ERROR,
      UNKNOWN_SHARD, UNKNOWN_BLOB, UNKNOWN_PG, CHECKSUM_MISMATCH, READ_FAILED, INDEX_ERROR, SEALED_SHARD, RETRY_REQUEST,
-     SHUTTING_DOWN, ROLL_BACK);
+     SHUTTING_DOWN, ROLL_BACK, NO_SPACE_LEFT);
 struct BlobError {
     BlobErrorCode code;
     // set when we are not the current leader of the PG.
@@ -42,8 +42,8 @@ struct Blob {
 class BlobManager : public Manager< BlobError > {
 public:
     virtual AsyncResult< blob_id_t > put(shard_id_t shard, Blob&&, trace_id_t tid = 0) = 0;
-    virtual AsyncResult< Blob > get(shard_id_t shard, blob_id_t const& blob, uint64_t off = 0,
-                                    uint64_t len = 0, trace_id_t tid = 0) const = 0;
+    virtual AsyncResult< Blob > get(shard_id_t shard, blob_id_t const& blob, uint64_t off = 0, uint64_t len = 0,
+                                    trace_id_t tid = 0) const = 0;
     virtual NullAsyncResult del(shard_id_t shard, blob_id_t const& blob, trace_id_t tid = 0) = 0;
 };
 
