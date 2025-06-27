@@ -64,10 +64,10 @@ private:
 
     PGManager::NullAsyncResult _create_pg(PGInfo&& pg_info, std::set< peer_id_t > const& peers,
                                           trace_id_t tid) override;
-    PGManager::NullAsyncResult _replace_member(pg_id_t id, uuid_t task_id, peer_id_t const& old_member,
+    PGManager::NullAsyncResult _replace_member(pg_id_t id, std::string& task_id, peer_id_t const& old_member,
                                                PGMember const& new_member, uint32_t commit_quorum,
                                                trace_id_t tid) override;
-    PGReplaceMemberStatus _get_replace_member_status(pg_id_t id, uuid_t task_id, const PGMember& old_member,
+    PGReplaceMemberStatus _get_replace_member_status(pg_id_t id, std::string& task_id, const PGMember& old_member,
                                                      const PGMember& new_member, const std::vector< PGMember >& others,
                                                      uint64_t trace_id) const override;
 
@@ -737,7 +737,7 @@ public:
      * @param member_out Member which is removed from group
      * @param member_in Member which is added to group
      * */
-    void on_pg_start_replace_member(homestore::group_id_t group_id, uuid_t task_id,
+    void on_pg_start_replace_member(homestore::group_id_t group_id, const std::string& task_id,
                                     const homestore::replica_member_info& member_out,
                                     const homestore::replica_member_info& member_in, trace_id_t tid);
 
@@ -748,7 +748,7 @@ public:
      * @param member_out Member which is removed from group
      * @param member_in Member which is added to group
      * */
-    void on_pg_complete_replace_member(homestore::group_id_t group_id, uuid_t task_id,
+    void on_pg_complete_replace_member(homestore::group_id_t group_id, const std::string& task_id,
                                        const homestore::replica_member_info& member_out,
                                        const homestore::replica_member_info& member_in, trace_id_t tid);
 

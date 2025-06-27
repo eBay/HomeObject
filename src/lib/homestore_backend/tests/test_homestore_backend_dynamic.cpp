@@ -132,7 +132,7 @@ void HomeObjectFixture::RestartFollowerDuringBaselineResyncUsingSigKill(uint64_t
         }
     }
 #endif
-    auto task_id = boost::uuids::random_generator()();
+    std::string task_id = "task_id";
     if (!is_restart) {
         for (uint64_t j = 0; j < num_shards_per_pg; j++)
             create_shard(pg_id, 64 * Mi);
@@ -293,7 +293,7 @@ TEST_F(HomeObjectFixture, RestartFollowerDuringBaselineResyncUsingGracefulShutdo
     g_helper->sync();
 
     // ======== Stage 2: replace a member ========
-    auto task_id = boost::uuids::random_generator()();
+    std::string task_id = "task_id";
     run_on_pg_leader(pg_id, [&]() {
         auto r = _obj_inst->pg_manager()
                      ->replace_member(pg_id, task_id, out_member_id, PGMember{in_member_id, "new_member", 0})
@@ -453,7 +453,7 @@ void HomeObjectFixture::ReplaceMember(bool withGC) {
     set_basic_flip("snapshot_receiver_blob_write_data_error", 4, 15);  // simulate blob write data error
     set_basic_flip("snapshot_receiver_blk_allocation_error", 4, 15);   // simulate blob allocation error
 #endif
-    auto task_id = boost::uuids::random_generator()();
+    std::string task_id = "task_id";
     LOGINFO("start replace member, pg={}, task_id={}", pg_id, task_id);
     run_on_pg_leader(pg_id, [&]() {
         auto r = _obj_inst->pg_manager()
@@ -574,7 +574,7 @@ void HomeObjectFixture::RestartLeaderDuringBaselineResyncUsingSigKill(uint64_t f
         auto hs_pg = _obj_inst->get_hs_pg(pg_id);
         index_table_uuid_str = uuids::to_string(hs_pg->pg_sb_->index_table_uuid);
     }
-    auto task_id = boost::uuids::random_generator()();
+    std::string task_id = "task_id";
     if (!is_restart) {
         auto kill_until_shard = pg_shard_id_vec[pg_id].back();
         auto kill_until_blob = num_blobs_per_shard * num_shards_per_pg - 1;

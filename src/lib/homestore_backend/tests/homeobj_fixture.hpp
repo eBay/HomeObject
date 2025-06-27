@@ -560,7 +560,7 @@ public:
         EXPECT_EQ(lhs.current_leader, rhs.current_leader);
     }
 
-    bool verify_start_replace_member_result(pg_id_t pg_id, uuid_t task_id, peer_id_t out_member_id,
+    bool verify_start_replace_member_result(pg_id_t pg_id, std::string& task_id, peer_id_t out_member_id,
                                             peer_id_t in_member_id) {
         auto hs_pg = _obj_inst->get_hs_pg(pg_id);
         RELEASE_ASSERT(hs_pg, "PG not found");
@@ -577,7 +577,7 @@ public:
             LOGERROR("out_member not found, out_member={}", boost::uuids::to_string(out_member_id));
             return false;
         }
-        run_on_pg_leader(pg_id, [this, pg_id, task_id, &out_member, &in_member]() {
+        run_on_pg_leader(pg_id, [this, pg_id, &task_id, &out_member, &in_member]() {
             std::vector< PGMember > others;
             for (auto m : g_helper->members_) {
                 if (m.first != out_member.id && m.first != in_member.id) { others.emplace_back(PGMember(m.first, "")); }
@@ -601,7 +601,7 @@ public:
         return hs_pg->get_snp_progress();
     }
 
-    bool verify_complete_replace_member_result(pg_id_t pg_id, uuid_t task_id, peer_id_t out_member_id,
+    bool verify_complete_replace_member_result(pg_id_t pg_id, std::string& task_id, peer_id_t out_member_id,
                                                peer_id_t in_member_id) {
         auto hs_pg = _obj_inst->get_hs_pg(pg_id);
         RELEASE_ASSERT(hs_pg, "PG not found");
@@ -623,7 +623,7 @@ public:
             return false;
         }
 
-        run_on_pg_leader(pg_id, [this, pg_id, task_id, &out_member, &in_member]() {
+        run_on_pg_leader(pg_id, [this, pg_id, &task_id, &out_member, &in_member]() {
             std::vector< PGMember > others;
             for (auto m : g_helper->members_) {
                 if (m.first != out_member.id && m.first != in_member.id) { others.emplace_back(PGMember(m.first, "")); }
