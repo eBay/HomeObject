@@ -975,11 +975,13 @@ void ReplicationStateMachine::handle_no_space_left(homestore::repl_lsn_t lsn, ho
             .via(&folly::InlineExecutor::instance())
             .thenValue([this, lsn, chunk_id](auto&& res) {
                 if (!res) {
-                    RELEASE_ASSERT(false,
-                                   "failed to submit emergent gc task for chunk_id={} , lsn={} - fatal error, aborting",
-                                   chunk_id, lsn);
+                    LOGERROR("failed to submit emergent gc task for chunk_id={} , lsn={}, will retry again if new "
+                             "no_space_left happens",
+                             chunk_id, lsn);
+                } else {
+                    LOGD("successfully handle no_space_left error for chunk_id={} , lsn={}", chunk_id, lsn);
                 }
-                LOGD("successfully handle no_space_left error for chunk_id={} , lsn={}", chunk_id, lsn);
+
                 // start accepting new requests again.
                 repl_dev()->resume_accepting_reqs();
             });
