@@ -42,6 +42,7 @@ public:
     inline static auto const _gc_actor_meta_name = std::string("GCActor");
     inline static auto const _gc_task_meta_name = std::string("GCTask");
     inline static auto const _gc_reserved_chunk_meta_name = std::string("GCReservedChunk");
+    inline static atomic_uint64_t _gc_task_id{1}; // 0 is used for crash recovery
 
 #pragma pack(1)
     struct gc_actor_superblk {
@@ -110,19 +111,22 @@ public:
         void stop();
 
     private:
-        void process_gc_task(chunk_id_t move_from_chunk, uint8_t priority, folly::Promise< bool > task);
+        void process_gc_task(chunk_id_t move_from_chunk, uint8_t priority, folly::Promise< bool > task,
+                             const uint64_t task_id);
 
         // this should be called only after gc_task meta blk is persisted. it will update the pg index table according
         // to the gc index table. return the move_to_chunk to chunkselector and put move_from_chunk to reserved chunk
         // queue.
         bool
         replace_blob_index(chunk_id_t move_from_chunk, chunk_id_t move_to_chunk,
-                           const std::vector< std::pair< BlobRouteByChunkKey, BlobRouteValue > >& valid_blob_indexes);
+                           const std::vector< std::pair< BlobRouteByChunkKey, BlobRouteValue > >& valid_blob_indexes,
+                           const uint64_t task_id);
 
         // copy all the valid data from the move_from_chunk to move_to_chunk. valid data means those blobs that are not
         // tombstone in the pg index table
         // return true if the data copy is successful, false otherwise.
-        bool copy_valid_data(chunk_id_t move_from_chunk, chunk_id_t move_to_chunk, bool is_emergent = false);
+        bool copy_valid_data(chunk_id_t move_from_chunk, chunk_id_t move_to_chunk, const uint64_t task_id,
+                             bool is_emergent = false);
 
         // before we select a reserved chunk and start gc, we need:
         //  1 clear all the entries of this chunk in the gc index table
@@ -136,7 +140,8 @@ public:
         // case and recvoery case
         bool process_after_gc_metablk_persisted(
             homestore::superblk< GCManager::gc_task_superblk >& gc_task_sb,
-            const std::vector< std::pair< BlobRouteByChunkKey, BlobRouteValue > >& valid_blob_indexes);
+            const std::vector< std::pair< BlobRouteByChunkKey, BlobRouteValue > >& valid_blob_indexes,
+            const uint64_t task_id);
 
     private:
         // utils
