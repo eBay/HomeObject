@@ -225,9 +225,7 @@ int HSHomeObject::SnapshotReceiveHandler::process_blobs_snapshot_data(ResyncBlob
                 LOGE("Invalid header found for blob_id={}: [header={}]", blob->blob_id(), header->to_string());
                 return INVALID_BLOB_HEADER;
             }
-            std::string user_key = header->user_key_size
-                ? std::string(r_cast< const char* >(blob_data + sizeof(BlobHeader)), header->user_key_size)
-                : std::string{};
+            std::string user_key = std::string((const char*)header->user_key, (size_t)header->user_key_size);
 
             uint8_t computed_hash[BlobHeader::blob_max_hash_len]{};
             home_obj_.compute_blob_payload_hash(header->hash_algorithm, blob_data + header->data_offset,
