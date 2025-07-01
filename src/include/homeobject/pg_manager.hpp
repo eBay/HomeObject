@@ -112,6 +112,7 @@ struct PGStats {
             num_active_objects{0},
             num_tombstone_objects{0},
             pg_state{0},
+            snp_progress{0},
             members{} {}
 
     std::string to_string() {
@@ -133,7 +134,7 @@ struct PGStats {
 };
 
 struct PGReplaceMemberStatus {
-    uuid_t task_id;
+    std::string task_id;
     PGReplaceMemberTaskStatus status = PGReplaceMemberTaskStatus::UNKNOWN;
     std::vector< peer_info > members;
 };
@@ -141,9 +142,9 @@ struct PGReplaceMemberStatus {
 class PGManager : public Manager< PGError > {
 public:
     virtual NullAsyncResult create_pg(PGInfo&& pg_info, trace_id_t tid = 0) = 0;
-    virtual NullAsyncResult replace_member(pg_id_t id, uuid_t task_id, peer_id_t const& old_member, PGMember const& new_member,
+    virtual NullAsyncResult replace_member(pg_id_t id, std::string& task_id, peer_id_t const& old_member, PGMember const& new_member,
                                            u_int32_t commit_quorum = 0, trace_id_t tid = 0) = 0;
-    virtual PGReplaceMemberStatus get_replace_member_status(pg_id_t id, uuid_t task_id, const PGMember& old_member,
+    virtual PGReplaceMemberStatus get_replace_member_status(pg_id_t id, std::string& task_id, const PGMember& old_member,
                                                           const PGMember& new_member,
                                                           const std::vector< PGMember >& others,
                                                           uint64_t trace_id = 0) const = 0;

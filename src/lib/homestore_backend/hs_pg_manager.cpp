@@ -271,7 +271,7 @@ void HSHomeObject::on_create_pg_message_commit(int64_t lsn, sisl::blob const& he
 // 1. Set the old member to learner and add the new member. This step will call `on_pg_start_replace_member`.
 // 2. HS takes the responsiblity to track the replication progress, and complete the replace member(remove the old
 // member) when the new member is fully synced.  This step will call `on_pg_complete_replace_member`.
-PGManager::NullAsyncResult HSHomeObject::_replace_member(pg_id_t pg_id, uuid_t task_id, peer_id_t const& old_member_id,
+PGManager::NullAsyncResult HSHomeObject::_replace_member(pg_id_t pg_id, std::string& task_id, peer_id_t const& old_member_id,
                                                          PGMember const& new_member, uint32_t commit_quorum,
                                                          trace_id_t tid) {
     if (is_shutting_down()) {
@@ -327,7 +327,7 @@ replica_member_info HSHomeObject::to_replica_member_info(const PGMember& pg_memb
     return replica_info;
 }
 
-void HSHomeObject::on_pg_start_replace_member(group_id_t group_id, uuid_t task_id,
+void HSHomeObject::on_pg_start_replace_member(group_id_t group_id, const std::string& task_id,
                                               const replica_member_info& member_out,
                                               const replica_member_info& member_in, trace_id_t tid) {
     auto lg = std::shared_lock(_pg_lock);
@@ -353,18 +353,18 @@ void HSHomeObject::on_pg_start_replace_member(group_id_t group_id, uuid_t task_i
             hs_pg->pg_sb_->num_dynamic_members = pg->pg_info_.members.size();
             // Update the latest membership info to pg superblk.
             hs_pg->pg_sb_.write();
-            LOGI("PG start replace member done member_out={} member_in={}, member_nums={}, trace_id={}",
-                 boost::uuids::to_string(member_out.id), boost::uuids::to_string(member_in.id),
+            LOGI("PG start replace member done, task_id={} member_out={} member_in={}, member_nums={}, trace_id={}",
+                 task_id, boost::uuids::to_string(member_out.id), boost::uuids::to_string(member_in.id),
                  pg->pg_info_.members.size(), tid);
             return;
         }
     }
 
-    LOGE("PG replace member failed member_out={} member_in={}, trace_id={}", boost::uuids::to_string(member_out.id),
-         boost::uuids::to_string(member_in.id), tid);
+    LOGE("PG replace member failed task_id={}, member_out={} member_in={}, trace_id={}", task_id,
+         boost::uuids::to_string(member_out.id), boost::uuids::to_string(member_in.id), tid);
 }
 
-void HSHomeObject::on_pg_complete_replace_member(group_id_t group_id, uuid_t task_id,
+void HSHomeObject::on_pg_complete_replace_member(group_id_t group_id, const std::string& task_id,
                                                  const replica_member_info& member_out,
                                                  const replica_member_info& member_in, trace_id_t tid) {
     auto lg = std::shared_lock(_pg_lock);
@@ -400,7 +400,7 @@ void HSHomeObject::on_pg_complete_replace_member(group_id_t group_id, uuid_t tas
          boost::uuids::to_string(member_out.id), boost::uuids::to_string(member_in.id), tid);
 }
 
-PGReplaceMemberStatus HSHomeObject::_get_replace_member_status(pg_id_t id, uuid_t task_id, const PGMember& old_member,
+PGReplaceMemberStatus HSHomeObject::_get_replace_member_status(pg_id_t id, std::string& task_id, const PGMember& old_member,
                                                                const PGMember& new_member,
                                                                const std::vector< PGMember >& others,
                                                                uint64_t trace_id) const {
@@ -571,6 +571,7 @@ PGInfo HSHomeObject::deserialize_pg_info(const unsigned char* json_str, size_t s
 }
 
 void HSHomeObject::on_pg_meta_blk_found(sisl::byte_view const& buf, void* meta_cookie) {
+    LOGI("on_pg_meta_blk_found is called")
     homestore::superblk< pg_info_superblk > pg_sb(_pg_meta_name);
     pg_sb.load(buf, meta_cookie);
 
