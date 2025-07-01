@@ -13,11 +13,11 @@
 namespace homeobject {
 HSHomeObject::PGBlobIterator::PGBlobIterator(HSHomeObject& home_obj, homestore::group_id_t group_id,
                                              uint64_t upto_lsn) :
-        home_obj_(home_obj), group_id_(group_id), snp_start_lsn_(upto_lsn) {
+        group_id(group_id), home_obj_(home_obj), snp_start_lsn_(upto_lsn) {
     auto pg = get_pg_metadata();
-    pg_id_ = pg->pg_info_.id;
+    pg_id = pg->pg_info_.id;
     repl_dev_ = static_cast< HS_PG* >(pg)->repl_dev_;
-    metrics_ = make_unique< DonerSnapshotMetrics >(pg_id_);
+    metrics_ = make_unique< DonerSnapshotMetrics >(pg_id);
     max_batch_size_ = HS_BACKEND_DYNAMIC_CONFIG(max_snapshot_batch_size_mb) * Mi;
     if (max_batch_size_ == 0) { max_batch_size_ = DEFAULT_MAX_BATCH_SIZE_MB * Mi; }
 
@@ -30,14 +30,14 @@ HSHomeObject::PGBlobIterator::PGBlobIterator(HSHomeObject& home_obj, homestore::
             }
         }
         // Sort shard list by <vchunkid, lsn> to ensure open shards positioned after sealed shards within each chunk
-        std::ranges::sort(shard_list_, [](ShardEntry& a, ShardEntry& b) {
+        std::ranges::sort(shard_list_, [](const ShardEntry& a, const ShardEntry& b) {
             return a.v_chunk_num != b.v_chunk_num ? a.v_chunk_num < b.v_chunk_num : a.info.lsn < b.info.lsn;
         });
     }
 }
 
 // result represents if the objId is valid and the cursors are updated
-bool HSHomeObject::PGBlobIterator::update_cursor(objId id) {
+bool HSHomeObject::PGBlobIterator::update_cursor(const objId& id) {
     if (cur_batch_start_time_ != Clock::time_point{}) {
         HISTOGRAM_OBSERVE(*metrics_, snp_dnr_batch_e2e_latency, get_elapsed_time_us(cur_batch_start_time_));
     }
@@ -45,14 +45,14 @@ bool HSHomeObject::PGBlobIterator::update_cursor(objId id) {
 
     if (id.value == LAST_OBJ_ID) { return true; }
     // resend batch
-    if (id.value == cur_obj_id_.value) {
-        LOGT("resend the same batch, objId={}, cur_obj_id={}", id.to_string(), cur_obj_id_.to_string());
+    if (id.value == cur_obj_id.value) {
+        LOGT("resend the same batch, objId={}, cur_obj_id={}", id.to_string(), cur_obj_id.to_string());
         COUNTER_INCREMENT(*metrics_, snp_dnr_resend_count, 1);
         return true;
     }
 
     // If cur_obj_id_ == 0|0 (PG meta), this may be a request for resuming from specific shard
-    if (cur_obj_id_.shard_seq_num == 0 && id.shard_seq_num != 0 && id.batch_id == 0) {
+    if (cur_obj_id.shard_seq_num == 0 && id.shard_seq_num != 0 && id.batch_id == 0) {
         bool found = false;
         for (size_t i = 0; i < shard_list_.size(); i++) {
             if (get_sequence_num_from_shard_id(shard_list_[i].info.id) == id.shard_seq_num) {
@@ -63,7 +63,7 @@ bool HSHomeObject::PGBlobIterator::update_cursor(objId id) {
                 break;
             }
         }
-        if (found) { cur_obj_id_ = id; }
+        if (found) { cur_obj_id = id; }
         return found;
     }
 
@@ -73,7 +73,7 @@ bool HSHomeObject::PGBlobIterator::update_cursor(objId id) {
         return false;
     }
     // next shard
-    if (cur_obj_id_.shard_seq_num != next_obj_id.shard_seq_num) {
+    if (cur_obj_id.shard_seq_num != next_obj_id.shard_seq_num) {
         cur_shard_idx_++;
         cur_start_blob_idx_ = 0;
         cur_batch_blob_count_ = 0;
@@ -82,12 +82,12 @@ bool HSHomeObject::PGBlobIterator::update_cursor(objId id) {
         cur_start_blob_idx_ = cur_start_blob_idx_ + cur_batch_blob_count_;
         cur_batch_blob_count_ = 0;
     }
-    cur_obj_id_ = id;
+    cur_obj_id = id;
     return true;
 }
 
 void HSHomeObject::PGBlobIterator::reset_cursor() {
-    cur_obj_id_ = {0, 0};
+    cur_obj_id = {0, 0};
     cur_shard_idx_ = -1;
     std::vector< BlobInfo > cur_blob_list_{0};
     cur_start_blob_idx_ = 0;
@@ -95,14 +95,14 @@ void HSHomeObject::PGBlobIterator::reset_cursor() {
     cur_batch_start_time_ = Clock::time_point{};
 }
 
-objId HSHomeObject::PGBlobIterator::expected_next_obj_id() {
+objId HSHomeObject::PGBlobIterator::expected_next_obj_id() const {
     // next batch
     if (cur_start_blob_idx_ + cur_batch_blob_count_ < cur_blob_list_.size()) {
-        return objId(cur_obj_id_.shard_seq_num, cur_obj_id_.batch_id + 1);
+        return objId(cur_obj_id.shard_seq_num, cur_obj_id.batch_id + 1);
     }
     // handle empty shard
-    if (cur_obj_id_.batch_id == 0 && cur_blob_list_.empty()) {
-        return objId(cur_obj_id_.shard_seq_num, cur_obj_id_.batch_id + 1);
+    if (cur_obj_id.batch_id == 0 && cur_blob_list_.empty()) {
+        return objId(cur_obj_id.shard_seq_num, cur_obj_id.batch_id + 1);
     }
     // next shard
     if (cur_shard_idx_ < static_cast< int64_t >(shard_list_.size() - 1)) {
@@ -112,15 +112,15 @@ objId HSHomeObject::PGBlobIterator::expected_next_obj_id() {
     return objId(LAST_OBJ_ID);
 }
 
-PG* HSHomeObject::PGBlobIterator::get_pg_metadata() {
+PG* HSHomeObject::PGBlobIterator::get_pg_metadata() const {
     std::scoped_lock lock_guard(home_obj_._pg_lock);
     auto iter = home_obj_._pg_map.begin();
     for (; iter != home_obj_._pg_map.end(); iter++) {
-        if (iter->second->pg_info_.replica_set_uuid == group_id_) { break; }
+        if (iter->second->pg_info_.replica_set_uuid == group_id) { break; }
     }
 
     RELEASE_ASSERT(iter != home_obj_._pg_map.end(), "PG not found replica_set_uuid={}",
-                   boost::uuids::to_string(group_id_));
+                   boost::uuids::to_string(group_id));
     return iter->second.get();
 }
 
@@ -131,9 +131,9 @@ bool HSHomeObject::PGBlobIterator::create_pg_snapshot_data(sisl::io_blob_safe& m
         return false;
     }
 #endif
-    auto pg = home_obj_._pg_map[pg_id_].get();
+    auto pg = home_obj_._pg_map[pg_id].get();
     if (pg == nullptr) {
-        LOGE("PG not found in pg_map, pg={}", pg_id_);
+        LOGE("PG not found in pg_map, pg={}", pg_id);
         return false;
     }
     auto pg_info = pg->pg_info_;
@@ -170,7 +170,7 @@ bool HSHomeObject::PGBlobIterator::generate_shard_blob_list() {
         return false;
     }
 #endif
-    auto r = home_obj_.query_blobs_in_shard(pg_id_, cur_obj_id_.shard_seq_num, 0, UINT64_MAX);
+    auto r = home_obj_.query_blobs_in_shard(pg_id, cur_obj_id.shard_seq_num, 0, UINT64_MAX);
     if (!r) { return false; }
     cur_blob_list_ = r.value();
     return true;
@@ -179,7 +179,7 @@ bool HSHomeObject::PGBlobIterator::generate_shard_blob_list() {
 bool HSHomeObject::PGBlobIterator::create_shard_snapshot_data(sisl::io_blob_safe& meta_blob) {
     auto shard = shard_list_[cur_shard_idx_];
     auto shard_entry = CreateResyncShardMetaData(
-        builder_, shard.info.id, pg_id_, static_cast< uint8_t >(shard.info.state), shard.info.lsn,
+        builder_, shard.info.id, pg_id, static_cast< uint8_t >(shard.info.state), shard.info.lsn,
         shard.info.created_time, shard.info.last_modified_time, shard.info.total_capacity_bytes, shard.v_chunk_num);
 
     builder_.FinishSizePrefixed(shard_entry);
@@ -204,8 +204,8 @@ BlobManager::AsyncResult< blob_read_result > HSHomeObject::PGBlobIterator::load_
     LOGD("Blob get request: shardID=0x{:x}, pg={}, shard=0x{:x}, blob_id={}, blkid={}", shard_id,
          (shard_id >> homeobject::shard_width), (shard_id & homeobject::shard_mask), blob_id, blkid.to_string());
     return repl_dev_->async_read(blkid, sgs, total_size)
-        .thenValue([this, blob_id, shard_id, read_buf = std::move(read_buf)](auto&& result) mutable
-                       -> BlobManager::AsyncResult< HSHomeObject::PGBlobIterator::blob_read_result > {
+        .thenValue([this, blob_id, shard_id, read_buf = std::move(read_buf)](
+                       auto&& result) mutable -> BlobManager::AsyncResult< blob_read_result > {
             if (result) {
                 LOGE("Failed to get blob, shardID=0x{:x}, pg={}, shard=0x{:x}, blob_id={}, err={}", shard_id,
                      (shard_id >> homeobject::shard_width), (shard_id & homeobject::shard_mask), blob_id,
@@ -258,10 +258,10 @@ bool HSHomeObject::PGBlobIterator::prefetch_blobs_snapshot_data() {
     auto skipped_blobs = 0;
     // limit inflight prefect data to 2x of max_batch_size.
     std::vector< BlobInfo > prefetch_list;
-    LOGD("prefetch_blobs_snapshot_data, inflight={}, idx={}, max_batch_size * 2 = {}", inflight_prefetch_bytes,
+    LOGD("prefetch_blobs_snapshot_data, inflight={}, idx={}, max_batch_size * 2 = {}", inflight_prefetch_bytes_,
          cur_start_blob_idx_, max_batch_size_ * 2);
     auto idx = cur_start_blob_idx_;
-    while (inflight_prefetch_bytes < max_batch_size_ * 2 && idx < cur_blob_list_.size()) {
+    while (inflight_prefetch_bytes_ < max_batch_size_ * 2 && idx < cur_blob_list_.size()) {
         auto info = cur_blob_list_[idx++];
         total_blobs++;
         // handle deleted object
@@ -273,25 +273,24 @@ bool HSHomeObject::PGBlobIterator::prefetch_blobs_snapshot_data() {
             skipped_blobs++;
             continue;
         }
-        if (prefetched_blobs.contains(info.blob_id)) {
+        if (prefetched_blobs_.contains(info.blob_id)) {
             LOGT("Blob {} has prefetched, skipping", info.blob_id);
             skipped_blobs++;
             continue;
         }
         auto expect_blob_size = info.pbas.blk_count() * repl_dev_->get_blk_size();
-        inflight_prefetch_bytes += expect_blob_size;
+        inflight_prefetch_bytes_ += expect_blob_size;
         LOGD("will prefetch {}", info.blob_id);
         prefetch_list.emplace_back(info);
     }
     // POC: sort the prefetch_list by pbas, trying to let IO submitted to disk more sequential.
     std::sort(prefetch_list.begin(), prefetch_list.end(),
               [](const BlobInfo& a, const BlobInfo& b) { return a.pbas < b.pbas; });
-
     for (auto info : prefetch_list) {
 #ifdef _PRERELEASE
         if (iomgr_flip::instance()->test_flip("pg_blob_iterator_load_blob_data_error")) {
             LOGW("Simulating loading blob data error");
-            prefetched_blobs.emplace(info.blob_id, folly::makeUnexpected(BlobError(BlobErrorCode::READ_FAILED)));
+            prefetched_blobs_.emplace(info.blob_id, folly::makeUnexpected(BlobError(BlobErrorCode::READ_FAILED)));
             continue;
         }
         auto delay = iomgr_flip::instance()->get_test_flip< long >("simulate_read_snapshot_load_blob_delay",
@@ -306,7 +305,7 @@ bool HSHomeObject::PGBlobIterator::prefetch_blobs_snapshot_data() {
 
         LOGT("submitting io for blob {}", info.blob_id);
         // Fixme: Re-enable retries uint8_t retries = HS_BACKEND_DYNAMIC_CONFIG(snapshot_blob_load_retry);
-        prefetched_blobs.emplace(
+        prefetched_blobs_.emplace(
             info.blob_id,
             std::move(load_blob_data(info))
                 .via(folly::getKeepAliveToken(folly::InlineExecutor::instance()))
@@ -328,54 +327,66 @@ bool HSHomeObject::PGBlobIterator::prefetch_blobs_snapshot_data() {
 }
 
 bool HSHomeObject::PGBlobIterator::create_blobs_snapshot_data(sisl::io_blob_safe& data_blob) {
-    auto batch_start = Clock::now();
-    // prefetch blobs
-    prefetch_blobs_snapshot_data();
-    std::vector< ::flatbuffers::Offset< ResyncBlobData > > blob_entries;
+    if (stopped_) {
+        LOGI("PGBlobIterator already stopped, skipping create_blobs_snapshot_data");
+        return false;
+    }
 
+    auto batch_start = Clock::now();
+    std::vector< ::flatbuffers::Offset< ResyncBlobData > > blob_entries;
     bool end_of_shard = false;
     uint64_t total_bytes = 0;
     auto idx = cur_start_blob_idx_;
-
-    std::vector< BlobManager::AsyncResult< blob_read_result > > futs;
     auto total_blobs = 0;
     auto skipped_blobs = 0;
     auto fetched_blobs = 0;
     bool hit_error = false;
-    while (total_bytes < max_batch_size_ && idx < cur_blob_list_.size()) {
-        auto info = cur_blob_list_[idx++];
-        total_blobs++;
-        // handle deleted object
-        if (info.pbas == tombstone_pbas) {
-            LOGT("Blob is deleted: shardID=0x{:x}, pg={}, shard=0x{:x}, blob_id={}, blkid={}", info.shard_id,
-                 (info.shard_id >> homeobject::shard_width), (info.shard_id & homeobject::shard_mask), info.blob_id,
-                 info.pbas.to_string());
-            // ignore
-            skipped_blobs++;
-            continue;
-        }
 
-        LOGT("Getting prefetched data for blob {}", info.blob_id);
-        auto it = prefetched_blobs.find(info.blob_id);
-        if (it == prefetched_blobs.end()) {
-            hit_error = true;
-            LOGE("blob {} not found in prefetched blob map", info.blob_id);
-            break;
-        }
-        auto res = std::move(it->second).get();
-        prefetched_blobs.erase(it);
+    // Prefetch and load blobs data
+    {
+        std::lock_guard lock(prefetch_lock_);
+        prefetch_blobs_snapshot_data();
 
-        if (res.hasError()) {
-            LOGE("blob {} hit error {}", info.blob_id, res.error());
-            hit_error = true;
-            break;
+        while (total_bytes < max_batch_size_ && idx < cur_blob_list_.size()) {
+            if (stopped_) {
+                LOGI("PGBlobIterator already stopped, skipping further blob processing");
+                return false;
+            }
+
+            auto info = cur_blob_list_[idx++];
+            total_blobs++;
+            // handle deleted object
+            if (info.pbas == tombstone_pbas) {
+                LOGT("Blob is deleted: shardID=0x{:x}, pg={}, shard=0x{:x}, blob_id={}, blkid={}", info.shard_id,
+                     (info.shard_id >> homeobject::shard_width), (info.shard_id & homeobject::shard_mask), info.blob_id,
+                     info.pbas.to_string());
+                // ignore
+                skipped_blobs++;
+                continue;
+            }
+
+            LOGT("Getting prefetched data for blob {}", info.blob_id);
+            auto it = prefetched_blobs_.find(info.blob_id);
+            if (it == prefetched_blobs_.end()) {
+                hit_error = true;
+                LOGE("blob {} not found in prefetched blob map", info.blob_id);
+                break;
+            }
+            auto res = std::move(it->second).get();
+            prefetched_blobs_.erase(it);
+
+            if (res.hasError()) {
+                LOGE("blob {} hit error {}", info.blob_id, res.error());
+                hit_error = true;
+                break;
+            }
+            std::vector< uint8_t > data(res->blob_.cbytes(), res->blob_.cbytes() + res->blob_.size());
+            blob_entries.push_back(CreateResyncBlobDataDirect(builder_, res->blob_id_, (uint8_t)res->state_, &data));
+            auto const expect_blob_size = info.pbas.blk_count() * repl_dev_->get_blk_size();
+            inflight_prefetch_bytes_ -= expect_blob_size;
+            total_bytes += expect_blob_size;
+            fetched_blobs++;
         }
-        std::vector< uint8_t > data(res->blob_.cbytes(), res->blob_.cbytes() + res->blob_.size());
-        blob_entries.push_back(CreateResyncBlobDataDirect(builder_, res->blob_id_, (uint8_t)res->state_, &data));
-        auto const expect_blob_size = info.pbas.blk_count() * repl_dev_->get_blk_size();
-        inflight_prefetch_bytes -= expect_blob_size;
-        total_bytes += expect_blob_size;
-        fetched_blobs++;
     }
 
     if (skipped_blobs + fetched_blobs != total_blobs) {
@@ -386,15 +397,9 @@ bool HSHomeObject::PGBlobIterator::create_blobs_snapshot_data(sisl::io_blob_safe
 
     if (hit_error) {
         builder_.Clear();
-        // drain the prefetched data before return which destroy the iterator.
-        for (auto& blob : prefetched_blobs) {
-            LOGD("Waiting Blob {} ready and drain it", blob.first);
-            std::move(blob.second).get();
-        }
-        prefetched_blobs.clear();
-        inflight_prefetch_bytes = 0;
         return false;
     }
+
     // should include the deleted blobs
     cur_batch_blob_count_ = idx - cur_start_blob_idx_;
     if (idx == cur_blob_list_.size()) { end_of_shard = true; }
@@ -402,7 +407,7 @@ bool HSHomeObject::PGBlobIterator::create_blobs_snapshot_data(sisl::io_blob_safe
 
     LOGD("create blobs snapshot data batch: shard_seq_num={}, batch_num={}, total_bytes={}, blob_num={}, "
          "end_of_shard={}",
-         cur_obj_id_.shard_seq_num, cur_obj_id_.batch_id, total_bytes, blob_entries.size(), end_of_shard);
+         cur_obj_id.shard_seq_num, cur_obj_id.batch_id, total_bytes, blob_entries.size(), end_of_shard);
 
     COUNTER_INCREMENT(*metrics_, snp_dnr_load_blob, blob_entries.size());
     COUNTER_INCREMENT(*metrics_, snp_dnr_load_bytes, total_bytes);
@@ -417,7 +422,7 @@ void HSHomeObject::PGBlobIterator::pack_resync_message(sisl::io_blob_safe& dest_
     header.payload_size = builder_.GetSize();
     header.payload_crc = crc32_ieee(init_crc32, builder_.GetBufferPointer(), builder_.GetSize());
     header.seal();
-    LOGD("Creating resync message in pg={} with header={} ", pg_id_, header.to_string());
+    LOGD("Creating resync message in pg={} with header={}", pg_id, header.to_string());
 
     dest_blob = sisl::io_blob_safe{static_cast< unsigned int >(builder_.GetSize() + sizeof(SyncMessageHeader))};
     std::memcpy(dest_blob.bytes(), &header, sizeof(SyncMessageHeader));
@@ -425,6 +430,19 @@ void HSHomeObject::PGBlobIterator::pack_resync_message(sisl::io_blob_safe& dest_
 
     // reset builder for next message
     builder_.Clear();
+}
+
+void HSHomeObject::PGBlobIterator::stop() {
+    stopped_ = true;
+
+    std::lock_guard lock(prefetch_lock_);
+    // Wait for all inflight prefetch blobs to finish and drain the data
+    for (auto& blob : prefetched_blobs_) {
+        LOGD("Waiting Blob {} ready and drain it", blob.first);
+        std::move(blob.second).get();
+    }
+    prefetched_blobs_.clear();
+    inflight_prefetch_bytes_ = 0;
 }
 
 } // namespace homeobject

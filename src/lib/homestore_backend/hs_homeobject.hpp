@@ -455,7 +455,8 @@ public:
 
     inline const static homestore::MultiBlkId tombstone_pbas{0, 0, 0};
 
-    struct PGBlobIterator {
+    class PGBlobIterator {
+    public:
         struct blob_read_result {
             blob_id_t blob_id_;
             sisl::io_blob_safe blob_;
@@ -463,21 +464,28 @@ public:
             blob_read_result(blob_id_t blob_id, sisl::io_blob_safe&& blob, ResyncBlobState state) :
                     blob_id_(blob_id), blob_(std::move(blob)), state_(state) {}
         };
+
         PGBlobIterator(HSHomeObject& home_obj, homestore::group_id_t group_id, uint64_t upto_lsn = 0);
-        PG* get_pg_metadata();
-        bool update_cursor(objId id);
+        bool update_cursor(const objId& id);
         void reset_cursor();
-        objId expected_next_obj_id();
         bool generate_shard_blob_list();
-        BlobManager::AsyncResult< blob_read_result > load_blob_data(const BlobInfo& blob_info);
         bool create_pg_snapshot_data(sisl::io_blob_safe& meta_blob);
         bool create_shard_snapshot_data(sisl::io_blob_safe& meta_blob);
-        bool prefetch_blobs_snapshot_data();
         bool create_blobs_snapshot_data(sisl::io_blob_safe& data_blob);
-        void pack_resync_message(sisl::io_blob_safe& dest_blob, SyncMessageType type);
-        bool end_of_scan() const;
+        void stop();
 
-        // All of the leader's metrics are in-memory
+        objId cur_obj_id{0, 0};
+        homestore::group_id_t group_id;
+        pg_id_t pg_id;
+
+    private:
+        PG* get_pg_metadata() const;
+        objId expected_next_obj_id() const;
+        BlobManager::AsyncResult< blob_read_result > load_blob_data(const BlobInfo& blob_info);
+        bool prefetch_blobs_snapshot_data();
+        void pack_resync_message(sisl::io_blob_safe& dest_blob, SyncMessageType type);
+
+        // All the leader's metrics are in-memory
         struct DonerSnapshotMetrics : sisl::MetricsGroup {
             explicit DonerSnapshotMetrics(pg_id_t pg_id) : sisl::MetricsGroup("snapshot_doner", std::to_string(pg_id)) {
                 REGISTER_COUNTER(snp_dnr_load_blob, "Loaded blobs in baseline resync");
@@ -510,23 +518,22 @@ public:
 
         std::vector< ShardEntry > shard_list_{0};
 
-        objId cur_obj_id_{0, 0};
         int64_t cur_shard_idx_{-1};
         std::vector< BlobInfo > cur_blob_list_{0};
-        uint64_t inflight_prefetch_bytes{0};
-        std::map< blob_id_t, BlobManager::AsyncResult< blob_read_result > > prefetched_blobs;
+        uint64_t inflight_prefetch_bytes_{0};
+        std::map< blob_id_t, BlobManager::AsyncResult< blob_read_result > > prefetched_blobs_;
+        std::mutex prefetch_lock_;
         uint64_t cur_start_blob_idx_{0};
         uint64_t cur_batch_blob_count_{0};
         Clock::time_point cur_batch_start_time_;
         flatbuffers::FlatBufferBuilder builder_;
 
         HSHomeObject& home_obj_;
-        homestore::group_id_t group_id_;
         uint64_t snp_start_lsn_;
-        pg_id_t pg_id_;
         shared< homestore::ReplDev > repl_dev_;
         uint64_t max_batch_size_;
         std::unique_ptr< DonerSnapshotMetrics > metrics_;
+        bool stopped_{false};
     };
 
     class SnapshotReceiveHandler {
