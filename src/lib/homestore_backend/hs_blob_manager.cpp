@@ -77,6 +77,10 @@ struct put_blob_req_ctx : public repl_result_ctx< BlobManager::Result< HSHomeObj
         blob_header_idx_ = data_bufs_.size() - 1;
     }
 
+    void copy_user_key(std::string const& user_key) {
+        std::memcpy((blob_header_buf().bytes() + sizeof(HSHomeObject::BlobHeader)), user_key.data(), user_key.size());
+    }
+
     HSHomeObject::BlobHeader* blob_header() { return r_cast< HSHomeObject::BlobHeader* >(blob_header_buf().bytes()); }
     sisl::io_blob_safe& blob_header_buf() { return data_bufs_[blob_header_idx_]; }
 };
@@ -123,14 +127,8 @@ BlobManager::AsyncResult< blob_id_t > HSHomeObject::_put_blob(ShardInfo const& s
         return folly::makeUnexpected(BlobError(BlobErrorCode::RETRY_REQUEST));
     }
 
-    // check user key size
-    if (blob.user_key.size() > BlobHeader::max_user_key_length) {
-        BLOGE(tid, shard.id, new_blob_id, "input user key length > max_user_key_length {}", blob.user_key.size(),
-              BlobHeader::max_user_key_length);
-        return folly::makeUnexpected(BlobError(BlobErrorCode::INVALID_ARG));
-    }
     // Create a put_blob request which allocates for header, key and blob_header, user_key. Data sgs are added later
-    auto req = put_blob_req_ctx::make(sisl::round_up(sizeof(BlobHeader), repl_dev->get_blk_size()));
+    auto req = put_blob_req_ctx::make(sizeof(BlobHeader) + blob.user_key.size());
     req->header()->msg_type = ReplicationMessageType::PUT_BLOB_MSG;
     req->header()->payload_size = 0;
     req->header()->payload_crc = 0;
@@ -159,18 +157,11 @@ BlobManager::AsyncResult< blob_id_t > HSHomeObject::_put_blob(ShardInfo const& s
     req->blob_header()->object_offset = blob.object_off;
 
     // Append the user key information if present.
-    if (!blob.user_key.empty()) {
-        std::memcpy(req->blob_header()->user_key, blob.user_key.data(), blob.user_key.size());
-    }
+    if (!blob.user_key.empty()) { req->copy_user_key(blob.user_key); }
 
     // Set offset of actual data after the blob header and user key (rounded off)
     req->blob_header()->data_offset = req->blob_header_buf().size();
-    if (req->blob_header()->data_offset != _data_block_size) {
-        BLOGE(tid, shard.id, new_blob_id, "data offset {}, req->blob_header_buf().size() {}",
-              req->blob_header()->data_offset, req->blob_header_buf().size());
-        RELEASE_ASSERT(req->blob_header()->data_offset == _data_block_size,
-                       "blob header should be one block after padding");
-    }
+
     // In case blob body is not aligned, create a new aligned buffer and copy the blob body.
     if (((r_cast< uintptr_t >(blob.body.cbytes()) % io_align) != 0) || ((blob_size % io_align) != 0)) {
         // If address or size is not aligned, create a separate aligned buffer and do expensive memcpy.
@@ -357,7 +348,10 @@ BlobManager::AsyncResult< Blob > HSHomeObject::_get_blob_data(const shared< home
                 return folly::makeUnexpected(BlobError(BlobErrorCode::READ_FAILED));
             }
 
-            std::string user_key = std::string((const char*)header->user_key, (size_t)header->user_key_size);
+            // Metadata start offset is just after blob header
+            std::string user_key = header->user_key_size
+                ? std::string((const char*)(read_buf.bytes() + sizeof(BlobHeader)), (size_t)header->user_key_size)
+                : std::string{};
 
             uint8_t const* blob_bytes = read_buf.bytes() + header->data_offset;
             uint8_t computed_hash[BlobHeader::blob_max_hash_len]{};

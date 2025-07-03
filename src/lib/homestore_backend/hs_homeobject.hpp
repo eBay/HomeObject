@@ -371,8 +371,6 @@ public:
     // Padding of zeroes is added to make sure the whole payload be aligned to device block size.
     struct BlobHeader : DataHeader {
         static constexpr uint64_t blob_max_hash_len = 32;
-        static constexpr uint64_t max_blocks = 64;
-        static constexpr uint64_t max_user_key_length = 1024 + 1;
 
         enum class HashAlgorithm : uint8_t {
             NONE = 0,
@@ -384,14 +382,12 @@ public:
         HashAlgorithm hash_algorithm;
         mutable uint8_t header_hash[blob_max_hash_len]{};
         uint8_t hash[blob_max_hash_len]{};
-        uint8_t block_hashes[max_blocks][blob_max_hash_len]{};
         shard_id_t shard_id;
         blob_id_t blob_id;
         uint32_t blob_size;
         uint64_t object_offset; // Offset of this blob in the object. Provided by GW.
         uint32_t data_offset;   // Offset of actual data blob stored after the metadata.
         uint32_t user_key_size; // Actual size of the user key.
-        uint8_t user_key[max_user_key_length]{};
 
         std::string to_string() const {
             return fmt::format("magic={:#x} version={} shard={:#x} blob_size={} user_size={} algo={} hash={:np}\n",
@@ -440,8 +436,7 @@ public:
         }
     };
 #pragma pack()
-    // size of BlobHeader should be smaller than _data_block_size
-    static_assert(sizeof(BlobHeader) < _data_block_size);
+
     struct BlobInfo {
         shard_id_t shard_id;
         blob_id_t blob_id;
