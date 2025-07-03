@@ -230,7 +230,9 @@ BlobManager::AsyncResult< blob_read_result > HSHomeObject::PGBlobIterator::load_
                 return blob_read_result(blob_id, std::move(read_buf), ResyncBlobState::CORRUPTED);
             }
 
-	    std::string user_key = std::string((const char*)header->user_key, (size_t)header->user_key_size);
+            std::string user_key = header->user_key_size
+                ? std::string((const char*)(read_buf.bytes() + sizeof(BlobHeader)), (size_t)header->user_key_size)
+                : std::string{};
 
             uint8_t const* blob_bytes = read_buf.bytes() + header->data_offset;
             uint8_t computed_hash[BlobHeader::blob_max_hash_len]{};

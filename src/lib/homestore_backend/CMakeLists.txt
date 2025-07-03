@@ -78,7 +78,6 @@ target_sources(homestore_test_misc PRIVATE $<TARGET_OBJECTS:homestore_tests_misc
 target_link_libraries(homestore_test_misc PUBLIC homeobject_homestore ${COMMON_TEST_DEPS})
 add_test(NAME HomestoreTestMisc COMMAND homestore_test_misc -csv error --executor immediate --config_path ./
         --override_config homestore_config.consensus.snapshot_freq_distance:0
-        --override_config hs_backend_config.enable_gc=true
         --override_config homestore_config.consensus.max_grpc_message_size:138412032)
 
 # Dynamic tests
