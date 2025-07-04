@@ -301,7 +301,7 @@ BlobManager::AsyncResult< Blob > HSHomeObject::_get_blob(ShardInfo const& shard,
         return folly::makeUnexpected(BlobError(BlobErrorCode::RETRY_REQUEST));
     }
 
-    BLOGD(tid, shard.id, blob_id, "Blob Get request: pd={}, group={}, shard=0x{:x}, blob={}, offset={}, len={}", pg_id,
+    BLOGD(tid, shard.id, blob_id, "Blob Get request: pg={}, group={}, shard=0x{:x}, blob={}, offset={}, len={}", pg_id,
           repl_dev->group_id(), shard.id, blob_id, req_offset, req_len);
     auto r = get_blob_from_index_table(index_table, shard.id, blob_id);
     if (!r) {
@@ -378,7 +378,7 @@ BlobManager::AsyncResult< Blob > HSHomeObject::_get_blob_data(const shared< home
             auto body = sisl::io_blob_safe(res_len);
             std::memcpy(body.bytes(), blob_bytes + req_offset, res_len);
 
-            BLOGD(tid, blob_id, shard_id, "Blob get success: blkid={}", blkid.to_string());
+            BLOGD(tid, shard_id, blob_id, "Blob get success: blkid={}", blkid.to_string());
             decr_pending_request_num();
             return Blob(std::move(body), std::move(user_key), header->object_offset, repl_dev->get_leader_id());
         });
@@ -423,9 +423,9 @@ HSHomeObject::blob_put_get_blk_alloc_hints(sisl::blob const& header, cintrusive<
         return folly::makeUnexpected(homestore::ReplServiceError::RESULT_NOT_EXIST_YET);
     }
 
-    homestore::blk_alloc_hints hints;
-
     auto hs_shard = d_cast< HS_Shard* >((*shard_iter->second).get());
+
+    homestore::blk_alloc_hints hints;
     hints.chunk_id_hint = hs_shard->sb_->p_chunk_id;
     if (hs_ctx->is_proposer()) { hints.reserved_blks = get_reserved_blks(); }
     BLOGD(tid, msg_header->shard_id, msg_header->blob_id, "Picked p_chunk_id={}, reserved_blks={}",
