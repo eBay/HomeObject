@@ -440,6 +440,10 @@ void HSHomeObject::local_create_shard(ShardInfo shard_info, homestore::chunk_num
     auto hs_pg = get_hs_pg(shard_info.placement_group);
     RELEASE_ASSERT(hs_pg != nullptr, "shardID=0x{:x}, pg={}, shard=0x{:x}, PG not found", shard_info.id,
                    (shard_info.id >> homeobject::shard_width), (shard_info.id & homeobject::shard_mask));
+
+    SLOGD(tid, shard_info.id, "local_create_shard {}, vchunk_id={}, p_chunk_id={}, pg_id={}", shard_info.id, v_chunk_id,
+          p_chunk_id, shard_info.placement_group);
+
     const_cast< HS_PG* >(hs_pg)->durable_entities_update(
         [blk_count](auto& de) { de.total_occupied_blk_count.fetch_add(blk_count, std::memory_order_relaxed); });
 }

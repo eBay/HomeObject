@@ -89,26 +89,38 @@ bool HeapChunkSelector::try_mark_chunk_to_gc_state(const chunk_num_t chunk_id, b
 }
 
 csharedChunk HeapChunkSelector::select_specific_chunk(const pg_id_t pg_id, const chunk_num_t v_chunk_id) {
-    std::unique_lock lock_guard(m_chunk_selector_mtx);
-    auto pg_it = m_per_pg_chunks.find(pg_id);
-    if (pg_it == m_per_pg_chunks.end()) {
-        LOGWARNMOD(homeobject, "No pg found for pg={}", pg_id);
-        return nullptr;
+    homestore::shared< ExtendedVChunk > chunk;
+
+    while (true) {
+        std::unique_lock lock_guard(m_chunk_selector_mtx);
+        auto pg_it = m_per_pg_chunks.find(pg_id);
+        if (pg_it == m_per_pg_chunks.end()) {
+            LOGWARNMOD(homeobject, "No pg found for pg={}", pg_id);
+            return nullptr;
+        }
+
+        auto pg_chunk_collection = pg_it->second;
+        auto& pg_chunks = pg_chunk_collection->m_pg_chunks;
+        std::scoped_lock lock(pg_chunk_collection->mtx);
+        if (v_chunk_id >= pg_chunks.size()) {
+            LOGWARNMOD(homeobject, "No chunk found for v_chunk_id={}", v_chunk_id);
+            return nullptr;
+        }
+
+        chunk = pg_chunks[v_chunk_id];
+        if (chunk->m_state == ChunkState::AVAILABLE) {
+            chunk->m_state = ChunkState::INUSE;
+            --pg_chunk_collection->available_num_chunks;
+            pg_chunk_collection->available_blk_count -= chunk->available_blks();
+            break;
+        } else {
+            LOGDEBUGMOD(homeobject, "v_chunk_id={} for pg={} is in the state of {}, wait and retry!", v_chunk_id, pg_id,
+                        chunk->m_state);
+            std::this_thread::sleep_for(std::chrono::seconds(5));
+        }
     }
 
-    auto pg_chunk_collection = pg_it->second;
-    auto& pg_chunks = pg_chunk_collection->m_pg_chunks;
-    std::scoped_lock lock(pg_chunk_collection->mtx);
-    if (v_chunk_id >= pg_chunks.size()) {
-        LOGWARNMOD(homeobject, "No chunk found for v_chunk_id={}", v_chunk_id);
-        return nullptr;
-    }
-    auto chunk = pg_chunks[v_chunk_id];
-    if (chunk->m_state == ChunkState::AVAILABLE) {
-        chunk->m_state = ChunkState::INUSE;
-        --pg_chunk_collection->available_num_chunks;
-        pg_chunk_collection->available_blk_count -= chunk->available_blks();
-    }
+    LOGDEBUGMOD(homeobject, "chunk={} is selected for v_chunk_id={}, pg={}", chunk->get_chunk_id(), v_chunk_id, pg_id);
 
     return chunk->get_internal_chunk();
 }
