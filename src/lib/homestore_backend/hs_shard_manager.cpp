@@ -41,6 +41,8 @@ ShardError toShardError(ReplServiceError const& e) {
         [[fallthrough]];
     case ReplServiceError::TERM_MISMATCH:
         return ShardError::PG_NOT_READY;
+    case ReplServiceError::NO_SPACE_LEFT:
+        return ShardError::NO_SPACE_LEFT;
     case ReplServiceError::NOT_LEADER:
         return ShardError::NOT_LEADER;
     case ReplServiceError::TIMEOUT:
@@ -153,7 +155,8 @@ ShardManager::AsyncResult< ShardInfo > HSHomeObject::_create_shard(pg_id_t pg_ow
         decr_pending_request_num();
         return folly::makeUnexpected(ShardError::NO_SPACE_LEFT);
     }
-    SLOGD(tid, new_shard_id, "vchunk_id={}", v_chunkID.value());
+    const auto v_chunk_id = v_chunkID.value();
+    SLOGD(tid, new_shard_id, "vchunk_id={}", v_chunk_id);
 
     // Prepare the shard info block
     sisl::io_blob_safe sb_blob(sisl::round_up(sizeof(shard_info_superblk), repl_dev->get_blk_size()), io_align);
@@ -168,7 +171,7 @@ ShardManager::AsyncResult< ShardInfo > HSHomeObject::_create_shard(pg_id_t pg_ow
                          .available_capacity_bytes = size_bytes,
                          .total_capacity_bytes = size_bytes};
     sb->p_chunk_id = 0;
-    sb->v_chunk_id = v_chunkID.value();
+    sb->v_chunk_id = v_chunk_id;
 
     auto req = repl_result_ctx< ShardManager::Result< ShardInfo > >::make(
         sizeof(shard_info_superblk) /* header_extn_size */, 0u /* key_size */);
@@ -192,20 +195,33 @@ ShardManager::AsyncResult< ShardInfo > HSHomeObject::_create_shard(pg_id_t pg_ow
 
     // replicate this create shard message to PG members;
     repl_dev->async_alloc_write(req->cheader_buf(), sisl::blob{}, req->data_sgs(), req, false /* part_of_batch */, tid);
-    return req->result().deferValue(
-        [this, req, repl_dev, tid](const auto& result) -> ShardManager::AsyncResult< ShardInfo > {
-            if (result.hasError()) {
-                auto err = result.error();
-                // FIXME: RETURNING CORRECT LEADER
-                // if (err == ShardError::NOT_LEADER) { err.current_leader = repl_dev->get_leader_id(); }
-                decr_pending_request_num();
-                return folly::makeUnexpected(err);
+    return req->result().deferValue([this, req, repl_dev, tid, pg_owner, new_shard_id,
+                                     v_chunk_id](const auto& result) -> ShardManager::AsyncResult< ShardInfo > {
+        if (result.hasError()) {
+            auto err = result.error();
+            // FIXME: RETURNING CORRECT LEADER
+            // if (err == ShardError::NOT_LEADER) { err.current_leader = repl_dev->get_leader_id(); }
+
+            bool res = chunk_selector()->release_chunk(pg_owner, v_chunk_id);
+            RELEASE_ASSERT(res, "Failed to release v_chunk_id={}, pg={}", v_chunk_id, pg_owner);
+
+            SLOGE(tid, new_shard_id, "got {} when creating shard at leader, failed to create shard {}!", err,
+                  new_shard_id);
+
+            if (err == ShardError::NO_SPACE_LEFT) {
+                gc_manager()->submit_gc_task(task_priority::normal,
+                                             chunk_selector()->get_pg_vchunk(pg_owner, v_chunk_id)->get_chunk_id());
+                SLOGD(tid, new_shard_id, "got no space left error when creating shard {} at leader", new_shard_id);
             }
-            auto shard_info = result.value();
-            SLOGD(tid, shard_info.id, "Shard created success.");
+
             decr_pending_request_num();
-            return shard_info;
-        });
+            return folly::makeUnexpected(err);
+        }
+        auto shard_info = result.value();
+        SLOGD(tid, shard_info.id, "Shard created success.");
+        decr_pending_request_num();
+        return shard_info;
+    });
 }
 
 ShardManager::AsyncResult< ShardInfo > HSHomeObject::_seal_shard(ShardInfo const& info, trace_id_t tid) {

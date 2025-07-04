@@ -674,11 +674,15 @@ folly::Future< std::error_code > ReplicationStateMachine::on_fetch_data(const in
             .via(folly::getGlobalIOExecutor())
             .thenValue([this, lsn, blob_id, shard_id, given_buffer, total_size](auto&& err) {
                 // io error
-                if (err) throw std::system_error(err);
+                if (err) {
+                    LOGE("FetchData fails to read blob, lsn={}, blob_id={}, shard_id={}, err_value={}, error={}", lsn,
+                         blob_id, shard_id, err.value(), err.message());
+                    throw std::system_error(err);
+                }
 
-                // folly future has no machenism to bypass the later thenValue in the then value chain. so for all
-                // the case that no need to schedule the later async_read, we throw a system_error with no error
-                // code to bypass the next thenValue.
+            // folly future has no machenism to bypass the later thenValue in the then value chain. so for all
+            // the case that no need to schedule the later async_read, we throw a system_error with no error
+            // code to bypass the next thenValue.
 #ifdef _PRERELEASE
                 if (iomgr_flip::instance()->test_flip("local_blk_data_invalid")) {
                     LOGI("Simulating forcing to read by indextable");
@@ -734,6 +738,10 @@ folly::Future< std::error_code > ReplicationStateMachine::on_fetch_data(const in
 
                 RELEASE_ASSERT(pbas.blk_count() * repl_dev()->get_blk_size() == total_size,
                                "pbas blk size does not match total_size");
+
+                LOGD("on_fetch_data: read data with blob_id={}, shardID=0x{:x}, pg={}, shard=0x{:x} from pbas={}",
+                     blob_id, shard_id, pg_id, (shard_id & homeobject::shard_mask), pbas.to_string());
+
                 return homestore::data_service().async_read(pbas, given_buffer, total_size);
             })
             .thenValue([this, lsn, blob_id, shard_id, given_buffer, total_size](auto&& err) {
@@ -785,8 +793,7 @@ bool ReplicationStateMachine::validate_blob(shard_id_t shard_id, blob_id_t blob_
         return false;
     }
     if (header->shard_id != shard_id) {
-        LOGD("shard_id does not match , expected shardID=0x{:x} , shard_id in header=0x{:x}", shard_id,
-             header->shard_id);
+        LOGD("shard_id does not match , expected shardID={} , shard_id in header={}", shard_id, header->shard_id);
         return false;
     }
     if (header->blob_id != blob_id) {
@@ -975,11 +982,13 @@ void ReplicationStateMachine::handle_no_space_left(homestore::repl_lsn_t lsn, ho
             .via(&folly::InlineExecutor::instance())
             .thenValue([this, lsn, chunk_id](auto&& res) {
                 if (!res) {
-                    RELEASE_ASSERT(false,
-                                   "failed to submit emergent gc task for chunk_id={} , lsn={} - fatal error, aborting",
-                                   chunk_id, lsn);
+                    LOGERROR("failed to submit emergent gc task for chunk_id={} , lsn={}, will retry again if new "
+                             "no_space_left happens",
+                             chunk_id, lsn);
+                } else {
+                    LOGD("successfully handle no_space_left error for chunk_id={} , lsn={}", chunk_id, lsn);
                 }
-                LOGD("successfully handle no_space_left error for chunk_id={} , lsn={}", chunk_id, lsn);
+
                 // start accepting new requests again.
                 repl_dev()->resume_accepting_reqs();
             });

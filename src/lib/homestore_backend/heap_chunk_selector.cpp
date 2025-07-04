@@ -73,8 +73,14 @@ bool HeapChunkSelector::try_mark_chunk_to_gc_state(const chunk_num_t chunk_id, b
     }
 
     auto& chunk_state = chunk_it->second->m_state;
+
+    if (chunk_state == ChunkState::GC) {
+        LOGWARNMOD(homeobject, "gc: chunk is already in gc state, chunk_id={}", chunk_id);
+        return false; // already in gc state, no need to change
+    }
+
     if (chunk_state == ChunkState::INUSE && !force) {
-        LOGWARNMOD(homeobject, "Chunk is inuse, chunk_id={}", chunk_id);
+        LOGWARNMOD(homeobject, "gc: chunk is inuse, chunk_id={}", chunk_id);
         return false;
     }
 
@@ -148,6 +154,7 @@ bool HeapChunkSelector::reset_pg_chunks(pg_id_t pg_id) {
         auto pg_chunk_collection = pg_it->second;
         std::scoped_lock lock(pg_chunk_collection->mtx);
         for (auto& chunk : pg_chunk_collection->m_pg_chunks) {
+            LOGDEBUGMOD(homeobject, "reset chunk={} in pg={} for destruction", chunk->get_chunk_id(), pg_id);
             chunk->reset();
         }
     }
@@ -271,7 +278,7 @@ std::optional< uint32_t > HeapChunkSelector::select_chunks_for_pg(pg_id_t pg_id,
 
 void HeapChunkSelector::switch_chunks_for_pg(const pg_id_t pg_id, const chunk_num_t old_chunk_id,
                                              const chunk_num_t new_chunk_id) {
-    LOGDEBUGMOD(homeobject, "switch chunks for pg_id={}, old_chunk={}, new_chunk={}", pg_id, old_chunk_id,
+    LOGDEBUGMOD(homeobject, "gc: switch chunks for pg_id={}, old_chunk={}, new_chunk={}", pg_id, old_chunk_id,
                 new_chunk_id);
 
     auto EXVchunk_old = get_extend_vchunk(old_chunk_id);
@@ -295,26 +302,31 @@ void HeapChunkSelector::switch_chunks_for_pg(const pg_id_t pg_id, const chunk_nu
     std::unique_lock lk(pg_chunk_collection->mtx);
     auto& pg_chunks = pg_chunk_collection->m_pg_chunks;
 
+    // LOGDEBUGMOD(homeobject, "gc: before switch chunks for pg_id={}, pg_chunks={}", pg_chunks);
+
     if (sisl_unlikely(pg_chunks[v_chunk_id]->get_chunk_id() == new_chunk_id)) {
         // this might happens when crash recovery. the crash happens after pg metablk is updated but before gc task
         // metablk is destroyed.
         LOGDEBUGMOD(
             homeobject,
-            "the pchunk_id for vchunk_id={} in chunkselector for pg_id={} is already {},  skip switching chunks!",
+            "gc: the pchunk_id for vchunk_id={} in chunkselector for pg_id={} is already {},  skip switching chunks!",
             v_chunk_id, pg_id, new_chunk_id);
 
         return;
     } else {
         RELEASE_ASSERT(pg_chunks[v_chunk_id]->get_chunk_id() == old_chunk_id,
-                       "vchunk={} for pg={} in chunkselector should have a pchunk={} , but have a pchunk={}",
+                       "gc: vchunk={} for pg={} in chunkselector should have a pchunk={} , but have a pchunk={}",
                        v_chunk_id, pg_id, old_chunk_id, pg_chunks[v_chunk_id]->get_chunk_id());
 
         pg_chunks[v_chunk_id] = EXVchunk_new;
 
-        LOGDEBUGMOD(homeobject,
-                    "vchunk={} in pg_chunk_collection for pg_id={} has been update from pchunk_id={} to pchunk_id={}",
-                    v_chunk_id, pg_id, old_chunk_id, new_chunk_id);
+        LOGDEBUGMOD(
+            homeobject,
+            "gc: vchunk={} in pg_chunk_collection for pg_id={} has been update from pchunk_id={} to pchunk_id={}",
+            v_chunk_id, pg_id, old_chunk_id, new_chunk_id);
     }
+
+    // LOGDEBUGMOD(homeobject, "gc: after switch chunks for pg_id={}, pg_chunks={}", pg_chunks);
 
     pg_chunk_collection->available_blk_count += new_available_blks - old_available_blks;
 }
