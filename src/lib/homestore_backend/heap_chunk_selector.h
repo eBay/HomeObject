@@ -200,7 +200,12 @@ public:
 
     homestore::cshared< ExtendedVChunk > get_extend_vchunk(const chunk_num_t chunk_id) const;
 
+    // swith pg chunks pg, which will move old chunk out of pg and move new chunk into pg.
     void switch_chunks_for_pg(const pg_id_t pg_id, const chunk_num_t old_chunk_id, const chunk_num_t new_chunk_id);
+
+    // switch vchunk info after gc, including pg and state.
+    void update_vchunk_info_after_gc(const chunk_num_t move_from_chunk, const chunk_num_t move_to_chunk,
+                                     const ChunkState final_state, const pg_id_t pg_id, const chunk_num_t vchunk_id);
 
 private:
     void add_chunk_internal(const chunk_num_t, bool add_to_heap = true);

@@ -89,26 +89,44 @@ bool HeapChunkSelector::try_mark_chunk_to_gc_state(const chunk_num_t chunk_id, b
 }
 
 csharedChunk HeapChunkSelector::select_specific_chunk(const pg_id_t pg_id, const chunk_num_t v_chunk_id) {
-    std::unique_lock lock_guard(m_chunk_selector_mtx);
-    auto pg_it = m_per_pg_chunks.find(pg_id);
-    if (pg_it == m_per_pg_chunks.end()) {
-        LOGWARNMOD(homeobject, "No pg found for pg={}", pg_id);
-        return nullptr;
+    homestore::shared< ExtendedVChunk > chunk;
+
+    while (true) {
+        {
+            std::unique_lock lock_guard(m_chunk_selector_mtx);
+            auto pg_it = m_per_pg_chunks.find(pg_id);
+            if (pg_it == m_per_pg_chunks.end()) {
+                LOGWARNMOD(homeobject, "No pg found for pg={}", pg_id);
+                return nullptr;
+            }
+
+            auto pg_chunk_collection = pg_it->second;
+            auto& pg_chunks = pg_chunk_collection->m_pg_chunks;
+            std::scoped_lock lock(pg_chunk_collection->mtx);
+            if (v_chunk_id >= pg_chunks.size()) {
+                LOGWARNMOD(homeobject, "No chunk found for v_chunk_id={}", v_chunk_id);
+                return nullptr;
+            }
+
+            chunk = pg_chunks[v_chunk_id];
+
+            if (chunk->m_state == ChunkState::GC) {
+                LOGDEBUGMOD(homeobject, "v_chunk_id={} for pg={} is in GC state, wait and retry!", v_chunk_id, pg_id);
+            } else {
+                if (chunk->m_state == ChunkState::AVAILABLE) {
+                    chunk->m_state = ChunkState::INUSE;
+                    --pg_chunk_collection->available_num_chunks;
+                    pg_chunk_collection->available_blk_count -= chunk->available_blks();
+                }
+                break;
+            }
+        }
+
+        // if the chunk is not available, probably being gc. we wait for a while and retry
+        std::this_thread::sleep_for(std::chrono::seconds(5));
     }
 
-    auto pg_chunk_collection = pg_it->second;
-    auto& pg_chunks = pg_chunk_collection->m_pg_chunks;
-    std::scoped_lock lock(pg_chunk_collection->mtx);
-    if (v_chunk_id >= pg_chunks.size()) {
-        LOGWARNMOD(homeobject, "No chunk found for v_chunk_id={}", v_chunk_id);
-        return nullptr;
-    }
-    auto chunk = pg_chunks[v_chunk_id];
-    if (chunk->m_state == ChunkState::AVAILABLE) {
-        chunk->m_state = ChunkState::INUSE;
-        --pg_chunk_collection->available_num_chunks;
-        pg_chunk_collection->available_blk_count -= chunk->available_blks();
-    }
+    LOGDEBUGMOD(homeobject, "chunk={} is selected for v_chunk_id={}, pg={}", chunk->get_chunk_id(), v_chunk_id, pg_id);
 
     return chunk->get_internal_chunk();
 }
@@ -274,6 +292,42 @@ std::optional< uint32_t > HeapChunkSelector::select_chunks_for_pg(pg_id_t pg_id,
     }
 
     return num_chunk;
+}
+
+void HeapChunkSelector::update_vchunk_info_after_gc(const chunk_num_t move_from_chunk, const chunk_num_t move_to_chunk,
+                                                    const ChunkState final_state, const pg_id_t pg_id,
+                                                    const chunk_num_t vchunk_id) {
+
+    std::unique_lock lock_guard(m_chunk_selector_mtx);
+
+    // if the state of move_to_chunk is updated to inuse or available, then it might be selected for gc immediately. if
+    // we change the state of move_to_chunk before gc_task_sb is destroyed, when crash recovery and redo the gc task,
+    // the move_to_chunk will probably has new data written into it, which is different from the data we copied from
+    // move_from_chunk. so, we need to switch the chunk state after gc_task_sb is destroyed.
+
+    auto move_to_vchunk = get_extend_vchunk(move_to_chunk);
+    auto move_from_vchunk = get_extend_vchunk(move_from_chunk);
+
+    RELEASE_ASSERT(move_from_vchunk->m_state == ChunkState::GC, "move_from_chunk={} should be in gc state",
+                   move_from_chunk);
+    RELEASE_ASSERT(move_to_vchunk->m_state == ChunkState::GC, "move_to_chunk={} should be in gc state", move_to_chunk);
+
+    RELEASE_ASSERT(!(move_to_vchunk->m_pg_id.has_value()), "move_to_chunk={} should not belongs to a pg",
+                   move_to_chunk);
+
+    // 1 change the pg_id and vchunk_id of the move_to_chunk according to metablk
+    move_to_vchunk->m_pg_id = pg_id;
+    move_to_vchunk->m_v_chunk_id = vchunk_id;
+
+    // 2 update the chunk state of move_from_chunk, now it is a reserved chunk
+    move_from_vchunk->m_pg_id = std::nullopt;
+    move_from_vchunk->m_v_chunk_id = std::nullopt;
+
+    // 3 update the state of move_to_chunk, so that it can be used for creating shard or putting blob. we need to do
+    // this after reserved_chunk meta blk is updated, so that if crash happens, we recovery the move_to_chunk is the
+    // same as that before crash. here, the same means not new put_blob or create_shard happens to it, the data on the
+    // chunk is the same as before.
+    move_to_vchunk->m_state = final_state;
 }
 
 void HeapChunkSelector::switch_chunks_for_pg(const pg_id_t pg_id, const chunk_num_t old_chunk_id,
