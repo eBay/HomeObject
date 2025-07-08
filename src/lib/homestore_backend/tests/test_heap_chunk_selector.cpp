@@ -36,6 +36,8 @@ public:
 
     void set_pdev_id(uint32_t pdev_id) { m_pdev_id = pdev_id; }
 
+    const std::string& get_pdev_name() const { return m_pdev_name; }
+
     uint16_t get_chunk_id() const { return m_chunk_id; }
 
     blk_num_t get_total_blks() const { return m_available_blks; }
@@ -47,6 +49,7 @@ public:
         m_pdev_id = pdev_id;
         m_chunk_id = chunk_id;
         m_defrag_nblks = defrag_nblks;
+        m_pdev_name = "pdev_" + std::to_string(pdev_id);
     }
 
 private:
@@ -54,6 +57,7 @@ private:
     uint32_t m_pdev_id;
     uint16_t m_chunk_id;
     uint32_t m_defrag_nblks;
+    std::string m_pdev_name;
 };
 
 VChunk::VChunk(cshared< Chunk >& chunk) : m_internal_chunk(chunk) {}
@@ -71,6 +75,8 @@ uint32_t VChunk::get_pdev_id() const { return m_internal_chunk->get_pdev_id(); }
 uint16_t VChunk::get_chunk_id() const { return m_internal_chunk->get_chunk_id(); }
 
 blk_num_t VChunk::get_total_blks() const { return m_internal_chunk->get_total_blks(); }
+
+const std::string& VChunk::get_pdev_name() const { return m_internal_chunk->get_pdev_name(); }
 
 uint64_t VChunk::size() const { return m_internal_chunk->size(); }
 void VChunk::reset() {}

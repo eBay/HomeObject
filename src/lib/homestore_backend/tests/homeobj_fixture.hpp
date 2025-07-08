@@ -66,14 +66,14 @@ public:
         g_helper->delete_homeobject();
     }
 
-    void restart(uint32_t shutdown_delay_secs = 0u, uint32_t restart_delay_secs = 0u, uint32_t disk_lost_num = 0u) {
+    void restart(uint32_t shutdown_delay_secs = 0u, uint32_t restart_delay_secs = 0u, uint32_t disk_lost_num = 0u, bool clean_lost_disk = false) {
         g_helper->sync();
         LOGINFO("Restarting homeobject replica={}", g_helper->my_replica_id());
         LOGTRACE("Metrics={}", sisl::MetricsFarm::getInstance().get_result_in_json().dump(2));
         trigger_cp(true);
         _obj_inst.reset();
         _obj_inst = std::dynamic_pointer_cast< HSHomeObject >(
-            g_helper->restart(shutdown_delay_secs, restart_delay_secs, disk_lost_num));
+            g_helper->restart(shutdown_delay_secs, restart_delay_secs, disk_lost_num, clean_lost_disk));
         // wait for leader to be elected
         std::this_thread::sleep_for(std::chrono::seconds(5));
     }
@@ -504,6 +504,10 @@ public:
         // check chunk_selector
         const auto& chunk_selector = _obj_inst->chunk_selector();
         ASSERT_EQ(chunk_selector->m_per_pg_chunks.find(pg_id), chunk_selector->m_per_pg_chunks.end());
+    }
+
+    void destroy_pg(pg_id_t pg_id) {
+        _obj_inst->pg_manager()->destroy_pg(pg_id);
     }
 
     void verify_hs_pg(HSHomeObject::HS_PG* lhs_pg, HSHomeObject::HS_PG* rhs_pg) {
