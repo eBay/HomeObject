@@ -28,7 +28,10 @@ void HeapChunkSelector::add_chunk_internal(const chunk_num_t p_chunk_id, bool ad
     auto pdevID = chunk->get_pdev_id();
     // add this find here, since we don`t want to call make_shared in try_emplace every time.
     auto it = m_per_dev_heap.find(pdevID);
-    if (it == m_per_dev_heap.end()) { it = m_per_dev_heap.emplace(pdevID, std::make_shared< ChunkHeap >()).first; }
+    if (it == m_per_dev_heap.end()) {
+        it = m_per_dev_heap.emplace(pdevID, std::make_shared< ChunkHeap >()).first;
+        it->second->pdev_name = chunk->get_pdev_name();
+    }
 
     // build total blks for every chunk on this device;
     it->second->m_total_blks += chunk->get_total_blks();
@@ -284,7 +287,8 @@ std::optional< uint32_t > HeapChunkSelector::select_chunks_for_pg(pg_id_t pg_id,
                    pg_id, num_chunk, pdev_heap->size());
         return std::nullopt;
     }
-
+    LOGINFOMOD(homeobject, "select pdev[id={}, name={}] for pg_id={}, num_chunk={}", most_avail_dev_it->first,
+               most_avail_dev_it->second->pdev_name, pg_id, num_chunk);
     auto pg_it = m_per_pg_chunks.emplace(pg_id, std::make_shared< PGChunkCollection >()).first;
     auto pg_chunk_collection = pg_it->second;
     auto& pg_chunks = pg_chunk_collection->m_pg_chunks;
