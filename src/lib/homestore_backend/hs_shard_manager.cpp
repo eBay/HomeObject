@@ -635,7 +635,7 @@ const std::set< shard_id_t > HSHomeObject::get_shards_in_chunk(homestore::chunk_
 }
 
 void HSHomeObject::update_shard_meta_after_gc(const homestore::chunk_num_t move_from_chunk,
-                                              const homestore::chunk_num_t move_to_chunk) {
+                                              const homestore::chunk_num_t move_to_chunk, const uint64_t task_id) {
     auto shards = get_shards_in_chunk(move_from_chunk);
 
     // TODO::optimize this lock
@@ -646,7 +646,8 @@ void HSHomeObject::update_shard_meta_after_gc(const homestore::chunk_num_t move_
 
     auto iter = chunk_to_shards_map_.find(move_from_chunk);
     if (iter == chunk_to_shards_map_.end()) {
-        LOGW("find no shard in move_from_chunk={}, skip update shard meta blk after gc!", move_from_chunk);
+        LOGW("gc task_id={}, find no shard in move_from_chunk={}, skip update shard meta blk after gc!", task_id,
+             move_from_chunk);
         return;
     }
 
@@ -677,7 +678,7 @@ void HSHomeObject::update_shard_meta_after_gc(const homestore::chunk_num_t move_
         // capacity
 
         hs_shard->update_info(shard_info, move_to_chunk);
-        LOGD("update shard={} pchunk from {} to {}", shard_id, move_from_chunk, move_to_chunk);
+        LOGD("gc task_id={}, update shard={} pchunk from {} to {}", task_id, shard_id, move_from_chunk, move_to_chunk);
         shards_in_move_to_chunk.insert(shard_id);
     }
 

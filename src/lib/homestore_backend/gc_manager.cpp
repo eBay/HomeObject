@@ -437,8 +437,9 @@ bool GCManager::pdev_gc_actor::replace_blob_index(
                        homestore::BtreeValue const& new_value) -> homestore::put_filter_decision {
                 BlobRouteValue existing_value{value_in_btree};
                 BlobRouteValue new_pba_value{new_value};
-
-                if (existing_value.pbas() == HSHomeObject::tombstone_pbas) {
+                const auto& existing_pbas = existing_value.pbas();
+                const auto& new_pbas = new_pba_value.pbas();
+                if (existing_pbas == HSHomeObject::tombstone_pbas) {
                     LOGDEBUG("gc task_id={}, remove tombstone when updating pg index after data copy , pg_id={}, "
                              "shard_id={}, blob_id={}, move_from_chunk={}, move_to_chunk={}",
                              task_id, pg_id, shard, blob, move_from_chunk, move_to_chunk);
@@ -446,10 +447,19 @@ bool GCManager::pdev_gc_actor::replace_blob_index(
                     return homestore::put_filter_decision::remove;
                 }
 
+                if (existing_pbas.chunk_num() != move_from_chunk) {
+                    LOGERROR("gc task_id={}, existing pbas chunk={} should be equal to move_from_chunk={}, pg_id={}, "
+                             "shard_id={}, blob_id={}, move_to_chunk={} , existing_pbas={}, new_pbas={}",
+                             task_id, existing_pbas.chunk_num(), move_from_chunk, pg_id, shard, blob, move_to_chunk,
+                             existing_pbas.to_string(), new_pbas.to_string());
+                    return homestore::put_filter_decision::keep;
+                }
+
                 LOGDEBUG("gc task_id={},  will replace pg_id={}, shard_id={}, blob_id={}, move_from_chunk={}, "
                          "move_to_chunk={} from blk_id={} to blk_id={}",
-                         task_id, pg_id, shard, blob, move_from_chunk, move_to_chunk, existing_value.pbas().to_string(),
-                         new_pba_value.pbas().to_string());
+                         task_id, pg_id, shard, blob, move_from_chunk, move_to_chunk, existing_pbas.to_string(),
+                         new_pbas.to_string());
+
                 return homestore::put_filter_decision::replace;
             }};
 
@@ -482,10 +492,10 @@ bool GCManager::pdev_gc_actor::replace_blob_index(
     // TODO:: revisit the following part with the consideration of persisting order for recovery.
 
     // 3 update pg metablk and related in-memory data structures
-    m_hs_home_object->update_pg_meta_after_gc(pg_id, move_from_chunk, move_to_chunk);
+    m_hs_home_object->update_pg_meta_after_gc(pg_id, move_from_chunk, move_to_chunk, task_id);
 
     // 4 update shard metablk and related in-memory data structures
-    m_hs_home_object->update_shard_meta_after_gc(move_from_chunk, move_to_chunk);
+    m_hs_home_object->update_shard_meta_after_gc(move_from_chunk, move_to_chunk, task_id);
 
     return true;
 }
@@ -903,9 +913,7 @@ bool GCManager::pdev_gc_actor::purge_reserved_chunk(chunk_id_t chunk) {
 
     homestore::BtreeRangeRemoveRequest< BlobRouteByChunkKey > range_remove_req{
         homestore::BtreeKeyRange< BlobRouteByChunkKey >{
-            std::move(start_key), true /* inclusive */
-            ,
-            std::move(end_key), true /* inclusive */
+            start_key, true /* inclusive */, end_key, true /* inclusive */
         }};
 
     auto status = m_index_table->remove(range_remove_req);
@@ -915,7 +923,43 @@ bool GCManager::pdev_gc_actor::purge_reserved_chunk(chunk_id_t chunk) {
         return false;
     }
 
+    // after range_remove, we check again to make sure there is not any entry in the gc index table for this chunk
+    homestore::BtreeQueryRequest< BlobRouteByChunkKey > query_req{homestore::BtreeKeyRange< BlobRouteByChunkKey >{
+        std::move(start_key), true /* inclusive */, std::move(end_key), true /* inclusive */
+    }};
+
+    std::vector< std::pair< BlobRouteByChunkKey, BlobRouteValue > > valid_blob_indexes;
+
+    status = m_index_table->query(query_req, valid_blob_indexes);
+    if (status != homestore::btree_status_t::success) {
+        LOGERROR("Failed to query blobs after purging reserved chunk={} in gc index table, index ret={}", chunk,
+                 status);
+        return false;
+    }
+
+    if (!valid_blob_indexes.empty()) {
+        LOGERROR("gc index table is not empty for chunk={} after purging, valid_blob_indexes.size={}", chunk,
+                 valid_blob_indexes.size());
+        return false;
+    }
+
     return true;
+}
+
+void GCManager::pdev_gc_actor::handle_error_before_persisting_gc_metablk(chunk_id_t move_from_chunk,
+                                                                         chunk_id_t move_to_chunk,
+                                                                         folly::Promise< bool > task,
+                                                                         const uint64_t task_id, uint8_t priority) {
+    LOGERROR(
+        "gc task_id={}, move_from_chunk={} to move_to_chunk={} with priority={} failed before persisting gc metablk",
+        task_id, move_from_chunk, move_to_chunk, priority);
+
+    const auto final_state =
+        priority == static_cast< uint8_t >(task_priority::normal) ? ChunkState::AVAILABLE : ChunkState::INUSE;
+    m_chunk_selector->mark_chunk_out_of_gc_state(move_from_chunk, final_state, task_id);
+
+    task.setValue(false);
+    m_reserved_chunk_queue.blockingWrite(move_to_chunk);
 }
 
 void GCManager::pdev_gc_actor::process_gc_task(chunk_id_t move_from_chunk, uint8_t priority,
@@ -948,8 +992,7 @@ void GCManager::pdev_gc_actor::process_gc_task(chunk_id_t move_from_chunk, uint8
 
     if (!purge_reserved_chunk(move_to_chunk)) {
         LOGWARN("gc task_id={}, can not purge move_to_chunk={}", task_id, move_to_chunk);
-        task.setValue(false);
-        m_reserved_chunk_queue.blockingWrite(move_to_chunk);
+        handle_error_before_persisting_gc_metablk(move_from_chunk, move_to_chunk, std::move(task), task_id, priority);
         return;
     }
 
@@ -957,8 +1000,7 @@ void GCManager::pdev_gc_actor::process_gc_task(chunk_id_t move_from_chunk, uint8
                          priority == static_cast< uint8_t >(task_priority::emergent))) {
         LOGWARN("gc task_id={}, failed to copy data from move_from_chunk={} to move_to_chunk={} with priority={}",
                 task_id, move_from_chunk, move_to_chunk, priority);
-        task.setValue(false);
-        m_reserved_chunk_queue.blockingWrite(move_to_chunk);
+        handle_error_before_persisting_gc_metablk(move_from_chunk, move_to_chunk, std::move(task), task_id, priority);
         return;
     }
 
@@ -966,8 +1008,7 @@ void GCManager::pdev_gc_actor::process_gc_task(chunk_id_t move_from_chunk, uint8
     if (!get_blobs_to_replace(move_to_chunk, valid_blob_indexes)) {
         LOGWARN("gc task_id={}, failed to get valid blob indexes from gc index table for move_to_chunk={}", task_id,
                 move_to_chunk);
-        task.setValue(false);
-        m_reserved_chunk_queue.blockingWrite(move_to_chunk);
+        handle_error_before_persisting_gc_metablk(move_from_chunk, move_to_chunk, std::move(task), task_id, priority);
         return;
     }
 
@@ -1053,31 +1094,15 @@ bool GCManager::pdev_gc_actor::process_after_gc_metablk_persisted(
 
     gc_task_sb.destroy();
 
-    // if the state of move_to_chunk is updated to inuse or available, then it might be selected for gc immediately. if
-    // we change the state of move_to_chunk before gc_task_sb is destroyed, when crash recovery and redo the gc task,
-    // the move_to_chunk will probably has new data written into it, which is different from the data we copied from
-    // move_from_chunk. so, we need to switch the chunk state after gc_task_sb is destroyed.
-
-    auto move_to_vchunk = m_chunk_selector->get_extend_vchunk(move_to_chunk);
-    auto move_from_vchunk = m_chunk_selector->get_extend_vchunk(move_from_chunk);
-
-    // 1 change the pg_id and vchunk_id of the move_to_chunk according to metablk
-    move_to_vchunk->m_pg_id = pg_id;
-    move_to_vchunk->m_v_chunk_id = vchunk_id;
-
-    // 2 update the chunk state of move_from_chunk, now it is a reserved chunk
-    move_from_vchunk->m_pg_id = std::nullopt;
-    move_from_vchunk->m_v_chunk_id = std::nullopt;
-    move_from_vchunk->m_state = ChunkState::GC;
-
-    // 3 update the state of move_to_chunk, so that it can be used for creating shard or putting blob. we need to do
-    // this after reserved_chunk meta blk is updated, so that if crash happens, we recovery the move_to_chunk is the
-    // same as that before crash. here, the same means not new put_blob or create_shard happens to it, the data on the
-    // chunk is the same as before.
-    move_to_vchunk->m_state =
+    const auto final_state =
         priority == static_cast< uint8_t >(task_priority::normal) ? ChunkState::AVAILABLE : ChunkState::INUSE;
 
-    LOGDEBUG("gc task_id={}, move_to_chunk={} state is updated to {}", task_id, move_to_chunk, move_to_vchunk->m_state);
+    m_chunk_selector->update_vchunk_info_after_gc(move_from_chunk, move_to_chunk, final_state, pg_id, vchunk_id,
+                                                  task_id);
+
+    LOGDEBUG("gc task_id={}, vchunk_id={} for pg={} has been update from move_from_chunk={} to move_to_chunk={} ,final "
+             "state is updated to {}",
+             task_id, vchunk_id, pg_id, move_from_chunk, move_to_chunk, final_state);
 
     return true;
 }

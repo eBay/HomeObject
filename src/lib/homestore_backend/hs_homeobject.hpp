@@ -799,7 +799,7 @@ public:
     std::optional< homestore::chunk_num_t > get_shard_p_chunk_id(shard_id_t id) const;
 
     void update_shard_meta_after_gc(const homestore::chunk_num_t move_from_chunk,
-                                    const homestore::chunk_num_t move_to_chunk);
+                                    const homestore::chunk_num_t move_to_chunk, const uint64_t task_id);
 
     /**
      * @brief Retrieves the chunk number associated with the given shard ID.
@@ -876,7 +876,7 @@ public:
     const std::set< shard_id_t > get_shards_in_chunk(homestore::chunk_num_t chunk_id) const;
 
     void update_pg_meta_after_gc(const pg_id_t pg_id, const homestore::chunk_num_t move_from_chunk,
-                                 const homestore::chunk_num_t move_to_chunk);
+                                 const homestore::chunk_num_t move_to_chunk, const uint64_t task_id);
 
     uint32_t get_pg_tombstone_blob_count(pg_id_t pg_id) const;
 

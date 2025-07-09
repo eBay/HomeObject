@@ -271,9 +271,9 @@ void HSHomeObject::on_create_pg_message_commit(int64_t lsn, sisl::blob const& he
 // 1. Set the old member to learner and add the new member. This step will call `on_pg_start_replace_member`.
 // 2. HS takes the responsiblity to track the replication progress, and complete the replace member(remove the old
 // member) when the new member is fully synced.  This step will call `on_pg_complete_replace_member`.
-PGManager::NullAsyncResult HSHomeObject::_replace_member(pg_id_t pg_id, std::string& task_id, peer_id_t const& old_member_id,
-                                                         PGMember const& new_member, uint32_t commit_quorum,
-                                                         trace_id_t tid) {
+PGManager::NullAsyncResult HSHomeObject::_replace_member(pg_id_t pg_id, std::string& task_id,
+                                                         peer_id_t const& old_member_id, PGMember const& new_member,
+                                                         uint32_t commit_quorum, trace_id_t tid) {
     if (is_shutting_down()) {
         LOGI("service is being shut down, trace_id={}", tid);
         return folly::makeUnexpected(PGError::SHUTTING_DOWN);
@@ -400,8 +400,8 @@ void HSHomeObject::on_pg_complete_replace_member(group_id_t group_id, const std:
          boost::uuids::to_string(member_out.id), boost::uuids::to_string(member_in.id), tid);
 }
 
-PGReplaceMemberStatus HSHomeObject::_get_replace_member_status(pg_id_t id, std::string& task_id, const PGMember& old_member,
-                                                               const PGMember& new_member,
+PGReplaceMemberStatus HSHomeObject::_get_replace_member_status(pg_id_t id, std::string& task_id,
+                                                               const PGMember& old_member, const PGMember& new_member,
                                                                const std::vector< PGMember >& others,
                                                                uint64_t trace_id) const {
     PGReplaceMemberStatus ret;
@@ -833,7 +833,7 @@ uint32_t HSHomeObject::get_pg_tombstone_blob_count(pg_id_t pg_id) const {
 }
 
 void HSHomeObject::update_pg_meta_after_gc(const pg_id_t pg_id, const homestore::chunk_num_t move_from_chunk,
-                                           const homestore::chunk_num_t move_to_chunk) {
+                                           const homestore::chunk_num_t move_to_chunk, const uint64_t task_id) {
     // 1 update pg metrics
     std::unique_lock lck(_pg_lock);
     auto iter = _pg_map.find(pg_id);
@@ -856,20 +856,21 @@ void HSHomeObject::update_pg_meta_after_gc(const pg_id_t pg_id, const homestore:
     if (sisl_unlikely(pg_chunks[v_chunk_id] == move_to_chunk)) {
         // this might happens when crash recovery. the crash happens after pg metablk is updated but before gc task
         // metablk is destroyed.
-        LOGD("the pchunk_id for vchunk_id={} for pg_id={} is already {},  update pg metablk again!", v_chunk_id, pg_id,
-             move_to_chunk);
+        LOGD("gc task_id={}, the pchunk_id for vchunk={} for pg_id={} is already {},  update pg metablk again!",
+             task_id, v_chunk_id, pg_id, move_to_chunk);
     } else {
         RELEASE_ASSERT(pg_chunks[v_chunk_id] == move_from_chunk,
                        "vchunk_id={} chunk_id={} is not equal to move_from_chunk={} for pg={}", v_chunk_id,
                        pg_chunks[v_chunk_id], move_from_chunk, pg_id);
         // update the vchunk to new pchunk(move_to_chunk)
         pg_chunks[v_chunk_id] = move_to_chunk;
-        LOGD("pchunk for vchunk={} of pg_id={} is updated from {} to {}", v_chunk_id, pg_id, move_from_chunk,
-             move_to_chunk);
+        LOGD("gc task_id={}, pchunk for vchunk={} of pg_id={} is updated from {} to {}", task_id, v_chunk_id, pg_id,
+             move_from_chunk, move_to_chunk);
 
         // TODO:hs_pg->shards_.size() will be decreased by 1 in delete_shard if gc finds a empty shard, which will be
         // implemented later
-        hs_pg->durable_entities_update([this, move_from_v_chunk, &move_to_chunk, &move_from_chunk, &pg_id](auto& de) {
+        hs_pg->durable_entities_update([this, move_from_v_chunk, &move_to_chunk, &move_from_chunk, &pg_id,
+                                        &task_id](auto& de) {
             // active_blob_count is updated by put/delete blob, not change it here.
 
             // considering the complexity of gc crash recovery for tombstone_blob_count, we get it directly from index
@@ -887,9 +888,9 @@ void HSHomeObject::update_pg_meta_after_gc(const pg_id_t pg_id, const homestore:
             de.total_occupied_blk_count -=
                 total_occupied_blk_count_by_move_from_chunk - total_occupied_blk_count_by_move_to_chunk;
 
-            LOGD("move_from_chunk={}, total_occupied_blk_count_by_move_from_chunk={}, move_to_chunk={}, "
+            LOGD("gc task_id={}, move_from_chunk={}, total_occupied_blk_count_by_move_from_chunk={}, move_to_chunk={}, "
                  "total_occupied_blk_count_by_move_to_chunk={}, total_occupied_blk_count={}",
-                 move_from_chunk, total_occupied_blk_count_by_move_from_chunk, move_to_chunk,
+                 task_id, move_from_chunk, total_occupied_blk_count_by_move_from_chunk, move_to_chunk,
                  total_occupied_blk_count_by_move_to_chunk, de.total_occupied_blk_count.load());
         });
 
@@ -902,7 +903,7 @@ void HSHomeObject::update_pg_meta_after_gc(const pg_id_t pg_id, const homestore:
         hs_pg->pg_sb_.write();
 
         // 2 change the pg_chunkcollection in chunk selector.
-        chunk_selector()->switch_chunks_for_pg(pg_id, move_from_chunk, move_to_chunk);
+        chunk_selector()->switch_chunks_for_pg(pg_id, move_from_chunk, move_to_chunk, task_id);
     }
 }
 
