@@ -233,6 +233,11 @@ ReplicationStateMachine::get_blk_alloc_hints(sisl::blob const& header, uint32_t 
         homestore::chunk_num_t v_chunk_id = v_chunkID.value();
         hints.application_hint = ((uint64_t)pg_id << 16) | v_chunk_id;
         if (hs_ctx->is_proposer()) { hints.reserved_blks = home_object_->get_reserved_blks(); }
+
+        auto tid = hs_ctx ? hs_ctx->traceID() : 0;
+        LOGD("tid={}, get_blk_alloc_hint for creating shard, select vchunk_id={} for pg={}, shardID={}", tid,
+             v_chunk_id, pg_id, msg_header->shard_id);
+
         return hints;
     }
 

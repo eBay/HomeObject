@@ -440,6 +440,10 @@ void HSHomeObject::local_create_shard(ShardInfo shard_info, homestore::chunk_num
     auto hs_pg = get_hs_pg(shard_info.placement_group);
     RELEASE_ASSERT(hs_pg != nullptr, "shardID=0x{:x}, pg={}, shard=0x{:x}, PG not found", shard_info.id,
                    (shard_info.id >> homeobject::shard_width), (shard_info.id & homeobject::shard_mask));
+
+    SLOGD(tid, shard_info.id, "local_create_shard {}, vchunk_id={}, p_chunk_id={}, pg_id={}", shard_info.id, v_chunk_id,
+          p_chunk_id, shard_info.placement_group);
+
     const_cast< HS_PG* >(hs_pg)->durable_entities_update(
         [blk_count](auto& de) { de.total_occupied_blk_count.fetch_add(blk_count, std::memory_order_relaxed); });
 }
@@ -631,7 +635,7 @@ const std::set< shard_id_t > HSHomeObject::get_shards_in_chunk(homestore::chunk_
 }
 
 void HSHomeObject::update_shard_meta_after_gc(const homestore::chunk_num_t move_from_chunk,
-                                              const homestore::chunk_num_t move_to_chunk) {
+                                              const homestore::chunk_num_t move_to_chunk, const uint64_t task_id) {
     auto shards = get_shards_in_chunk(move_from_chunk);
 
     // TODO::optimize this lock
@@ -642,7 +646,8 @@ void HSHomeObject::update_shard_meta_after_gc(const homestore::chunk_num_t move_
 
     auto iter = chunk_to_shards_map_.find(move_from_chunk);
     if (iter == chunk_to_shards_map_.end()) {
-        LOGW("find no shard in move_from_chunk={}, skip update shard meta blk after gc!", move_from_chunk);
+        LOGW("gc task_id={}, find no shard in move_from_chunk={}, skip update shard meta blk after gc!", task_id,
+             move_from_chunk);
         return;
     }
 
@@ -673,7 +678,7 @@ void HSHomeObject::update_shard_meta_after_gc(const homestore::chunk_num_t move_
         // capacity
 
         hs_shard->update_info(shard_info, move_to_chunk);
-        LOGD("update shard={} pchunk from {} to {}", shard_id, move_from_chunk, move_to_chunk);
+        LOGD("gc task_id={}, update shard={} pchunk from {} to {}", task_id, shard_id, move_from_chunk, move_to_chunk);
         shards_in_move_to_chunk.insert(shard_id);
     }
 

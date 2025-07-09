@@ -76,6 +76,10 @@ struct std::hash< homeobject::BlobRoute > {
 template <>
 struct std::hash< homeobject::BlobRouteByChunk > {
     std::size_t operator()(homeobject::BlobRouteByChunk const& r) const noexcept {
-        return boost::hash_value< homeobject::blob_id_t >(std::make_pair(r.shard, r.blob));
+        std::size_t seed = 0;
+        boost::hash_combine(seed, r.chunk);
+        boost::hash_combine(seed, r.shard);
+        boost::hash_combine(seed, r.blob);
+        return seed;
     }
 };

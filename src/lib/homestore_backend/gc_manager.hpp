@@ -143,6 +143,10 @@ public:
             const std::vector< std::pair< BlobRouteByChunkKey, BlobRouteValue > >& valid_blob_indexes,
             const uint64_t task_id);
 
+        void handle_error_before_persisting_gc_metablk(chunk_id_t move_from_chunk, chunk_id_t move_to_chunk,
+                                                       folly::Promise< bool > task, const uint64_t task_id,
+                                                       uint8_t priority);
+
     private:
         // utils
         sisl::sg_list generate_shard_super_blk_sg_list(shard_id_t shard_id);
