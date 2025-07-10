@@ -311,6 +311,8 @@ bool ReplicationStateMachine::apply_snapshot(std::shared_ptr< homestore::snapsho
         LOGI("Simulating apply snapshot with delay, delay={}", delay.get());
         std::this_thread::sleep_for(std::chrono::milliseconds(delay.get()));
     }
+    // Currently, nuraft will pause state machine and resume it after the last snp obj is saved. So we don't need to resume it explicitly.
+    // home_object_->resume_pg_state_machine(m_snp_rcv_handler->get_context_pg_id());
 #endif
     m_snp_rcv_handler->destroy_context_and_metrics();
 
@@ -486,7 +488,11 @@ void ReplicationStateMachine::write_snapshot_obj(std::shared_ptr< homestore::sna
         // If PG already exists, clean the stale pg resources. Let's resync on a pristine base
         if (home_object_->pg_exists(pg_data->pg_id())) {
             LOGI("pg already exists, clean pg resources before snapshot, pg={} {}", pg_data->pg_id(), log_suffix);
-            home_object_->pg_destroy(pg_data->pg_id());
+            // Need to pause state machine before destroying the PG, if fail, let raft retry.
+            if (!home_object_->pg_destroy(pg_data->pg_id(), true /* pause state machine */)) {
+                LOGE("failed to destroy existing pg, let raft retry, pg={} {}", pg_data->pg_id(), log_suffix);
+                return;
+            }
         }
         LOGI("reset context from lsn={} to lsn={}", m_snp_rcv_handler->get_context_lsn(), context->get_lsn());
         m_snp_rcv_handler->reset_context_and_metrics(context->get_lsn(), pg_data->pg_id());

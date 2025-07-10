@@ -443,7 +443,11 @@ std::optional< pg_id_t > HSHomeObject::get_pg_id_with_group_id(group_id_t group_
     }
 }
 
-void HSHomeObject::pg_destroy(pg_id_t pg_id) {
+bool HSHomeObject::pg_destroy(pg_id_t pg_id, bool need_to_pause_pg_state_machine) {
+    if (need_to_pause_pg_state_machine && !pause_pg_state_machine(pg_id)) {
+        LOGI("Failed to pause pg state machine, pg_id={}", pg_id);
+        return false;
+    }
     LOGI("Destroying pg={}", pg_id);
     mark_pg_destroyed(pg_id);
     destroy_shards(pg_id);
@@ -457,6 +461,36 @@ void HSHomeObject::pg_destroy(pg_id_t pg_id) {
     RELEASE_ASSERT(res, "Failed to return pg={} chunks to dev_heap", pg_id);
 
     LOGI("pg={} is destroyed", pg_id);
+    return true;
+}
+
+bool HSHomeObject::pause_pg_state_machine(pg_id_t pg_id) {
+    LOGI("Pause pg state machine, pg={}", pg_id);
+    auto hs_pg = const_cast< HS_PG* >(_get_hs_pg_unlocked(pg_id));
+    auto repl_dev = hs_pg ? hs_pg->repl_dev_ : nullptr;
+    auto timeout = HS_BACKEND_DYNAMIC_CONFIG(state_machine_pause_timeout_ms);
+    auto retry = HS_BACKEND_DYNAMIC_CONFIG(state_machine_pause_retry_count);
+    for (auto i = 0; i < static_cast<int>(retry); i++) {
+        hs_pg->repl_dev_->pause_state_machine(timeout /* ms */);
+        if (repl_dev->is_state_machine_paused()) {
+            LOGI("pg={} state machine is paused", pg_id);
+            return true;
+        }
+    }
+    LOGE("Failed to pause pg={} state machine after {} ms", pg_id, timeout * retry);
+    return false;
+}
+
+bool HSHomeObject::resume_pg_state_machine(pg_id_t pg_id) {
+    LOGI("Resuming pg state machine, pg={}", pg_id);
+    auto hs_pg = const_cast< HS_PG* >(_get_hs_pg_unlocked(pg_id));
+    auto repl_dev = hs_pg ? hs_pg->repl_dev_ : nullptr;
+    while (repl_dev->is_state_machine_paused()) {
+        hs_pg->repl_dev_->resume_state_machine();
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    }
+    LOGE("Resumed pg state machine, pg=", pg_id);
+    return true;
 }
 
 void HSHomeObject::mark_pg_destroyed(pg_id_t pg_id) {
