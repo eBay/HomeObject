@@ -255,6 +255,75 @@ TEST_F(HomeObjectFixture, ConcurrencyCreatePG) {
     }
 }
 
+TEST_F(HomeObjectFixture, DuplicateCreatePG) {
+    LOGINFO("HomeObject replica={} setup completed", g_helper->replica_num());
+    pg_id_t pg_id{1};
+    // create pg1 with leader 0
+    LOGINFO("Create pg={} with leader 0", pg_id);
+    create_pg(pg_id, 0);
+
+    // create pg1 again with leader 0, it should success because the same pg is already created
+    LOGINFO("Create pg={} again with leader 0", pg_id);
+    create_pg(pg_id, 0);
+
+    auto pg_size = SISL_OPTIONS["chunks_per_pg"].as< uint64_t >() * SISL_OPTIONS["chunk_size"].as< uint64_t >() * Mi;
+    uint8_t leader_replica_num = 0;
+    auto members = g_helper->members();
+
+    // create pg1 with same members, but with different size, it should failed because they are not equivalent
+    if (leader_replica_num == g_helper->replica_num()) {
+        LOGINFO("Create pg={} with same members but different size", pg_id);
+        auto info = homeobject::PGInfo(pg_id);
+        info.size = pg_size + 1 * Mi;
+        for (const auto& member : members) {
+            if (leader_replica_num == member.second) {
+                info.members.insert(homeobject::PGMember{member.first, g_helper->name() + std::to_string(member.second), 1});
+            } else {
+                info.members.insert(homeobject::PGMember{member.first, g_helper->name() + std::to_string(member.second), 0});
+            }
+        }
+        auto p = _obj_inst->pg_manager()->create_pg(std::move(info)).get();
+        ASSERT_FALSE(p);
+        ASSERT_EQ(PGError::INVALID_ARG, p.error());
+    }
+
+    // create pg1 with different members
+    if (leader_replica_num == g_helper->replica_num()) {
+        LOGINFO("Create pg={} with different members", pg_id);
+        auto info = homeobject::PGInfo(pg_id);
+        info.size = pg_size;
+        for (const auto& member : members) {
+            if (leader_replica_num == member.second) {
+                info.members.insert(homeobject::PGMember{member.first, g_helper->name() + std::to_string(member.second), 1});
+            } else {
+                auto uuid = boost::uuids::random_generator()();
+                info.members.insert(homeobject::PGMember{uuid, g_helper->name() + std::to_string(member.second), 0});
+            }
+        }
+        auto p = _obj_inst->pg_manager()->create_pg(std::move(info)).get();
+        ASSERT_FALSE(p);
+        ASSERT_EQ(PGError::INVALID_ARG, p.error());
+    }
+
+    // create pg1 with same member but with different priority
+    if (leader_replica_num == g_helper->replica_num()) {
+        LOGINFO("Create pg={} with same members but different leader", pg_id);
+        auto info = homeobject::PGInfo(pg_id);
+        info.size = pg_size;
+        for (const auto& member : members) {
+            // set member 1 with priority 1, others with priority 0
+            if (member.second == 1) {
+                info.members.insert(homeobject::PGMember{member.first, g_helper->name() + std::to_string(member.second), 1});
+            } else {
+                info.members.insert(homeobject::PGMember{member.first, g_helper->name() + std::to_string(member.second), 0});
+            }
+        }
+        auto p = _obj_inst->pg_manager()->create_pg(std::move(info)).get();
+        ASSERT_FALSE(p);
+        ASSERT_EQ(PGError::INVALID_ARG, p.error());
+    }
+}
+
 #ifdef _PRERELEASE
 TEST_F(HomeObjectFixture, CreatePGFailed) {
     set_basic_flip("create_pg_create_repl_dev_error", 1); // simulate create pg repl dev error
