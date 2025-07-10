@@ -88,8 +88,15 @@ PGManager::NullAsyncResult HSHomeObject::_create_pg(PGInfo&& pg_info, std::set< 
     incr_pending_request_num();
 
     auto pg_id = pg_info.id;
-    if (pg_exists(pg_id)) {
-        LOGW("pg already exists! pg={}", pg_id);
+    auto hs_pg = get_hs_pg(pg_id);
+    if (hs_pg) {
+        if (!pg_info.is_equivalent_to(hs_pg->pg_info_)) {
+            LOGW("PG already exists with different info! pg={}, pg_info={}, hs_pg_info={}",
+                 pg_id, pg_info.to_string(), hs_pg->pg_info_.to_string());
+            decr_pending_request_num();
+            return folly::makeUnexpected(PGError::INVALID_ARG);
+        }
+        LOGW("PG already exists! pg={}", pg_id);
         decr_pending_request_num();
         return folly::Unit();
     }
@@ -183,7 +190,9 @@ folly::Expected< HSHomeObject::HS_PG*, PGError > HSHomeObject::local_create_pg(s
                                                                                PGInfo pg_info, trace_id_t tid) {
     auto pg_id = pg_info.id;
     if (auto hs_pg = get_hs_pg(pg_id); hs_pg) {
-        LOGW("PG already exists, pg={}, trace_id={}", pg_id, tid);
+        // pg info may have changed due to replace_member, so we just log pg info here
+        LOGW("PG already exists, pg={}, trace_id={}, pg_info={}, hs_pg_info={}",
+             pg_id, tid, pg_info.to_string(), hs_pg->pg_info_.to_string());
         return const_cast< HS_PG* >(hs_pg);
     }
 

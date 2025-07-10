@@ -51,6 +51,34 @@ struct PGInfo {
 
     auto operator<=>(PGInfo const& rhs) const { return id <=> rhs.id; }
     auto operator==(PGInfo const& rhs) const { return id == rhs.id; }
+
+    // check if the PGInfo has same id, size and members with the rhs PGInfo.
+    bool is_equivalent_to(PGInfo const& rhs) const {
+        if (id != rhs.id || size != rhs.size || members.size() != rhs.members.size()) {
+            return false;
+        }
+        for (auto const& m : members) {
+            auto it = rhs.members.find(m);
+            if (it == rhs.members.end() || it->priority != m.priority) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    std::string to_string() const {
+        std::string members_str;
+        uint32_t i = 0ul;
+        for (auto const& m : members) {
+            if (i++ > 0) { members_str += ", "; }
+            members_str += fmt::format("member-{}: id={}, name={}, priority={}",
+                                       i, boost::uuids::to_string(m.id), m.name, m.priority);
+        }
+        return fmt::format("PGInfo: id={}, replica_set_uuid={}, size={}, chunk_size={}, "
+                           "expected_member_num={}, members={}",
+                           id, boost::uuids::to_string(replica_set_uuid), size, chunk_size,
+                           expected_member_num, members_str);
+    }
 };
 
 struct peer_info {
