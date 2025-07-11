@@ -771,7 +771,11 @@ public:
      *
      * @param pg_id The ID of the PG to be destroyed.
      */
-    void pg_destroy(pg_id_t pg_id);
+    bool pg_destroy(pg_id_t pg_id, bool need_to_pause_pg_state_machine = false);
+
+    bool pause_pg_state_machine(pg_id_t pg_id);
+
+    bool resume_pg_state_machine(pg_id_t pg_id);
 
     /**
      * @brief Get HS_PG object from given pg_id.
