@@ -99,8 +99,7 @@ struct SyncMessageHeader : public BaseMessageHeader<SyncMessageHeader> {
     }
 
     std::string to_string() const {
-        return fmt::format(
-            "magic={:#x} version={} msg_type={} payload_size={} payload_crc={} header_crc={}\n",
+        return fmt::format("magic={:#x} version={} msg_type={} payload_size={} payload_crc={} header_crc={}",
             magic_num, protocol_version, enum_name(msg_type), payload_size, payload_crc, header_crc);
     }
 };

@@ -355,7 +355,7 @@ int ReplicationStateMachine::read_snapshot_obj(std::shared_ptr< homestore::snaps
     // We use pg blob iterator to go over all the blobs in all the shards in that PG.
     // Once all the shards are done, follower will return next obj Id = LAST_OBJ_ID(ULLONG_MAX) as a end marker,
     // leader will stop sending the snapshot data.
-    auto log_str = fmt::format("group={}, lsn={},", uuids::to_string(repl_dev()->group_id()), context->get_lsn());
+    auto log_str = fmt::format("group={}, lsn={}", uuids::to_string(repl_dev()->group_id()), context->get_lsn());
     if (snp_obj->offset == LAST_OBJ_ID) {
         // No more shards to read, baseline resync is finished after this.
         snp_obj->is_last_obj = true;
@@ -379,7 +379,7 @@ int ReplicationStateMachine::read_snapshot_obj(std::shared_ptr< homestore::snaps
         LOGW("Invalid objId in snapshot read, {}, current shard_seq_num={}, current batch_num={}, reset cursor to "
              "the "
              "beginning",
-             log_str, pg_iter->cur_obj_id_.shard_seq_num, pg_iter->cur_obj_id_.batch_id);
+             log_str, pg_iter->cur_obj_id.shard_seq_num, pg_iter->cur_obj_id.batch_id);
         pg_iter->reset_cursor();
         return 0;
     }
@@ -577,8 +577,9 @@ void ReplicationStateMachine::free_user_snp_ctx(void*& user_snp_ctx) {
     }
     std::lock_guard lk(m_snp_sync_ctx_lock);
     auto pg_iter_ptr = static_cast< std::shared_ptr< HSHomeObject::PGBlobIterator >* >(user_snp_ctx);
-    LOGD("Freeing snapshot iterator={}, pg={} group={}", user_snp_ctx, (*pg_iter_ptr)->pg_id_,
-         boost::uuids::to_string((*pg_iter_ptr)->group_id_));
+    LOGD("Freeing snapshot iterator={}, pg={} group={}", user_snp_ctx, (*pg_iter_ptr)->pg_id,
+         boost::uuids::to_string((*pg_iter_ptr)->group_id));
+    pg_iter_ptr->get()->stop();
     delete pg_iter_ptr;
     user_snp_ctx = nullptr;
 }
