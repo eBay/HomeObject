@@ -139,7 +139,7 @@ csharedChunk HeapChunkSelector::select_specific_chunk(const pg_id_t pg_id, const
         }
 
         // if the chunk is not available, probably being gc. we wait for a while and retry
-        std::this_thread::sleep_for(std::chrono::seconds(5));
+        std::this_thread::sleep_for(std::chrono::seconds(1));
     }
 
     LOGDEBUGMOD(homeobject, "chunk={} is selected for v_chunk_id={}, pg={}", chunk->get_chunk_id(), v_chunk_id, pg_id);
