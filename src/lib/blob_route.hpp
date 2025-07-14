@@ -14,8 +14,8 @@ namespace homeobject {
 // to appear in a different Index should the Blob (Shard) be moved between Pgs.
 #pragma pack(1)
 struct BlobRoute {
-    shard_id_t shard;
-    blob_id_t blob;
+    shard_id_t shard{0};
+    blob_id_t blob{0};
     auto operator<=>(BlobRoute const&) const = default;
     sisl::blob to_blob() const { return sisl::blob{uintptr_cast(const_cast< BlobRoute* >(this)), sizeof(*this)}; }
 };
@@ -23,9 +23,9 @@ struct BlobRoute {
 // used for gc to quickly identify all the blob in the move_to chunk
 struct BlobRouteByChunk {
     // homestore::chunk_num_t == uint16_t
-    uint16_t chunk;
-    shard_id_t shard;
-    blob_id_t blob;
+    uint16_t chunk{0};
+    shard_id_t shard{0};
+    blob_id_t blob{0};
     auto operator<=>(BlobRouteByChunk const&) const = default;
     sisl::blob to_blob() const {
         return sisl::blob{uintptr_cast(const_cast< BlobRouteByChunk* >(this)), sizeof(*this)};
