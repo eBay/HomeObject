@@ -199,6 +199,9 @@ public:
 
     void scan_chunks_for_gc();
     void handle_all_recovered_gc_tasks();
+    void drain_pg_pending_gc_task(const pg_id_t pg_id);
+    void decr_pg_pending_gc_task(const pg_id_t pg_id);
+    void incr_pg_pending_gc_task(const pg_id_t pg_id);
 
 private:
     void on_gc_task_meta_blk_found(sisl::byte_view const& buf, void* meta_cookie);
@@ -212,6 +215,8 @@ private:
     iomgr::timer_handle_t m_gc_timer_hdl{iomgr::null_timer_handle};
     HSHomeObject* m_hs_home_object{nullptr};
     std::list< homestore::superblk< GCManager::gc_task_superblk > > m_recovered_gc_tasks;
+    std::unordered_map< pg_id_t, atomic_uint64_t > m_pending_gc_task_num_per_pg;
+    std::mutex m_pending_gc_task_mtx;
 };
 
 } // namespace homeobject
