@@ -7,9 +7,10 @@ from os.path import join
 
 required_conan_version = ">=1.60.0"
 
+
 class HomeObjectConan(ConanFile):
     name = "homeobject"
-    version = "2.6.5"
+    version = "2.6.6"
 
     homepage = "https://github.com/eBay/HomeObject"
     description = "Blob Store built on HomeReplication"
@@ -71,7 +72,7 @@ class HomeObjectConan(ConanFile):
 
         self.cpp.package.components["homestore"].libs = ["homeobject_homestore"]
         self.cpp.package.components["memory"].libs = ["homeobject_memory"]
-        self.cpp.package.includedirs = ["include"] # includedirs is already set to 'include' by
+        self.cpp.package.includedirs = ["include"]  # includedirs is already set to 'include' by
         self.cpp.package.libdirs = ["lib"]
 
     def generate(self):
@@ -108,9 +109,11 @@ class HomeObjectConan(ConanFile):
         copy(self, "*.dylib*", self.build_folder, lib_dir, keep_path=False)
         copy(self, "*.dll*", self.build_folder, join(self.package_folder, "bin"), keep_path=False)
         copy(self, "*.so*", self.build_folder, lib_dir, keep_path=False)
-        copy(self, "*", join(self.source_folder, "src", "flip", "client", "python"), join(self.package_folder, "bindings", "flip", "python"), keep_path=False)
+        copy(self, "*", join(self.source_folder, "src", "flip", "client", "python"),
+             join(self.package_folder, "bindings", "flip", "python"), keep_path=False)
 
-        copy(self, "*.h*", join(self.source_folder, "src", "include"), join(self.package_folder, "include"), keep_path=True)
+        copy(self, "*.h*", join(self.source_folder, "src", "include"), join(self.package_folder, "include"),
+             keep_path=True)
 
     def package_info(self):
         self.cpp_info.components["homestore"].requires = ["homestore::homestore", "iomgr::iomgr", "sisl::sisl"]
@@ -120,7 +123,7 @@ class HomeObjectConan(ConanFile):
         if self.settings.os == "Linux":
             self.cpp_info.components["homestore"].system_libs.append("pthread")
             self.cpp_info.components["memory"].system_libs.append("pthread")
-        if  self.options.sanitize:
+        if self.options.sanitize:
             self.cpp_info.components["memory"].sharedlinkflags.append("-fsanitize=address")
             self.cpp_info.components["memory"].exelinkflags.append("-fsanitize=address")
             self.cpp_info.components["memory"].sharedlinkflags.append("-fsanitize=undefined")
