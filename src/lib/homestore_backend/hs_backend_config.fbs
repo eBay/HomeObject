@@ -38,6 +38,12 @@ table HSBackendSettings {
     //max read/write block count per second, which is used by ratelimiter to limit the io resource taken by gc
     max_read_write_block_count_per_second: uint16 = 7680;
 
+    // Timeout in milliseconds to pause the state machine during certain operations
+    state_machine_pause_timeout_ms: uint32 = 1000;
+
+    // Number of times to pause the state machine
+    state_machine_pause_retry_count: uint8 = 3;
+
 }
 
 root_type HSBackendSettings;
