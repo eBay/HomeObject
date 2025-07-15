@@ -87,7 +87,7 @@ void HomeObjectFixture::RestartFollowerDuringBaselineResyncUsingSigKill(uint64_t
     for (size_t i = num_replicas; i < num_replicas + spare_num_replicas; i++)
         excluding_replicas_in_pg.insert(i);
 
-    create_pg(pg_id, 0 /* pg_leader */, excluding_replicas_in_pg);
+    if (!is_restart) { create_pg(pg_id, 0 /* pg_leader */, excluding_replicas_in_pg); }
 
     // we can not share all the shard_id and blob_id among all the replicas including the spare ones, so we need to
     // derive them by calculating.
@@ -544,7 +544,7 @@ void HomeObjectFixture::RestartLeaderDuringBaselineResyncUsingSigKill(uint64_t f
         excluding_replicas_in_pg.insert(i);
 
     auto initial_leader_replica_num = 1;
-    create_pg(pg_id, initial_leader_replica_num /* pg_leader */, excluding_replicas_in_pg);
+    if (!is_restart) { create_pg(pg_id, initial_leader_replica_num /* pg_leader */, excluding_replicas_in_pg); }
     peer_id_t initial_leader_replica_id = get_leader_id(pg_id);
 
     auto num_shards_per_pg = SISL_OPTIONS["num_shards"].as< uint64_t >();
