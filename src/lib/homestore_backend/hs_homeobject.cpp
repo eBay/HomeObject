@@ -422,9 +422,14 @@ void HSHomeObject::shutdown() {
 
 HomeObjectStats HSHomeObject::_get_stats() const {
     HomeObjectStats stats;
+    // total capacity
     auto const& repl_svc = homestore::hs()->repl_service();
-    stats.total_capacity_bytes = repl_svc.get_cap_stats().total_capacity;
-    stats.used_capacity_bytes = repl_svc.get_cap_stats().used_capacity;
+    auto const num_pdevs = chunk_selector()->get_pdev_chunks().size();
+    auto const reserved_chunk_num_per_pdev = HS_BACKEND_DYNAMIC_CONFIG(reserved_chunk_num_per_pdev);
+    uint64_t reserved_gc_bytes = num_pdevs * reserved_chunk_num_per_pdev * _hs_chunk_size;
+    stats.total_capacity_bytes = repl_svc.get_cap_stats().total_capacity - reserved_gc_bytes;
+    // used capacity
+    stats.used_capacity_bytes = chunk_selector()->get_used_blks() * _data_block_size;
 
     uint32_t num_open_shards = 0ul;
     std::scoped_lock lock_guard(_pg_lock);

@@ -280,7 +280,8 @@ std::optional< uint32_t > HeapChunkSelector::select_chunks_for_pg(pg_id_t pg_id,
                                               });
     auto& pdev_heap = most_avail_dev_it->second;
     if (num_chunk > pdev_heap->size()) {
-        LOGWARNMOD(homeobject, "Pdev has no enough space to create pg={} with num_chunk={}", pg_id, num_chunk);
+        LOGWARNMOD(homeobject, "Pdev has no enough space to create pg={} with num_chunk={}, available_num_chunk={}",
+                   pg_id, num_chunk, pdev_heap->size());
         return std::nullopt;
     }
 
@@ -579,6 +580,15 @@ uint64_t HeapChunkSelector::total_blks(uint32_t dev_id) const {
     }
 
     return it->second->m_total_blks;
+}
+
+uint64_t HeapChunkSelector::get_used_blks() const {
+    std::shared_lock lock_guard(m_chunk_selector_mtx);
+    uint64_t used_blks = 0;
+    for (const auto& [_, chunk] : m_chunks) {
+        if (chunk->m_state != ChunkState::GC) { used_blks += chunk->get_used_blks(); }
+    }
+    return used_blks;
 }
 
 std::unordered_map< uint32_t, std::vector< homestore::chunk_num_t > > HeapChunkSelector::get_pdev_chunks() const {
