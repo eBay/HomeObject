@@ -727,8 +727,9 @@ bool GCManager::pdev_gc_actor::copy_valid_data(chunk_id_t move_from_chunk, chunk
                     RELEASE_ASSERT(header_sgs.iovs.size() == 1, "header_sgs.iovs.size() should be 1, but not!");
                     iomanager.iobuf_free(reinterpret_cast< uint8_t* >(header_sgs.iovs[0].iov_base));
                     if (err) {
-                        LOGERROR("gc task_id={}, Failed to write shard header for move_to_chunk={} shard_id={}, err={}",
-                                 task_id, move_to_chunk, shard_id, err.value());
+                        LOGERROR("gc task_id={}, Failed to write shard header for move_to_chunk={} shard_id={}, "
+                                 "err={}, err_category={}, err_message={}",
+                                 task_id, move_to_chunk, shard_id, err.value(), err.category().name(), err.message());
                         return folly::makeFuture< bool >(false);
                     }
 
@@ -764,8 +765,9 @@ bool GCManager::pdev_gc_actor::copy_valid_data(chunk_id_t move_from_chunk, chunk
                                     if (err) {
                                         LOGERROR(
                                             "gc task_id={}, Failed to read blob from move_from_chunk={}, shard_id={}, "
-                                            "blob_id={}: err={}",
-                                            task_id, move_from_chunk, k.key().shard, k.key().blob, err.value());
+                                            "blob_id={}, err={}, err_category={}, err_message={}",
+                                            task_id, move_from_chunk, k.key().shard, k.key().blob, err.value(),
+                                            err.category().name(), err.message());
                                         iomanager.iobuf_free(reinterpret_cast< uint8_t* >(data_sgs.iovs[0].iov_base));
                                         return folly::makeFuture< bool >(false);
                                     }
@@ -798,10 +800,11 @@ bool GCManager::pdev_gc_actor::copy_valid_data(chunk_id_t move_from_chunk, chunk
                                             iomanager.iobuf_free(
                                                 reinterpret_cast< uint8_t* >(data_sgs.iovs[0].iov_base));
                                             if (err) {
-                                                LOGERROR("gc task_id={}, Failed to write blob to move_to_chunk={}, "
-                                                         "shard_id={}, blob_id={}, err={}",
-                                                         task_id, move_to_chunk, k.key().shard, k.key().blob,
-                                                         err.value());
+                                                LOGERROR(
+                                                    "gc task_id={}, Failed to write blob to move_to_chunk={}, "
+                                                    "shard_id={}, blob_id={}, err={}, err_category={}, err_message={}",
+                                                    task_id, move_to_chunk, k.key().shard, k.key().blob, err.value(),
+                                                    err.category().name(), err.message());
                                                 return false;
                                             }
 
@@ -862,10 +865,10 @@ bool GCManager::pdev_gc_actor::copy_valid_data(chunk_id_t move_from_chunk, chunk
                             iomanager.iobuf_free(reinterpret_cast< uint8_t* >(footer_sgs.iovs[0].iov_base));
 
                             if (err) {
-                                LOGERROR(
-                                    "gc task_id={}, Failed to write shard footer for move_to_chunk={} shard_id={}, "
-                                    "err={}",
-                                    task_id, move_to_chunk, shard_id, err.value());
+                                LOGERROR("gc task_id={}, Failed to write shard footer for move_to_chunk={} "
+                                         "shard_id={}, err={}, error_category={}, error_message={}",
+                                         task_id, move_to_chunk, shard_id, err.value(), err.category().name(),
+                                         err.message());
                                 return false;
                             }
                             return true;
