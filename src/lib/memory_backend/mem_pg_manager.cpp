@@ -74,4 +74,10 @@ HomeObjectStats MemoryHomeObject::_get_stats() const {
     stats.num_open_shards = num_open_shards;
     return stats;
 }
+
+void MemoryHomeObject::_destroy_pg(pg_id_t pg_id) {
+    auto lg = std::unique_lock(_pg_lock);
+    _pg_map.erase(pg_id);
+}
+
 } // namespace homeobject

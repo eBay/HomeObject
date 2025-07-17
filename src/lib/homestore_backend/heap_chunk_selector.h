@@ -55,6 +55,7 @@ public:
         ExtendedVChunkHeap m_heap;
         std::atomic_size_t available_blk_count;
         uint64_t m_total_blks{0}; // initlized during boot, and will not change during runtime;
+        std::string pdev_name;
         uint32_t size() const { return m_heap.size(); }
     };
 

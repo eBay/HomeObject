@@ -13,8 +13,6 @@ PGError toPgError(ReplServiceError const& e) {
     switch (e) {
     case ReplServiceError::BAD_REQUEST:
         [[fallthrough]];
-    case ReplServiceError::CANCELLED:
-        [[fallthrough]];
     case ReplServiceError::CONFIG_CHANGING:
         [[fallthrough]];
     case ReplServiceError::SERVER_ALREADY_EXISTS:
@@ -28,18 +26,21 @@ PGError toPgError(ReplServiceError const& e) {
     case ReplServiceError::TERM_MISMATCH:
     case ReplServiceError::NOT_IMPLEMENTED:
         return PGError::INVALID_ARG;
+    case ReplServiceError::CANCELLED:
+        return PGError::CANCELLED;
     case ReplServiceError::NOT_LEADER:
         return PGError::NOT_LEADER;
     case ReplServiceError::CANNOT_REMOVE_LEADER:
+    case ReplServiceError::SERVER_NOT_FOUND:
         return PGError::UNKNOWN_PEER;
     case ReplServiceError::TIMEOUT:
         return PGError::TIMEOUT;
-    case ReplServiceError::SERVER_NOT_FOUND:
-        return PGError::UNKNOWN_PG;
     case ReplServiceError::NO_SPACE_LEFT:
         return PGError::NO_SPACE_LEFT;
     case ReplServiceError::DRIVE_WRITE_ERROR:
         return PGError::DRIVE_WRITE_ERROR;
+    case ReplServiceError::QUORUM_NOT_MET:
+        return PGError::QUORUM_NOT_MET;
     case ReplServiceError::RETRY_REQUEST:
         return PGError::RETRY_REQUEST;
     /* TODO: enable this after add erro type to homestore
@@ -442,6 +443,8 @@ std::optional< pg_id_t > HSHomeObject::get_pg_id_with_group_id(group_id_t group_
         return std::nullopt;
     }
 }
+
+void HSHomeObject::_destroy_pg(pg_id_t pg_id) { pg_destroy(pg_id); }
 
 bool HSHomeObject::pg_destroy(pg_id_t pg_id, bool need_to_pause_pg_state_machine) {
     if (need_to_pause_pg_state_machine && !pause_pg_state_machine(pg_id)) {
