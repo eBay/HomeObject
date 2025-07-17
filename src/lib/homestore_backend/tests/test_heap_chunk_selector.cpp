@@ -39,6 +39,9 @@ public:
     uint16_t get_chunk_id() const { return m_chunk_id; }
 
     blk_num_t get_total_blks() const { return m_available_blks; }
+
+    blk_num_t get_used_blks() const { return m_used_blks; }
+
     void set_chunk_id(uint16_t chunk_id) { m_chunk_id = chunk_id; }
     uint64_t size() const { return 1 * Mi; }
 
@@ -47,6 +50,7 @@ public:
         m_pdev_id = pdev_id;
         m_chunk_id = chunk_id;
         m_defrag_nblks = defrag_nblks;
+        m_used_blks = 0;
     }
 
 private:
@@ -54,6 +58,7 @@ private:
     uint32_t m_pdev_id;
     uint16_t m_chunk_id;
     uint32_t m_defrag_nblks;
+    uint32_t m_used_blks;
 };
 
 VChunk::VChunk(cshared< Chunk >& chunk) : m_internal_chunk(chunk) {}
@@ -71,6 +76,8 @@ uint32_t VChunk::get_pdev_id() const { return m_internal_chunk->get_pdev_id(); }
 uint16_t VChunk::get_chunk_id() const { return m_internal_chunk->get_chunk_id(); }
 
 blk_num_t VChunk::get_total_blks() const { return m_internal_chunk->get_total_blks(); }
+
+blk_num_t VChunk::get_used_blks() const { return m_internal_chunk->get_used_blks(); }
 
 uint64_t VChunk::size() const { return m_internal_chunk->size(); }
 void VChunk::reset() {}
