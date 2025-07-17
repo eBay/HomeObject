@@ -450,6 +450,11 @@ bool HSHomeObject::pg_destroy(pg_id_t pg_id, bool need_to_pause_pg_state_machine
     }
     LOGI("Destroying pg={}", pg_id);
     mark_pg_destroyed(pg_id);
+
+    // we have the assumption that after pg is marked as destroyed, it will not be marked as alive again.
+    // TODO:: if this assumption is broken, we need to handle it.
+    gc_mgr_->drain_pg_pending_gc_task(pg_id);
+    
     destroy_shards(pg_id);
     destroy_hs_resources(pg_id);
     destroy_pg_index_table(pg_id);
@@ -503,6 +508,17 @@ void HSHomeObject::mark_pg_destroyed(pg_id_t pg_id) {
     hs_pg->pg_sb_->state = PGState::DESTROYED;
     hs_pg->pg_sb_.write();
     LOGD("pg={} is marked as destroyed", pg_id);
+}
+
+bool HSHomeObject::can_chunks_in_pg_be_gc(pg_id_t pg_id) const {
+    auto lg = std::scoped_lock(_pg_lock);
+    auto hs_pg = const_cast< HS_PG* >(_get_hs_pg_unlocked(pg_id));
+    if (hs_pg == nullptr) {
+        LOGW("unknown pg={}", pg_id);
+        return false;
+    }
+
+    return hs_pg->pg_sb_->state == PGState::ALIVE;
 }
 
 void HSHomeObject::destroy_hs_resources(pg_id_t pg_id) { chunk_selector_->reset_pg_chunks(pg_id); }

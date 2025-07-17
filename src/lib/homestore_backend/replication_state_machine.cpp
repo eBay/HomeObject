@@ -683,7 +683,6 @@ folly::Future< std::error_code > ReplicationStateMachine::on_fetch_data(const in
         LOGD("fetch data with blob_id={}, shard=0x{:x}", blob_id, shard_id);
         // we first try to read data according to the local_blk_id to see if it matches the blob_id
         return std::move(homestore::data_service().async_read(local_blk_id, given_buffer, total_size))
-            .via(folly::getGlobalIOExecutor())
             .thenValue([this, lsn, blob_id, shard_id, given_buffer, total_size](auto&& err) {
                 // io error
                 if (err) {

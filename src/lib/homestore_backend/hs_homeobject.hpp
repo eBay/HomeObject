@@ -856,6 +856,14 @@ public:
      */
     bool release_chunk_based_on_create_shard_message(sisl::blob const& header);
 
+    /**
+     * @brief check whether the chunks in a given pg can be gc.
+     *
+     * @param pg_id The ID of the PG whose shards are to be destroyed.
+     * @return True if the chunks in the PG can be garbage collected, false otherwise.
+     */
+    bool can_chunks_in_pg_be_gc(pg_id_t pg_id) const;
+
     bool pg_exists(pg_id_t pg_id) const;
 
     uint32_t get_reserved_blks() const { return _hs_reserved_blks; }
