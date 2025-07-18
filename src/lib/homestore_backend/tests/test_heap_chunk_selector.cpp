@@ -39,6 +39,9 @@ public:
     uint16_t get_chunk_id() const { return m_chunk_id; }
 
     blk_num_t get_total_blks() const { return m_available_blks; }
+
+    blk_num_t get_used_blks() const { return m_available_blks; }
+
     void set_chunk_id(uint16_t chunk_id) { m_chunk_id = chunk_id; }
     uint64_t size() const { return 1 * Mi; }
 
@@ -71,6 +74,8 @@ uint32_t VChunk::get_pdev_id() const { return m_internal_chunk->get_pdev_id(); }
 uint16_t VChunk::get_chunk_id() const { return m_internal_chunk->get_chunk_id(); }
 
 blk_num_t VChunk::get_total_blks() const { return m_internal_chunk->get_total_blks(); }
+
+blk_num_t VChunk::get_used_blks() const { return m_internal_chunk->get_used_blks(); }
 
 uint64_t VChunk::size() const { return m_internal_chunk->size(); }
 void VChunk::reset() {}

@@ -177,6 +177,8 @@ public:
      */
     uint32_t total_chunks() const;
 
+    uint64_t get_used_blks() const;
+
     uint32_t get_chunk_size() const;
 
     /**
