@@ -11,7 +11,8 @@
 namespace homeobject {
 
 ENUM(PGError, uint16_t, UNKNOWN = 1, INVALID_ARG, TIMEOUT, UNKNOWN_PG, NOT_LEADER, UNKNOWN_PEER, UNSUPPORTED_OP,
-     CRC_MISMATCH, NO_SPACE_LEFT, DRIVE_WRITE_ERROR, RETRY_REQUEST, SHUTTING_DOWN, ROLL_BACK);
+     CRC_MISMATCH, NO_SPACE_LEFT, DRIVE_WRITE_ERROR, RETRY_REQUEST, SHUTTING_DOWN, ROLL_BACK, CANCELLED,
+     QUORUM_NOT_MET);
 ENUM(PGReplaceMemberTaskStatus, uint16_t, COMPLETED = 0, IN_PROGRESS, NOT_LEADER, TASK_ID_MISMATCH, TASK_NOT_FOUND, UNKNOWN);
 // https://github.corp.ebay.com/SDS/nuobject_proto/blob/main/src/proto/pg.proto#L52
 ENUM(PGStateMask, uint32_t, HEALTHY = 0, DISK_DOWN = 0x1, SCRUBBING = 0x2, BASELINE_RESYNC = 0x4, INCONSISTENT = 0x8,
@@ -194,6 +195,12 @@ public:
      * @param pg_ids The vector to store the pg_ids.
      */
     virtual void get_pg_ids(std::vector< pg_id_t >& pg_ids) const = 0;
+
+    /**
+     * @brief Destroys a PG (Placement Group) identified by its ID.
+     * @param pg_id The ID of the PG.
+     */
+    virtual void destroy_pg(pg_id_t pg_id) = 0;
 };
 
 } // namespace homeobject

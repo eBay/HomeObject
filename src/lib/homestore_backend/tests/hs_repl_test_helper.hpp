@@ -325,7 +325,7 @@ public:
     }
 
     std::shared_ptr< homeobject::HomeObject > restart(uint32_t shutdown_delay_secs = 0u,
-                                                      uint32_t restart_delay_secs = 0u, uint32_t disk_lost_num = 0u) {
+                                                      uint32_t restart_delay_secs = 0u, uint32_t disk_lost_num = 0u, bool clean_lost_disk = false) {
 
         if (shutdown_delay_secs > 0) { std::this_thread::sleep_for(std::chrono::seconds(shutdown_delay_secs)); }
         LOGINFO("Stoping homeobject after {} secs, replica={}", shutdown_delay_secs, replica_num_);
@@ -338,6 +338,17 @@ public:
         // we support losing at most ndevices - 2 disks, because we need to guarantee ho has at least 2 disks to run
         //  one for meta, index ,log, another for data.
         disk_lost_num_ = disk_lost_num > ndevices - 2 ? ndevices - 2 : disk_lost_num;
+        if (clean_lost_disk) {
+            auto const use_file = SISL_OPTIONS["use_file"].as< bool >();
+            bool is_raw_device = !use_file && dev_list_.size() > 0;
+            std::vector< string >& all_devs = is_raw_device ? dev_list_ : generated_devs;
+            std::vector< string > lost_disks;
+            for (size_t i = all_devs.size() - 1; i >= all_devs.size() - disk_lost_num_; --i) {
+                LOGINFO("Simulate disk lost on device {}", all_devs[i]);
+                lost_disks.emplace_back(all_devs[i]);
+            }
+            recreate_dev(lost_disks);
+        }
         homeobj_ = init_homeobject(std::weak_ptr< TestReplApplication >(app));
         disk_lost_num_ = 0;
         return homeobj_;
@@ -439,6 +450,15 @@ private:
         }
     }
 
+    void recreate_dev(const std::vector< string >& devs, bool is_raw_device = false) {
+        auto const dev_size = SISL_OPTIONS["dev_size_mb"].as< uint64_t >() * 1024 * 1024;
+        if (is_raw_device) {
+            init_raw_devices(devs);
+        } else {
+            init_files(devs, dev_size);
+        }
+    }
+
     void remove_test_files() {
         for (auto const& dev : generated_devs) {
             if (std::filesystem::exists(dev)) std::filesystem::remove(dev);
@@ -466,9 +486,13 @@ private:
 
     void init_files(const std::vector< std::string >& file_paths, uint64_t dev_size) {
         for (const auto& fpath : file_paths) {
-            if (std::filesystem::exists(fpath)) std::filesystem::remove(fpath);
+            if (std::filesystem::exists(fpath)) {
+                LOGINFO("remove device {}", fpath);
+                std::filesystem::remove(fpath);
+            }
             std::ofstream ofs{fpath, std::ios::binary | std::ios::out | std::ios::trunc};
             std::filesystem::resize_file(fpath, dev_size);
+            LOGINFO("Created device file {} with size {}", fpath, homestore::in_bytes(dev_size));
         }
     }
 

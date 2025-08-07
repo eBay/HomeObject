@@ -110,6 +110,8 @@ class HomeObjectImpl : public HomeObject,
 
     virtual HomeObjectStats _get_stats() const = 0;
 
+    virtual void _destroy_pg(pg_id_t pg_id) = 0;
+
 protected:
     std::mutex _repl_lock;
     peer_id_t _our_id;
@@ -160,6 +162,7 @@ public:
     // see api comments in base class;
     bool get_stats(pg_id_t id, PGStats& stats) const final;
     void get_pg_ids(std::vector< pg_id_t >& pg_ids) const final;
+    void destroy_pg(pg_id_t pg_id) final;
 
     /// ShardManager
     ShardManager::AsyncResult< ShardInfo > get_shard(shard_id_t id, trace_id_t tid) const final;

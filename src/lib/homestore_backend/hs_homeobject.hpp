@@ -75,6 +75,7 @@ private:
     void _get_pg_ids(std::vector< pg_id_t >& pg_ids) const override;
 
     HomeObjectStats _get_stats() const override;
+    void _destroy_pg(pg_id_t pg_id) override;
 
     // Mapping from index table uuid to pg id.
     std::shared_mutex index_lock_;

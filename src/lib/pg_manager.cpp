@@ -42,4 +42,5 @@ PGReplaceMemberStatus HomeObjectImpl::get_replace_member_status(pg_id_t id, std:
 
 bool HomeObjectImpl::get_stats(pg_id_t id, PGStats& stats) const { return _get_stats(id, stats); }
 void HomeObjectImpl::get_pg_ids(std::vector< pg_id_t >& pg_ids) const { return _get_pg_ids(pg_ids); }
+void HomeObjectImpl::destroy_pg(pg_id_t pg_id) { return _destroy_pg(pg_id); }
 } // namespace homeobject
