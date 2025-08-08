@@ -385,21 +385,7 @@ void HSHomeObject::on_pg_complete_replace_member(group_id_t group_id, const std:
             auto hs_pg = static_cast< HSHomeObject::HS_PG* >(pg.get());
             pg->pg_info_.members.erase(PGMember(member_out.id));
             pg->pg_info_.members.emplace(std::move(to_pg_member(member_in)));
-
-            uint32_t i{0};
-            pg_members* sb_members = hs_pg->pg_sb_->get_pg_members_mutable();
-            for (auto const& m : pg->pg_info_.members) {
-                sb_members[i].id = m.id;
-                DEBUG_ASSERT(m.name.size() <= PGMember::max_name_len, "member name exceeds max len, name={}", m.name);
-                auto name_len = std::min(m.name.size(), PGMember::max_name_len);
-                std::strncpy(sb_members[i].name, m.name.c_str(), name_len);
-                sb_members[i].name[name_len] = '\0';
-                sb_members[i].priority = m.priority;
-                ++i;
-            }
-            hs_pg->pg_sb_->num_dynamic_members = pg->pg_info_.members.size();
-            // Update the latest membership info to pg superblk.
-            hs_pg->pg_sb_.write();
+            hs_pg->update_membership(pg->pg_info_.members);
             LOGI("PG complete replace member done member_out={} member_in={}, member_nums={}, trace_id={}",
                  boost::uuids::to_string(member_out.id), boost::uuids::to_string(member_in.id),
                  pg->pg_info_.members.size(), tid);
@@ -408,6 +394,20 @@ void HSHomeObject::on_pg_complete_replace_member(group_id_t group_id, const std:
     }
     LOGE("PG complete replace member failed member_out={} member_in={}, trace_id={}",
          boost::uuids::to_string(member_out.id), boost::uuids::to_string(member_in.id), tid);
+}
+
+void HSHomeObject::on_remove_member(const peer_id_t& member, trace_id_t tid) {
+    LOGINFO("PG remove member, member={}, trace_id={}", boost::uuids::to_string(member), tid);
+    auto lg = std::shared_lock(_pg_lock);
+    for (const auto& iter : _pg_map) {
+        auto& pg = iter.second;
+        auto hs_pg = static_cast< HSHomeObject::HS_PG* >(pg.get());
+        if (pg->pg_info_.members.erase(PGMember(member)) > 0) {
+            hs_pg->update_membership(pg->pg_info_.members);
+            LOGI("PG remove member done member={} member_nums={}, trace_id={}", boost::uuids::to_string(member),
+                 pg->pg_info_.members.size(), tid);
+        }
+    }
 }
 
 PGReplaceMemberStatus HSHomeObject::_get_replace_member_status(pg_id_t id, std::string& task_id,
@@ -430,6 +430,123 @@ PGReplaceMemberStatus HSHomeObject::_get_replace_member_status(pg_id_t id, std::
         other_replicas, trace_id));
     hs_pg->get_peer_info(ret.members);
     return ret;
+}
+
+PGManager::NullAsyncResult HSHomeObject::flip_learner_flag(pg_id_t pg_id, peer_id_t const& member_id, bool learner,
+                                                            uint32_t commit_quorum, trace_id_t tid) {
+    if (is_shutting_down()) {
+        LOGI("service is being shut down, trace_id={}", tid);
+        return folly::makeUnexpected(PGError::SHUTTING_DOWN);
+    }
+    incr_pending_request_num();
+
+    auto hs_pg = get_hs_pg(pg_id);
+    if (hs_pg == nullptr) {
+        decr_pending_request_num();
+        return folly::makeUnexpected(PGError::UNKNOWN_PG);
+    }
+
+    auto& repl_dev = pg_repl_dev(*hs_pg);
+    if (!repl_dev.is_leader() && commit_quorum == 0) {
+        // Only leader can replace a member
+        decr_pending_request_num();
+        return folly::makeUnexpected(PGError::NOT_LEADER);
+    }
+    auto group_id = repl_dev.group_id();
+
+    LOGI("PG flip learner flag to  {}, pg_id={} member={} trace_id={}", learner, pg_id, boost::uuids::to_string(member_id), tid);
+
+    replica_member_info replica;
+    replica.id = member_id;
+
+    return hs_repl_service()
+        .flip_learner_flag(group_id, replica, learner, commit_quorum, true, tid)
+        .via(executor_)
+        .thenValue([this](auto&& v) mutable -> PGManager::NullAsyncResult {
+            decr_pending_request_num();
+            if (v.hasError()) { return folly::makeUnexpected(toPgError(v.error())); }
+            return folly::Unit();
+        });
+}
+
+PGManager::NullAsyncResult HSHomeObject::remove_member(pg_id_t pg_id, peer_id_t const& member_id, uint32_t commit_quorum, trace_id_t tid) {
+    if (is_shutting_down()) {
+        LOGI("service is being shut down, trace_id={}", tid);
+        return folly::makeUnexpected(PGError::SHUTTING_DOWN);
+    }
+    incr_pending_request_num();
+
+    auto hs_pg = get_hs_pg(pg_id);
+    if (hs_pg == nullptr) {
+        decr_pending_request_num();
+        return folly::makeUnexpected(PGError::UNKNOWN_PG);
+    }
+
+    auto& repl_dev = pg_repl_dev(*hs_pg);
+    if (!repl_dev.is_leader() && commit_quorum == 0) {
+        // Only leader can replace a member
+        decr_pending_request_num();
+        return folly::makeUnexpected(PGError::NOT_LEADER);
+    }
+    auto group_id = repl_dev.group_id();
+
+    LOGI("PG remove member, pg_id={}, member={} trace_id={}", pg_id, boost::uuids::to_string(member_id), tid);
+    return hs_repl_service()
+        .remove_member(group_id, member_id, commit_quorum, tid)
+        .via(executor_)
+        .thenValue([this](auto&& v) mutable -> PGManager::NullAsyncResult {
+            decr_pending_request_num();
+            if (v.hasError()) { return folly::makeUnexpected(toPgError(v.error())); }
+            return folly::Unit();
+        });
+}
+
+PGManager::NullAsyncResult HSHomeObject::clean_replace_member_task(pg_id_t pg_id, std::string& task_id, uint32_t commit_quorum, trace_id_t tid) {
+    if (is_shutting_down()) {
+        LOGI("service is being shut down, trace_id={}", tid);
+        return folly::makeUnexpected(PGError::SHUTTING_DOWN);
+    }
+    incr_pending_request_num();
+
+    auto hs_pg = get_hs_pg(pg_id);
+    if (hs_pg == nullptr) {
+        decr_pending_request_num();
+        return folly::makeUnexpected(PGError::UNKNOWN_PG);
+    }
+
+    auto& repl_dev = pg_repl_dev(*hs_pg);
+    if (!repl_dev.is_leader() && commit_quorum == 0) {
+        // Only leader can replace a member
+        decr_pending_request_num();
+        return folly::makeUnexpected(PGError::NOT_LEADER);
+    }
+    auto group_id = repl_dev.group_id();
+
+    LOGI("PG clean replace member task, pg={}, task={} trace_id={}", pg_id, task_id, tid);
+    return hs_repl_service()
+        .clean_replace_member_task(group_id, task_id, commit_quorum, tid)
+        .via(executor_)
+        .thenValue([this](auto&& v) mutable -> PGManager::NullAsyncResult {
+            decr_pending_request_num();
+            if (v.hasError()) { return folly::makeUnexpected(toPgError(v.error())); }
+            return folly::Unit();
+        });
+}
+
+PGManager::Result< std::vector< replace_member_task > > HSHomeObject::list_all_replace_member_tasks(trace_id_t tid) {
+    if (is_shutting_down()) {
+        LOGI("service is being shut down, trace_id={}", tid);
+        return folly::makeUnexpected(PGError::SHUTTING_DOWN);
+    }
+    incr_pending_request_num();
+    auto ret = hs_repl_service().list_replace_member_tasks();
+    if (ret.hasError()) {
+        LOGE("Failed to list replace member tasks, error={}", ret.error());
+        decr_pending_request_num();
+        return folly::makeUnexpected(toPgError(ret.error()));
+    }
+    decr_pending_request_num();
+    return ret.value();
 }
 
 std::optional< pg_id_t > HSHomeObject::get_pg_id_with_group_id(group_id_t group_id) const {
@@ -763,6 +880,24 @@ void HSHomeObject::HS_PG::get_peer_info(std::vector< peer_info >& members) const
         }
         members.emplace_back(peer);
     }
+}
+
+void HSHomeObject::HS_PG::update_membership(const MemberSet& members) {
+    uint32_t i{0};
+    pg_members* sb_members = pg_sb_->get_pg_members_mutable();
+    for (auto const& m : members) {
+        sb_members[i].id = m.id;
+        DEBUG_ASSERT(m.name.size() <= PGMember::max_name_len, "member name exceeds max len, name={}", m.name);
+        auto name_len = std::min(m.name.size(), PGMember::max_name_len);
+        std::strncpy(sb_members[i].name, m.name.c_str(), name_len);
+        sb_members[i].name[name_len] = '\0';
+        sb_members[i].priority = m.priority;
+        ++i;
+    }
+    pg_sb_->num_dynamic_members = members.size();
+    // Update the latest membership info to pg superblk.
+    pg_sb_.write();
+    LOGI("PG membership updated, member_nums={}", pg_sb_->num_dynamic_members);
 }
 
 // NOTE: caller should hold the _pg_lock
