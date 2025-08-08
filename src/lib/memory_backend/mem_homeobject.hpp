@@ -62,6 +62,16 @@ class MemoryHomeObject : public HomeObjectImpl {
 
     HomeObjectStats _get_stats() const override;
     void _destroy_pg(pg_id_t pg_id) override;
+    PGManager::NullResult _exit_pg(uuid_t group_id, peer_id_t peer_id, trace_id_t trace_id) override;
+
+    PGManager::NullAsyncResult _flip_learner_flag(pg_id_t pg_id, peer_id_t const& member_id, bool is_learner,
+                                                  uint32_t commit_quorum, trace_id_t trace_id) override;
+    PGManager::NullAsyncResult _remove_member(pg_id_t pg_id, peer_id_t const& member_id, uint32_t commit_quorum,
+                                              trace_id_t trace_id) override;
+    PGManager::NullAsyncResult _clean_replace_member_task(pg_id_t pg_id, std::string& task_id, uint32_t commit_quorum,
+                                                          trace_id_t trace_id) override;
+    PGManager::Result< std::vector< replace_member_task > >
+    _list_all_replace_member_tasks(trace_id_t trace_id) override;
 
     ShardIndex& _find_index(shard_id_t) const;
 
