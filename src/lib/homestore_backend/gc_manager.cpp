@@ -1194,10 +1194,10 @@ bool GCManager::pdev_gc_actor::process_after_gc_metablk_persisted(
 
     if (priority == static_cast< uint8_t >(task_priority::normal)) {
         HISTOGRAM_OBSERVE(metrics(), reclaim_ratio_gc,
-                          static_cast< double >(reclaimed_blk_count) / total_blks_in_chunk);
+                          100 * static_cast< double >(reclaimed_blk_count) / total_blks_in_chunk);
     } else {
         HISTOGRAM_OBSERVE(metrics(), reclaim_ratio_egc,
-                          static_cast< double >(reclaimed_blk_count) / total_blks_in_chunk);
+                          100 * static_cast< double >(reclaimed_blk_count) / total_blks_in_chunk);
     }
 
     return true;
