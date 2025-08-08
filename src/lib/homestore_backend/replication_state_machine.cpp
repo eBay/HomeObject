@@ -286,7 +286,7 @@ void ReplicationStateMachine::on_destroy(const homestore::group_id_t& group_id) 
 }
 
 void ReplicationStateMachine::on_remove_member(const homestore::replica_id_t& member, trace_id_t tid) {
-    // TODO: Implement this
+    home_object_->on_remove_member(repl_dev()->group_id(), member, tid);
 }
 
 homestore::AsyncReplResult<>

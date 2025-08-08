@@ -76,6 +76,16 @@ private:
 
     HomeObjectStats _get_stats() const override;
     void _destroy_pg(pg_id_t pg_id) override;
+    PGManager::NullResult _exit_pg(uuid_t group_id, peer_id_t peer_id, trace_id_t trace_id) override;
+
+    PGManager::NullAsyncResult _flip_learner_flag(pg_id_t pg_id, peer_id_t const& member_id, bool is_learner,
+                                                  uint32_t commit_quorum, trace_id_t trace_id) override;
+    PGManager::NullAsyncResult _remove_member(pg_id_t pg_id, peer_id_t const& member_id, uint32_t commit_quorum,
+                                              trace_id_t trace_id) override;
+    PGManager::NullAsyncResult _clean_replace_member_task(pg_id_t pg_id, std::string& task_id, uint32_t commit_quorum,
+                                                          trace_id_t trace_id) override;
+    PGManager::Result< std::vector< replace_member_task > >
+    _list_all_replace_member_tasks(trace_id_t trace_id) override;
 
     // Mapping from index table uuid to pg id.
     std::shared_mutex index_lock_;
@@ -367,6 +377,11 @@ public:
          * Returns all shards
          */
         std::vector< Shard > get_chunk_shards(homestore::chunk_num_t v_chunk_id) const;
+
+        /**
+         * Update membership in pg's superblock.
+         */
+        void update_membership(const MemberSet& members);
     };
 
     struct HS_Shard : public Shard {
@@ -777,6 +792,8 @@ public:
     void on_pg_complete_replace_member(homestore::group_id_t group_id, const std::string& task_id,
                                        const homestore::replica_member_info& member_out,
                                        const homestore::replica_member_info& member_in, trace_id_t tid);
+
+    void on_remove_member(homestore::group_id_t group_id, const peer_id_t& member, trace_id_t tid = 0);
 
     /**
      * @brief Cleans up and recycles resources for the PG identified by the given pg_id on the current node.

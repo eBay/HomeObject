@@ -33,6 +33,12 @@ private:
     void dump_chunk(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response);
     void dump_shard(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response);
     void get_shard(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response);
+    void flip_learner_flag(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response);
+    void remove_member(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response);
+    void clean_replace_member_task(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response);
+    void list_pg_replace_member_task(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response);
+    void get_pg_quorum(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response);
+    void exit_pg(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response);
 
 #ifdef _PRERELEASE
     void crash_system(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response);

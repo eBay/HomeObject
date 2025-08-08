@@ -113,6 +113,20 @@ class HomeObjectImpl : public HomeObject,
 
     virtual void _destroy_pg(pg_id_t pg_id) = 0;
 
+    virtual PGManager::NullResult _exit_pg(uuid_t group_id, peer_id_t peer_id, trace_id_t trace_id) = 0;
+
+    virtual PGManager::NullAsyncResult _flip_learner_flag(pg_id_t pg_id, peer_id_t const& member_id, bool is_learner,
+                                                          uint32_t commit_quorum, trace_id_t trace_id) = 0;
+
+    virtual PGManager::NullAsyncResult _remove_member(pg_id_t pg_id, peer_id_t const& member_id, uint32_t commit_quorum,
+                                                      trace_id_t trace_id) = 0;
+
+    virtual PGManager::NullAsyncResult _clean_replace_member_task(pg_id_t pg_id, std::string& task_id,
+                                                                  uint32_t commit_quorum, trace_id_t trace_id) = 0;
+
+    virtual PGManager::Result< std::vector< replace_member_task > >
+    _list_all_replace_member_tasks(trace_id_t trace_id) = 0;
+
 protected:
     std::mutex _repl_lock;
     peer_id_t _our_id;
@@ -164,6 +178,14 @@ public:
     bool get_stats(pg_id_t id, PGStats& stats) const final;
     void get_pg_ids(std::vector< pg_id_t >& pg_ids) const final;
     void destroy_pg(pg_id_t pg_id) final;
+    PGManager::NullResult exit_pg(uuid_t group_id, peer_id_t peer_id, trace_id_t trace_id) final;
+    PGManager::NullAsyncResult flip_learner_flag(pg_id_t pg_id, peer_id_t const& member_id, bool is_learner,
+                                                 uint32_t commit_quorum, trace_id_t trace_id) final;
+    PGManager::NullAsyncResult remove_member(pg_id_t pg_id, peer_id_t const& member_id, uint32_t commit_quorum,
+                                             trace_id_t trace_id) final;
+    PGManager::NullAsyncResult clean_replace_member_task(pg_id_t pg_id, std::string& task_id, uint32_t commit_quorum,
+                                                         trace_id_t trace_id) final;
+    PGManager::Result< std::vector< replace_member_task > > list_all_replace_member_tasks(trace_id_t trace_id) final;
 
     /// ShardManager
     ShardManager::AsyncResult< ShardInfo > get_shard(shard_id_t id, trace_id_t tid) const final;

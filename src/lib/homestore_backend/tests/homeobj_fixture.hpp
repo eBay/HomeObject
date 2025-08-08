@@ -589,7 +589,8 @@ public:
         auto in_member = PGMember(in_member_id, "in_member");
         auto out = hs_pg->pg_info_.members.find(out_member);
         auto in = hs_pg->pg_info_.members.find(in_member);
-        RELEASE_ASSERT(hs_pg->pg_info_.members.size() == 4, "Invalid pg member size");
+        RELEASE_ASSERT(hs_pg->pg_info_.members.size() == 4, "Invalid pg member size={}",
+                       hs_pg->pg_info_.members.size());
         if (in == hs_pg->pg_info_.members.end()) {
             LOGERROR("in_member not found, in_member={}", boost::uuids::to_string(in_member_id));
             return false;
@@ -660,6 +661,39 @@ public:
         return true;
     }
 
+    bool verify_rollback_replace_member_result(pg_id_t pg_id, std::string& task_id, peer_id_t out_member_id,
+                                               peer_id_t in_member_id) {
+        auto hs_pg = _obj_inst->get_hs_pg(pg_id);
+        RELEASE_ASSERT(hs_pg, "PG not found");
+        RELEASE_ASSERT(hs_pg->pg_info_.members.size() == 3, "Invalid pg member size");
+        auto out_member = PGMember(out_member_id, "out_member");
+        auto in_member = PGMember(in_member_id, "in_member");
+        auto in = hs_pg->pg_info_.members.find(in_member);
+        auto out = hs_pg->pg_info_.members.find(out_member);
+        if (in != hs_pg->pg_info_.members.end()) {
+            LOGERROR("in_member still in pg, in_member={}", boost::uuids::to_string(in_member_id));
+            return false;
+        }
+        if (out == hs_pg->pg_info_.members.end()) {
+            LOGERROR("Out member not exists in PG");
+            return false;
+        }
+
+        // verify task
+        auto r = _obj_inst->pg_manager()->list_all_replace_member_tasks(0);
+        RELEASE_ASSERT(r.hasValue(), "Failed to list_all_replace_member_tasks");
+        const auto& tasks = r.value();
+        bool found = std::any_of(tasks.cbegin(), tasks.cend(), [&task_id](const homeobject::replace_member_task& task) {
+            return task.task_id == task_id;
+        });
+        if (found) {
+            LOGI("Task with ID '{}' was found.", task_id);
+            return false;
+        }
+        LOGI("Task with ID '{}' was not found on this member", task_id);
+        return true;
+    }
+
     void run_on_pg_leader(pg_id_t pg_id, auto&& lambda) {
         PGStats pg_stats;
         auto res = _obj_inst->pg_manager()->get_stats(pg_id, pg_stats);
@@ -724,6 +758,20 @@ public:
             }
             std::this_thread::sleep_for(1s);
         }
+    }
+
+    peer_id_t get_group_id(pg_id_t pg_id) const {
+        auto pg = _obj_inst->get_hs_pg(pg_id);
+        if (!pg) {
+            LOGW("pg not found, pg_id={}", pg_id);
+            return uuids::nil_uuid();
+        }
+        auto repl_dev = pg->repl_dev_;
+        if (!repl_dev) {
+            LOGW("repl_dev is null, pg_id={}", pg_id);
+            return uuids::nil_uuid();
+        }
+        return repl_dev->group_id();
     }
 
 private:
