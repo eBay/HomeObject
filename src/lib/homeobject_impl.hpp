@@ -62,6 +62,7 @@ struct PG {
         std::atomic< uint64_t > active_blob_count{0ull};
         std::atomic< uint64_t > tombstone_blob_count{0ull};
         std::atomic< uint64_t > total_occupied_blk_count{0ull}; // this will only decrease after GC
+        std::atomic< uint64_t > total_reclaimed_blk_count{0ull}; // this will start from 0 if baseline resync happens
     };
 
     PGInfo pg_info_;
@@ -101,10 +102,10 @@ class HomeObjectImpl : public HomeObject,
     virtual PGManager::NullAsyncResult _replace_member(pg_id_t id, std::string& task_id, peer_id_t const& old_member,
                                                        PGMember const& new_member, uint32_t commit_quorum,
                                                        trace_id_t trace_id) = 0;
-    virtual PGReplaceMemberStatus _get_replace_member_status(pg_id_t id, std::string& task_id, const PGMember& old_member,
-                                                           const PGMember& new_member,
-                                                           const std::vector< PGMember >& others,
-                                                           uint64_t trace_id) const = 0;
+    virtual PGReplaceMemberStatus _get_replace_member_status(pg_id_t id, std::string& task_id,
+                                                             const PGMember& old_member, const PGMember& new_member,
+                                                             const std::vector< PGMember >& others,
+                                                             uint64_t trace_id) const = 0;
     virtual bool _get_stats(pg_id_t id, PGStats& stats) const = 0;
     virtual void _get_pg_ids(std::vector< pg_id_t >& pg_ids) const = 0;
 

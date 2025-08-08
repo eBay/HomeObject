@@ -66,18 +66,13 @@ void GCManager::handle_all_recovered_gc_tasks() {
 }
 
 void GCManager::on_gc_actor_meta_blk_found(sisl::byte_view const& buf, void* meta_cookie) {
-    homestore::superblk< GCManager::gc_actor_superblk > gc_actor_sb(GCManager::_gc_actor_meta_name);
+    m_gc_actor_sbs.emplace_back(GCManager::_gc_actor_meta_name);
+    auto& gc_actor_sb = m_gc_actor_sbs.back();
     gc_actor_sb.load(buf, meta_cookie);
     auto pdev_id = gc_actor_sb->pdev_id;
-    auto index_table_uuid = gc_actor_sb->index_table_uuid;
-
-    auto gc_index_table = m_hs_home_object->get_gc_index_table(boost::uuids::to_string(index_table_uuid));
-
-    RELEASE_ASSERT(gc_index_table, "can not get gc index table for pdev {} with uuid {}!", pdev_id,
-                   boost::uuids::to_string(index_table_uuid));
 
     // create a gc actor for this pdev if not exists
-    auto gc_actor = try_create_pdev_gc_actor(pdev_id, gc_index_table);
+    auto gc_actor = try_create_pdev_gc_actor(pdev_id, gc_actor_sb);
     RELEASE_ASSERT(gc_actor, "can not get gc actor for pdev {}!", pdev_id);
 }
 
@@ -144,9 +139,10 @@ folly::SemiFuture< bool > GCManager::submit_gc_task(task_priority priority, chun
 }
 
 std::shared_ptr< GCManager::pdev_gc_actor >
-GCManager::try_create_pdev_gc_actor(uint32_t pdev_id, std::shared_ptr< GCBlobIndexTable > index_table) {
+GCManager::try_create_pdev_gc_actor(uint32_t pdev_id,
+                                    const homestore::superblk< GCManager::gc_actor_superblk >& gc_actor_sb) {
     auto const [it, happened] = m_pdev_gc_actors.try_emplace(
-        pdev_id, std::make_shared< pdev_gc_actor >(pdev_id, m_chunk_selector, index_table, m_hs_home_object));
+        pdev_id, std::make_shared< pdev_gc_actor >(gc_actor_sb, m_chunk_selector, m_hs_home_object));
     RELEASE_ASSERT((it != m_pdev_gc_actors.end()), "Unexpected error in m_pdev_gc_actors!!!");
     if (happened) {
         LOGINFO("create new gc actor for pdev_id: {}", pdev_id);
@@ -227,14 +223,23 @@ void GCManager::scan_chunks_for_gc() {
 
 /* pdev_gc_actor */
 
-GCManager::pdev_gc_actor::pdev_gc_actor(uint32_t pdev_id, std::shared_ptr< HeapChunkSelector > chunk_selector,
-                                        std::shared_ptr< GCBlobIndexTable > index_table, HSHomeObject* homeobject) :
-        m_pdev_id{pdev_id},
+GCManager::pdev_gc_actor::pdev_gc_actor(const homestore::superblk< GCManager::gc_actor_superblk >& gc_actor_sb,
+                                        std::shared_ptr< HeapChunkSelector > chunk_selector, HSHomeObject* homeobject) :
+        m_pdev_id{gc_actor_sb->pdev_id},
         m_chunk_selector{chunk_selector},
         m_reserved_chunk_queue{HS_BACKEND_DYNAMIC_CONFIG(reserved_chunk_num_per_pdev)},
-        m_index_table{index_table},
-        m_hs_home_object{homeobject} {
-    RELEASE_ASSERT(index_table, "index_table for a gc_actor should not be nullptr!!!");
+        m_index_table{homeobject->get_gc_index_table(boost::uuids::to_string(gc_actor_sb->index_table_uuid))},
+        m_hs_home_object{homeobject},
+        metrics_{*this} {
+
+    RELEASE_ASSERT(m_index_table, "index_table for a gc_actor should not be nullptr!!!");
+
+    durable_entities_.success_gc_task_count = gc_actor_sb->success_gc_task_count;
+    durable_entities_.success_egc_task_count = gc_actor_sb->success_egc_task_count;
+    durable_entities_.failed_gc_task_count = gc_actor_sb->failed_gc_task_count;
+    durable_entities_.failed_egc_task_count = gc_actor_sb->failed_egc_task_count;
+    durable_entities_.total_reclaimed_blk_count_by_gc = gc_actor_sb->total_reclaimed_blk_count_by_gc;
+    durable_entities_.total_reclaimed_blk_count_by_egc = gc_actor_sb->total_reclaimed_blk_count_by_egc;
 }
 
 void GCManager::pdev_gc_actor::start() {
@@ -1014,12 +1019,18 @@ void GCManager::pdev_gc_actor::handle_error_before_persisting_gc_metablk(chunk_i
 
     task.setValue(false);
     m_reserved_chunk_queue.blockingWrite(move_to_chunk);
+
+    durable_entities_update([this, priority](auto& de) {
+        priority == static_cast< uint8_t >(task_priority::normal) ? de.failed_gc_task_count.fetch_add(1)
+                                                                  : de.failed_egc_task_count.fetch_add(1);
+    });
 }
 
 void GCManager::pdev_gc_actor::process_gc_task(chunk_id_t move_from_chunk, uint8_t priority,
                                                folly::Promise< bool > task, const uint64_t task_id) {
     LOGDEBUG("gc task_id={}, start process gc task for move_from_chunk={} with priority={} ", task_id, move_from_chunk,
              priority);
+    auto start_time = std::chrono::steady_clock::now();
     auto vchunk = m_chunk_selector->get_extend_vchunk(move_from_chunk);
 
     if (vchunk->m_state != ChunkState::GC) {
@@ -1095,10 +1106,21 @@ void GCManager::pdev_gc_actor::process_gc_task(chunk_id_t move_from_chunk, uint8
                        move_from_chunk, move_to_chunk, priority);
     }
 
+    durable_entities_update([this, priority](auto& de) {
+        priority == static_cast< uint8_t >(task_priority::normal) ? de.success_gc_task_count.fetch_add(1)
+                                                                  : de.success_egc_task_count.fetch_add(1);
+    });
+
+    if (priority == static_cast< uint8_t >(task_priority::normal)) {
+        HISTOGRAM_OBSERVE(metrics(), gc_time_duration_s_gc, get_elapsed_time_sec(start_time));
+    } else {
+        HISTOGRAM_OBSERVE(metrics(), gc_time_duration_s_egc, get_elapsed_time_sec(start_time));
+    }
+
     task.setValue(true);
     m_reserved_chunk_queue.blockingWrite(move_from_chunk);
     m_hs_home_object->gc_manager()->decr_pg_pending_gc_task(pg_id);
-    LOGINFO("gc task_id={} for move_from_chunk={} to move_to_chunk={} with priority={} is completed", task_id,
+    LOGINFO("gc task_id={} for move_from_chunk={} to move_to_chunk={} with priority={} is completed!", task_id,
             move_from_chunk, move_to_chunk, priority);
 }
 
@@ -1149,15 +1171,34 @@ bool GCManager::pdev_gc_actor::process_after_gc_metablk_persisted(
 
     gc_task_sb.destroy();
 
+    const auto reclaimed_blk_count = m_chunk_selector->get_extend_vchunk(move_from_chunk)->get_used_blks() -
+        m_chunk_selector->get_extend_vchunk(move_to_chunk)->get_used_blks();
+
+    durable_entities_update([this, priority, reclaimed_blk_count](auto& de) {
+        priority == static_cast< uint8_t >(task_priority::normal)
+            ? de.total_reclaimed_blk_count_by_gc.fetch_add(reclaimed_blk_count)
+            : de.total_reclaimed_blk_count_by_egc.fetch_add(reclaimed_blk_count);
+    });
+
     const auto final_state =
         priority == static_cast< uint8_t >(task_priority::normal) ? ChunkState::AVAILABLE : ChunkState::INUSE;
 
     m_chunk_selector->update_vchunk_info_after_gc(move_from_chunk, move_to_chunk, final_state, pg_id, vchunk_id,
                                                   task_id);
 
-    LOGDEBUG("gc task_id={}, vchunk_id={} for pg={} has been update from move_from_chunk={} to move_to_chunk={} ,final "
-             "state is updated to {}",
-             task_id, vchunk_id, pg_id, move_from_chunk, move_to_chunk, final_state);
+    LOGDEBUG("gc task_id={}, vchunk_id={} for pg={} has been update from move_from_chunk={} to move_to_chunk={}, {} "
+             "blks are reclaimed, final state is updated to {}",
+             task_id, vchunk_id, pg_id, move_from_chunk, move_to_chunk, reclaimed_blk_count, final_state);
+
+    const auto total_blks_in_chunk = m_chunk_selector->get_extend_vchunk(move_from_chunk)->get_total_blks();
+
+    if (priority == static_cast< uint8_t >(task_priority::normal)) {
+        HISTOGRAM_OBSERVE(metrics(), reclaim_ratio_gc,
+                          static_cast< double >(reclaimed_blk_count) / total_blks_in_chunk);
+    } else {
+        HISTOGRAM_OBSERVE(metrics(), reclaim_ratio_egc,
+                          static_cast< double >(reclaimed_blk_count) / total_blks_in_chunk);
+    }
 
     return true;
 }
