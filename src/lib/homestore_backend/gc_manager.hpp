@@ -48,6 +48,12 @@ public:
     struct gc_actor_superblk {
         uint32_t pdev_id;
         homestore::uuid_t index_table_uuid;
+        uint64_t success_gc_task_count{0ull};
+        uint64_t success_egc_task_count{0ull};
+        uint64_t failed_gc_task_count{0ull};
+        uint64_t failed_egc_task_count{0ull};
+        uint64_t total_reclaimed_blk_count_by_gc{0ull};
+        uint64_t total_reclaimed_blk_count_by_egc{0ull};
         static std::string name() { return _gc_actor_meta_name; }
     };
 
@@ -93,8 +99,9 @@ public:
 public:
     class pdev_gc_actor {
     public:
-        pdev_gc_actor(uint32_t pdev_id, std::shared_ptr< HeapChunkSelector > chunk_selector,
-                      std::shared_ptr< GCBlobIndexTable > index_table, HSHomeObject* homeobject);
+        pdev_gc_actor(const homestore::superblk< GCManager::gc_actor_superblk >& gc_actor_sb,
+                      std::shared_ptr< HeapChunkSelector > chunk_selector, HSHomeObject* homeobject);
+
         ~pdev_gc_actor();
 
         // Disallow copy and move
@@ -104,11 +111,93 @@ public:
         pdev_gc_actor& operator=(pdev_gc_actor&&) = delete;
 
     public:
+        struct pdev_gc_metrics : public sisl::MetricsGroup {
+        public:
+            pdev_gc_metrics(pdev_gc_actor const& gc_actor) :
+                    sisl::MetricsGroup{"pdev_GC", std::to_string(gc_actor.get_pdev_id())},
+                    gc_actor_(gc_actor),
+                    blk_size_{homestore::data_service().get_blk_size()} {
+                // We use replica_set_uuid instead of pg_id for metrics to make it globally unique to allow aggregating
+                // across multiple nodes
+                REGISTER_GAUGE(success_gc_task_count, "Number of successful gc tasks");
+                REGISTER_GAUGE(success_egc_task_count, "Number of successful emergent gc tasks");
+                REGISTER_GAUGE(failed_gc_task_count, "Number of failed gc tasks");
+                REGISTER_GAUGE(failed_egc_task_count, "Number of failed emergent gc tasks");
+                REGISTER_GAUGE(total_reclaimed_space_by_gc, "Total reclaimed space by gc task");
+                REGISTER_GAUGE(total_reclaimed_space_by_egc, "Total reclaimed space by emergent gc task");
+
+                // gc task level histogram metrics
+                REGISTER_HISTOGRAM(reclaim_ratio_gc, "the ratio of reclaimed blks to total blks in a gc task",
+                                   HistogramBucketsType(LinearUpto128Buckets)); // 0% to 100% in 128 buckets
+                REGISTER_HISTOGRAM(
+                    gc_time_duration_s_gc, "how long a successful gc task takes by second",
+                    HistogramBucketsType(LinearUpto64Buckets)); // gc task is expected to finish within 1 minutes
+
+                REGISTER_HISTOGRAM(reclaim_ratio_egc, "the ratio of reclaimed blks to total blks in an egc task",
+                                   HistogramBucketsType(LinearUpto128Buckets)); // 0% to 100% in 128 buckets
+                REGISTER_HISTOGRAM(
+                    gc_time_duration_s_egc, "how long a successful egc task takes by second",
+                    HistogramBucketsType(LinearUpto64Buckets)); // gc task is expected to finish within 1 minutes
+
+                register_me_to_farm();
+                attach_gather_cb(std::bind(&pdev_gc_metrics::on_gather, this));
+            }
+            ~pdev_gc_metrics() { deregister_me_from_farm(); }
+            pdev_gc_metrics(const pdev_gc_metrics&) = delete;
+            pdev_gc_metrics(pdev_gc_metrics&&) noexcept = delete;
+            pdev_gc_metrics& operator=(const pdev_gc_metrics&) = delete;
+            pdev_gc_metrics& operator=(pdev_gc_metrics&&) noexcept = delete;
+
+            void on_gather() {
+                GAUGE_UPDATE(*this, success_gc_task_count,
+                             gc_actor_.durable_entities().success_gc_task_count.load(std::memory_order_relaxed));
+                GAUGE_UPDATE(*this, success_egc_task_count,
+                             gc_actor_.durable_entities().success_egc_task_count.load(std::memory_order_relaxed));
+                GAUGE_UPDATE(*this, failed_gc_task_count,
+                             gc_actor_.durable_entities().failed_gc_task_count.load(std::memory_order_relaxed));
+                GAUGE_UPDATE(*this, failed_egc_task_count,
+                             gc_actor_.durable_entities().failed_egc_task_count.load(std::memory_order_relaxed));
+                GAUGE_UPDATE(
+                    *this, total_reclaimed_space_by_gc,
+                    gc_actor_.durable_entities().total_reclaimed_blk_count_by_gc.load(std::memory_order_relaxed) *
+                        blk_size_);
+                GAUGE_UPDATE(
+                    *this, total_reclaimed_space_by_egc,
+                    gc_actor_.durable_entities().total_reclaimed_blk_count_by_egc.load(std::memory_order_relaxed) *
+                        blk_size_);
+            }
+
+        private:
+            pdev_gc_actor const& gc_actor_;
+            uint32_t blk_size_;
+        };
+
+    public:
+        struct DurableEntities {
+            std::atomic< uint64_t > success_gc_task_count{0ull};
+            std::atomic< uint64_t > success_egc_task_count{0ull};
+            std::atomic< uint64_t > failed_gc_task_count{0ull};
+            std::atomic< uint64_t > failed_egc_task_count{0ull};
+            std::atomic< uint64_t > total_reclaimed_blk_count_by_gc{0ull};
+            std::atomic< uint64_t > total_reclaimed_blk_count_by_egc{0ull};
+        };
+
+        std::atomic< bool > is_dirty_{false};
+
+        void durable_entities_update(auto&& cb, bool dirty = true) {
+            cb(durable_entities_);
+            if (dirty) { is_dirty_.store(true, std::memory_order_relaxed); }
+        }
+
+        DurableEntities const& durable_entities() const { return durable_entities_; }
+
+    public:
         void add_reserved_chunk(homestore::superblk< GCManager::gc_reserved_chunk_superblk > reserved_chunk_sb);
         folly::SemiFuture< bool > add_gc_task(uint8_t priority, chunk_id_t move_from_chunk);
         void handle_recovered_gc_task(homestore::superblk< GCManager::gc_task_superblk >& gc_task_sb);
         void start();
         void stop();
+        uint32_t get_pdev_id() const { return m_pdev_id; }
 
     private:
         void process_gc_task(chunk_id_t move_from_chunk, uint8_t priority, folly::Promise< bool > task,
@@ -147,6 +236,8 @@ public:
                                                        folly::Promise< bool > task, const uint64_t task_id,
                                                        uint8_t priority);
 
+        pdev_gc_metrics& metrics() { return metrics_; }
+
     private:
         // utils
         sisl::sg_list generate_shard_super_blk_sg_list(shard_id_t shard_id);
@@ -169,6 +260,10 @@ public:
         // since we have a very small number of reserved chunks, a vector is enough
         // TODO:: use a map if we have a large number of reserved chunks
         std::vector< homestore::superblk< GCManager::gc_reserved_chunk_superblk > > m_reserved_chunks;
+
+        // metrics
+        pdev_gc_metrics metrics_;
+        DurableEntities durable_entities_;
     };
 
 public:
@@ -188,8 +283,8 @@ public:
      *
      * @return the created or existing(if already exists) gc actor
      */
-    std::shared_ptr< pdev_gc_actor > try_create_pdev_gc_actor(uint32_t pdev_id,
-                                                              std::shared_ptr< GCBlobIndexTable > index_table);
+    std::shared_ptr< pdev_gc_actor >
+    try_create_pdev_gc_actor(uint32_t pdev_id, const homestore::superblk< GCManager::gc_actor_superblk >& gc_actor_sb);
 
     bool is_eligible_for_gc(chunk_id_t chunk_id);
 
@@ -202,12 +297,13 @@ public:
     void drain_pg_pending_gc_task(const pg_id_t pg_id);
     void decr_pg_pending_gc_task(const pg_id_t pg_id);
     void incr_pg_pending_gc_task(const pg_id_t pg_id);
+    auto& get_gc_actore_superblks() { return m_gc_actor_sbs; }
+    std::shared_ptr< pdev_gc_actor > get_pdev_gc_actor(uint32_t pdev_id);
 
 private:
     void on_gc_task_meta_blk_found(sisl::byte_view const& buf, void* meta_cookie);
     void on_gc_actor_meta_blk_found(sisl::byte_view const& buf, void* meta_cookie);
     void on_reserved_chunk_meta_blk_found(sisl::byte_view const& buf, void* meta_cookie);
-    std::shared_ptr< pdev_gc_actor > get_pdev_gc_actor(uint32_t pdev_id);
 
 private:
     std::shared_ptr< HeapChunkSelector > m_chunk_selector;
@@ -217,6 +313,7 @@ private:
     std::list< homestore::superblk< GCManager::gc_task_superblk > > m_recovered_gc_tasks;
     std::unordered_map< pg_id_t, atomic_uint64_t > m_pending_gc_task_num_per_pg;
     std::mutex m_pending_gc_task_mtx;
+    std::vector< homestore::superblk< GCManager::gc_actor_superblk > > m_gc_actor_sbs;
 };
 
 } // namespace homeobject

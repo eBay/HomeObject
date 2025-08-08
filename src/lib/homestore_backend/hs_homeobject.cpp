@@ -409,12 +409,12 @@ void HSHomeObject::shutdown() {
         if (0 == pending_reqs) break;
         LOGI("waiting for {} pending requests to complete", pending_reqs);
         std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-    }
-    gc_mgr_.reset();
+    };
 
     LOGI("start shutting down HomeStore");
     homestore::HomeStore::instance()->shutdown();
     homestore::HomeStore::reset_instance();
+    gc_mgr_.reset();
     iomanager.stop();
 
     LOGI("complete shutting down HomeStore");

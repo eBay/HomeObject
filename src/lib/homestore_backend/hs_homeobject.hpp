@@ -112,10 +112,11 @@ public:
         uint64_t pg_size;
         homestore::uuid_t index_table_uuid;
         blob_id_t blob_sequence_num;
-        uint64_t active_blob_count;        // Total number of active blobs
-        uint64_t tombstone_blob_count;     // Total number of tombstones
-        uint64_t total_occupied_blk_count; // Total number of occupied blocks
-        char data[1];                      // ISO C++ forbids zero-size array
+        uint64_t active_blob_count;         // Total number of active blobs
+        uint64_t tombstone_blob_count;      // Total number of tombstones
+        uint64_t total_occupied_blk_count;  // Total number of occupied blocks
+        uint64_t total_reclaimed_blk_count; // Total number of reclaimed blocks
+        char data[1];                       // ISO C++ forbids zero-size array
         // Data layout inside 'data':
         // First, an array of 'pg_members' structures:
         // | pg_members[0] | pg_members[1] | ... | pg_members[num_dynamic_members-1] | reserved
@@ -281,6 +282,8 @@ public:
                 REGISTER_GAUGE(tombstone_blob_count, "Number of tombstone blobs which can be garbage collected");
                 REGISTER_GAUGE(total_occupied_space,
                                "Total Size occupied (including padding, user_key, blob) rounded to block size");
+                REGISTER_GAUGE(total_reclaimed_space, "Total Size occupied that has been reclaimed by GC");
+
                 REGISTER_COUNTER(total_user_key_size, "Total user key size provided",
                                  sisl::_publish_as::publish_as_gauge);
 
@@ -307,6 +310,9 @@ public:
                              pg_.durable_entities().tombstone_blob_count.load(std::memory_order_relaxed));
                 GAUGE_UPDATE(*this, total_occupied_space,
                              pg_.durable_entities().total_occupied_blk_count.load(std::memory_order_relaxed) *
+                                 blk_size);
+                GAUGE_UPDATE(*this, total_reclaimed_space,
+                             pg_.durable_entities().total_reclaimed_blk_count.load(std::memory_order_relaxed) *
                                  blk_size);
             }
 
