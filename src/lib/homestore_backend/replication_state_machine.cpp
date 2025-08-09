@@ -311,8 +311,8 @@ bool ReplicationStateMachine::apply_snapshot(std::shared_ptr< homestore::snapsho
         LOGI("Simulating apply snapshot with delay, delay={}", delay.get());
         std::this_thread::sleep_for(std::chrono::milliseconds(delay.get()));
     }
-    // Currently, nuraft will pause state machine and resume it after the last snp obj is saved. So we don't need to resume it explicitly.
-    // home_object_->resume_pg_state_machine(m_snp_rcv_handler->get_context_pg_id());
+    // Currently, nuraft will pause state machine and resume it after the last snp obj is saved. So we don't need to
+    // resume it explicitly. home_object_->resume_pg_state_machine(m_snp_rcv_handler->get_context_pg_id());
 #endif
     m_snp_rcv_handler->destroy_context_and_metrics();
 
@@ -735,8 +735,19 @@ folly::Future< std::error_code > ReplicationStateMachine::on_fetch_data(const in
                          "blob_id={}, "
                          "shardID=0x{:x}, pg={}, shard=0x{:x}",
                          blob_id, shard_id, pg_id, (shard_id & homeobject::shard_mask));
-                    // returning whatever data is good , since client will never read it.
-                    throw std::system_error(std::error_code{});
+                    // 1 if we only fetch data from originator, we can make sure this originator should have this blob.
+                    // if we can not find the blob in the originator, we can make sure blob never exists or has been gc.
+                    // at this time, it is safe to return any data since this blob has already been deleted and will
+                    // never be read.
+
+                    //TODO::if I am originator, throw no error
+                    //throw std::system_error(std::error_code{});
+
+                    // 2 if we fetch data from a random peer, we can not make sure this peer should have this blob.
+                    // thus, we can not return success(any data) since this will be considered as we read data
+                    // successfully and the returned empty data will be considered as the wanted data. Instead, we need
+                    // to return read failure to let the fetcher retry fetching data from another peer.
+                    throw std::system_error(std::make_error_code(std::errc::resource_unavailable_try_again));
                 }
 
                 const auto& pbas = index_value.pbas();
