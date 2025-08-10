@@ -46,12 +46,35 @@ folly::Future< bool > HSHomeObject::MyCPCallbacks::cp_flush(CP* cp) {
         hs_pg->pg_sb_->active_blob_count = hs_pg->durable_entities().active_blob_count.load();
         hs_pg->pg_sb_->tombstone_blob_count = hs_pg->durable_entities().tombstone_blob_count.load();
         hs_pg->pg_sb_->total_occupied_blk_count = hs_pg->durable_entities().total_occupied_blk_count.load();
+        hs_pg->pg_sb_->total_reclaimed_blk_count = hs_pg->durable_entities().total_reclaimed_blk_count.load();
         dirty_pg_list.push_back(hs_pg);
     }
 
     for (auto& hs_pg : dirty_pg_list) {
         hs_pg->pg_sb_.write();
     }
+
+    // flush gc durable_entities
+    auto gc_manager = home_obj_.gc_manager();
+    auto& gc_actor_superblks = gc_manager->get_gc_actore_superblks();
+    for (auto& gc_actor_sb : gc_actor_superblks) {
+        const auto pdev_id = gc_actor_sb->pdev_id;
+        const auto gc_actor = gc_manager->get_pdev_gc_actor(pdev_id);
+        RELEASE_ASSERT(gc_actor, "can not get gc actor for pdev {}!", pdev_id);
+        if (gc_actor->is_dirty_.exchange(false)) {
+            gc_actor_sb->success_gc_task_count = gc_actor->durable_entities().success_gc_task_count.load();
+            gc_actor_sb->failed_gc_task_count = gc_actor->durable_entities().failed_gc_task_count.load();
+            gc_actor_sb->success_egc_task_count = gc_actor->durable_entities().success_egc_task_count.load();
+            gc_actor_sb->failed_egc_task_count = gc_actor->durable_entities().failed_egc_task_count.load();
+            gc_actor_sb->total_reclaimed_blk_count_by_gc =
+                gc_actor->durable_entities().total_reclaimed_blk_count_by_gc.load();
+            gc_actor_sb->total_reclaimed_blk_count_by_egc =
+                gc_actor->durable_entities().total_reclaimed_blk_count_by_egc.load();
+
+            gc_actor_sb.write();
+        }
+    }
+
     return folly::makeFuture< bool >(true);
 }
 

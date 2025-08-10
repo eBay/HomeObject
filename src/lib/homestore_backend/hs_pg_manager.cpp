@@ -92,8 +92,8 @@ PGManager::NullAsyncResult HSHomeObject::_create_pg(PGInfo&& pg_info, std::set< 
     auto hs_pg = get_hs_pg(pg_id);
     if (hs_pg) {
         if (!pg_info.is_equivalent_to(hs_pg->pg_info_)) {
-            LOGW("PG already exists with different info! pg={}, pg_info={}, hs_pg_info={}",
-                 pg_id, pg_info.to_string(), hs_pg->pg_info_.to_string());
+            LOGW("PG already exists with different info! pg={}, pg_info={}, hs_pg_info={}", pg_id, pg_info.to_string(),
+                 hs_pg->pg_info_.to_string());
             decr_pending_request_num();
             return folly::makeUnexpected(PGError::INVALID_ARG);
         }
@@ -192,8 +192,8 @@ folly::Expected< HSHomeObject::HS_PG*, PGError > HSHomeObject::local_create_pg(s
     auto pg_id = pg_info.id;
     if (auto hs_pg = get_hs_pg(pg_id); hs_pg) {
         // pg info may have changed due to replace_member, so we just log pg info here
-        LOGW("PG already exists, pg={}, trace_id={}, pg_info={}, hs_pg_info={}",
-             pg_id, tid, pg_info.to_string(), hs_pg->pg_info_.to_string());
+        LOGW("PG already exists, pg={}, trace_id={}, pg_info={}, hs_pg_info={}", pg_id, tid, pg_info.to_string(),
+             hs_pg->pg_info_.to_string());
         return const_cast< HS_PG* >(hs_pg);
     }
 
@@ -457,7 +457,7 @@ bool HSHomeObject::pg_destroy(pg_id_t pg_id, bool need_to_pause_pg_state_machine
     // we have the assumption that after pg is marked as destroyed, it will not be marked as alive again.
     // TODO:: if this assumption is broken, we need to handle it.
     gc_mgr_->drain_pg_pending_gc_task(pg_id);
-    
+
     destroy_shards(pg_id);
     destroy_hs_resources(pg_id);
     destroy_pg_index_table(pg_id);
@@ -478,7 +478,7 @@ bool HSHomeObject::pause_pg_state_machine(pg_id_t pg_id) {
     auto repl_dev = hs_pg ? hs_pg->repl_dev_ : nullptr;
     auto timeout = HS_BACKEND_DYNAMIC_CONFIG(state_machine_pause_timeout_ms);
     auto retry = HS_BACKEND_DYNAMIC_CONFIG(state_machine_pause_retry_count);
-    for (auto i = 0; i < static_cast<int>(retry); i++) {
+    for (auto i = 0; i < static_cast< int >(retry); i++) {
         hs_pg->repl_dev_->pause_state_machine(timeout /* ms */);
         if (repl_dev->is_state_machine_paused()) {
             LOGI("pg={} state machine is paused", pg_id);
@@ -732,6 +732,7 @@ HSHomeObject::HS_PG::HS_PG(superblk< pg_info_superblk >&& sb, shared< ReplDev > 
     durable_entities_.active_blob_count = pg_sb_->active_blob_count;
     durable_entities_.tombstone_blob_count = pg_sb_->tombstone_blob_count;
     durable_entities_.total_occupied_blk_count = pg_sb_->total_occupied_blk_count;
+    durable_entities_.total_reclaimed_blk_count = pg_sb_->total_reclaimed_blk_count;
 }
 
 uint32_t HSHomeObject::HS_PG::total_shards() const { return shards_.size(); }
@@ -938,7 +939,7 @@ void HSHomeObject::update_pg_meta_after_gc(const pg_id_t pg_id, const homestore:
             // considering the complexity of gc crash recovery for tombstone_blob_count, we get it directly from index
             // table , which is the most accurate.
 
-            // TODO::do we need this as durable entity? remove it and got all the from pg index in real time.
+            // TODO::do we need this as durable entity? remove it and get all the from pg index in real time.
             de.tombstone_blob_count = get_pg_tombstone_blob_count(pg_id);
 
             auto move_to_v_chunk = chunk_selector()->get_extend_vchunk(move_to_chunk);
@@ -947,8 +948,11 @@ void HSHomeObject::update_pg_meta_after_gc(const pg_id_t pg_id, const homestore:
             auto total_occupied_blk_count_by_move_to_chunk = move_to_v_chunk->get_used_blks();
 
             // TODO::in recovery case , this might be updated again , fix me later.
-            de.total_occupied_blk_count -=
+            const auto reclaimed_blk_count =
                 total_occupied_blk_count_by_move_from_chunk - total_occupied_blk_count_by_move_to_chunk;
+
+            de.total_occupied_blk_count -= reclaimed_blk_count;
+            de.total_reclaimed_blk_count += reclaimed_blk_count;
 
             LOGD("gc task_id={}, move_from_chunk={}, total_occupied_blk_count_by_move_from_chunk={}, move_to_chunk={}, "
                  "total_occupied_blk_count_by_move_to_chunk={}, total_occupied_blk_count={}",
