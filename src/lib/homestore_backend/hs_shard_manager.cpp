@@ -176,6 +176,10 @@ ShardManager::AsyncResult< ShardInfo > HSHomeObject::_create_shard(pg_id_t pg_ow
     auto req = repl_result_ctx< ShardManager::Result< ShardInfo > >::make(
         sizeof(shard_info_superblk) /* header_extn_size */, 0u /* key_size */);
 
+    // for create shard, we disable push_data, so that all the selecting chunk for creating shard will go through raft
+    // log channel, and thus, the the selecting chunk of later creating shard will go after that of the former one.
+    req->disable_push_data();
+
     // prepare msg header;
     req->header()->msg_type = ReplicationMessageType::CREATE_SHARD_MSG;
     req->header()->pg_id = pg_owner;
@@ -370,21 +374,34 @@ void HSHomeObject::on_shard_message_rollback(int64_t lsn, sisl::blob const& head
     const ReplicationMessageHeader* msg_header = r_cast< const ReplicationMessageHeader* >(header.cbytes());
     if (msg_header->corrupted()) {
         LOGW("replication message header is corrupted with crc error, lsn={}, traceID={}", lsn, tid);
-        if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(ShardError::CRC_MISMATCH)); }
+        RELEASE_ASSERT(false, "shardID=0x{:x}, pg={}, shard=0x{:x}, failed to rollback create_shard msg",
+                       msg_header->shard_id, (msg_header->shard_id >> homeobject::shard_width),
+                       (msg_header->shard_id & homeobject::shard_mask));
         return;
     }
 
     switch (msg_header->msg_type) {
     case ReplicationMessageType::CREATE_SHARD_MSG: {
-        bool res = release_chunk_based_on_create_shard_message(header);
-        if (!res) {
-            RELEASE_ASSERT(false,
-                           "shardID=0x{:x}, pg={}, shard=0x{:x}, failed to release chunk based on create shard msg",
-                           msg_header->shard_id, (msg_header->shard_id >> homeobject::shard_width),
-                           (msg_header->shard_id & homeobject::shard_mask));
+        if (ctx) {
+            ctx->promise_.setValue(folly::makeUnexpected(ShardError::RETRY_REQUEST));
+        } else {
+            // we have already added release_chunk logic to thenValue of hoemobject#create_shard in originator, so here
+            // we just need to release_chunk for non-originater case since it will bring a bug if a chunk is released
+            // for two times. for exampele, as a originator:
+
+            // t1 : chunk1 is released in the rollback of create_shard, the chunk state is marked as available
+            // t2 : chunk1 is select by a new create shard (shard1), the chunk state is marked as inuse
+            // t3 : chunk1 is released in thenValue of create_shard, the chunk state is marked as available
+            // t4 : chunk1 is select by a new create shard (shard2), the chunk state is marked as inuse
+            // now, shard1 and shard2 hold the same chunk.
+            bool res = release_chunk_based_on_create_shard_message(header);
+            if (!res) {
+                RELEASE_ASSERT(false,
+                               "shardID=0x{:x}, pg={}, shard=0x{:x}, failed to release chunk based on create shard msg",
+                               msg_header->shard_id, (msg_header->shard_id >> homeobject::shard_width),
+                               (msg_header->shard_id & homeobject::shard_mask));
+            }
         }
-        // TODO:set a proper error code
-        if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(ShardError::RETRY_REQUEST)); }
         break;
     }
     case ReplicationMessageType::SEAL_SHARD_MSG: {
