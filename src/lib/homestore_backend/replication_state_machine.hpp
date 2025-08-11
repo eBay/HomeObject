@@ -179,6 +179,9 @@ public:
     void on_complete_replace_member(const std::string& task_id, const homestore::replica_member_info& member_out,
                                     const homestore::replica_member_info& member_in, trace_id_t tid = 0) override;
 
+    /// @brief Called when removing a member
+    void on_remove_member(const peer_id_t& member, trace_id_t tid = 0) override;
+
     /// @brief Called when the replica is being destroyed by nuraft;
     void on_destroy(const homestore::group_id_t& group_id) override;
 

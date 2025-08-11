@@ -86,6 +86,16 @@ bool ReplicationStateMachine::on_pre_commit(int64_t lsn, sisl::blob const& heade
         return true;
     }
 
+    if (ctx->op_code() == homestore::journal_type_t::HS_CTRL_REMOVE_MEMBER) {
+        LOGI("pre_commit HS_CTRL_REMOVE_MEMBER log entry, lsn={}", lsn);
+        return true;
+    }
+
+    if (ctx->op_code() == homestore::journal_type_t::HS_CTRL_CLEAN_REPLACE_TASK) {
+        LOGI("pre_commit HS_CTRL_CLEAN_REPLACE_TASK log entry, lsn={}", lsn);
+        return true;
+    }
+
     if (ctx->op_code() == homestore::journal_type_t::HS_CTRL_DESTROY) {
         LOGI("pre_commit destroy member log entry, lsn={}", lsn);
         return true;
@@ -276,6 +286,10 @@ void ReplicationStateMachine::on_complete_replace_member(const std::string& task
                                                          const homestore::replica_member_info& member_in,
                                                          trace_id_t tid) {
     home_object_->on_pg_complete_replace_member(repl_dev()->group_id(), task_id, member_out, member_in, tid);
+}
+
+void ReplicationStateMachine::on_remove_member(const peer_id_t& member, trace_id_t tid) {
+    home_object_->on_remove_member(member, tid);
 }
 
 void ReplicationStateMachine::on_destroy(const homestore::group_id_t& group_id) {

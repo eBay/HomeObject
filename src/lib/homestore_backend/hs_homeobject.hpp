@@ -361,6 +361,11 @@ public:
          * Returns all replication info of all peers.
          */
         void get_peer_info(std::vector< peer_info >& members) const;
+
+        /**
+         * Update membership in pg's superblock.
+         */
+        void update_membership(const MemberSet& members);
     };
 
     struct HS_Shard : public Shard {
@@ -766,6 +771,8 @@ public:
                                        const homestore::replica_member_info& member_out,
                                        const homestore::replica_member_info& member_in, trace_id_t tid);
 
+    void on_remove_member(const peer_id_t& member, trace_id_t tid = 0);
+
     /**
      * @brief Cleans up and recycles resources for the PG identified by the given pg_id on the current node.
      *
@@ -913,6 +920,57 @@ public:
     const Shard* _get_hs_shard(const shard_id_t shard_id) const;
     std::shared_ptr< GCBlobIndexTable > get_gc_index_table(std::string uuid) const;
     void trigger_immediate_gc();
+
+    /**
+     * @brief Toggle the learner flag for a specified member.
+     *
+     * This function changes the state of the learner flag for a given member in the PG.
+     * It is typically used to revert the learner flag back to false when roll back the pgmove.
+     *
+     * @param pg_id The ID of the PG where the member resides.
+     * @param member_id The ID of the member whose learner flag is to be toggled.
+     * @param learner The new state of the learner flag (true to set as learner, false to unset).
+     * @param commit_quorum The quorum required for committing the change.
+     * @param tid The trace ID for tracking the operation.
+     * @return PGManager::NullAsyncResult indicating the result of the operation.
+     */
+    PGManager::NullAsyncResult flip_learner_flag(pg_id_t id, peer_id_t const& member_id, bool learner,
+                                                 uint32_t commit_quorum, trace_id_t tid);
+    /**
+     * @brief Remove a member from the PG.
+     *
+     * This function removes a specified member from the PG, typically used to rollback the pgmove operation.
+     *
+     * @param pg_id The ID of the PG from which the member is to be removed.
+     * @param member_id The ID of the member to be removed.
+     * @param commit_quorum The quorum required for committing the removal.
+     * @param tid The trace ID for tracking the operation.
+     * @return PGManager::NullAsyncResult indicating the result of the operation.
+     */
+    PGManager::NullAsyncResult remove_member(pg_id_t id, peer_id_t const& member_id, uint32_t commit_quorum,
+                                             trace_id_t tid);
+    /**
+     * @brief Clean up the replace a member task in the PG.
+     *
+     * This function clean up the replace member task, typically used to rollback the pgmove operation.
+     *
+     * @param pg_id The ID of the PG where the task is to be cleaned and replaced.
+     * @param task_id The ID of the task to be cleaned.
+     * @param commit_quorum The quorum required for committing the task replacement.
+     * @param tid The trace ID for tracking the operation.
+     * @return PGManager::NullAsyncResult indicating the result of the operation.
+     */
+    PGManager::NullAsyncResult clean_replace_member_task(pg_id_t id, std::string& task_id, uint32_t commit_quorum,
+                                                         trace_id_t tid);
+    /**
+     * @brief List all replace member tasks happening on this homeobject instance.
+     *
+     * This function retrieves a list of all ongoing tasks on this homeobject instance.
+     *
+     * @param tid The trace ID for tracking the operation.
+     * @return PGManager::Result indicating the result of the operation.
+     */
+    PGManager::Result< std::vector< homestore::replace_member_task > > list_all_replace_member_tasks(trace_id_t tid);
 
 private:
     std::shared_ptr< BlobIndexTable > create_pg_index_table();
