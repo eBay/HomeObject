@@ -47,7 +47,6 @@ public:
 #pragma pack(1)
     struct gc_actor_superblk {
         uint32_t pdev_id;
-        homestore::uuid_t index_table_uuid;
         uint64_t success_gc_task_count{0ull};
         uint64_t success_egc_task_count{0ull};
         uint64_t failed_gc_task_count{0ull};
@@ -63,6 +62,7 @@ public:
         chunk_id_t vchunk_id;
         pg_id_t pg_id;
         uint8_t priority;
+        homestore::uuid_t index_table_uuid;
         static std::string name() { return _gc_task_meta_name; }
     };
 
@@ -214,25 +214,28 @@ public:
         // copy all the valid data from the move_from_chunk to move_to_chunk. valid data means those blobs that are not
         // tombstone in the pg index table
         // return true if the data copy is successful, false otherwise.
-        bool copy_valid_data(chunk_id_t move_from_chunk, chunk_id_t move_to_chunk, const uint64_t task_id);
+        bool copy_valid_data(chunk_id_t move_from_chunk, chunk_id_t move_to_chunk,
+                             std::shared_ptr< GCBlobIndexTable > gc_index_table, const uint64_t task_id);
 
         // before we select a reserved chunk and start gc, we need:
-        //  1 clear all the entries of this chunk in the gc index table
+        //  1 clear a new gc_index_table for this gc task.
         //  2 reset this chunk to make sure it is empty.
-        bool purge_reserved_chunk(chunk_id_t move_to_chunk);
+        std::shared_ptr< GCBlobIndexTable > prepare_copy_data(const chunk_id_t move_to_chunk, const uint64_t task_id);
 
-        bool get_blobs_to_replace(chunk_id_t move_to_chunk,
+        bool get_blobs_to_replace(chunk_id_t move_to_chunk, std::shared_ptr< GCBlobIndexTable > gc_index_table,
                                   std::vector< std::pair< BlobRouteByChunkKey, BlobRouteValue > >& valid_blob_indexes);
 
         // this function aims to execute the logic after gc_meta_blk has been persisted, which will shared by normal gc
         // case and recvoery case
         bool process_after_gc_metablk_persisted(
             homestore::superblk< GCManager::gc_task_superblk >& gc_task_sb,
+            std::shared_ptr< GCBlobIndexTable > gc_index_table,
             const std::vector< std::pair< BlobRouteByChunkKey, BlobRouteValue > >& valid_blob_indexes,
             const uint64_t task_id);
 
         void handle_error_before_persisting_gc_metablk(chunk_id_t move_from_chunk, chunk_id_t move_to_chunk,
                                                        folly::Promise< bool > task, const uint64_t task_id,
+                                                       std::shared_ptr< GCBlobIndexTable > gc_index_table,
                                                        uint8_t priority);
 
         pdev_gc_metrics& metrics() { return metrics_; }
@@ -245,7 +248,6 @@ public:
         uint32_t m_pdev_id;
         std::shared_ptr< HeapChunkSelector > m_chunk_selector;
         folly::MPMCQueue< chunk_id_t > m_reserved_chunk_queue;
-        std::shared_ptr< GCBlobIndexTable > m_index_table;
         HSHomeObject* m_hs_home_object{nullptr};
 
         // limit the io resource that gc thread can take, so that it will not impact the client io.

@@ -229,24 +229,17 @@ void HSHomeObject::init_homestore() {
         auto pdev_chunks = chunk_selector_->get_pdev_chunks();
         const auto reserved_chunk_num_per_pdev = HS_BACKEND_DYNAMIC_CONFIG(reserved_chunk_num_per_pdev);
         for (auto const& [pdev_id, chunks] : pdev_chunks) {
-            // 1 create gc index table for each pdev
-            auto gc_index_table = create_gc_index_table();
-            auto uuid = gc_index_table->uuid();
-            // no need lock here for gc_index_table_map
-            gc_index_table_map.emplace(boost::uuids::to_string(uuid), gc_index_table);
-
-            // 2 create gc actor superblk for each pdev, which contains the pdev_id and index table uuid.
+            // 1 create gc actor superblk for each pdev, which contains the pdev_id and index table uuid.
             homestore::superblk< GCManager::gc_actor_superblk > gc_actor_sb{GCManager::_gc_actor_meta_name};
             gc_actor_sb.create(sizeof(GCManager::gc_actor_superblk));
             gc_actor_sb->pdev_id = pdev_id;
-            gc_actor_sb->index_table_uuid = uuid;
             gc_actor_sb.write();
 
             RELEASE_ASSERT(chunks.size() > reserved_chunk_num_per_pdev,
                            "pdev {} has {} chunks, but we need at least {} chunks for reserved chunk", pdev_id,
                            chunks.size(), reserved_chunk_num_per_pdev);
 
-            // 3 create reserved chunk meta blk for each pdev, which contains the reserved chunks.
+            // 2 create reserved chunk meta blk for each pdev, which contains the reserved chunks.
             for (size_t i = 0; i < reserved_chunk_num_per_pdev; ++i) {
                 auto chunk = chunks[i];
                 homestore::superblk< GCManager::gc_reserved_chunk_superblk > reserved_chunk_sb{
@@ -467,6 +460,16 @@ std::shared_ptr< GCBlobIndexTable > HSHomeObject::get_gc_index_table(std::string
         return nullptr;
     }
     return it->second;
+}
+
+void HSHomeObject::remove_gc_index_table(std::string uuid) { gc_index_table_map.erase(uuid); }
+
+void HSHomeObject::destroy_all_gc_index_table() {
+    for (auto& [_, table] : gc_index_table_map) {
+        homestore::index_service().remove_index_table(table);
+        table->destroy();
+    }
+    gc_index_table_map.clear();
 }
 
 void HSHomeObject::trigger_immediate_gc() {

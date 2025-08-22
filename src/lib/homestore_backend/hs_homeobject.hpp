@@ -912,11 +912,13 @@ public:
     void destroy_snapshot_sb(homestore::group_id_t group_id);
     const Shard* _get_hs_shard(const shard_id_t shard_id) const;
     std::shared_ptr< GCBlobIndexTable > get_gc_index_table(std::string uuid) const;
+    void remove_gc_index_table(std::string uuid);
+    void destroy_all_gc_index_table();
     void trigger_immediate_gc();
+    std::shared_ptr< GCBlobIndexTable > create_gc_index_table();
 
 private:
     std::shared_ptr< BlobIndexTable > create_pg_index_table();
-    std::shared_ptr< GCBlobIndexTable > create_gc_index_table();
 
     std::pair< bool, homestore::btree_status_t > add_to_index_table(shared< BlobIndexTable > index_table,
                                                                     const BlobInfo& blob_info);

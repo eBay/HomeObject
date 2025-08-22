@@ -63,6 +63,7 @@ void GCManager::handle_all_recovered_gc_tasks() {
         gc_actor->handle_recovered_gc_task(recovered_gc_task);
     }
     m_recovered_gc_tasks.clear();
+    m_hs_home_object->destroy_all_gc_index_table();
 }
 
 void GCManager::on_gc_actor_meta_blk_found(sisl::byte_view const& buf, void* meta_cookie) {
@@ -228,12 +229,8 @@ GCManager::pdev_gc_actor::pdev_gc_actor(const homestore::superblk< GCManager::gc
         m_pdev_id{gc_actor_sb->pdev_id},
         m_chunk_selector{chunk_selector},
         m_reserved_chunk_queue{HS_BACKEND_DYNAMIC_CONFIG(reserved_chunk_num_per_pdev)},
-        m_index_table{homeobject->get_gc_index_table(boost::uuids::to_string(gc_actor_sb->index_table_uuid))},
         m_hs_home_object{homeobject},
         metrics_{*this} {
-
-    RELEASE_ASSERT(m_index_table, "index_table for a gc_actor should not be nullptr!!!");
-
     durable_entities_.success_gc_task_count = gc_actor_sb->success_gc_task_count;
     durable_entities_.success_egc_task_count = gc_actor_sb->success_egc_task_count;
     durable_entities_.failed_gc_task_count = gc_actor_sb->failed_gc_task_count;
@@ -420,24 +417,31 @@ void GCManager::pdev_gc_actor::handle_recovered_gc_task(
 
     std::vector< std::pair< BlobRouteByChunkKey, BlobRouteValue > > valid_blob_indexes;
 
-    if (!get_blobs_to_replace(move_to_chunk, valid_blob_indexes)) {
+    const auto uuid = boost::uuids::to_string(gc_task_sb->index_table_uuid);
+    auto gc_index_table = m_hs_home_object->get_gc_index_table(uuid);
+    RELEASE_ASSERT(gc_index_table, "gc index table not found for uuid={} when recovery", uuid);
+
+    if (!get_blobs_to_replace(move_to_chunk, gc_index_table, valid_blob_indexes)) {
         RELEASE_ASSERT(false, "failed to get valid blob indexes from gc index table for move_to_chunk={} when recovery",
                        move_to_chunk);
     }
 
-    if (!process_after_gc_metablk_persisted(gc_task_sb, valid_blob_indexes, 0)) {
+    if (!process_after_gc_metablk_persisted(gc_task_sb, gc_index_table, valid_blob_indexes, 0)) {
         RELEASE_ASSERT(false,
                        "failed to process after gc metablk persisted when recovery, "
                        "move_from_chunk={}, move_to_chunk={}, priority={}",
                        move_from_chunk, move_to_chunk, priority);
     }
 
+    m_hs_home_object->remove_gc_index_table(uuid);
+
     LOGDEBUG("finish handling recovered gc task: move_from_chunk_id={}, move_to_chunk_id={}, priority={}",
              move_from_chunk, move_to_chunk, priority);
 }
 
 bool GCManager::pdev_gc_actor::get_blobs_to_replace(
-    chunk_id_t move_to_chunk, std::vector< std::pair< BlobRouteByChunkKey, BlobRouteValue > >& valid_blob_indexes) {
+    chunk_id_t move_to_chunk, std::shared_ptr< GCBlobIndexTable > gc_index_table,
+    std::vector< std::pair< BlobRouteByChunkKey, BlobRouteValue > >& valid_blob_indexes) {
 
     auto start_key = BlobRouteByChunkKey{BlobRouteByChunk(move_to_chunk, 0, 0)};
     auto end_key = BlobRouteByChunkKey{BlobRouteByChunk{move_to_chunk, std::numeric_limits< uint64_t >::max(),
@@ -446,7 +450,7 @@ bool GCManager::pdev_gc_actor::get_blobs_to_replace(
         std::move(start_key), true /* inclusive */, std::move(end_key), true /* inclusive */
     }};
 
-    auto ret = m_index_table->query(query_req, valid_blob_indexes);
+    auto ret = gc_index_table->query(query_req, valid_blob_indexes);
     if (ret != homestore::btree_status_t::success) {
         // "ret != homestore::btree_status_t::has_more" is not expetced here, since we are querying all the pbas in one
         // time.
@@ -579,6 +583,7 @@ sisl::sg_list GCManager::pdev_gc_actor::generate_shard_super_blk_sg_list(shard_i
 
 // note that, when we copy data, there is not create shard or put blob in this chunk, only delete blob might happen.
 bool GCManager::pdev_gc_actor::copy_valid_data(chunk_id_t move_from_chunk, chunk_id_t move_to_chunk,
+                                               std::shared_ptr< GCBlobIndexTable > gc_index_table,
                                                const uint64_t task_id) {
     auto move_to_vchunk = m_chunk_selector->get_extend_vchunk(move_to_chunk);
     auto move_from_vchunk = m_chunk_selector->get_extend_vchunk(move_from_chunk);
@@ -727,7 +732,7 @@ bool GCManager::pdev_gc_actor::copy_valid_data(chunk_id_t move_from_chunk, chunk
             // 1 write the shard header to move_to_chunk
             data_service.async_alloc_write(header_sgs, hints, out_blkids)
                 .thenValue([this, &hints, &move_to_chunk, &move_from_chunk, &is_last_shard, &shard_id, &blk_size,
-                            &valid_blob_indexes, &data_service, task_id, &last_shard_state,
+                            &valid_blob_indexes, &data_service, task_id, &gc_index_table, &last_shard_state,
                             header_sgs = std::move(header_sgs)](auto&& err) {
                     RELEASE_ASSERT(header_sgs.iovs.size() == 1, "header_sgs.iovs.size() should be 1, but not!");
                     iomanager.iobuf_free(reinterpret_cast< uint8_t* >(header_sgs.iovs[0].iov_base));
@@ -764,7 +769,7 @@ bool GCManager::pdev_gc_actor::copy_valid_data(chunk_id_t move_from_chunk, chunk
                             // read blob from move_from_chunk
                             data_service.async_read(pba, data_sgs, total_size)
                                 .thenValue([this, k, &hints, &move_from_chunk, &move_to_chunk, &data_service, task_id,
-                                            data_sgs = std::move(data_sgs), pba](auto&& err) {
+                                            &gc_index_table, data_sgs = std::move(data_sgs), pba](auto&& err) {
                                     RELEASE_ASSERT(data_sgs.iovs.size() == 1,
                                                    "data_sgs.iovs.size() should be 1, but not!");
                                     if (err) {
@@ -798,7 +803,7 @@ bool GCManager::pdev_gc_actor::copy_valid_data(chunk_id_t move_from_chunk, chunk
                                     // shard since we can not guarantee a certain order
                                     homestore::MultiBlkId new_pba;
                                     return data_service.async_alloc_write(data_sgs, hints, new_pba)
-                                        .thenValue([this, k, new_pba, &move_to_chunk, task_id,
+                                        .thenValue([this, k, new_pba, &move_to_chunk, task_id, &gc_index_table,
                                                     data_sgs = std::move(data_sgs)](auto&& err) {
                                             RELEASE_ASSERT(data_sgs.iovs.size() == 1,
                                                            "data_sgs.iovs.size() should be 1, but not!");
@@ -821,7 +826,7 @@ bool GCManager::pdev_gc_actor::copy_valid_data(chunk_id_t move_from_chunk, chunk
 
                                             homestore::BtreeSinglePutRequest put_req{
                                                 &key, &value, homestore::btree_put_type::INSERT, &existing_value};
-                                            auto status = m_index_table->put(put_req);
+                                            auto status = gc_index_table->put(put_req);
                                             if (status != homestore::btree_status_t::success) {
                                                 LOGERROR(
                                                     "gc task_id={}, Failed to insert new key to gc index table for "
@@ -953,61 +958,32 @@ bool GCManager::pdev_gc_actor::copy_valid_data(chunk_id_t move_from_chunk, chunk
     return true;
 }
 
-bool GCManager::pdev_gc_actor::purge_reserved_chunk(chunk_id_t chunk) {
-    auto vchunk = m_chunk_selector->get_extend_vchunk(chunk);
+std::shared_ptr< GCBlobIndexTable > GCManager::pdev_gc_actor::prepare_copy_data(const chunk_id_t move_to_chunk,
+                                                                                const uint64_t task_id) {
+    auto vchunk = m_chunk_selector->get_extend_vchunk(move_to_chunk);
+
     RELEASE_ASSERT(!vchunk->m_pg_id.has_value(),
-                   "chunk_id={} is expected to be a reserved chunk, and not belong to a pg", chunk);
+                   "move_to_chunk_id={} is expected to be a reserved chunk, and not belong to a pg", move_to_chunk);
     RELEASE_ASSERT(vchunk->m_state == ChunkState::GC,
-                   "chunk_id={} is a reserved chunk, expected to have a GC state, but actuall state is {} ", chunk,
-                   vchunk->m_state);
+                   "move_to_chunk_id={} is a reserved chunk, expected to have a GC state, but actual state is {} ",
+                   move_to_chunk, vchunk->m_state);
 
-    LOGDEBUG("reset chunk={} before using it for gc", vchunk->get_chunk_id());
-    vchunk->reset(); // reset the chunk to make sure it is empty
+    // reset the chunk to make sure it is empty
+    vchunk->reset();
+    // create a new gc index table for a gc task
+    auto gc_index_table = m_hs_home_object->create_gc_index_table();
 
-    // clear all the entries of this chunk in the gc index table
-    auto start_key = BlobRouteByChunkKey{BlobRouteByChunk(chunk, 0, 0)};
-    auto end_key = BlobRouteByChunkKey{
-        BlobRouteByChunk{chunk, std::numeric_limits< uint64_t >::max(), std::numeric_limits< uint64_t >::max()}};
+    RELEASE_ASSERT(gc_index_table, "can not create gc index table for move_to_chunk={}", move_to_chunk);
 
-    homestore::BtreeRangeRemoveRequest< BlobRouteByChunkKey > range_remove_req{
-        homestore::BtreeKeyRange< BlobRouteByChunkKey >{
-            start_key, true /* inclusive */, end_key, true /* inclusive */
-        }};
+    LOGDEBUG("reset move_to_chunk={} before using it for gc, the corresponding index table uuid={}",
+             vchunk->get_chunk_id(), gc_index_table->uuid());
 
-    auto status = m_index_table->remove(range_remove_req);
-    if (status != homestore::btree_status_t::success &&
-        status != homestore::btree_status_t::not_found /*already empty*/) {
-        LOGWARN("fail to purge gc index for chunk={}", chunk);
-        return false;
-    }
-
-    // after range_remove, we check again to make sure there is not any entry in the gc index table for this chunk
-    homestore::BtreeQueryRequest< BlobRouteByChunkKey > query_req{homestore::BtreeKeyRange< BlobRouteByChunkKey >{
-        std::move(start_key), true /* inclusive */, std::move(end_key), true /* inclusive */
-    }};
-
-    std::vector< std::pair< BlobRouteByChunkKey, BlobRouteValue > > valid_blob_indexes;
-
-    status = m_index_table->query(query_req, valid_blob_indexes);
-    if (status != homestore::btree_status_t::success) {
-        LOGERROR("Failed to query blobs after purging reserved chunk={} in gc index table, index ret={}", chunk,
-                 status);
-        return false;
-    }
-
-    if (!valid_blob_indexes.empty()) {
-        LOGERROR("gc index table is not empty for chunk={} after purging, valid_blob_indexes.size={}", chunk,
-                 valid_blob_indexes.size());
-        return false;
-    }
-
-    return true;
+    return gc_index_table;
 }
 
-void GCManager::pdev_gc_actor::handle_error_before_persisting_gc_metablk(chunk_id_t move_from_chunk,
-                                                                         chunk_id_t move_to_chunk,
-                                                                         folly::Promise< bool > task,
-                                                                         const uint64_t task_id, uint8_t priority) {
+void GCManager::pdev_gc_actor::handle_error_before_persisting_gc_metablk(
+    chunk_id_t move_from_chunk, chunk_id_t move_to_chunk, folly::Promise< bool > task, const uint64_t task_id,
+    std::shared_ptr< GCBlobIndexTable > gc_index_table, uint8_t priority) {
     LOGERROR(
         "gc task_id={}, move_from_chunk={} to move_to_chunk={} with priority={} failed before persisting gc metablk",
         task_id, move_from_chunk, move_to_chunk, priority);
@@ -1015,6 +991,9 @@ void GCManager::pdev_gc_actor::handle_error_before_persisting_gc_metablk(chunk_i
     const auto final_state =
         priority == static_cast< uint8_t >(task_priority::normal) ? ChunkState::AVAILABLE : ChunkState::INUSE;
     m_chunk_selector->mark_chunk_out_of_gc_state(move_from_chunk, final_state, task_id);
+
+    homestore::index_service().remove_index_table(gc_index_table);
+    gc_index_table->destroy();
 
     task.setValue(false);
     m_reserved_chunk_queue.blockingWrite(move_to_chunk);
@@ -1054,24 +1033,22 @@ void GCManager::pdev_gc_actor::process_gc_task(chunk_id_t move_from_chunk, uint8
     LOGDEBUG("gc task_id={} for move_from_chunk={} to move_to_chunk={} with priority={} start copying data", task_id,
              move_from_chunk, move_to_chunk, priority);
 
-    if (!purge_reserved_chunk(move_to_chunk)) {
-        LOGWARN("gc task_id={}, can not purge move_to_chunk={}", task_id, move_to_chunk);
-        handle_error_before_persisting_gc_metablk(move_from_chunk, move_to_chunk, std::move(task), task_id, priority);
-        return;
-    }
+    auto gc_index_table = prepare_copy_data(move_to_chunk, task_id);
 
-    if (!copy_valid_data(move_from_chunk, move_to_chunk, task_id)) {
+    if (!copy_valid_data(move_from_chunk, move_to_chunk, gc_index_table, task_id)) {
         LOGWARN("gc task_id={}, failed to copy data from move_from_chunk={} to move_to_chunk={} with priority={}",
                 task_id, move_from_chunk, move_to_chunk, priority);
-        handle_error_before_persisting_gc_metablk(move_from_chunk, move_to_chunk, std::move(task), task_id, priority);
+        handle_error_before_persisting_gc_metablk(move_from_chunk, move_to_chunk, std::move(task), task_id,
+                                                  gc_index_table, priority);
         return;
     }
 
     std::vector< std::pair< BlobRouteByChunkKey, BlobRouteValue > > valid_blob_indexes;
-    if (!get_blobs_to_replace(move_to_chunk, valid_blob_indexes)) {
+    if (!get_blobs_to_replace(move_to_chunk, gc_index_table, valid_blob_indexes)) {
         LOGWARN("gc task_id={}, failed to get valid blob indexes from gc index table for move_to_chunk={}", task_id,
                 move_to_chunk);
-        handle_error_before_persisting_gc_metablk(move_from_chunk, move_to_chunk, std::move(task), task_id, priority);
+        handle_error_before_persisting_gc_metablk(move_from_chunk, move_to_chunk, std::move(task), task_id,
+                                                  gc_index_table, priority);
         return;
     }
 
@@ -1088,6 +1065,7 @@ void GCManager::pdev_gc_actor::process_gc_task(chunk_id_t move_from_chunk, uint8
     gc_task_sb->move_to_chunk = move_to_chunk;
     gc_task_sb->vchunk_id = vchunk_id;
     gc_task_sb->priority = priority;
+    gc_task_sb->index_table_uuid = gc_index_table->uuid();
     gc_task_sb->pg_id = pg_id;
     // write the gc task meta blk to the meta service, so that it can be recovered when restarting
     gc_task_sb.write();
@@ -1096,7 +1074,7 @@ void GCManager::pdev_gc_actor::process_gc_task(chunk_id_t move_from_chunk, uint8
         "gc task_id={}, gc task for move_from_chunk={} to move_to_chunk={} with priority={} start replacing blob index",
         task_id, move_from_chunk, move_to_chunk, priority);
 
-    if (!process_after_gc_metablk_persisted(gc_task_sb, valid_blob_indexes, task_id)) {
+    if (!process_after_gc_metablk_persisted(gc_task_sb, gc_index_table, valid_blob_indexes, task_id)) {
         // TODO::add a method to restore the old index if any error happen when replacing blob index
         RELEASE_ASSERT(false,
                        "Fail to process after gc metablk persisted, "
@@ -1123,7 +1101,7 @@ void GCManager::pdev_gc_actor::process_gc_task(chunk_id_t move_from_chunk, uint8
 }
 
 bool GCManager::pdev_gc_actor::process_after_gc_metablk_persisted(
-    homestore::superblk< GCManager::gc_task_superblk >& gc_task_sb,
+    homestore::superblk< GCManager::gc_task_superblk >& gc_task_sb, std::shared_ptr< GCBlobIndexTable > gc_index_table,
     const std::vector< std::pair< BlobRouteByChunkKey, BlobRouteValue > >& valid_blob_indexes, const uint64_t task_id) {
 
     const chunk_id_t move_from_chunk = gc_task_sb->move_from_chunk;
@@ -1167,6 +1145,8 @@ bool GCManager::pdev_gc_actor::process_after_gc_metablk_persisted(
         }
     }
 
+    homestore::index_service().remove_index_table(gc_index_table);
+    gc_index_table->destroy();
     gc_task_sb.destroy();
 
     const auto reclaimed_blk_count = m_chunk_selector->get_extend_vchunk(move_from_chunk)->get_used_blks() -
