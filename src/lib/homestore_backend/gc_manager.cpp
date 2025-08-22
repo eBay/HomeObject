@@ -579,7 +579,7 @@ sisl::sg_list GCManager::pdev_gc_actor::generate_shard_super_blk_sg_list(shard_i
 
 // note that, when we copy data, there is not create shard or put blob in this chunk, only delete blob might happen.
 bool GCManager::pdev_gc_actor::copy_valid_data(chunk_id_t move_from_chunk, chunk_id_t move_to_chunk,
-                                               const uint64_t task_id, bool is_emergent) {
+                                               const uint64_t task_id) {
     auto move_to_vchunk = m_chunk_selector->get_extend_vchunk(move_to_chunk);
     auto move_from_vchunk = m_chunk_selector->get_extend_vchunk(move_from_chunk);
 
@@ -606,12 +606,14 @@ bool GCManager::pdev_gc_actor::copy_valid_data(chunk_id_t move_from_chunk, chunk
 
     const auto last_shard_id = *(shards.rbegin());
     const auto& shard_info = m_hs_home_object->_get_hs_shard(last_shard_id)->info;
-    const auto& shard_state = shard_info.state;
+    const auto& last_shard_state = shard_info.state;
 
-    // the last shard that triggers emergent gc should be in open state
-    if (shard_state != ShardInfo::State::OPEN && is_emergent) {
-        LOGERROR("gc task_id={}, shard state is not open for emergent gc, shard_id={} !!!", task_id, last_shard_id);
-        return false;
+    // in most cases(put_blob and seal_shard), the last shard in the chunk, which triggers emergent gc, should be in
+    // open state. but if the emergent gc is triggered by a creat_shard request, then the last shard is not in open
+    // state, it is in sealed state.
+    if (last_shard_state == ShardInfo::State::OPEN) {
+        LOGWARN("gc task_id={}, last shard in move_from_chunk={} is shard_id={}, state is OPEN!", task_id,
+                move_from_chunk, last_shard_id);
     }
 
     homestore::blk_alloc_hints hints;
@@ -680,16 +682,14 @@ bool GCManager::pdev_gc_actor::copy_valid_data(chunk_id_t move_from_chunk, chunk
             return false;
         }
 
-        const auto is_last_shard_in_emergent_chunk = is_emergent && is_last_shard;
-
         if (valid_blob_indexes.empty()) {
             LOGDEBUG("gc task_id={}, empty shard found in move_from_chunk, chunk_id={}, shard_id={}", task_id,
                      move_from_chunk, shard_id);
             // TODO::send a delete shard request to raft channel. there is a case that when we are doing gc, the
             // shard becomes empty, need to handle this case
 
-            // we should always write a shard header for the last shard of emergent gc.
-            if (!is_last_shard_in_emergent_chunk) continue;
+            // we should always write a shard header for the last shard if the state of it is open.
+            if (last_shard_state != ShardInfo::State::OPEN || !is_last_shard) continue;
         } else {
             LOGDEBUG("gc task_id={}, {} valid blobs found in move_from_chunk, chunk_id={}, shard_id={}", task_id,
                      valid_blob_indexes.size(), move_from_chunk, shard_id);
@@ -726,8 +726,8 @@ bool GCManager::pdev_gc_actor::copy_valid_data(chunk_id_t move_from_chunk, chunk
         auto succeed_copying_shard =
             // 1 write the shard header to move_to_chunk
             data_service.async_alloc_write(header_sgs, hints, out_blkids)
-                .thenValue([this, &hints, &move_to_chunk, &move_from_chunk, &is_emergent, &is_last_shard, &shard_id,
-                            &blk_size, &valid_blob_indexes, &data_service, task_id,
+                .thenValue([this, &hints, &move_to_chunk, &move_from_chunk, &is_last_shard, &shard_id, &blk_size,
+                            &valid_blob_indexes, &data_service, task_id, &last_shard_state,
                             header_sgs = std::move(header_sgs)](auto&& err) {
                     RELEASE_ASSERT(header_sgs.iovs.size() == 1, "header_sgs.iovs.size() should be 1, but not!");
                     iomanager.iobuf_free(reinterpret_cast< uint8_t* >(header_sgs.iovs[0].iov_base));
@@ -739,7 +739,7 @@ bool GCManager::pdev_gc_actor::copy_valid_data(chunk_id_t move_from_chunk, chunk
                     }
 
                     if (valid_blob_indexes.empty()) {
-                        RELEASE_ASSERT(is_emergent,
+                        RELEASE_ASSERT(is_last_shard && last_shard_state == ShardInfo::State::OPEN,
                                        "find empty shard in move_from_chunk={} "
                                        "but is_emergent is false, shard_id={}",
                                        move_from_chunk, shard_id);
@@ -843,8 +843,8 @@ bool GCManager::pdev_gc_actor::copy_valid_data(chunk_id_t move_from_chunk, chunk
                     // 3 write a shard footer for this shard
                     sisl::sg_list footer_sgs = generate_shard_super_blk_sg_list(shard_id);
                     return folly::collectAllUnsafe(futs)
-                        .thenValue([this, &is_emergent, &is_last_shard, &shard_id, &blk_size, &hints, &move_to_chunk,
-                                    task_id, &data_service, footer_sgs](auto&& results) {
+                        .thenValue([this, &is_last_shard, &shard_id, &blk_size, &hints, &move_to_chunk,
+                                    &last_shard_state, task_id, &data_service, footer_sgs](auto&& results) {
                             for (auto const& ok : results) {
                                 RELEASE_ASSERT(ok.hasValue(), "we never throw any exception when copying data");
                                 if (!ok.value()) {
@@ -854,9 +854,8 @@ bool GCManager::pdev_gc_actor::copy_valid_data(chunk_id_t move_from_chunk, chunk
                                 }
                             }
 
-                            // the shard that triggers emergent gc should be the last shard in the chunk, so it should
-                            // be open and we skip writing the footer for this case.
-                            if (is_emergent && is_last_shard) {
+                            // we skip writing footer only if the last shard of this chunk is in open state.
+                            if (is_last_shard && last_shard_state == ShardInfo::State::OPEN) {
                                 LOGDEBUG("gc task_id={}, skip writing the footer for move_to_chunk={} shard_id={} for "
                                          "emergent gc task",
                                          task_id, move_to_chunk, shard_id);
@@ -1061,8 +1060,7 @@ void GCManager::pdev_gc_actor::process_gc_task(chunk_id_t move_from_chunk, uint8
         return;
     }
 
-    if (!copy_valid_data(move_from_chunk, move_to_chunk, task_id,
-                         priority == static_cast< uint8_t >(task_priority::emergent))) {
+    if (!copy_valid_data(move_from_chunk, move_to_chunk, task_id)) {
         LOGWARN("gc task_id={}, failed to copy data from move_from_chunk={} to move_to_chunk={} with priority={}",
                 task_id, move_from_chunk, move_to_chunk, priority);
         handle_error_before_persisting_gc_metablk(move_from_chunk, move_to_chunk, std::move(task), task_id, priority);
