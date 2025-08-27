@@ -77,20 +77,16 @@ bool ReplicationStateMachine::on_pre_commit(int64_t lsn, sisl::blob const& heade
     // For shard creation, since homestore repldev inside will write shard header to data service first before this
     // function is called. So there is nothing is needed to do and we can get the binding chunk_id with the newly shard
     // from the blkid in on_commit()
-    if (ctx->op_code() == homestore::journal_type_t::HS_CTRL_START_REPLACE) {
-        LOGI("pre_commit HS_CTRL_START_REPLACE log entry, lsn={}", lsn);
-        return true;
-    }
-    if (ctx->op_code() == homestore::journal_type_t::HS_CTRL_COMPLETE_REPLACE) {
-        LOGI("pre_commit HS_CTRL_COMPLETE_REPLACE log entry, lsn={}", lsn);
-        return true;
-    }
-
-    if (ctx->op_code() == homestore::journal_type_t::HS_CTRL_DESTROY) {
-        LOGI("pre_commit destroy member log entry, lsn={}", lsn);
+    homestore::journal_type_t op_code = ctx->op_code();
+    bool is_data_op =
+        (op_code == homestore::journal_type_t::HS_DATA_LINKED || op_code == homestore::journal_type_t::HS_DATA_INLINED);
+    if (!is_data_op) {
+        LOGI("pre_commit {} log entry, lsn={}", enum_name(op_code), lsn);
         return true;
     }
 
+    RELEASE_ASSERT(is_data_op, "pre_commit should only be called for linked or inlined data, current op_code={}",
+                   enum_name(op_code));
     const ReplicationMessageHeader* msg_header = r_cast< const ReplicationMessageHeader* >(header.cbytes());
     if (msg_header->corrupted()) {
         LOGE("corrupted message in pre_commit, lsn={}", lsn);
@@ -311,8 +307,8 @@ bool ReplicationStateMachine::apply_snapshot(std::shared_ptr< homestore::snapsho
         LOGI("Simulating apply snapshot with delay, delay={}", delay.get());
         std::this_thread::sleep_for(std::chrono::milliseconds(delay.get()));
     }
-    // Currently, nuraft will pause state machine and resume it after the last snp obj is saved. So we don't need to resume it explicitly.
-    // home_object_->resume_pg_state_machine(m_snp_rcv_handler->get_context_pg_id());
+    // Currently, nuraft will pause state machine and resume it after the last snp obj is saved. So we don't need to
+    // resume it explicitly. home_object_->resume_pg_state_machine(m_snp_rcv_handler->get_context_pg_id());
 #endif
     m_snp_rcv_handler->destroy_context_and_metrics();
 
