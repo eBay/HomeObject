@@ -9,8 +9,20 @@
 
 namespace homeobject {
 
-ENUM(ShardError, uint16_t, UNKNOWN = 1, TIMEOUT, INVALID_ARG, NOT_LEADER, UNSUPPORTED_OP, UNKNOWN_PG, UNKNOWN_SHARD,
+ENUM(ShardErrorCode, uint16_t, UNKNOWN = 1, TIMEOUT, INVALID_ARG, NOT_LEADER, UNSUPPORTED_OP, UNKNOWN_PG, UNKNOWN_SHARD,
      PG_NOT_READY, CRC_MISMATCH, NO_SPACE_LEFT, RETRY_REQUEST, SHUTTING_DOWN);
+struct ShardError {
+    ShardErrorCode code;
+    // set when we are not the current leader of the PG.
+    std::optional< peer_id_t > current_leader{std::nullopt};
+    ShardError(ShardErrorCode _code) { code = _code; }
+
+    ShardError(ShardErrorCode _code, peer_id_t _leader) {
+        code = _code;
+        current_leader = _leader;
+    }
+    ShardErrorCode getCode() const { return code; }
+};
 
 struct ShardInfo {
     enum class State : uint8_t {
