@@ -88,7 +88,7 @@ TEST_F(HomeObjectFixture, SealShard) {
         run_on_pg_leader(pg_id, [&]() {
             auto s = _obj_inst->shard_manager()->create_shard(pg_id, 64 * Mi).get();
             ASSERT_TRUE(s.hasError());
-            ASSERT_EQ(ShardError::NO_SPACE_LEFT, s.error());
+            ASSERT_EQ(ShardErrorCode::NO_SPACE_LEFT, s.error().getCode());
         });
 
         auto start_time = std::chrono::steady_clock::now();

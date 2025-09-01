@@ -3,24 +3,25 @@
 
 using homeobject::shard_id_t;
 using homeobject::ShardError;
+using homeobject::ShardErrorCode;
 using homeobject::ShardInfo;
 
 TEST_F(TestFixture, CreateShardTooBig) {
     EXPECT_EQ(
-        ShardError::INVALID_ARG,
-        homeobj_->shard_manager()->create_shard(_pg_id, homeobject::ShardManager::max_shard_size() + 1).get().error());
+        ShardErrorCode::INVALID_ARG,
+        homeobj_->shard_manager()->create_shard(_pg_id, homeobject::ShardManager::max_shard_size() + 1).get().error().getCode());
 }
 
 TEST_F(TestFixture, CreateShardTooSmall) {
-    EXPECT_EQ(ShardError::INVALID_ARG, homeobj_->shard_manager()->create_shard(_pg_id, 0ul).get().error());
+    EXPECT_EQ(ShardErrorCode::INVALID_ARG, homeobj_->shard_manager()->create_shard(_pg_id, 0ul).get().error().getCode());
 }
 
 TEST_F(TestFixture, CreateShardNoPg) {
-    EXPECT_EQ(ShardError::UNKNOWN_PG, homeobj_->shard_manager()->create_shard(_pg_id + 1, Mi).get().error());
+    EXPECT_EQ(ShardErrorCode::UNKNOWN_PG, homeobj_->shard_manager()->create_shard(_pg_id + 1, Mi).get().error().getCode());
 }
 
 TEST_F(TestFixture, GetUnknownShard) {
-    EXPECT_EQ(ShardError::UNKNOWN_SHARD, homeobj_->shard_manager()->get_shard(_shard_2.id + 1).get().error());
+    EXPECT_EQ(ShardErrorCode::UNKNOWN_SHARD, homeobj_->shard_manager()->get_shard(_shard_2.id + 1).get().error().getCode());
 }
 
 TEST_F(TestFixture, GetKnownShard) {
@@ -34,7 +35,7 @@ TEST_F(TestFixture, GetKnownShard) {
 }
 
 TEST_F(TestFixture, ListShardsNoPg) {
-    EXPECT_EQ(ShardError::UNKNOWN_PG, homeobj_->shard_manager()->list_shards(_pg_id + 1).get().error());
+    EXPECT_EQ(ShardErrorCode::UNKNOWN_PG, homeobj_->shard_manager()->list_shards(_pg_id + 1).get().error().getCode());
 }
 
 TEST_F(TestFixture, ListShards) {
@@ -49,7 +50,7 @@ TEST_F(TestFixture, ListShards) {
 }
 
 TEST_F(TestFixture, SealShardNoShard) {
-    EXPECT_EQ(ShardError::UNKNOWN_SHARD, homeobj_->shard_manager()->seal_shard(_shard_2.id + 1).get().error());
+    EXPECT_EQ(ShardErrorCode::UNKNOWN_SHARD, homeobj_->shard_manager()->seal_shard(_shard_2.id + 1).get().error().getCode());
 }
 
 TEST_F(TestFixture, SealShard) {

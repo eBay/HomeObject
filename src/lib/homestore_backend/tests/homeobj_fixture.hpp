@@ -497,7 +497,7 @@ public:
         ASSERT_EQ(_obj_inst->index_table_pg_map_.find(index_table_uuid_str), _obj_inst->index_table_pg_map_.end());
         // check shards
         auto e = _obj_inst->shard_manager()->list_shards(pg_id).get();
-        ASSERT_EQ(e.error(), ShardError::UNKNOWN_PG);
+        ASSERT_EQ(e.error().getCode(), ShardErrorCode::UNKNOWN_PG);
         for (const auto& shard_id : shard_id_vec) {
             ASSERT_FALSE(shard_exist(shard_id));
         }

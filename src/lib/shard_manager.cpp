@@ -6,7 +6,7 @@ std::shared_ptr< ShardManager > HomeObjectImpl::shard_manager() { return shared_
 
 ShardManager::AsyncResult< ShardInfo > HomeObjectImpl::create_shard(pg_id_t pg_owner, uint64_t size_bytes,
                                                                     trace_id_t tid) {
-    if (0 == size_bytes || max_shard_size() < size_bytes) return folly::makeUnexpected(ShardError::INVALID_ARG);
+    if (0 == size_bytes || max_shard_size() < size_bytes) return folly::makeUnexpected(ShardError(ShardErrorCode::INVALID_ARG));
     return _defer().thenValue([this, pg_owner, size_bytes, tid](auto) mutable -> ShardManager::AsyncResult< ShardInfo > {
         return _create_shard(pg_owner, size_bytes, tid);
     });
@@ -16,7 +16,7 @@ ShardManager::AsyncResult< InfoList > HomeObjectImpl::list_shards(pg_id_t pgid, 
     return _defer().thenValue([this, pgid, tid](auto) mutable -> ShardManager::Result< InfoList > {
         std::shared_lock lock_guard(_pg_lock);
         auto iter = _pg_map.find(pgid);
-        if (iter == _pg_map.cend()) { return folly::makeUnexpected(ShardError::UNKNOWN_PG); }
+        if (iter == _pg_map.cend()) { return folly::makeUnexpected(ShardError(ShardErrorCode::UNKNOWN_PG)); }
         auto& pg = iter->second;
 
         auto info_l = std::list< ShardInfo >();
@@ -30,7 +30,7 @@ ShardManager::AsyncResult< InfoList > HomeObjectImpl::list_shards(pg_id_t pgid, 
 
 ShardManager::AsyncResult< ShardInfo > HomeObjectImpl::seal_shard(shard_id_t id, trace_id_t tid) {
     return _get_shard(id, tid).thenValue([this, tid](auto const e) mutable -> ShardManager::AsyncResult< ShardInfo > {
-        if (!e) return folly::makeUnexpected(ShardError::UNKNOWN_SHARD);
+        if (!e) return folly::makeUnexpected(ShardError(ShardErrorCode::UNKNOWN_SHARD));
         if (ShardInfo::State::SEALED == e.value().state) return e.value();
         return _seal_shard(e.value(), tid);
     });
@@ -51,7 +51,7 @@ folly::Future< ShardManager::Result< ShardInfo > > HomeObjectImpl::_get_shard(sh
         auto lg = std::shared_lock(_shard_lock);
         if (auto it = _shard_map.find(id); _shard_map.end() != it) return (*it->second)->info;
         LOGE("Couldnt find shard id in shard map {}, trace_id=[{}]", id, tid);
-        return folly::makeUnexpected(ShardError::UNKNOWN_SHARD);
+        return folly::makeUnexpected(ShardError(ShardErrorCode::UNKNOWN_SHARD));
     });
 }
 
