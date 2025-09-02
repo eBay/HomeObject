@@ -765,6 +765,8 @@ void HSHomeObject::HS_PG::get_peer_info(std::vector< peer_info >& members) const
     }
 }
 
+void HSHomeObject::HS_PG::reconcile_leader() const { repl_dev_->reconcile_leader(); }
+
 // NOTE: caller should hold the _pg_lock
 const HSHomeObject::HS_PG* HSHomeObject::_get_hs_pg_unlocked(pg_id_t pg_id) const {
     auto iter = _pg_map.find(pg_id);

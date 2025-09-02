@@ -33,6 +33,8 @@ HttpManager::HttpManager(HSHomeObject& ho) : ho_(ho) {
          Pistache::Rest::Routes::bind(&HttpManager::get_obj_life, this)},
         {Pistache::Http::Method::Get, "/api/v1/mallocStats",
          Pistache::Rest::Routes::bind(&HttpManager::get_malloc_stats, this)},
+        {Pistache::Http::Method::Post, "/api/v1/reconcile_leader",
+         Pistache::Rest::Routes::bind(&HttpManager::reconcile_leader, this)},
 #ifdef _PRERELEASE
         {Pistache::Http::Method::Post, "/api/v1/crashSystem",
          Pistache::Rest::Routes::bind(&HttpManager::crash_system, this)},
@@ -61,6 +63,14 @@ void HttpManager::get_obj_life(const Pistache::Rest::Request& request, Pistache:
 
 void HttpManager::get_malloc_stats(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response) {
     response.send(Pistache::Http::Code::Ok, sisl::get_malloc_stats_detailed().dump(2));
+}
+
+void HttpManager::reconcile_leader(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response) {
+    const auto pg_id_param = request.query().get("pg_id");
+    int32_t pg_id = std::stoi(pg_id_param.value_or("-1"));
+    LOGINFO("Received reconcile leader request for pg_id {}", pg_id);
+    ho_.reconcile_pg_leader(pg_id);
+    response.send(Pistache::Http::Code::Ok, "Reconcile leader request submitted");
 }
 
 #ifdef _PRERELEASE

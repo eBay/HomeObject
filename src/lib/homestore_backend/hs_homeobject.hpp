@@ -361,6 +361,8 @@ public:
          * Returns all replication info of all peers.
          */
         void get_peer_info(std::vector< peer_info >& members) const;
+
+        void reconcile_leader() const;
     };
 
     struct HS_Shard : public Shard {
@@ -880,6 +882,17 @@ public:
 
     cshared< HeapChunkSelector > chunk_selector() const { return chunk_selector_; }
     cshared< GCManager > gc_manager() const { return gc_mgr_; }
+
+    /**
+     * @brief Reconciles the leaders for all PGs or a specific PG identified by pg_id.
+     *
+     * This function ensures that the leadership status of PGs is consistent across the system.
+     * If a specific pg_id is provided, it reconciles the leader for that particular PG.
+     * If pg_id is -1 (default), it reconciles leaders for all PGs.
+     *
+     * @param pg_id The ID of the PG to reconcile. Default is -1, which indicates all PGs.
+     */
+    void reconcile_pg_leader(int32_t pg_id = -1);
 
     // Blob manager related.
     void on_blob_message_rollback(int64_t lsn, sisl::blob const& header, sisl::blob const& key,
