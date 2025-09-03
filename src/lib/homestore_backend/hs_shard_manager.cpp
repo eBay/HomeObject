@@ -158,17 +158,12 @@ ShardManager::AsyncResult< ShardInfo > HSHomeObject::_create_shard(pg_id_t pg_ow
     // now, we put allocate blk for shard head/footer in on_commit of create/seal shard, so we have to make sure that
     // the blk can be successfully allocated immediately(or after emergent gc). otherwise, on_commit can not go ahead
     // and the whole raft group will be blocked forever.
-
-    // +1 here means the created shard should have the capacity to hold at least one blob, otherwise we refuse this
-    // request.
     const auto v_chunk_id = v_chunkID.value();
-    const static uint64_t shard_super_blk_count{
-        sisl::round_up(sizeof(shard_info_superblk), homestore::data_service().get_blk_size()) /
-        homestore::data_service().get_blk_size()};
-
-    const static auto least_available_blk_count = 2 * shard_super_blk_count + 1;
     const auto exVchunk = chunk_selector()->get_pg_vchunk(pg_owner, v_chunk_id);
-    if (exVchunk->available_blks() < least_available_blk_count) {
+
+    // only seal_shard(footer) can used reserved space, so +2 here means we can at least write a shard header and a blob
+    // except shard footer.
+    if (exVchunk->available_blks() < get_reserved_blks() + 2) {
         const auto pchunk_id = exVchunk->get_chunk_id();
         LOGW("failed to create shard for pg={}, pchunk_id= {} is selected for vchunk_id={} is selected, not enough "
              "left space",
@@ -471,7 +466,7 @@ void HSHomeObject::on_shard_message_commit(int64_t lsn, sisl::blob const& h, sha
     homestore::BlkAllocStatus alloc_status;
     auto gc_mgr = gc_manager();
 
-    while (true) {
+    for (uint8_t i = 0; i < 3; ++i) {
         alloc_status = homestore::data_service().alloc_blks(
             sisl::round_up(sizeof(shard_info_superblk), repl_dev->get_blk_size()), hints, blkids);
 
@@ -498,6 +493,13 @@ void HSHomeObject::on_shard_message_commit(int64_t lsn, sisl::blob const& h, sha
                            "fatal error={} happens when allocating blk for committing shard message, chunk={}, lsn={}",
                            alloc_status, pchunk, lsn);
         }
+    }
+
+    if (alloc_status != homestore::BlkAllocStatus::SUCCESS) {
+        RELEASE_ASSERT(
+            false,
+            "can not allocate blk for shard meta blk after trying for 3 times, fatal error! vchunk={}, pg={}, shard={}",
+            vchunk_id, pg_id, shard_id);
     }
 
     ShardInfo shard_info;
