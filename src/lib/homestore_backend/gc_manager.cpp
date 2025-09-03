@@ -556,27 +556,6 @@ bool GCManager::pdev_gc_actor::replace_blob_index(
     return true;
 }
 
-sisl::sg_list GCManager::pdev_gc_actor::generate_shard_super_blk_sg_list(shard_id_t shard_id) {
-    // TODO: do the buffer check before using it.
-    auto raw_shard_sb = m_hs_home_object->_get_hs_shard(shard_id);
-    RELEASE_ASSERT(raw_shard_sb, "can not find shard super blk for shard_id={} !!!", shard_id);
-
-    const auto shard_sb =
-        const_cast< HSHomeObject::HS_Shard* >(d_cast< const HSHomeObject::HS_Shard* >(raw_shard_sb))->sb_.get();
-
-    auto blk_size = homestore::data_service().get_blk_size();
-    auto shard_sb_size = sizeof(HSHomeObject::shard_info_superblk);
-    auto total_size = sisl::round_up(shard_sb_size, blk_size);
-    auto shard_sb_buf = iomanager.iobuf_alloc(blk_size, total_size);
-
-    std::memcpy(shard_sb_buf, shard_sb, shard_sb_size);
-
-    sisl::sg_list shard_sb_sgs;
-    shard_sb_sgs.size = total_size;
-    shard_sb_sgs.iovs.emplace_back(iovec{.iov_base = shard_sb_buf, .iov_len = total_size});
-    return shard_sb_sgs;
-}
-
 // note that, when we copy data, there is not create shard or put blob in this chunk, only delete blob might happen.
 bool GCManager::pdev_gc_actor::copy_valid_data(chunk_id_t move_from_chunk, chunk_id_t move_to_chunk,
                                                const uint64_t task_id) {
@@ -696,7 +675,7 @@ bool GCManager::pdev_gc_actor::copy_valid_data(chunk_id_t move_from_chunk, chunk
         }
 
         // prepare a shard header for this shard in move_to_chunk
-        sisl::sg_list header_sgs = generate_shard_super_blk_sg_list(shard_id);
+        sisl::sg_list header_sgs = m_hs_home_object->generate_shard_super_blk_sg_list(shard_id);
 
         // we ignore the state in shard header blk. we never read a shard header since we don`t know where it is(nor
         // record the pba in indextable)
@@ -841,7 +820,7 @@ bool GCManager::pdev_gc_actor::copy_valid_data(chunk_id_t move_from_chunk, chunk
                     }
 
                     // 3 write a shard footer for this shard
-                    sisl::sg_list footer_sgs = generate_shard_super_blk_sg_list(shard_id);
+                    sisl::sg_list footer_sgs = m_hs_home_object->generate_shard_super_blk_sg_list(shard_id);
                     return folly::collectAllUnsafe(futs)
                         .thenValue([this, &is_last_shard, &shard_id, &blk_size, &hints, &move_to_chunk,
                                     &last_shard_state, task_id, &data_service, footer_sgs](auto&& results) {

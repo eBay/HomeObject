@@ -107,7 +107,6 @@ ShardInfo HSHomeObject::deserialize_shard_info(const char* json_str, size_t str_
 
 ShardManager::AsyncResult< ShardInfo > HSHomeObject::_create_shard(pg_id_t pg_owner, uint64_t size_bytes,
                                                                    trace_id_t tid) {
-
     if (is_shutting_down()) {
         LOGI("service is being shut down");
         return folly::makeUnexpected(ShardError(ShardErrorCode::SHUTTING_DOWN));
@@ -146,76 +145,72 @@ ShardManager::AsyncResult< ShardInfo > HSHomeObject::_create_shard(pg_id_t pg_ow
     }
     auto new_shard_id = generate_new_shard_id(pg_owner);
     SLOGD(tid, new_shard_id, "Create shard request: pg={}, size={}", pg_owner, size_bytes);
-    auto create_time = get_current_timestamp();
 
     // select chunk for shard.
-    const auto v_chunkID = chunk_selector()->get_most_available_blk_chunk(new_shard_id, pg_owner);
+    const auto v_chunkID = chunk_selector()->pick_most_available_blk_chunk(new_shard_id, pg_owner);
+
     if (!v_chunkID.has_value()) {
         SLOGW(tid, new_shard_id, "no availble chunk left to create shard for pg={}", pg_owner);
         decr_pending_request_num();
         return folly::makeUnexpected(ShardError(ShardErrorCode::NO_SPACE_LEFT));
     }
+
+    // now, we put allocate blk for shard head/footer in on_commit of create/seal shard, so we have to make sure that
+    // the blk can be successfully allocated immediately(or after emergent gc). otherwise, on_commit can not go ahead
+    // and the whole raft group will be blocked forever.
+
+    // +1 here means the created shard should have the capacity to hold at least one blob, otherwise we refuse this
+    // request.
     const auto v_chunk_id = v_chunkID.value();
+    const static uint64_t shard_super_blk_count{
+        sisl::round_up(sizeof(shard_info_superblk), homestore::data_service().get_blk_size()) /
+        homestore::data_service().get_blk_size()};
+
+    const static auto least_available_blk_count = 2 * shard_super_blk_count + 1;
+    const auto exVchunk = chunk_selector()->get_pg_vchunk(pg_owner, v_chunk_id);
+    if (exVchunk->available_blks() < least_available_blk_count) {
+        const auto pchunk_id = exVchunk->get_chunk_id();
+        LOGW("failed to create shard for pg={}, pchunk_id= {} is selected for vchunk_id={} is selected, not enough "
+             "left space",
+             pg_owner, pchunk_id, v_chunk_id);
+
+        bool res = chunk_selector()->release_chunk(pg_owner, v_chunk_id);
+        RELEASE_ASSERT(res, "Failed to release v_chunk_id={}, pg={}", v_chunk_id, pg_owner);
+
+        auto gc_mgr = gc_manager();
+        if (gc_mgr->is_started()) { gc_manager()->submit_gc_task(task_priority::normal, pchunk_id); }
+
+        decr_pending_request_num();
+        return folly::makeUnexpected(ShardError(ShardErrorCode::NO_SPACE_LEFT));
+    }
+
     SLOGD(tid, new_shard_id, "vchunk_id={}", v_chunk_id);
 
-    // Prepare the shard info block
-    sisl::io_blob_safe sb_blob(sisl::round_up(sizeof(shard_info_superblk), repl_dev->get_blk_size()), io_align);
-    shard_info_superblk* sb = new (sb_blob.bytes()) shard_info_superblk();
-    sb->type = DataHeader::data_type_t::SHARD_INFO;
-    sb->info = ShardInfo{.id = new_shard_id,
-                         .placement_group = pg_owner,
-                         .state = ShardInfo::State::OPEN,
-                         .lsn = 0,
-                         .created_time = create_time,
-                         .last_modified_time = create_time,
-                         .available_capacity_bytes = size_bytes,
-                         .total_capacity_bytes = size_bytes};
-    sb->p_chunk_id = 0;
-    sb->v_chunk_id = v_chunk_id;
+    auto req = repl_result_ctx< ShardManager::Result< ShardInfo > >::make(0u /* header_extn_size */, 0u /* key_size */);
 
-    auto req = repl_result_ctx< ShardManager::Result< ShardInfo > >::make(
-        sizeof(shard_info_superblk) /* header_extn_size */, 0u /* key_size */);
-
-    // for create shard, we disable push_data, so that all the selecting chunk for creating shard will go through raft
-    // log channel, and thus, the the selecting chunk of later creating shard will go after that of the former one.
-    req->disable_push_data();
-
-    // prepare msg header;
+    // prepare msg header, log only
     req->header()->msg_type = ReplicationMessageType::CREATE_SHARD_MSG;
     req->header()->pg_id = pg_owner;
     req->header()->shard_id = new_shard_id;
-    req->header()->payload_size = sizeof(shard_info_superblk);
-    req->header()->payload_crc = crc32_ieee(init_crc32, sb_blob.cbytes(), sizeof(shard_info_superblk));
+    req->header()->vchunk_id = v_chunk_id;
+    req->header()->payload_size = 0;
+    req->header()->payload_crc = 0;
     req->header()->seal();
 
-    // ShardInfo block is persisted on both on header and in data portion.
-    // It is persisted in header portion, so that it is written in journal and hence replay of journal on most cases
-    // doesn't need additional read from data blks.
-    // We also persist in data blocks for following reasons:
-    //   * To recover the shard information in case both journal and metablk are lost
-    //   * For garbage collection, we directly read from the data chunk and get shard information.
-    std::memcpy(req->header_extn(), sb_blob.cbytes(), sizeof(shard_info_superblk));
-    req->add_data_sg(std::move(sb_blob));
-
     // replicate this create shard message to PG members;
-    repl_dev->async_alloc_write(req->cheader_buf(), sisl::blob{}, req->data_sgs(), req, false /* part_of_batch */, tid);
+    repl_dev->async_alloc_write(req->cheader_buf(), sisl::blob{}, sisl::sg_list{}, req, false /* part_of_batch */, tid);
     return req->result().deferValue([this, req, repl_dev, tid, pg_owner, new_shard_id,
                                      v_chunk_id](const auto& result) -> ShardManager::AsyncResult< ShardInfo > {
         if (result.hasError()) {
             auto err = result.error();
             if (err.getCode() == ShardErrorCode::NOT_LEADER) { err.current_leader = repl_dev->get_leader_id(); }
 
+            // we will never get no_space_left error here.
             bool res = chunk_selector()->release_chunk(pg_owner, v_chunk_id);
             RELEASE_ASSERT(res, "Failed to release v_chunk_id={}, pg={}", v_chunk_id, pg_owner);
 
             SLOGE(tid, new_shard_id, "got {} when creating shard at leader, failed to create shard {}!", err.getCode(),
                   new_shard_id);
-
-            if (err.getCode() == ShardErrorCode::NO_SPACE_LEFT) {
-                gc_manager()->submit_gc_task(task_priority::normal,
-                                             chunk_selector()->get_pg_vchunk(pg_owner, v_chunk_id)->get_chunk_id());
-                SLOGD(tid, new_shard_id, "got no space left error when creating shard {} at leader", new_shard_id);
-            }
 
             decr_pending_request_num();
             return folly::makeUnexpected(err);
@@ -234,8 +229,8 @@ ShardManager::AsyncResult< ShardInfo > HSHomeObject::_seal_shard(ShardInfo const
     }
     incr_pending_request_num();
 
-    auto pg_id = info.placement_group;
-    auto shard_id = info.id;
+    const auto pg_id = info.placement_group;
+    const auto shard_id = info.id;
     SLOGD(tid, shard_id, "Seal shard request: is_open={}", info.is_open());
     auto hs_pg = get_hs_pg(pg_id);
     if (!hs_pg) {
@@ -269,33 +264,24 @@ ShardManager::AsyncResult< ShardInfo > HSHomeObject::_seal_shard(ShardInfo const
         return folly::makeUnexpected(ShardError(ShardErrorCode::RETRY_REQUEST));
     }
 
-    ShardInfo tmp_info = info;
-    tmp_info.state = ShardInfo::State::SEALED;
+    auto v_chunkID = get_shard_v_chunk_id(shard_id);
+    if (!v_chunkID.has_value()) {
+        SLOGW(tid, shard_id, "failed to seal shard, vchunk id not found");
+        decr_pending_request_num();
+        return folly::makeUnexpected(ShardError(ShardErrorCode::UNKNOWN_SHARD));
+    }
 
-    // Prepare the shard info block
-    sisl::io_blob_safe sb_blob(sisl::round_up(sizeof(shard_info_superblk), repl_dev->get_blk_size()), io_align);
-    shard_info_superblk* sb = new (sb_blob.bytes()) shard_info_superblk();
-    sb->type = DataHeader::data_type_t::SHARD_INFO;
-    sb->info = tmp_info;
-    // p_chunk_id and v_chunk_id will never be used in seal shard workflow.
-    sb->p_chunk_id = 0;
-    sb->v_chunk_id = 0;
-
-    auto req = repl_result_ctx< ShardManager::Result< ShardInfo > >::make(
-        sizeof(shard_info_superblk) /* header_extn_size */, 0u /* key_size */);
+    auto req = repl_result_ctx< ShardManager::Result< ShardInfo > >::make(0u /* header_extn_size */, 0u /* key_size */);
     req->header()->msg_type = ReplicationMessageType::SEAL_SHARD_MSG;
     req->header()->pg_id = pg_id;
     req->header()->shard_id = shard_id;
-    req->header()->payload_size = sizeof(shard_info_superblk);
-    req->header()->payload_crc = crc32_ieee(init_crc32, sb_blob.cbytes(), sizeof(shard_info_superblk));
+    req->header()->vchunk_id = v_chunkID.value();
+    req->header()->payload_size = 0;
+    req->header()->payload_crc = 0;
     req->header()->seal();
 
-    // Similar to create shard - ShardInfo block is persisted on both on header and in data portion.
-    std::memcpy(req->header_extn(), sb_blob.cbytes(), sizeof(shard_info_superblk));
-    req->add_data_sg(std::move(sb_blob));
-
     // replicate this seal shard message to PG members;
-    repl_dev->async_alloc_write(req->cheader_buf(), sisl::blob{}, req->data_sgs(), req, false /* part_of_batch */, tid);
+    repl_dev->async_alloc_write(req->cheader_buf(), sisl::blob{}, sisl::sg_list{}, req, false /* part_of_batch */, tid);
     return req->result().deferValue(
         [this, req, repl_dev, tid](const auto& result) -> ShardManager::AsyncResult< ShardInfo > {
             if (result.hasError()) {
@@ -326,39 +312,34 @@ bool HSHomeObject::on_shard_message_pre_commit(int64_t lsn, sisl::blob const& he
     }
     auto tid = hs_ctx ? hs_ctx->traceID() : 0;
     const ReplicationMessageHeader* msg_header = r_cast< const ReplicationMessageHeader* >(header.cbytes());
-    if (msg_header->corrupted()) {
-        LOGW("replication message header is corrupted with crc error, lsn={}, traceID={}", lsn, tid);
-        if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(ShardError(ShardErrorCode::CRC_MISMATCH))); }
-        // TODO::if fail to pre_commit, shuold we crash here?
 
+    if (msg_header->corrupted()) {
+        RELEASE_ASSERT(
+            false, "replication message header is corrupted with crc error when pre_committing shard message, lsn={}",
+            lsn);
+        if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(ShardError(ShardErrorCode::CRC_MISMATCH))); }
         return false;
     }
-    switch (msg_header->msg_type) {
-    case ReplicationMessageType::SEAL_SHARD_MSG: {
-        auto sb = r_cast< shard_info_superblk const* >(header.cbytes() + sizeof(ReplicationMessageHeader));
-        auto const shard_info = sb->info;
 
-        {
-            std::scoped_lock lock_guard(_shard_lock);
-            auto iter = _shard_map.find(shard_info.id);
-            RELEASE_ASSERT(iter != _shard_map.end(), "shardID=0x{:x}, pg={}, shard=0x{:x}, shard does not exist",
-                           shard_info.id, (shard_info.id >> homeobject::shard_width),
-                           (shard_info.id & homeobject::shard_mask));
-            auto& state = (*iter->second)->info.state;
-            // we just change the state to SEALED, so that it will fail the later coming put_blob on this shard and will
-            // be easy for rollback.
-            // the update of superblk will be done in on_shard_message_commit;
-            if (state == ShardInfo::State::OPEN) {
-                state = ShardInfo::State::SEALED;
-            } else {
-                SLOGW(tid, shard_info.id, "try to seal an unopened shard");
-            }
+    const auto& shard_id = msg_header->shard_id;
+
+    SLOGD(tid, shard_id, "pre_commit shard message, type={}, lsn= {}", msg_header->msg_type, lsn);
+
+    if (msg_header->msg_type == ReplicationMessageType::SEAL_SHARD_MSG) {
+        std::scoped_lock lock_guard(_shard_lock);
+        auto iter = _shard_map.find(shard_id);
+        RELEASE_ASSERT(iter != _shard_map.end(), "shardID=0x{:x}, pg={}, shard=0x{:x}, shard does not exist", shard_id,
+                       (shard_id >> homeobject::shard_width), (shard_id & homeobject::shard_mask));
+        auto& state = (*iter->second)->info.state;
+        // we just change the state to SEALED, so that it will fail the later coming put_blob on this shard and will
+        // be easy for rollback. the update of superblk will be done in on_shard_message_commit;
+        if (state == ShardInfo::State::OPEN) {
+            state = ShardInfo::State::SEALED;
+        } else {
+            SLOGW(tid, shard_id, "try to seal an unopened shard");
         }
     }
-    default: {
-        break;
-    }
-    }
+
     return true;
 }
 
@@ -370,62 +351,42 @@ void HSHomeObject::on_shard_message_rollback(int64_t lsn, sisl::blob const& head
     }
     auto tid = hs_ctx ? hs_ctx->traceID() : 0;
     const ReplicationMessageHeader* msg_header = r_cast< const ReplicationMessageHeader* >(header.cbytes());
+
     if (msg_header->corrupted()) {
-        LOGW("replication message header is corrupted with crc error, lsn={}, traceID={}", lsn, tid);
-        RELEASE_ASSERT(false, "shardID=0x{:x}, pg={}, shard=0x{:x}, failed to rollback create_shard msg",
-                       msg_header->shard_id, (msg_header->shard_id >> homeobject::shard_width),
-                       (msg_header->shard_id & homeobject::shard_mask));
+        RELEASE_ASSERT(false,
+                       "replication message header is corrupted with crc error in on_rollback, lsn={}, traceID={}", lsn,
+                       tid);
         return;
     }
 
+    const auto shard_id = msg_header->shard_id;
     switch (msg_header->msg_type) {
     case ReplicationMessageType::CREATE_SHARD_MSG: {
-        if (ctx) {
-            ctx->promise_.setValue(folly::makeUnexpected(ShardError(ShardErrorCode::RETRY_REQUEST)));
-        } else {
-            // we have already added release_chunk logic to thenValue of hoemobject#create_shard in originator, so here
-            // we just need to release_chunk for non-originater case since it will bring a bug if a chunk is released
-            // for two times. for exampele, as a originator:
-
-            // t1 : chunk1 is released in the rollback of create_shard, the chunk state is marked as available
-            // t2 : chunk1 is select by a new create shard (shard1), the chunk state is marked as inuse
-            // t3 : chunk1 is released in thenValue of create_shard, the chunk state is marked as available
-            // t4 : chunk1 is select by a new create shard (shard2), the chunk state is marked as inuse
-            // now, shard1 and shard2 hold the same chunk.
-            bool res = release_chunk_based_on_create_shard_message(header);
-            if (!res) {
-                RELEASE_ASSERT(false,
-                               "shardID=0x{:x}, pg={}, shard=0x{:x}, failed to release chunk based on create shard msg",
-                               msg_header->shard_id, (msg_header->shard_id >> homeobject::shard_width),
-                               (msg_header->shard_id & homeobject::shard_mask));
-            }
-        }
+        if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(ShardError(ShardErrorCode::RETRY_REQUEST))); }
+        SLOGD(tid, shard_id, "rollback create_shard message, lsn={}", lsn);
         break;
     }
     case ReplicationMessageType::SEAL_SHARD_MSG: {
-        auto sb = r_cast< shard_info_superblk const* >(header.cbytes() + sizeof(ReplicationMessageHeader));
-        auto const shard_info = sb->info;
-        {
-            std::scoped_lock lock_guard(_shard_lock);
-            auto iter = _shard_map.find(shard_info.id);
-            RELEASE_ASSERT(iter != _shard_map.end(), "shardID=0x{:x}, pg={}, shard=0x{:x}, shard does not exist",
-                           shard_info.id, (shard_info.id >> homeobject::shard_width),
-                           (shard_info.id & homeobject::shard_mask));
-            auto& state = (*iter->second)->info.state;
-            // we just change the state to SEALED, since it will be easy for rollback
-            // the update of superblk will be done in on_shard_message_commit;
-            if (state == ShardInfo::State::SEALED) {
-                state = ShardInfo::State::OPEN;
-            } else {
-                SLOGW(tid, shard_info.id, "try to rollback seal_shard message , but the shard state is not sealed");
-            }
+        std::scoped_lock lock_guard(_shard_lock);
+        auto iter = _shard_map.find(shard_id);
+        RELEASE_ASSERT(iter != _shard_map.end(), "shardID=0x{:x}, pg={}, shard=0x{:x}, shard does not exist", shard_id,
+                       (shard_id >> homeobject::shard_width), (shard_id & homeobject::shard_mask));
+        auto& state = (*iter->second)->info.state;
+        // we just change the state to SEALED, since it will be easy for rollback
+        // the update of superblk will be done in on_shard_message_commit;
+        if (state == ShardInfo::State::SEALED) {
+            state = ShardInfo::State::OPEN;
+        } else {
+            SLOGW(tid, shard_id, "try to rollback seal_shard message , but the shard state is not sealed");
         }
+
         // TODO:set a proper error code
         if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(ShardError(ShardErrorCode::RETRY_REQUEST))); }
 
         break;
     }
     default: {
+        SLOGE(tid, shard_id, "unsupported op type={} for rollbacking shard message", msg_header->msg_type);
         break;
     }
     }
@@ -450,21 +411,9 @@ void HSHomeObject::local_create_shard(ShardInfo shard_info, homestore::chunk_num
     } else {
         SLOGD(tid, shard_info.id, "shard already exist, skip creating shard");
     }
-
-    // update pg's total_occupied_blk_count
-    auto hs_pg = get_hs_pg(shard_info.placement_group);
-    RELEASE_ASSERT(hs_pg != nullptr, "shardID=0x{:x}, pg={}, shard=0x{:x}, PG not found", shard_info.id,
-                   (shard_info.id >> homeobject::shard_width), (shard_info.id & homeobject::shard_mask));
-
-    SLOGD(tid, shard_info.id, "local_create_shard {}, vchunk_id={}, p_chunk_id={}, pg_id={}", shard_info.id, v_chunk_id,
-          p_chunk_id, shard_info.placement_group);
-
-    const_cast< HS_PG* >(hs_pg)->durable_entities_update(
-        [blk_count](auto& de) { de.total_occupied_blk_count.fetch_add(blk_count, std::memory_order_relaxed); });
 }
 
-void HSHomeObject::on_shard_message_commit(int64_t lsn, sisl::blob const& h, homestore::MultiBlkId const& blkids,
-                                           shared< homestore::ReplDev > repl_dev,
+void HSHomeObject::on_shard_message_commit(int64_t lsn, sisl::blob const& h, shared< homestore::ReplDev > repl_dev,
                                            cintrusive< homestore::repl_req_ctx >& hs_ctx) {
     repl_result_ctx< ShardManager::Result< ShardInfo > >* ctx{nullptr};
     if (hs_ctx && hs_ctx->is_proposer()) {
@@ -473,11 +422,15 @@ void HSHomeObject::on_shard_message_commit(int64_t lsn, sisl::blob const& h, hom
     auto tid = hs_ctx ? hs_ctx->traceID() : 0;
     auto header = r_cast< const ReplicationMessageHeader* >(h.cbytes());
     if (header->corrupted()) {
-        LOGW("replication message header is corrupted with crc error, lsn={}, traceID={}", lsn, tid);
-        if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(ShardError(ShardErrorCode::CRC_MISMATCH))); }
-        // TODO::if fail to commit, shuold we crash here?
+        RELEASE_ASSERT(false, "replication message header is corrupted with crc error in on_commit, lsn={}, traceID={}",
+                       lsn, tid);
         return;
     }
+    const auto shard_id = header->shard_id;
+
+    RELEASE_ASSERT(header->msg_type == ReplicationMessageType::CREATE_SHARD_MSG ||
+                       header->msg_type == ReplicationMessageType::SEAL_SHARD_MSG,
+                   "unsupport message tyep {} when committing shard message, fatal error!", header->msg_type);
 
 #ifdef VADLIDATE_ON_REPLAY
     sisl::io_blob_safe value_blob(blkids.blk_count() * repl_dev->get_blk_size(), io_align);
@@ -489,71 +442,131 @@ void HSHomeObject::on_shard_message_commit(int64_t lsn, sisl::blob const& h, hom
     std::error_code err = repl_dev->async_read(blkids, value_sgs, value_blob.size()).get();
     if (err) {
         LOGW("failed to read data from homestore blks, lsn={}", lsn);
-        if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(ShardError(ShardErrorCode::UNKNOWN)); }
+        if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(ShardError(ShardErrorCode::UNKNOWN));
+        }
         return;
     }
 
     if (crc32_ieee(init_crc32, value.cbytes(), value.size()) != header->payload_crc) {
         // header & value is inconsistent;
         LOGW("replication message header is inconsistent with value, lsn={}", lsn);
-        if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(ShardError(ShardErrorCode::CRC_MISMATCH)); }
+        if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(ShardError(ShardErrorCode::CRC_MISMATCH));
+        }
         return;
     }
 #endif
 
+    // allocate blk for shard header/footer
+    const auto pg_id = header->pg_id;
+    const auto vchunk_id = header->vchunk_id;
+    const auto vchunk = chunk_selector_->get_pg_vchunk(pg_id, vchunk_id);
+    RELEASE_ASSERT(vchunk != nullptr, "chunk selection failed with vchunk_id={} in pg={}", vchunk_id, pg_id);
+    const auto pchunk = vchunk->get_chunk_id();
+
+    homestore::blk_alloc_hints hints;
+    hints.chunk_id_hint = pchunk;
+    hints.reserved_blks = header->msg_type == ReplicationMessageType::CREATE_SHARD_MSG ? get_reserved_blks() : 0;
+
+    homestore::MultiBlkId blkids;
+    homestore::BlkAllocStatus alloc_status;
+    auto gc_mgr = gc_manager();
+
+    while (true) {
+        alloc_status = homestore::data_service().alloc_blks(
+            sisl::round_up(sizeof(shard_info_superblk), repl_dev->get_blk_size()), hints, blkids);
+
+        if (alloc_status == homestore::BlkAllocStatus::SUCCESS) {
+            SLOGD(tid, shard_id, "successfully alloc blk for committing shard message, lsn={}", lsn);
+            break;
+        } else if (alloc_status == homestore::BlkAllocStatus::SPACE_FULL) {
+            SLOGD(tid, shard_id,
+                  "no_space_left happens when allocating blk for committing shard message, chunk_id={}, lsn={}", pchunk,
+                  lsn);
+            if (!gc_mgr->is_started()) {
+                RELEASE_ASSERT(false,
+                               "no_space_left when allocating blk for committing shard message, but gc is disabled, "
+                               "can not proceed, fatal error!");
+            }
+
+            // although we have checked the available_blks of the selected chunk before accept the creating shard
+            // request, there is also a case that we have to trigger emergent gc here, for example, a staled push_data
+            // of a put_blob will consume the capacity of this chunk and lead to no_space_left.
+            auto ret = gc_mgr->submit_gc_task(task_priority::emergent, pchunk).get();
+            SLOGD(tid, shard_id, "emergent gc is completed for chunk_id={}, lsn={}, ok={}", pchunk, lsn, ret);
+        } else {
+            RELEASE_ASSERT(false,
+                           "fatal error={} happens when allocating blk for committing shard message, chunk={}, lsn={}",
+                           alloc_status, pchunk, lsn);
+        }
+    }
+
+    ShardInfo shard_info;
+
     switch (header->msg_type) {
     case ReplicationMessageType::CREATE_SHARD_MSG: {
-        auto sb = r_cast< shard_info_superblk const* >(h.cbytes() + sizeof(ReplicationMessageHeader));
-        auto shard_info = sb->info;
-        auto v_chunk_id = sb->v_chunk_id;
+        // 1 select sepecific chunk.
+        // for leader, the chunk has been selected in create_shard, so when selecting, the chunk will be found as
+        // state::used.
+        auto chunk = chunk_selector_->select_specific_chunk(pg_id, vchunk_id);
+        RELEASE_ASSERT(chunk != nullptr, "chunk selection failed with v_chunk_id={} in pg={}", vchunk_id, pg_id);
+        SLOGD(tid, shard_id, "pchunk {} is selected for vchunk {} in pg {} for creating shard", pchunk, vchunk_id,
+              pg_id);
+
+        // 2 add shard meta blk
+        shard_info.id = shard_id;
+        shard_info.placement_group = pg_id;
+        shard_info.created_time = get_current_timestamp();
+        shard_info.last_modified_time = get_current_timestamp();
+        shard_info.total_capacity_bytes = blkids.blk_count() * homestore::data_service().get_blk_size();
         shard_info.lsn = lsn;
+        shard_info.state = ShardInfo::State::OPEN;
+        shard_info.available_capacity_bytes = shard_info.total_capacity_bytes;
 
-        local_create_shard(shard_info, v_chunk_id, blkids.chunk_num(), blkids.blk_count(), tid);
+        local_create_shard(shard_info, vchunk_id, blkids.chunk_num(), blkids.blk_count(), tid);
         if (ctx) { ctx->promise_.setValue(ShardManager::Result< ShardInfo >(shard_info)); }
-
-        SLOGD(tid, shard_info.id, "Commit done for creating shard");
-
+        SLOGD(tid, shard_id, "Commit done for creating shard");
         break;
     }
 
     case ReplicationMessageType::SEAL_SHARD_MSG: {
-        auto sb = r_cast< shard_info_superblk const* >(h.cbytes() + sizeof(ReplicationMessageHeader));
-        auto const shard_info = sb->info;
-
-        ShardInfo::State state;
         {
             std::scoped_lock lock_guard(_shard_lock);
-            auto iter = _shard_map.find(shard_info.id);
+            auto iter = _shard_map.find(shard_id);
             RELEASE_ASSERT(iter != _shard_map.end(), "shardID=0x{:x}, pg={}, shard=0x{:x}, shard does not exist",
-                           shard_info.id, (shard_info.id >> homeobject::shard_width),
-                           (shard_info.id & homeobject::shard_mask));
-            state = (*iter->second)->info.state;
+                           shard_id, (shard_id >> homeobject::shard_width), (shard_id & homeobject::shard_mask));
+            shard_info = (*iter->second)->info;
         }
 
-        if (state == ShardInfo::State::SEALED) {
-            auto pg_id = shard_info.placement_group;
-            auto v_chunkID = get_shard_v_chunk_id(shard_info.id);
-            RELEASE_ASSERT(v_chunkID.has_value(), "v_chunk id not found");
-            bool res = chunk_selector()->release_chunk(pg_id, v_chunkID.value());
-            RELEASE_ASSERT(res, "Failed to release v_chunk_id={}, pg={}", v_chunkID.value(), pg_id);
+        if (shard_info.state == ShardInfo::State::SEALED) {
+            bool res = chunk_selector()->release_chunk(pg_id, vchunk_id);
+            RELEASE_ASSERT(res, "Failed to release v_chunk_id={}, pg={}", vchunk_id, pg_id);
             update_shard_in_map(shard_info);
         } else
-            SLOGW(tid, shard_info.id, "try to commit SEAL_SHARD_MSG but shard state is not sealed.");
+            RELEASE_ASSERT(false, "try to commit SEAL_SHARD_MSG but shard state is not sealed, shard_id={}", shard_id);
         if (ctx) { ctx->promise_.setValue(ShardManager::Result< ShardInfo >(shard_info)); }
-        SLOGD(tid, shard_info.id, "Commit done for sealing shard");
-
-        auto hs_pg = get_hs_pg(shard_info.placement_group);
-        RELEASE_ASSERT(hs_pg != nullptr, "shardID=0x{:x}, pg={}, shard=0x{:x}, PG not found", shard_info.id,
-                       (shard_info.id >> homeobject::shard_width), (shard_info.id & homeobject::shard_mask));
-        const_cast< HS_PG* >(hs_pg)->durable_entities_update(
-            // shard_footer will also occupy one blk.
-            [](auto& de) { de.total_occupied_blk_count.fetch_add(1, std::memory_order_relaxed); });
-
-        break;
+        SLOGD(tid, shard_id, "Commit done for sealing shard");
     }
+
     default:
         break;
     }
+
+    // write shard header/footer blk. in log replay case, one more shard header/footer will be written again. it does
+    // not matter.
+    sisl::sg_list sgs = generate_shard_super_blk_sg_list(shard_id);
+    RELEASE_ASSERT(sgs.iovs.size() == 1, "sgs.iovs.size() for shard header/footer should be 1, but not!");
+    homestore::data_service().async_write(sgs, blkids).thenValue([sgs, lsn, msgtype = header->msg_type](auto&& err) {
+        // it does not matter if fail to write shard header/footer, we never read them
+        if (err) { LOGW("failed to write shard super blk, err={}, lsn={}, msgType={}", err.message(), lsn, msgtype); }
+        iomanager.iobuf_free(reinterpret_cast< uint8_t* >(sgs.iovs[0].iov_base));
+    });
+
+    auto hs_pg = get_hs_pg(pg_id);
+    RELEASE_ASSERT(hs_pg != nullptr, "shardID=0x{:x}, pg={}, shard=0x{:x}, PG not found", shard_id,
+                   (shard_id >> homeobject::shard_width), (shard_id & homeobject::shard_mask));
+    const_cast< HS_PG* >(hs_pg)->durable_entities_update(
+        // shard footer/header will also take one blk.
+        [](auto& de) { de.total_occupied_blk_count.fetch_add(1, std::memory_order_relaxed); });
 }
 
 void HSHomeObject::on_shard_meta_blk_found(homestore::meta_blk* mblk, sisl::byte_view buf) {
@@ -708,33 +721,6 @@ std::optional< homestore::chunk_num_t > HSHomeObject::get_shard_v_chunk_id(const
     return std::make_optional< homestore::chunk_num_t >(hs_shard->sb_->v_chunk_id);
 }
 
-std::optional< homestore::chunk_num_t > HSHomeObject::resolve_v_chunk_id_from_msg(sisl::blob const& header) {
-    const ReplicationMessageHeader* msg_header = r_cast< const ReplicationMessageHeader* >(header.cbytes());
-    if (msg_header->corrupted()) {
-        LOGW("replication message header is corrupted with crc error");
-        return std::nullopt;
-    }
-
-    switch (msg_header->msg_type) {
-    case ReplicationMessageType::CREATE_SHARD_MSG: {
-        const pg_id_t pg_id = msg_header->pg_id;
-        if (!pg_exists(pg_id)) {
-            LOGW("shardID=0x{:x}, pg={}, shard=0x{:x}, Requesting a chunk for an unknown pg={}", msg_header->shard_id,
-                 (msg_header->shard_id >> homeobject::shard_width), (msg_header->shard_id & homeobject::shard_mask),
-                 pg_id);
-            return std::nullopt;
-        }
-        auto sb = r_cast< shard_info_superblk const* >(header.cbytes() + sizeof(ReplicationMessageHeader));
-        return sb->v_chunk_id;
-    }
-    default: {
-        LOGW("Unexpected message type encountered={}. This function should only be called with 'CREATE_SHARD_MSG'.",
-             msg_header->msg_type);
-        return std::nullopt;
-    }
-    }
-}
-
 bool HSHomeObject::release_chunk_based_on_create_shard_message(sisl::blob const& header) {
     const ReplicationMessageHeader* msg_header = r_cast< const ReplicationMessageHeader* >(header.cbytes());
     if (msg_header->corrupted()) {
@@ -745,10 +731,10 @@ bool HSHomeObject::release_chunk_based_on_create_shard_message(sisl::blob const&
     switch (msg_header->msg_type) {
     case ReplicationMessageType::CREATE_SHARD_MSG: {
         const pg_id_t pg_id = msg_header->pg_id;
+        const auto shard_id = msg_header->shard_id;
         if (!pg_exists(pg_id)) {
-            LOGW("shardID=0x{:x}, pg={}, shard=0x{:x}, Requesting a chunk for an unknown pg={}", msg_header->shard_id,
-                 (msg_header->shard_id >> homeobject::shard_width), (msg_header->shard_id & homeobject::shard_mask),
-                 pg_id);
+            LOGW("shardID=0x{:x}, pg={}, shard=0x{:x}, Requesting a chunk for an unknown pg={}", shard_id,
+                 (shard_id >> homeobject::shard_width), (shard_id & homeobject::shard_mask), pg_id);
             return false;
         }
         auto sb = r_cast< shard_info_superblk const* >(header.cbytes() + sizeof(ReplicationMessageHeader));
@@ -802,6 +788,26 @@ void HSHomeObject::HS_Shard::update_info(const ShardInfo& shard_info,
     info = shard_info;
     sb_->info = info;
     sb_.write();
+}
+
+sisl::sg_list HSHomeObject::generate_shard_super_blk_sg_list(shard_id_t shard_id) {
+    // TODO: do the buffer check before using it.
+    auto raw_shard_sb = _get_hs_shard(shard_id);
+    RELEASE_ASSERT(raw_shard_sb, "can not find shard super blk for shard_id={} !!!", shard_id);
+
+    const auto shard_sb = const_cast< HS_Shard* >(d_cast< const HS_Shard* >(raw_shard_sb))->sb_.get();
+
+    auto blk_size = homestore::data_service().get_blk_size();
+    auto shard_sb_size = sizeof(shard_info_superblk);
+    auto total_size = sisl::round_up(shard_sb_size, blk_size);
+    auto shard_sb_buf = iomanager.iobuf_alloc(blk_size, total_size);
+
+    std::memcpy(shard_sb_buf, shard_sb, shard_sb_size);
+
+    sisl::sg_list shard_sb_sgs;
+    shard_sb_sgs.size = total_size;
+    shard_sb_sgs.iovs.emplace_back(iovec{.iov_base = shard_sb_buf, .iov_len = total_size});
+    return shard_sb_sgs;
 }
 
 } // namespace homeobject

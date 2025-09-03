@@ -401,6 +401,14 @@ HSHomeObject::blob_put_get_blk_alloc_hints(sisl::blob const& header, cintrusive<
         return folly::makeUnexpected(homestore::ReplServiceError::FAILED);
     }
 
+    if (msg_header->msg_type != ReplicationMessageType::PUT_BLOB_MSG) {
+        LOGW("traceID={}, shardID=0x{:x}, pg={}, shard=0x{:x}, unsupported message type {}, reject it!", tid,
+             msg_header->shard_id, (msg_header->shard_id >> homeobject::shard_width),
+             (msg_header->shard_id & homeobject::shard_mask), msg_header->pg_id, msg_header->msg_type);
+        if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(BlobError(BlobErrorCode::UNSUPPORTED_OP))); }
+        return folly::makeUnexpected(homestore::ReplServiceError::RESULT_NOT_EXIST_YET);
+    }
+
     auto hs_pg = get_hs_pg(msg_header->pg_id);
     if (hs_pg == nullptr) {
         LOGW("traceID={}, shardID=0x{:x}, pg={}, shard=0x{:x}, Received a blob_put on an unknown pg={}, underlying "
@@ -424,6 +432,14 @@ HSHomeObject::blob_put_get_blk_alloc_hints(sisl::blob const& header, cintrusive<
     }
 
     auto hs_shard = d_cast< HS_Shard* >((*shard_iter->second).get());
+
+    if (hs_shard->sb_->info.state != ShardInfo::State::OPEN) {
+        LOGW("traceID={}, shardID=0x{:x}, pg={}, shard=0x{:x}, Received a blob_put on an unopen shard, reject it!", tid,
+             msg_header->shard_id, (msg_header->shard_id >> homeobject::shard_width),
+             (msg_header->shard_id & homeobject::shard_mask));
+        if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(BlobError(BlobErrorCode::SEALED_SHARD))); }
+        return folly::makeUnexpected(homestore::ReplServiceError::RESULT_NOT_EXIST_YET);
+    }
 
     homestore::blk_alloc_hints hints;
     hints.chunk_id_hint = hs_shard->sb_->p_chunk_id;

@@ -449,14 +449,6 @@ TEST_F(HomeObjectFixture, BasicPutGetBlobWithPushDataDisabled) {
     // statemachine
     set_basic_flip("disable_leader_push_data", std::numeric_limits< int >::max());
 
-    // set the flip to force to read by index table to exercise reading from the index table is working as expected
-    // 50% percentage will achieve the effect that half of the blobs are read from index table and the other
-    // half are read by blk_id
-
-    // for now, given_buffer will be filled by the first async_read, so this will pass.
-    // TODO:: enhence the logic after we have real gc
-    set_basic_flip("local_blk_data_invalid", std::numeric_limits< int >::max(), 50);
-
     // test recovery with pristine state firstly
     restart();
 
@@ -487,13 +479,7 @@ TEST_F(HomeObjectFixture, BasicPutGetBlobWithPushDataDisabled) {
 
     // Verify the stats
     verify_obj_count(num_pgs, num_blobs_per_shard, num_shards_per_pg, false /* deleted */);
-
-    remove_flip("local_blk_data_invalid");
     remove_flip("disable_leader_push_data");
 }
 
-// TODO:: add a test for no_space_left without flip.
-
 #endif
-
-// TODO:: add more test cases to verify the push data disabled scenario after we have gc
