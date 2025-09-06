@@ -10,7 +10,7 @@ ShardManager::AsyncResult< ShardInfo > MemoryHomeObject::_create_shard(pg_id_t p
                                                                        trace_id_t tid) {
     (void)tid;
     auto const now = get_current_timestamp();
-    auto info = ShardInfo(0ull, pg_owner, ShardInfo::State::OPEN, 0, now, now, size_bytes, size_bytes);
+    auto info = ShardInfo(0ull, pg_owner, ShardInfo::State::OPEN, 0, 0, now, now, size_bytes, size_bytes);
     {
         auto lg = std::scoped_lock(_pg_lock, _shard_lock);
         auto pg_it = _pg_map.find(pg_owner);

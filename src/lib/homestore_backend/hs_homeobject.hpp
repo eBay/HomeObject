@@ -802,8 +802,8 @@ public:
      * @param repl_dev The replication device.
      * @param hs_ctx The replication request context.
      */
-    void on_shard_message_commit(int64_t lsn, sisl::blob const& header, homestore::MultiBlkId const& blkids,
-                                 shared< homestore::ReplDev > repl_dev, cintrusive< homestore::repl_req_ctx >& hs_ctx);
+    void on_shard_message_commit(int64_t lsn, sisl::blob const& header, shared< homestore::ReplDev > repl_dev,
+                                 cintrusive< homestore::repl_req_ctx >& hs_ctx);
 
     bool on_shard_message_pre_commit(int64_t lsn, sisl::blob const& header, sisl::blob const& key,
                                      cintrusive< homestore::repl_req_ctx >& hs_ctx);
@@ -842,16 +842,6 @@ public:
      *
      */
     void on_replica_restart();
-
-    /**
-     * @brief Extracts the physical chunk ID for create shard from the message.
-     *
-     * @param header The message header that includes the shard_info_superblk, which contains the data necessary for
-     * extracting and mapping the chunk ID.
-     * @return An optional virtual chunk id if the extraction and mapping process is successful, otherwise an empty
-     * optional.
-     */
-    std::optional< homestore::chunk_num_t > resolve_v_chunk_id_from_msg(sisl::blob const& header);
 
     /**
      * @brief Releases a chunk based on the information provided in a CREATE_SHARD message.
@@ -916,6 +906,8 @@ public:
 
     void update_pg_meta_after_gc(const pg_id_t pg_id, const homestore::chunk_num_t move_from_chunk,
                                  const homestore::chunk_num_t move_to_chunk, const uint64_t task_id);
+
+    sisl::sg_list generate_shard_super_blk_sg_list(shard_id_t shard_id);
 
     uint32_t get_pg_tombstone_blob_count(pg_id_t pg_id) const;
 
