@@ -84,6 +84,7 @@ std::string HSHomeObject::serialize_shard_info(const ShardInfo& info) {
     j["shard_info"]["pg_id_t"] = info.placement_group;
     j["shard_info"]["state"] = info.state;
     j["shard_info"]["lsn"] = info.lsn;
+    j["shard_info"]["sealed_lsn"] = info.sealed_lsn;
     j["shard_info"]["created_time"] = info.created_time;
     j["shard_info"]["modified_time"] = info.last_modified_time;
     j["shard_info"]["total_capacity"] = info.total_capacity_bytes;
@@ -98,6 +99,7 @@ ShardInfo HSHomeObject::deserialize_shard_info(const char* json_str, size_t str_
     shard_info.placement_group = shard_json["shard_info"]["pg_id_t"].get< pg_id_t >();
     shard_info.state = static_cast< ShardInfo::State >(shard_json["shard_info"]["state"].get< int >());
     shard_info.lsn = shard_json["shard_info"]["lsn"].get< uint64_t >();
+    shard_info.sealed_lsn = shard_json["shard_info"]["sealed_lsn"].get< uint64_t >();
     shard_info.created_time = shard_json["shard_info"]["created_time"].get< uint64_t >();
     shard_info.last_modified_time = shard_json["shard_info"]["modified_time"].get< uint64_t >();
     shard_info.available_capacity_bytes = shard_json["shard_info"]["available_capacity"].get< uint64_t >();
@@ -301,10 +303,6 @@ ShardManager::AsyncResult< ShardInfo > HSHomeObject::_seal_shard(ShardInfo const
 
 bool HSHomeObject::on_shard_message_pre_commit(int64_t lsn, sisl::blob const& header, sisl::blob const& key,
                                                cintrusive< homestore::repl_req_ctx >& hs_ctx) {
-    repl_result_ctx< ShardManager::Result< ShardInfo > >* ctx{nullptr};
-    if (hs_ctx && hs_ctx->is_proposer()) {
-        ctx = boost::static_pointer_cast< repl_result_ctx< ShardManager::Result< ShardInfo > > >(hs_ctx).get();
-    }
     auto tid = hs_ctx ? hs_ctx->traceID() : 0;
     const ReplicationMessageHeader* msg_header = r_cast< const ReplicationMessageHeader* >(header.cbytes());
 
@@ -312,29 +310,32 @@ bool HSHomeObject::on_shard_message_pre_commit(int64_t lsn, sisl::blob const& he
         RELEASE_ASSERT(
             false, "replication message header is corrupted with crc error when pre_committing shard message, lsn={}",
             lsn);
-        if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(ShardError(ShardErrorCode::CRC_MISMATCH))); }
         return false;
     }
 
+    const auto msg_type = msg_header->msg_type;
+
+    RELEASE_ASSERT(msg_type == ReplicationMessageType::CREATE_SHARD_MSG ||
+                       msg_type == ReplicationMessageType::SEAL_SHARD_MSG,
+                   "unsupport message tyep {} when pre committing shard message, fatal error!", msg_type);
+
     const auto& shard_id = msg_header->shard_id;
 
-    SLOGD(tid, shard_id, "pre_commit shard message, type={}, lsn= {}", msg_header->msg_type, lsn);
-
-    if (msg_header->msg_type == ReplicationMessageType::SEAL_SHARD_MSG) {
-        std::scoped_lock lock_guard(_shard_lock);
-        auto iter = _shard_map.find(shard_id);
-        RELEASE_ASSERT(iter != _shard_map.end(), "shardID=0x{:x}, pg={}, shard=0x{:x}, shard does not exist", shard_id,
-                       (shard_id >> homeobject::shard_width), (shard_id & homeobject::shard_mask));
-        auto& state = (*iter->second)->info.state;
-        // we just change the state to SEALED, so that it will fail the later coming put_blob on this shard and will
-        // be easy for rollback. the update of superblk will be done in on_shard_message_commit;
-        if (state == ShardInfo::State::OPEN) {
-            state = ShardInfo::State::SEALED;
-        } else {
-            SLOGW(tid, shard_id, "try to seal an unopened shard");
-        }
+    if (msg_type == ReplicationMessageType::CREATE_SHARD_MSG) {
+        SLOGD(tid, shard_id, "pre_commit create shard message, type={}, lsn= {}", msg_header->msg_type, lsn);
+    } else {
+        SLOGD(tid, shard_id, "pre_commit seal shard message, type={}, lsn= {}", msg_header->msg_type, lsn);
     }
 
+    // now, we change the shard state only in on_commit, since if we change the state in pre_commit, the completion of
+    // pre_commit is different among different nodes. when we check the shard state in put_blob on_commit:
+    //  1 if the seal_shard has been pre_committed, then this node will consider the shard is sealed, and reject the
+    //  put_blob.
+    //  2 in contrast, if the seal_shard has not been pre_committed, then this node will consider the shard is
+    //  open, and accept the put_blob.
+    //  as a result, this put_blob has a different result in different nodes, which is not correct.
+
+    // TODO: add other pre_commit logic in the future if needed.
     return true;
 }
 
@@ -354,37 +355,22 @@ void HSHomeObject::on_shard_message_rollback(int64_t lsn, sisl::blob const& head
         return;
     }
 
+    const auto msg_type = msg_header->msg_type;
+
+    RELEASE_ASSERT(msg_type == ReplicationMessageType::CREATE_SHARD_MSG ||
+                       msg_type == ReplicationMessageType::SEAL_SHARD_MSG,
+                   "unsupport message tyep {} when pre committing shard message, fatal error!", msg_type);
+
     const auto shard_id = msg_header->shard_id;
-    switch (msg_header->msg_type) {
-    case ReplicationMessageType::CREATE_SHARD_MSG: {
-        if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(ShardError(ShardErrorCode::RETRY_REQUEST))); }
-        SLOGD(tid, shard_id, "rollback create_shard message, lsn={}", lsn);
-        break;
-    }
-    case ReplicationMessageType::SEAL_SHARD_MSG: {
-        std::scoped_lock lock_guard(_shard_lock);
-        auto iter = _shard_map.find(shard_id);
-        RELEASE_ASSERT(iter != _shard_map.end(), "shardID=0x{:x}, pg={}, shard=0x{:x}, shard does not exist", shard_id,
-                       (shard_id >> homeobject::shard_width), (shard_id & homeobject::shard_mask));
-        auto& state = (*iter->second)->info.state;
-        // we just change the state to SEALED, since it will be easy for rollback
-        // the update of superblk will be done in on_shard_message_commit;
-        if (state == ShardInfo::State::SEALED) {
-            state = ShardInfo::State::OPEN;
-        } else {
-            SLOGW(tid, shard_id, "try to rollback seal_shard message , but the shard state is not sealed");
-        }
 
-        // TODO:set a proper error code
-        if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(ShardError(ShardErrorCode::RETRY_REQUEST))); }
+    // since we do nothing in pre_commit, so we do nothing in rollback
+    if (msg_type == ReplicationMessageType::CREATE_SHARD_MSG) {
+        SLOGD(tid, shard_id, "rollback create shard message, type={}, lsn= {}", msg_header->msg_type, lsn);
+    } else {
+        SLOGD(tid, shard_id, "rollback seal shard message, type={}, lsn= {}", msg_header->msg_type, lsn);
+    }
 
-        break;
-    }
-    default: {
-        SLOGE(tid, shard_id, "unsupported op type={} for rollbacking shard message", msg_header->msg_type);
-        break;
-    }
-    }
+    if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(ShardError(ShardErrorCode::RETRY_REQUEST))); }
 }
 
 void HSHomeObject::local_create_shard(ShardInfo shard_info, homestore::chunk_num_t v_chunk_id,
@@ -466,7 +452,7 @@ void HSHomeObject::on_shard_message_commit(int64_t lsn, sisl::blob const& h, sha
     homestore::BlkAllocStatus alloc_status;
     auto gc_mgr = gc_manager();
 
-    for (uint8_t i = 0; i < 3; ++i) {
+    for (uint8_t i = 0; i < 5; ++i) {
         alloc_status = homestore::data_service().alloc_blks(
             sisl::round_up(sizeof(shard_info_superblk), repl_dev->get_blk_size()), hints, blkids);
 
@@ -495,12 +481,10 @@ void HSHomeObject::on_shard_message_commit(int64_t lsn, sisl::blob const& h, sha
         }
     }
 
-    if (alloc_status != homestore::BlkAllocStatus::SUCCESS) {
-        RELEASE_ASSERT(
-            false,
-            "can not allocate blk for shard meta blk after trying for 3 times, fatal error! vchunk={}, pg={}, shard={}",
-            vchunk_id, pg_id, shard_id);
-    }
+    RELEASE_ASSERT(
+        alloc_status == homestore::BlkAllocStatus::SUCCESS,
+        "can not allocate blk for shard meta blk after trying for 5 times, fatal error! vchunk={}, pg={}, shard={}",
+        vchunk_id, pg_id, shard_id);
 
     ShardInfo shard_info;
 
@@ -526,7 +510,7 @@ void HSHomeObject::on_shard_message_commit(int64_t lsn, sisl::blob const& h, sha
 
         local_create_shard(shard_info, vchunk_id, blkids.chunk_num(), blkids.blk_count(), tid);
         if (ctx) { ctx->promise_.setValue(ShardManager::Result< ShardInfo >(shard_info)); }
-        SLOGD(tid, shard_id, "Commit done for creating shard");
+        SLOGD(tid, shard_id, "Commit done for creating shard at lsn={}", lsn);
         break;
     }
 
@@ -539,14 +523,17 @@ void HSHomeObject::on_shard_message_commit(int64_t lsn, sisl::blob const& h, sha
             shard_info = (*iter->second)->info;
         }
 
-        if (shard_info.state == ShardInfo::State::SEALED) {
-            bool res = chunk_selector()->release_chunk(pg_id, vchunk_id);
-            RELEASE_ASSERT(res, "Failed to release v_chunk_id={}, pg={}", vchunk_id, pg_id);
-            update_shard_in_map(shard_info);
-        } else
-            RELEASE_ASSERT(false, "try to commit SEAL_SHARD_MSG but shard state is not sealed, shard_id={}", shard_id);
+        // if we fail the pre_commit for sealing shard(when pre_commit sealing shard, the create_shard is not committed
+        // yet), when reaching here, the shard state will be open. we just seal it here if the above case happens.
+
+        shard_info.state = ShardInfo::State::SEALED;
+        shard_info.sealed_lsn = lsn;
+        bool res = chunk_selector()->release_chunk(pg_id, vchunk_id);
+        RELEASE_ASSERT(res, "Failed to release v_chunk_id={}, pg={}", vchunk_id, pg_id);
+        update_shard_in_map(shard_info);
+
         if (ctx) { ctx->promise_.setValue(ShardManager::Result< ShardInfo >(shard_info)); }
-        SLOGD(tid, shard_id, "Commit done for sealing shard");
+        SLOGD(tid, shard_id, "Commit done for sealing shard at lsn={}", lsn);
     }
 
     default:

@@ -168,7 +168,7 @@ bool GCManager::is_eligible_for_gc(chunk_id_t chunk_id) {
 
     if (!defrag_blk_num) { return false; }
 
-    // 1 if the chunk state is inuse, it is occupied by a open shard, so it can not be selected and we don't need gc it.
+    // 1 if the chunk state is inuse, it is now occupied by an open shard and can not be selected ,so we can not gc it.
     // 2 if the chunk state is gc, it means this chunk is being gc, or this is a reserved chunk, so we don't need gc it.
     if (chunk->m_state != ChunkState::AVAILABLE) {
         LOGDEBUG("chunk_id={} state is {}, not eligible for gc", chunk_id, chunk->m_state)
@@ -177,7 +177,7 @@ bool GCManager::is_eligible_for_gc(chunk_id_t chunk_id) {
 
     const auto total_blk_num = chunk->get_total_blks();
 
-    const auto gc_garbage_rate_threshold = HS_BACKEND_DYNAMIC_CONFIG(gc_garbage_rate_threshold);
+    static const auto gc_garbage_rate_threshold = HS_BACKEND_DYNAMIC_CONFIG(gc_garbage_rate_threshold);
 
     bool should_gc = 100 * defrag_blk_num >= total_blk_num * gc_garbage_rate_threshold;
 
