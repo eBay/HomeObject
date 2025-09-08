@@ -363,6 +363,8 @@ public:
         void get_peer_info(std::vector< peer_info >& members) const;
 
         void reconcile_leader() const;
+
+        void yield_leadership_to_follower() const;
     };
 
     struct HS_Shard : public Shard {
@@ -893,6 +895,11 @@ public:
      * @param pg_id The ID of the PG to reconcile. Default is -1, which indicates all PGs.
      */
     void reconcile_pg_leader(int32_t pg_id = -1);
+
+    /**
+     * @brief yield leadership to follower with newest progress, only used for test
+     */
+    void yield_pg_leadership_to_follower(int32_t pg_id = 1);
 
     // Blob manager related.
     void on_blob_message_rollback(int64_t lsn, sisl::blob const& header, sisl::blob const& key,

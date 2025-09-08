@@ -767,6 +767,36 @@ void HSHomeObject::HS_PG::get_peer_info(std::vector< peer_info >& members) const
 
 void HSHomeObject::HS_PG::reconcile_leader() const { repl_dev_->reconcile_leader(); }
 
+void HSHomeObject::HS_PG::yield_leadership_to_follower() const {
+    if (!repl_dev_->is_leader()) {
+        LOGDEBUG("Not a leader, no need to yield leadership");
+        return;
+    }
+
+    auto leader_id = repl_dev_->get_leader_id();
+    auto candidate_leader_id = leader_id;
+    int32_t highest_prority = 0;
+    auto const replication_status = repl_dev_->get_replication_status();
+    for (auto const& r : replication_status) {
+        if (r.id_ == leader_id) continue;
+        auto priority = static_cast< int32_t >(r.priority_);
+        if (priority > highest_prority) {
+            highest_prority = priority;
+            candidate_leader_id = r.id_;
+        }
+    }
+
+    if (candidate_leader_id == leader_id) {
+        LOGDEBUG("cannot find a candidate leader except current leader {}, candidate_priority={}",
+                 boost::uuids::to_string(leader_id), highest_prority);
+        return;
+    }
+
+    LOGI("Trying to yield leadership from {} to {}, candidate_priority={}", boost::uuids::to_string(leader_id),
+         boost::uuids::to_string(candidate_leader_id), highest_prority);
+    repl_dev_->yield_leadership(false /*immediate_yield*/, candidate_leader_id);
+}
+
 // NOTE: caller should hold the _pg_lock
 const HSHomeObject::HS_PG* HSHomeObject::_get_hs_pg_unlocked(pg_id_t pg_id) const {
     auto iter = _pg_map.find(pg_id);
