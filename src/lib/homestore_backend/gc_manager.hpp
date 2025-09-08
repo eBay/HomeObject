@@ -216,6 +216,8 @@ public:
         // return true if the data copy is successful, false otherwise.
         bool copy_valid_data(chunk_id_t move_from_chunk, chunk_id_t move_to_chunk, const uint64_t task_id);
 
+        bool verify_blob(const void* blob, const BlobRouteKey& k, const uint64_t task_id);
+
         // before we select a reserved chunk and start gc, we need:
         //  1 clear all the entries of this chunk in the gc index table
         //  2 reset this chunk to make sure it is empty.
