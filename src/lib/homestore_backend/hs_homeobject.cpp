@@ -504,4 +504,30 @@ void HSHomeObject::reconcile_pg_leader(int32_t pg_id) {
     }
 }
 
+void HSHomeObject::yield_pg_leadership_to_follower(int32_t pg_id) {
+    if (pg_id == -1) {
+        LOGI("PG id not set, start yield leaders for all PGs");
+        std::shared_lock lock_guard(_pg_lock);
+        std::vector< std::future< void > > futures;
+        for (const auto& [id, pg] : _pg_map) {
+            auto hs_pg = static_cast< HS_PG* >(pg.get());
+            futures.emplace_back(std::async(std::launch::async, [hs_pg, id]() {
+                hs_pg->yield_leadership_to_follower();
+                LOGI("Triggered reconcile leader for PG {}", id);
+            }));
+        }
+        for (auto& future : futures) {
+            future.get();
+        }
+    } else {
+        LOGI("Yielding leader for PG {}", pg_id);
+        auto hs_pg = get_hs_pg(pg_id);
+        if (hs_pg) {
+            hs_pg->yield_leadership_to_follower();
+        } else {
+            LOGE("PG {} not found", pg_id);
+        }
+    }
+}
+
 } // namespace homeobject
