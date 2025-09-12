@@ -163,9 +163,7 @@ std::shared_ptr< GCManager::pdev_gc_actor > GCManager::get_pdev_gc_actor(uint32_
 
 bool GCManager::is_eligible_for_gc(chunk_id_t chunk_id) {
     auto chunk = m_chunk_selector->get_extend_vchunk(chunk_id);
-
     const auto defrag_blk_num = chunk->get_defrag_nblks();
-
     if (!defrag_blk_num) { return false; }
 
     // 1 if the chunk state is inuse, it is occupied by a open shard, so it can not be selected and we don't need gc it.
@@ -176,9 +174,7 @@ bool GCManager::is_eligible_for_gc(chunk_id_t chunk_id) {
     }
 
     const auto total_blk_num = chunk->get_total_blks();
-
     const auto gc_garbage_rate_threshold = HS_BACKEND_DYNAMIC_CONFIG(gc_garbage_rate_threshold);
-
     bool should_gc = 100 * defrag_blk_num >= total_blk_num * gc_garbage_rate_threshold;
 
     LOGDEBUG("gc scan chunk_id={}, use_blks={}, available_blks={}, total_blks={}, defrag_blks={}, should_gc={}",
@@ -1023,6 +1019,7 @@ void GCManager::pdev_gc_actor::handle_error_before_persisting_gc_metablk(chunk_i
         priority == static_cast< uint8_t >(task_priority::normal) ? de.failed_gc_task_count.fetch_add(1)
                                                                   : de.failed_egc_task_count.fetch_add(1);
     });
+    m_hs_home_object->gc_manager()->decr_pg_pending_gc_task(pg_id);
 }
 
 void GCManager::pdev_gc_actor::process_gc_task(chunk_id_t move_from_chunk, uint8_t priority,
@@ -1035,6 +1032,7 @@ void GCManager::pdev_gc_actor::process_gc_task(chunk_id_t move_from_chunk, uint8
     if (vchunk->m_state != ChunkState::GC) {
         LOGWARN("gc task_id={}, move_from_chunk={} is expected to in GC state, but not!", task_id, move_from_chunk);
         task.setValue(false);
+        m_hs_home_object->gc_manager()->decr_pg_pending_gc_task(pg_id);
         return;
     }
 
