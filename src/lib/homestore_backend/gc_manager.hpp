@@ -238,10 +238,6 @@ public:
         pdev_gc_metrics& metrics() { return metrics_; }
 
     private:
-        // utils
-        sisl::sg_list generate_shard_super_blk_sg_list(shard_id_t shard_id);
-
-    private:
         uint32_t m_pdev_id;
         std::shared_ptr< HeapChunkSelector > m_chunk_selector;
         folly::MPMCQueue< chunk_id_t > m_reserved_chunk_queue;
