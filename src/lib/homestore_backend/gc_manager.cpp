@@ -1003,7 +1003,8 @@ bool GCManager::pdev_gc_actor::purge_reserved_chunk(chunk_id_t chunk) {
 void GCManager::pdev_gc_actor::handle_error_before_persisting_gc_metablk(chunk_id_t move_from_chunk,
                                                                          chunk_id_t move_to_chunk,
                                                                          folly::Promise< bool > task,
-                                                                         const uint64_t task_id, uint8_t priority) {
+                                                                         const uint64_t task_id, uint8_t priority,
+                                                                         const pg_id_t& pg_id) {
     LOGERROR(
         "gc task_id={}, move_from_chunk={} to move_to_chunk={} with priority={} failed before persisting gc metablk",
         task_id, move_from_chunk, move_to_chunk, priority);
@@ -1028,6 +1029,8 @@ void GCManager::pdev_gc_actor::process_gc_task(chunk_id_t move_from_chunk, uint8
              priority);
     auto start_time = std::chrono::steady_clock::now();
     auto vchunk = m_chunk_selector->get_extend_vchunk(move_from_chunk);
+    RELEASE_ASSERT(vchunk->m_pg_id.has_value(), "chunk_id={} is expected to belong to a pg, but not!", move_from_chunk);
+    const auto pg_id = vchunk->m_pg_id.value();
 
     if (vchunk->m_state != ChunkState::GC) {
         LOGWARN("gc task_id={}, move_from_chunk={} is expected to in GC state, but not!", task_id, move_from_chunk);
@@ -1035,9 +1038,6 @@ void GCManager::pdev_gc_actor::process_gc_task(chunk_id_t move_from_chunk, uint8
         m_hs_home_object->gc_manager()->decr_pg_pending_gc_task(pg_id);
         return;
     }
-
-    RELEASE_ASSERT(vchunk->m_pg_id.has_value(), "chunk_id={} is expected to belong to a pg, but not!", move_from_chunk);
-    const auto pg_id = vchunk->m_pg_id.value();
 
     RELEASE_ASSERT(vchunk->m_v_chunk_id.has_value(), "pg={}, chunk_id={} is expected to have a vchunk id, but not!",
                    pg_id, move_from_chunk);
@@ -1054,14 +1054,16 @@ void GCManager::pdev_gc_actor::process_gc_task(chunk_id_t move_from_chunk, uint8
 
     if (!purge_reserved_chunk(move_to_chunk)) {
         LOGWARN("gc task_id={}, can not purge move_to_chunk={}", task_id, move_to_chunk);
-        handle_error_before_persisting_gc_metablk(move_from_chunk, move_to_chunk, std::move(task), task_id, priority);
+        handle_error_before_persisting_gc_metablk(move_from_chunk, move_to_chunk, std::move(task), task_id, priority,
+                                                  pg_id);
         return;
     }
 
     if (!copy_valid_data(move_from_chunk, move_to_chunk, task_id)) {
         LOGWARN("gc task_id={}, failed to copy data from move_from_chunk={} to move_to_chunk={} with priority={}",
                 task_id, move_from_chunk, move_to_chunk, priority);
-        handle_error_before_persisting_gc_metablk(move_from_chunk, move_to_chunk, std::move(task), task_id, priority);
+        handle_error_before_persisting_gc_metablk(move_from_chunk, move_to_chunk, std::move(task), task_id, priority,
+                                                  pg_id);
         return;
     }
 
@@ -1069,7 +1071,8 @@ void GCManager::pdev_gc_actor::process_gc_task(chunk_id_t move_from_chunk, uint8
     if (!get_blobs_to_replace(move_to_chunk, valid_blob_indexes)) {
         LOGWARN("gc task_id={}, failed to get valid blob indexes from gc index table for move_to_chunk={}", task_id,
                 move_to_chunk);
-        handle_error_before_persisting_gc_metablk(move_from_chunk, move_to_chunk, std::move(task), task_id, priority);
+        handle_error_before_persisting_gc_metablk(move_from_chunk, move_to_chunk, std::move(task), task_id, priority,
+                                                  pg_id);
         return;
     }
 
