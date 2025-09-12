@@ -233,7 +233,7 @@ public:
 
         void handle_error_before_persisting_gc_metablk(chunk_id_t move_from_chunk, chunk_id_t move_to_chunk,
                                                        folly::Promise< bool > task, const uint64_t task_id,
-                                                       uint8_t priority);
+                                                       uint8_t priority, const pg_id_t& pg_id);
 
         pdev_gc_metrics& metrics() { return metrics_; }
 
