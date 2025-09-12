@@ -250,9 +250,8 @@ void HSHomeObject::on_create_pg_message_commit(int64_t lsn, sisl::blob const& he
     auto const* msg_header = r_cast< ReplicationMessageHeader const* >(header.cbytes());
 
     if (msg_header->corrupted()) {
-        LOGE("create PG message header is corrupted , lsn={}; header={}, trace_id={}", lsn, msg_header->to_string(),
-             tid);
-        if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(PGError::CRC_MISMATCH)); }
+        RELEASE_ASSERT(false, "create PG message header is corrupted , lsn={}; header={}, trace_id={}", lsn,
+                       msg_header->to_string(), tid);
         return;
     }
 
@@ -261,8 +260,7 @@ void HSHomeObject::on_create_pg_message_commit(int64_t lsn, sisl::blob const& he
 
     if (crc32_ieee(init_crc32, serailized_pg_info_buf, serailized_pg_info_size) != msg_header->payload_crc) {
         // header & value is inconsistent;
-        LOGE("create PG message header is inconsistent with value, lsn={}, trace_id={}", lsn, tid);
-        if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(PGError::CRC_MISMATCH)); }
+        RELEASE_ASSERT(false, "create PG message header is inconsistent with value, lsn={}, trace_id={}", lsn, tid);
         return;
     }
 
@@ -857,8 +855,8 @@ void HSHomeObject::on_create_pg_message_rollback(int64_t lsn, sisl::blob const& 
     auto const* msg_header = r_cast< ReplicationMessageHeader const* >(header.cbytes());
 
     if (msg_header->corrupted()) {
-        LOGE("create PG message header is corrupted , lsn={}, header={}", lsn, msg_header->to_string());
-        if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(PGError::CRC_MISMATCH)); }
+        RELEASE_ASSERT(false, "create PG message header is corrupted , lsn={}, header={}", lsn,
+                       msg_header->to_string());
         return;
     }
 
@@ -867,8 +865,7 @@ void HSHomeObject::on_create_pg_message_rollback(int64_t lsn, sisl::blob const& 
 
     if (crc32_ieee(init_crc32, serailized_pg_info_buf, serailized_pg_info_size) != msg_header->payload_crc) {
         // header & value is inconsistent;
-        LOGE("create PG message header is inconsistent with value, lsn={}", lsn);
-        if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(PGError::CRC_MISMATCH)); }
+        RELEASE_ASSERT(false, "create PG message header is inconsistent with value, lsn={}", lsn);
         return;
     }
 

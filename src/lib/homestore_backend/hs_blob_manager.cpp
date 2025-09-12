@@ -257,16 +257,48 @@ void HSHomeObject::on_blob_put_commit(int64_t lsn, sisl::blob const& header, sis
     trace_id_t tid = hs_ctx ? hs_ctx->traceID() : 0;
     auto msg_header = r_cast< ReplicationMessageHeader const* >(header.cbytes());
     if (msg_header->corrupted()) {
-        LOGE("replication message header is corrupted with crc error, lsn={}, traceID={}", lsn, tid);
-        if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(BlobError(BlobErrorCode::CHECKSUM_MISMATCH))); }
+        RELEASE_ASSERT(false, "replication message header is corrupted with crc error, lsn={}, traceID={}", lsn, tid);
         return;
     }
 
+    const auto shard_id = msg_header->shard_id;
     auto const blob_id = *(reinterpret_cast< blob_id_t* >(const_cast< uint8_t* >(key.cbytes())));
+
+    int64_t shard_sealed_lsn;
+    {
+        std::scoped_lock lock_guard(_shard_lock);
+        auto iter = _shard_map.find(shard_id);
+        RELEASE_ASSERT(iter != _shard_map.end(), "shardID=0x{:x}, pg={}, shard=0x{:x}, shard does not exist", shard_id,
+                       (shard_id >> homeobject::shard_width), (shard_id & homeobject::shard_mask));
+        shard_sealed_lsn = (*iter->second)->info.sealed_lsn;
+    }
+
+    // we should use shard state to determine whether to put blob, since when log replay, the if the shard has been
+    // sealed before homeobject restart, then the shard state in shard_meta_blk will be sealed, and as a result, all the
+    // replays of put_blob in this shard will fail, and the blob_id->pba will not be inserted into pg index table again.
+
+    if (lsn >= shard_sealed_lsn) {
+        homestore::data_service().async_free_blk(pbas).thenValue([lsn, shard_id, blob_id, tid, &pbas](auto&& err) {
+            if (err) {
+                BLOGW(tid, shard_id, blob_id, "failed to free blob data blk, err={}, lsn={}, blkid={}", err.message(),
+                      lsn, pbas.to_string());
+            } else {
+                BLOGD(tid, shard_id, blob_id, "succeed to free blob data blk, lsn={}, blkid={}", lsn, pbas.to_string());
+            }
+        });
+
+        BLOGD(tid, shard_id, blob_id,
+              "try to commit put_blob message to a non-open shard, lsn={}, shard_sealed_lsn={}, skip it!", lsn,
+              shard_sealed_lsn);
+
+        if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(BlobError(BlobErrorCode::SEALED_SHARD))); }
+        return;
+    }
+
     auto const pg_id = msg_header->pg_id;
 
     BlobInfo blob_info;
-    blob_info.shard_id = msg_header->shard_id;
+    blob_info.shard_id = shard_id;
     blob_info.blob_id = blob_id;
     blob_info.pbas = pbas;
 
@@ -394,11 +426,21 @@ HSHomeObject::blob_put_get_blk_alloc_hints(sisl::blob const& header, cintrusive<
 
     auto msg_header = r_cast< ReplicationMessageHeader* >(const_cast< uint8_t* >(header.cbytes()));
     if (msg_header->corrupted()) {
-        LOGE("traceID={}, shardID=0x{:x}, pg={}, shard=0x{:x}, replication message header is corrupted with crc error",
-             tid, msg_header->shard_id, (msg_header->shard_id >> homeobject::shard_width),
-             (msg_header->shard_id & homeobject::shard_mask));
+        RELEASE_ASSERT(
+            false,
+            "traceID={}, shardID=0x{:x}, pg={}, shard=0x{:x}, replication message header is corrupted with crc error",
+            tid, msg_header->shard_id, (msg_header->shard_id >> homeobject::shard_width),
+            (msg_header->shard_id & homeobject::shard_mask));
         if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(BlobError(BlobErrorCode::CHECKSUM_MISMATCH))); }
         return folly::makeUnexpected(homestore::ReplServiceError::FAILED);
+    }
+
+    if (msg_header->msg_type != ReplicationMessageType::PUT_BLOB_MSG) {
+        LOGW("traceID={}, shardID=0x{:x}, pg={}, shard=0x{:x}, unsupported message type {}, reject it!", tid,
+             msg_header->shard_id, (msg_header->shard_id >> homeobject::shard_width),
+             (msg_header->shard_id & homeobject::shard_mask), msg_header->pg_id, msg_header->msg_type);
+        if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(BlobError(BlobErrorCode::UNSUPPORTED_OP))); }
+        return folly::makeUnexpected(homestore::ReplServiceError::RESULT_NOT_EXIST_YET);
     }
 
     auto hs_pg = get_hs_pg(msg_header->pg_id);
@@ -424,6 +466,14 @@ HSHomeObject::blob_put_get_blk_alloc_hints(sisl::blob const& header, cintrusive<
     }
 
     auto hs_shard = d_cast< HS_Shard* >((*shard_iter->second).get());
+
+    if (hs_shard->sb_->info.state != ShardInfo::State::OPEN) {
+        LOGW("traceID={}, shardID=0x{:x}, pg={}, shard=0x{:x}, Received a blob_put on an unopen shard, reject it!", tid,
+             msg_header->shard_id, (msg_header->shard_id >> homeobject::shard_width),
+             (msg_header->shard_id & homeobject::shard_mask));
+        if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(BlobError(BlobErrorCode::SEALED_SHARD))); }
+        return folly::makeUnexpected(homestore::ReplServiceError::RESULT_NOT_EXIST_YET);
+    }
 
     homestore::blk_alloc_hints hints;
     hints.chunk_id_hint = hs_shard->sb_->p_chunk_id;
@@ -519,8 +569,10 @@ void HSHomeObject::on_blob_del_commit(int64_t lsn, sisl::blob const& header, sis
     auto tid = hs_ctx ? hs_ctx->traceID() : 0;
     auto msg_header = r_cast< ReplicationMessageHeader* >(const_cast< uint8_t* >(header.cbytes()));
     if (msg_header->corrupted()) {
-        BLOGE(tid, msg_header->shard_id, *r_cast< blob_id_t const* >(key.cbytes()),
-              "replication message header is corrupted with crc error, lsn={} header={}", lsn, msg_header->to_string());
+        RELEASE_ASSERT(
+            false,
+            "replication message header is corrupted with crc error, tid={}, shard={}, blob={}, lsn={} header={}", tid,
+            msg_header->shard_id, *r_cast< blob_id_t const* >(key.cbytes()), lsn, msg_header->to_string());
         if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(BlobError(BlobErrorCode::CHECKSUM_MISMATCH))); }
         return;
     }
@@ -607,7 +659,7 @@ void HSHomeObject::on_blob_message_rollback(int64_t lsn, sisl::blob const& heade
     auto tid = hs_ctx ? hs_ctx->traceID() : 0;
     const ReplicationMessageHeader* msg_header = r_cast< const ReplicationMessageHeader* >(header.cbytes());
     if (msg_header->corrupted()) {
-        LOGW("replication message header is corrupted with crc error, lsn={}, traceID={}", lsn, tid);
+        RELEASE_ASSERT(false, "replication message header is corrupted with crc error, lsn={}, traceID={}", lsn, tid);
         if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(BlobError(BlobErrorCode::CHECKSUM_MISMATCH))); }
         return;
     }

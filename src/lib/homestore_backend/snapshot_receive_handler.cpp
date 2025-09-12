@@ -74,22 +74,29 @@ int HSHomeObject::SnapshotReceiveHandler::process_shard_snapshot_data(ResyncShar
          (shard_meta.shard_id() >> homeobject::shard_width), (shard_meta.shard_id() & homeobject::shard_mask));
 
     // Persist shard meta on chunk data
+    const auto pg_id = shard_meta.pg_id();
+    const auto v_chunk_id = shard_meta.vchunk_id();
+
     sisl::io_blob_safe aligned_buf(sisl::round_up(sizeof(shard_info_superblk), io_align), io_align);
     shard_info_superblk* shard_sb = r_cast< shard_info_superblk* >(aligned_buf.bytes());
     shard_sb->info.id = shard_meta.shard_id();
-    shard_sb->info.placement_group = shard_meta.pg_id();
+    shard_sb->info.placement_group = pg_id;
     shard_sb->info.state = static_cast< ShardInfo::State >(shard_meta.state());
     shard_sb->info.lsn = shard_meta.created_lsn();
+    shard_sb->info.sealed_lsn = shard_meta.sealed_lsn();
     shard_sb->info.created_time = shard_meta.created_time();
     shard_sb->info.last_modified_time = shard_meta.last_modified_time();
     shard_sb->info.available_capacity_bytes = shard_meta.total_capacity_bytes();
     shard_sb->info.total_capacity_bytes = shard_meta.total_capacity_bytes();
-    shard_sb->v_chunk_id = shard_meta.vchunk_id();
+    shard_sb->v_chunk_id = v_chunk_id;
 
     homestore::blk_alloc_hints hints;
     hints.application_hint = static_cast< uint64_t >(ctx_->pg_id) << 16 | shard_sb->v_chunk_id;
 
     homestore::MultiBlkId blk_id;
+
+    // here, select_specific_chunk will be called in side alloc_blk, and as a result, the vchunk will be selected, which
+    // will prevent it to be selected by other create_shard.
     auto status = homestore::data_service().alloc_blks(
         sisl::round_up(aligned_buf.size(), homestore::data_service().get_blk_size()), hints, blk_id);
     if (status != homestore::BlkAllocStatus::SUCCESS) {
@@ -134,7 +141,7 @@ int HSHomeObject::SnapshotReceiveHandler::process_shard_snapshot_data(ResyncShar
     }
 
     // Now let's create local shard
-    home_obj_.local_create_shard(shard_sb->info, shard_sb->v_chunk_id, shard_sb->p_chunk_id, blk_id.blk_count());
+    home_obj_.local_create_shard(shard_sb->info, shard_sb->v_chunk_id, shard_sb->p_chunk_id);
     ctx_->shard_cursor = shard_meta.shard_id();
     ctx_->cur_batch_num = 0;
     return 0;
@@ -358,13 +365,46 @@ int HSHomeObject::SnapshotReceiveHandler::process_blobs_snapshot_data(ResyncBlob
             auto iter = home_obj_._shard_map.find(ctx_->shard_cursor);
             state = (*iter->second)->info.state;
         }
+
+        auto shard_id = ctx_->shard_cursor;
+
+        // shard header takes one blk.
+        uint8_t occupied_blk_count_by_shard_meta = 1;
         if (state == ShardInfo::State::SEALED) {
             home_obj_.chunk_selector()->release_chunk(ctx_->pg_id, v_chunk_id.value());
+
+            // write a shard footer for a sealed shard.
+            homestore::MultiBlkId footer_blk;
+            auto footer_sgs = home_obj_.generate_shard_super_blk_sg_list(shard_id);
+            // footer can use reserved blks
+            hints.reserved_blks = home_obj_.get_reserved_blks();
+            homestore::data_service()
+                .async_alloc_write(footer_sgs, hints, footer_blk)
+                .thenValue([footer_sgs, &shard_id](auto&& err) {
+                    // it does not matter if fail to write shard header/footer, we never read them
+                    if (err) { LOGW("failed to write shard footer blk for shard={}, err={}", shard_id, err.message()); }
+                    iomanager.iobuf_free(reinterpret_cast< uint8_t* >(footer_sgs.iovs[0].iov_base));
+                });
+            // TODO: take care of the result of writting footer if we need
+
+            // shard footer takes one blk
+            occupied_blk_count_by_shard_meta++;
         }
+
+        // update metrics
+        auto hs_pg = home_obj_.get_hs_pg(ctx_->pg_id);
+        RELEASE_ASSERT(hs_pg != nullptr, "shardID=0x{:x}, pg={}, shard=0x{:x}, PG not found", shard_id,
+                       (shard_id >> homeobject::shard_width), (shard_id & homeobject::shard_mask));
+        const_cast< HS_PG* >(hs_pg)->durable_entities_update([occupied_blk_count_by_shard_meta](auto& de) {
+            de.total_occupied_blk_count.fetch_add(occupied_blk_count_by_shard_meta, std::memory_order_relaxed);
+        });
+
+        // update ctx progress
         {
             std::unique_lock< std::shared_mutex > lock(ctx_->progress_lock);
             ctx_->progress.complete_shards++;
         }
+
         // We only update the snp info superblk on completion of each shard, since resumption is also shard-level
         update_snp_info_sb(ctx_->shard_cursor == ctx_->shard_list.front());
     }

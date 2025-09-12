@@ -514,7 +514,7 @@ std::shared_ptr< const std::vector< homestore::chunk_num_t > > HeapChunkSelector
     return p_chunk_ids;
 }
 
-std::optional< homestore::chunk_num_t > HeapChunkSelector::get_most_available_blk_chunk(uint64_t ctx, pg_id_t pg_id) {
+std::optional< homestore::chunk_num_t > HeapChunkSelector::pick_most_available_blk_chunk(uint64_t ctx, pg_id_t pg_id) {
     std::shared_lock lock_guard(m_chunk_selector_mtx);
     auto pg_it = m_per_pg_chunks.find(pg_id);
     if (pg_it == m_per_pg_chunks.end()) {
