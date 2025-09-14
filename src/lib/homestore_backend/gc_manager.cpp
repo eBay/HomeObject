@@ -778,11 +778,9 @@ bool GCManager::pdev_gc_actor::copy_valid_data(chunk_id_t move_from_chunk, chunk
                                         "blob_id={}, pba={}",
                                         task_id, move_from_chunk, k.key().shard, k.key().blob, pba.to_string());
 
-                                    HSHomeObject::BlobHeader const* header =
-                                        r_cast< HSHomeObject::BlobHeader const* >(data_sgs.iovs[0].iov_base);
-
-                                    if (!header->valid()) {
-                                        LOGERROR("gc task_id={}, read blob header is not valid for move_from_chunk={}, "
+                                    // verify the blob
+                                    if (!verify_blob(data_sgs.iovs[0].iov_base, k, task_id)) {
+                                        LOGERROR("gc task_id={}, blob verification fails for move_from_chunk={}, "
                                                  "shard_id={}, blob_id={}, pba={}",
                                                  task_id, move_from_chunk, k.key().shard, k.key().blob,
                                                  pba.to_string());
@@ -945,6 +943,45 @@ bool GCManager::pdev_gc_actor::copy_valid_data(chunk_id_t move_from_chunk, chunk
 
     LOGDEBUG("gc task_id={}, data copied successfully for move_from_chunk={} to move_to_chunk={}", task_id,
              move_from_chunk, move_to_chunk);
+
+    return true;
+}
+
+bool GCManager::pdev_gc_actor::verify_blob(const void* blob, const BlobRouteKey& k, const uint64_t task_id) {
+    uint8_t const* blob_data = static_cast< uint8_t const* >(blob);
+    HSHomeObject::BlobHeader const* header = r_cast< HSHomeObject::BlobHeader const* >(blob_data);
+
+    const auto shard_id = k.key().shard;
+    const auto blob_id = k.key().blob;
+
+    if (!header->valid()) {
+        LOGERROR("gc task_id={}, read blob header is not valid for shard_id={}, blob_id={}, "
+                 "Invalid header found: [header={}]",
+                 task_id, shard_id, blob_id, header->to_string());
+        return false;
+    }
+
+    if (header->shard_id != shard_id) {
+        LOGERROR("gc task_id={}, expecting shard_id={}, Invalid shard_id={} in header: [header={}]", task_id, shard_id,
+                 header->shard_id, header->to_string());
+        return false;
+    }
+
+    std::string user_key = header->user_key_size
+        ? std::string((const char*)(blob_data + sizeof(HSHomeObject::BlobHeader)), (size_t)header->user_key_size)
+        : std::string{};
+
+    uint8_t const* blob_bytes = blob_data + header->data_offset;
+    uint8_t computed_hash[HSHomeObject::BlobHeader::blob_max_hash_len]{};
+    m_hs_home_object->compute_blob_payload_hash(header->hash_algorithm, blob_bytes, header->blob_size,
+                                                uintptr_cast(user_key.data()), header->user_key_size, computed_hash,
+                                                HSHomeObject::BlobHeader::blob_max_hash_len);
+
+    if (std::memcmp(computed_hash, header->hash, HSHomeObject::BlobHeader::blob_max_hash_len) != 0) {
+        LOGERROR("gc task_id={}, Hash mismatch header, [header={}] [computed={:np}]", task_id, header->to_string(),
+                 spdlog::to_hex(computed_hash, computed_hash + HSHomeObject::BlobHeader::blob_max_hash_len));
+        return false;
+    }
 
     return true;
 }
