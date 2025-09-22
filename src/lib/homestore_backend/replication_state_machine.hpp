@@ -224,6 +224,11 @@ public:
     ///
     void notify_committed_lsn(int64_t lsn) override;
 
+    /// @brief this is called after all the logs are replayed but before joining raft group.
+    /// @param group_id - the group , where all the logs are replayed but not join raft group
+    ///
+    void on_log_replay_done(const homestore::group_id_t& group_id) override;
+
 private:
     HSHomeObject* home_object_{nullptr};
 
