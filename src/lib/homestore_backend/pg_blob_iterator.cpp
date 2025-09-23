@@ -39,7 +39,7 @@ HSHomeObject::PGBlobIterator::PGBlobIterator(HSHomeObject& home_obj, homestore::
 // result represents if the objId is valid and the cursors are updated
 bool HSHomeObject::PGBlobIterator::update_cursor(const objId& id) {
     if (cur_batch_start_time_ != Clock::time_point{}) {
-        HISTOGRAM_OBSERVE(*metrics_, snp_dnr_batch_e2e_latency, get_elapsed_time_us(cur_batch_start_time_));
+        HISTOGRAM_OBSERVE(*metrics_, snp_dnr_batch_e2e_latency, get_elapsed_time_ms(cur_batch_start_time_));
     }
     cur_batch_start_time_ = Clock::now();
 
@@ -412,7 +412,7 @@ bool HSHomeObject::PGBlobIterator::create_blobs_snapshot_data(sisl::io_blob_safe
     COUNTER_INCREMENT(*metrics_, snp_dnr_load_blob, blob_entries.size());
     COUNTER_INCREMENT(*metrics_, snp_dnr_load_bytes, total_bytes);
     pack_resync_message(data_blob, SyncMessageType::SHARD_BATCH);
-    HISTOGRAM_OBSERVE(*metrics_, snp_dnr_batch_process_latency, get_elapsed_time_us(batch_start));
+    HISTOGRAM_OBSERVE(*metrics_, snp_dnr_batch_process_latency, get_elapsed_time_ms(batch_start));
     return true;
 }
 
