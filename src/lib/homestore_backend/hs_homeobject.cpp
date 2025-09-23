@@ -97,6 +97,16 @@ public:
 
     homestore::replica_id_t get_my_repl_id() const override { return _home_object->our_uuid(); }
 
+    uint32_t get_my_repl_svc_port() const override {
+        uint32_t port = 0;
+        if (auto app = _ho_application.lock(); app) {
+            port = app->get_my_repl_svc_port();
+        } else {
+            LOGW("HomeObjectApplication lifetime unexpected! Shutdown in progress?");
+        }
+        return port;
+    }
+
 private:
     homestore::repl_impl_type _impl_type;
     bool _need_timeline_consistency;
