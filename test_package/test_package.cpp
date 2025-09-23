@@ -11,13 +11,12 @@ class TestApp : public homeobject::HomeObjectApplication {
 public:
     bool spdk_mode() const override { return false; }
     uint32_t threads() const override { return 1; }
-    std::list< homeobject::device_info_t > devices() const override {
-        return std::list< homeobject::device_info_t >();
-    }
+    std::list< homeobject::device_info_t > devices() const override { return std::list< homeobject::device_info_t >(); }
     homeobject::peer_id_t discover_svcid(std::optional< homeobject::peer_id_t > const& p) const override {
         return boost::uuids::random_generator()();
     }
     std::string lookup_peer(homeobject::peer_id_t const&) const override { return "test_package.com"; }
+    uint32_t get_my_repl_svc_port() const override { return 0; }
     uint64_t mem_size() const override { return 2 * Gi; }
     int max_data_size() const override { return 4 * Mi; }
 };

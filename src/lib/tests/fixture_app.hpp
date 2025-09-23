@@ -51,6 +51,7 @@ public:
 
     homeobject::peer_id_t discover_svcid(std::optional< homeobject::peer_id_t > const& p) const override;
     std::string lookup_peer(homeobject::peer_id_t const&) const override { return "127.0.0.1:4000"; }
+    uint32_t get_my_repl_svc_port() const override { return 4000; }
 };
 
 class TestFixture : public ::testing::Test {
