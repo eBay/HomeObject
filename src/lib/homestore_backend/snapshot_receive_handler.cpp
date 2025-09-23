@@ -369,7 +369,7 @@ int HSHomeObject::SnapshotReceiveHandler::process_blobs_snapshot_data(ResyncBlob
         update_snp_info_sb(ctx_->shard_cursor == ctx_->shard_list.front());
     }
 
-    HISTOGRAM_OBSERVE(*metrics_, snp_rcvr_batch_process_time, get_elapsed_time_us(batch_start));
+    HISTOGRAM_OBSERVE(*metrics_, snp_rcvr_batch_process_time, get_elapsed_time_ms(batch_start));
     return 0;
 }
 

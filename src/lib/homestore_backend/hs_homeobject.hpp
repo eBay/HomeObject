@@ -287,10 +287,6 @@ public:
                 REGISTER_COUNTER(total_user_key_size, "Total user key size provided",
                                  sisl::_publish_as::publish_as_gauge);
 
-                REGISTER_HISTOGRAM(blobs_per_shard,
-                                   "Distribution of blobs per shard"); // TODO: Add a bucket for blob sizes
-                REGISTER_HISTOGRAM(actual_blob_size, "Distribution of actual blob sizes");
-
                 register_me_to_farm();
                 attach_gather_cb(std::bind(&PGMetrics::on_gather, this));
                 blk_size = pg_.repl_dev_->get_blk_size();
@@ -505,13 +501,13 @@ public:
                 REGISTER_COUNTER(snp_dnr_error_count, "Error times when reading blobs in baseline resync");
                 REGISTER_HISTOGRAM(snp_dnr_blob_process_latency,
                                    "Time cost(us) of successfully process a blob in baseline resync",
-                                   HistogramBucketsType(DefaultBuckets));
+                                   HistogramBucketsType(LowResolutionLatecyBuckets));
                 REGISTER_HISTOGRAM(snp_dnr_batch_process_latency,
                                    "Time cost(ms) of successfully process a batch in baseline resync",
-                                   HistogramBucketsType(DefaultBuckets));
+                                   HistogramBucketsType(LowResolutionLatecyBuckets));
                 REGISTER_HISTOGRAM(snp_dnr_batch_e2e_latency,
                                    "Time cost(ms) of a batch end-to-end round trip in baseline resync",
-                                   HistogramBucketsType(DefaultBuckets));
+                                   HistogramBucketsType(LowResolutionLatecyBuckets));
                 register_me_to_farm();
             }
 
@@ -611,10 +607,10 @@ public:
                 REGISTER_GAUGE(snp_rcvr_error_count, "Error count in baseline resync");
                 REGISTER_HISTOGRAM(snp_rcvr_blob_process_time,
                                    "Time cost(us) of successfully process a blob in baseline resync",
-                                   HistogramBucketsType(DefaultBuckets));
+                                   HistogramBucketsType(LowResolutionLatecyBuckets));
                 REGISTER_HISTOGRAM(snp_rcvr_batch_process_time,
                                    "Time cost(ms) of successfully process a batch in baseline resync",
-                                   HistogramBucketsType(DefaultBuckets));
+                                   HistogramBucketsType(LowResolutionLatecyBuckets));
 
                 attach_gather_cb(std::bind(&ReceiverSnapshotMetrics::on_gather, this));
                 register_me_to_farm();
