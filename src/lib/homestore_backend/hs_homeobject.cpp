@@ -221,9 +221,6 @@ void HSHomeObject::init_homestore() {
 
         // We dont have any repl dev now, explicitly call init_completed_cb() where we register PG/Shard meta types.
         repl_app->on_repl_devs_init_completed();
-
-        // we need to regitster the meta blk handlers after metaservice is ready.
-        gc_mgr_ = std::make_shared< GCManager >(chunk_selector_, this);
         // if this is the first time we are starting, we need to create gc metablk for each pdev， which record the
         // reserved chunks and indextable.
         auto pdev_chunks = chunk_selector_->get_pdev_chunks();
@@ -321,6 +318,9 @@ void HSHomeObject::on_replica_restart() {
             },
             [this](bool success) { on_snp_rcvr_shard_list_meta_blk_recover_completed(success); }, true);
         HomeStore::instance()->meta_service().read_sub_sb(_snp_rcvr_shard_list_meta_name);
+
+        // gc_manager will be created only once here.
+        gc_mgr_ = std::make_shared< GCManager >(this);
     });
 }
 
@@ -352,7 +352,6 @@ void HSHomeObject::init_cp() {
 
 void HSHomeObject::init_gc() {
     using namespace homestore;
-    if (!gc_mgr_) gc_mgr_ = std::make_shared< GCManager >(chunk_selector_, this);
     // when initializing, there is not gc task. we need to recover reserved chunks here, so that the reserved chunks
     // will not be put into pdev heap when built
     HomeStore::instance()->meta_service().read_sub_sb(GCManager::_gc_actor_meta_name);

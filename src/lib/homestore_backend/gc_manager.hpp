@@ -29,7 +29,7 @@ using GCBlobIndexTable = homestore::IndexTable< BlobRouteByChunkKey, BlobRouteVa
 
 class GCManager {
 public:
-    GCManager(std::shared_ptr< HeapChunkSelector > chunk_selector, HSHomeObject* homeobject);
+    GCManager(HSHomeObject* homeobject);
     ~GCManager();
 
     // Disallow copy and move

@@ -6,8 +6,8 @@ namespace homeobject {
 
 /* GCManager */
 
-GCManager::GCManager(std::shared_ptr< HeapChunkSelector > chunk_selector, HSHomeObject* homeobject) :
-        m_chunk_selector{chunk_selector}, m_hs_home_object{homeobject} {
+GCManager::GCManager(HSHomeObject* homeobject) :
+        m_chunk_selector{homeobject->chunk_selector()}, m_hs_home_object{homeobject} {
     homestore::HomeStore::instance()->meta_service().register_handler(
         GCManager::_gc_actor_meta_name,
         [this](homestore::meta_blk* mblk, sisl::byte_view buf, size_t size) {

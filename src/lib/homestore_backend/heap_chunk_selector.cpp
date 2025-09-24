@@ -390,7 +390,6 @@ void HeapChunkSelector::switch_chunks_for_pg(const pg_id_t pg_id, const chunk_nu
                     "gc task_id={}, the pchunk_id for vchunk={} in chunkselector for pg_id={} is already {},  skip "
                     "switching chunks!",
                     task_id, v_chunk_id, pg_id, new_chunk_id);
-
         return;
     } else {
         RELEASE_ASSERT(
@@ -405,9 +404,6 @@ void HeapChunkSelector::switch_chunks_for_pg(const pg_id_t pg_id, const chunk_nu
                     "pchunk_id={}",
                     task_id, v_chunk_id, pg_id, old_chunk_id, new_chunk_id);
     }
-
-    // LOGDEBUGMOD(homeobject, "gc: after switch chunks for pg_id={}, pg_chunks={}", pg_chunks);
-
     pg_chunk_collection->available_blk_count += new_available_blks - old_available_blks;
 }
 

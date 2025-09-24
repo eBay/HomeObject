@@ -607,11 +607,8 @@ folly::Future< std::error_code > ReplicationStateMachine::on_fetch_data(const in
                                                                         const homestore::MultiBlkId& local_blk_id,
                                                                         sisl::sg_list& sgs) {
     if (0 == header.size()) {
-        LOGD("Header is empty, which means this req has been committed at leader, so ignore this request. req "
-             "lsn={}",
-             lsn);
-        RELEASE_ASSERT(lsn != -1, "the lsn of a committed req should not be -1");
-        return folly::makeFuture< std::error_code >(std::error_code{});
+        LOGW("Header is empty in on_fetch_data for lsn {}", lsn);
+        return folly::makeFuture< std::error_code >(std::make_error_code(std::errc::invalid_argument));
     }
 
     // the lsn here will mostly be -1 ,since this lsn has not been appeneded and thus get no lsn
@@ -1003,6 +1000,62 @@ void ReplicationStateMachine::handle_no_space_left(homestore::repl_lsn_t lsn, ho
         // start accepting new requests again.
         LOGD("gc manager is not started, skip handle no_space_left for chunk={}, lsn={}", chunk_id, lsn);
         repl_dev()->resume_accepting_reqs();
+    }
+}
+
+void ReplicationStateMachine::on_log_replay_done(const homestore::group_id_t& group_id) {
+    // when we reaching here, it means all the logs of this group has been replayed, but we don`t join the raft group
+    // ATM and thus no new request can be handled. Now, we can safely mark all the chunks with open shard in this group
+    // to inuse state, so that gc can not gc this chunk.
+
+    // we must do this job here, because:
+
+    // 1 we should change the chunk state after all the logs are replayed. since if we mark the chunk state to inuse
+    // before all the logs are replayed, there is a case that the chunk will be released by the last seal_shard, which
+    // is prior to the lastest open_shard of this chunk. for example: lsn 10 is create_shard_1 ,lsn 20 is seal_shard_1
+    // and lsn 30 is create_shard_2. shard1 and shard 2 are in the same chunk. now if we mark the chunk to inuse before
+    // replay lsn 20, then when replaying lsn 20, the chunk will be released by lsn 20(commit_seal_shard). and when we
+    // completed replay, the final state of this chunk is available. but what we want is inuse, since shard_2 is opened
+    // in lsn 30 and not sealed.
+
+    // 2 if we mark the chunk state to in use after the repl_dev join the raft group, then it can accept new request or
+    // can be gc before we mark it to inuse.
+
+    // so this is the only timepoint we should make all the chunks, which contains open shards, to inuse state.
+
+    auto pg_id_opt = home_object_->get_pg_id_with_group_id(group_id);
+    if (!pg_id_opt.has_value()) {
+        // there are two cases we might reach here.
+
+        //  1 when baseline resync, crash happens after pg is destroyed but before new pg is created in follower. when
+        //  recovery, we will find we have a group , but the corresponding pg does not exist.
+
+        //  2 when replacememeber, we will destroy the repl_dev after destroying the pg. if crash happens after pg is
+        //  destroyed but before the repl_dev superblk is destroyed, then when recovery, we will find we have a
+        //  group(repl_dev), but have not corresponding pg.
+
+        //  3 when fail to create repl_dev, there might be some stale repl_dev left on a node. for example, success to
+        //  add the first memeber but fail to add the second memeber, the there will be a stale repl_dev on leader and
+        //  the first member. see https://github.com/eBay/HomeObject/pull/136#discussion_r1470504271
+        LOGW("can not find any pg for group={}!", group_id);
+        return;
+    }
+
+    const auto pg_id = pg_id_opt.value();
+    RELEASE_ASSERT(home_object_->pg_exists(pg_id), "pg={} should exist, but not! fatal error!", pg_id);
+
+    const auto& shards_in_pg = (const_cast< HSHomeObject::HS_PG* >(home_object_->_get_hs_pg_unlocked(pg_id)))->shards_;
+    auto chunk_selector = home_object_->chunk_selector();
+
+    for (const auto& shard_iter : shards_in_pg) {
+        const auto& shard_sb = ((d_cast< HSHomeObject::HS_Shard* >(shard_iter.get()))->sb_).get();
+        if (shard_sb->info.is_open()) {
+            const auto pg_id = shard_sb->info.placement_group;
+            const auto vchunk_id = shard_sb->v_chunk_id;
+            auto chunk = chunk_selector->select_specific_chunk(pg_id, vchunk_id);
+            RELEASE_ASSERT(chunk != nullptr, "chunk selection failed with v_chunk_id={} in pg={}", vchunk_id, pg_id);
+            LOGD("vchunk={} is selected for shard={} in pg={} when recovery", vchunk_id, shard_sb->info.id, pg_id);
+        }
     }
 }
 

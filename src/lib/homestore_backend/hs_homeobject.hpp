@@ -681,7 +681,6 @@ private:
     static std::string serialize_pg_info(const PGInfo& info);
     static PGInfo deserialize_pg_info(const unsigned char* pg_info_str, size_t size);
     void add_pg_to_map(unique< HS_PG > hs_pg);
-    const HS_PG* _get_hs_pg_unlocked(pg_id_t pg_id) const;
 
     // create shard related
     shard_id_t generate_new_shard_id(pg_id_t pg);
@@ -923,7 +922,6 @@ public:
 
     void update_pg_meta_after_gc(const pg_id_t pg_id, const homestore::chunk_num_t move_from_chunk,
                                  const homestore::chunk_num_t move_to_chunk, const uint64_t task_id);
-
     uint32_t get_pg_tombstone_blob_count(pg_id_t pg_id) const;
 
     // Snapshot persistence related
@@ -933,6 +931,7 @@ public:
     const Shard* _get_hs_shard(const shard_id_t shard_id) const;
     std::shared_ptr< GCBlobIndexTable > get_gc_index_table(std::string uuid) const;
     void trigger_immediate_gc();
+    const HS_PG* _get_hs_pg_unlocked(pg_id_t pg_id) const;
 
 private:
     std::shared_ptr< BlobIndexTable > create_pg_index_table();
