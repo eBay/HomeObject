@@ -54,6 +54,9 @@ public:
 
     // When RAFT operations take place, we must map the SvcId to a gethostbyaddr() value (IP)
     virtual std::string lookup_peer(peer_id_t const&) const = 0;
+
+    // Get the current replication service port
+    virtual uint32_t get_my_repl_svc_port() const = 0;
 };
 
 struct HomeObjectStats {
@@ -63,8 +66,9 @@ struct HomeObjectStats {
     uint32_t avail_open_shards{0};
     uint32_t num_disks{0};
     std::string to_string() const {
-        return fmt::format("total_capacity_bytes={}, used_capacity_bytes={}, num_open_shards={}, avail_open_shards={}, num_disks={}",
-                           total_capacity_bytes, used_capacity_bytes, num_open_shards, avail_open_shards, num_disks);
+        return fmt::format(
+            "total_capacity_bytes={}, used_capacity_bytes={}, num_open_shards={}, avail_open_shards={}, num_disks={}",
+            total_capacity_bytes, used_capacity_bytes, num_open_shards, avail_open_shards, num_disks);
     }
 };
 

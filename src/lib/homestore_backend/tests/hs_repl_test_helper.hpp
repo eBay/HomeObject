@@ -153,6 +153,9 @@ public:
 
             return std::string("127.0.0.1:") + std::to_string(port);
         }
+        uint32_t get_my_repl_svc_port() const override {
+            return SISL_OPTIONS["base_port"].as< uint16_t >() + helper_.replica_num_;
+        }
 
         void get_prometheus_metrics(const Pistache::Rest::Request&, Pistache::Http::ResponseWriter response) {
             response.send(Pistache::Http::Code::Ok,
@@ -325,7 +328,8 @@ public:
     }
 
     std::shared_ptr< homeobject::HomeObject > restart(uint32_t shutdown_delay_secs = 0u,
-                                                      uint32_t restart_delay_secs = 0u, uint32_t disk_lost_num = 0u, bool clean_lost_disk = false) {
+                                                      uint32_t restart_delay_secs = 0u, uint32_t disk_lost_num = 0u,
+                                                      bool clean_lost_disk = false) {
 
         if (shutdown_delay_secs > 0) { std::this_thread::sleep_for(std::chrono::seconds(shutdown_delay_secs)); }
         LOGINFO("Stoping homeobject after {} secs, replica={}", shutdown_delay_secs, replica_num_);
