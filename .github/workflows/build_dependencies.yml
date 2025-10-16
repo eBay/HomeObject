@@ -245,15 +245,24 @@ jobs:
       run: |
         sanitize=$([[ "${{ inputs.tooling }}" == "Sanitize" ]] && echo "True" || echo "False")
         pre=$([[ "${{ inputs.build-type }}" != "Debug" ]] && echo "-o sisl:prerelease=${{ inputs.prerelease }}" || echo "")
-        conan create \
-            ${pre} \
-            -o sisl:malloc_impl=${{ inputs.malloc-impl }} \
-            -o iomgr:testing=off \
-            -o homestore:testing=off \
-            -o homeobject:sanitize=${sanitize} \
-            -s build_type=${{ inputs.build-type }} \
-            --build missing \
-            .
+        retries=3
+        success=false
+        for attempt in $(seq 1 $retries); do
+          echo "Attempt $attempt: Creating and testing package..."
+          timeout 3h bash -c "conan create \
+              ${pre} \
+              -o sisl:malloc_impl=${{ inputs.malloc-impl }} \
+              -o iomgr:testing=off \
+              -o homestore:testing=off \
+              -o homeobject:sanitize=${sanitize} \
+              -s build_type=${{ inputs.build-type }} \
+              --build missing \
+              ." && success=true && break || echo "Attempt $attempt failed due to timeout or error."
+        done
+        if [ "$success" = false ]; then
+          echo "All attempts to create and test the package failed."
+          exit 1
+        fi
       if: ${{ inputs.testing == 'True' && inputs.tooling != 'Coverage' }}
 
     - name: Code Coverage Run
@@ -268,7 +277,18 @@ jobs:
             -s build_type=${{ inputs.build-type }} \
             --build missing \
             .
-        conan build .
+
+        retries=3
+        success=false
+        for attempt in $(seq 1 $retries); do
+          echo "Attempt $attempt: Building project..."
+          timeout 2h bash -c "conan build ." && success=true && break || echo "Attempt $attempt failed due to timeout or error."
+        done
+
+        if [ "$success" = false ]; then
+          echo "All attempts to build the project failed."
+          exit 1
+        fi
       if: ${{ inputs.testing == 'True' && inputs.tooling == 'Coverage' }}
 
     - name: Upload coverage reports to Codecov

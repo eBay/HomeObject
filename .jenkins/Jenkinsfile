@@ -59,10 +59,32 @@ pipeline {
 
         stage("Compile") {
             steps {
-                sh "conan create ${BUILD_MISSING} -s:h build_type=Debug -o ${PROJECT}/*:sanitize=True ${CONAN_FLAGS} . ; \
-                    conan create ${BUILD_MISSING} -s:h build_type=Debug ${CONAN_FLAGS} . ; \
-                    conan create ${BUILD_MISSING} -s:h build_type=RelWithDebInfo -o sisl/*:malloc_impl=tcmalloc ${CONAN_FLAGS} . ; \
-                    "
+                script {
+                    def commands = [
+                        "conan create ${BUILD_MISSING} -s:h build_type=Debug -o ${PROJECT}/*:sanitize=True ${CONAN_FLAGS} .",
+                        "conan create ${BUILD_MISSING} -s:h build_type=Debug ${CONAN_FLAGS} .",
+                        "conan create ${BUILD_MISSING} -s:h build_type=RelWithDebInfo -o sisl/*:malloc_impl=tcmalloc ${CONAN_FLAGS} ."
+                    ]
+
+                    commands.each { cmd ->
+                        def retries = 3
+                        def success = false
+                        for (int i = 0; i < retries; i++) {
+                            try {
+                                timeout(time: 2, unit: 'HOURS') { // Set timeout to 3 hours, increase if necessary
+                                    sh cmd
+                                }
+                                success = true
+                                break
+                            } catch (Exception e) {
+                                echo "Attempt ${i + 1} failed for command: ${cmd}"
+                            }
+                        }
+                        if (!success) {
+                            error "Command failed after ${retries} attempts: ${cmd}"
+                        }
+                    }
+                }
             }
         }
 
