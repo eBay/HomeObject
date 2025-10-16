@@ -44,6 +44,13 @@ GCManager::GCManager(HSHomeObject* homeobject) :
             on_gc_task_meta_blk_found(std::move(buf), voidptr_cast(mblk));
         },
         nullptr, true);
+
+    auto gcmgr_log_level = sisl::logging::GetModuleLogLevel("gcmgr");
+    if (gcmgr_log_level == spdlog::level::level_enum::err) {
+        // if we do not set gcmgr log level by start command line(for exampel, --log_mods gcmgr:info), then set it to
+        // debug level by default
+        sisl::logging::SetModuleLogLevel("gcmgr", spdlog::level::debug);
+    }
 }
 
 void GCManager::on_gc_task_meta_blk_found(sisl::byte_view const& buf, void* meta_cookie) {
