@@ -219,10 +219,11 @@ public:
         // before we select a reserved chunk and start gc, we need:
         //  1 clear all the entries of this chunk in the gc index table
         //  2 reset this chunk to make sure it is empty.
-        bool purge_reserved_chunk(chunk_id_t move_to_chunk);
+        bool purge_reserved_chunk(chunk_id_t move_to_chunk, const uint64_t task_id);
 
         bool get_blobs_to_replace(chunk_id_t move_to_chunk,
-                                  std::vector< std::pair< BlobRouteByChunkKey, BlobRouteValue > >& valid_blob_indexes);
+                                  std::vector< std::pair< BlobRouteByChunkKey, BlobRouteValue > >& valid_blob_indexes,
+                                  const uint64_t task_id);
 
         // this function aims to execute the logic after gc_meta_blk has been persisted, which will shared by normal gc
         // case and recvoery case
