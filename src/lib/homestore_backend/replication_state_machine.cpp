@@ -690,13 +690,13 @@ folly::Future< std::error_code > ReplicationStateMachine::on_fetch_data(const in
 #ifdef _PRERELEASE
                 if (iomgr_flip::instance()->test_flip("local_blk_data_invalid")) {
                     LOGI("Simulating forcing to read by indextable");
-                } else if (validate_blob(shard_id, blob_id, given_buffer, total_size)) {
+                } else if (home_object_->verify_blob(given_buffer, shard_id, blob_id)) {
                     LOGD("local_blk_id matches blob data, lsn={}, blob_id={}, shard=0x{:x}", lsn, blob_id, shard_id);
                     throw std::system_error(std::error_code{});
                 }
 #else
                 // if data matches
-                if (validate_blob(shard_id, blob_id, given_buffer, total_size)) {
+                if (home_object_->verify_blob(given_buffer, shard_id, blob_id)) {
                     LOGD("local_blk_id matches blob data, lsn={}, blob_id={}, shard_id={}", lsn, blob_id, shard_id);
                     throw std::system_error(std::error_code{});
                 }
@@ -752,7 +752,7 @@ folly::Future< std::error_code > ReplicationStateMachine::on_fetch_data(const in
                 // io error
                 if (err) throw std::system_error(err);
                 // if data matches
-                if (validate_blob(shard_id, blob_id, given_buffer, total_size)) {
+                if (home_object_->verify_blob(given_buffer, shard_id, blob_id)) {
                     LOGD("pba matches blob data, lsn={}, blob_id={}, shardID=0x{:x}, pg={}, shard=0x{:x}", lsn, blob_id,
                          shard_id, (shard_id >> homeobject::shard_width), (shard_id & homeobject::shard_mask));
                     return std::error_code{};
@@ -787,24 +787,6 @@ folly::Future< std::error_code > ReplicationStateMachine::on_fetch_data(const in
         return folly::makeFuture< std::error_code >(std::make_error_code(std::errc::operation_not_supported));
     }
     }
-}
-
-bool ReplicationStateMachine::validate_blob(shard_id_t shard_id, blob_id_t blob_id, void* data, size_t size) const {
-    auto const* header = r_cast< HSHomeObject::BlobHeader const* >(data);
-    if (!header->valid()) {
-        LOGD("blob header is invalid, blob_id={}, shardID=0x{:x}, pg={}, shard=0x{:x}, size={}", blob_id, shard_id,
-             (shard_id >> homeobject::shard_width), (shard_id & homeobject::shard_mask), size);
-        return false;
-    }
-    if (header->shard_id != shard_id) {
-        LOGD("shard_id does not match , expected shardID={} , shard_id in header={}", shard_id, header->shard_id);
-        return false;
-    }
-    if (header->blob_id != blob_id) {
-        LOGD("blob_id does not match , expected blob_id={} , blob_id in header={}", blob_id, header->blob_id);
-        return false;
-    }
-    return true;
 }
 
 sisl::io_blob_safe HSHomeObject::get_snapshot_sb_data(homestore::group_id_t group_id) {

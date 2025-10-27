@@ -628,4 +628,45 @@ void HSHomeObject::on_blob_message_rollback(int64_t lsn, sisl::blob const& heade
     }
 }
 
+bool HSHomeObject::verify_blob(const void* blob, const shard_id_t shard_id, const blob_id_t blob_id) const {
+    uint8_t const* blob_data = static_cast< uint8_t const* >(blob);
+    HSHomeObject::BlobHeader const* header = r_cast< HSHomeObject::BlobHeader const* >(blob_data);
+
+    if (!header->valid()) {
+        LOGE("read blob header is not valid for shard_id={}, blob_id={}, "
+             "Invalid header found: [header={}]",
+             shard_id, blob_id, header->to_string());
+        return false;
+    }
+
+    if (header->shard_id != shard_id) {
+        LOGE("expecting shard_id={}, Invalid shard_id={} in header: [header={}]", shard_id, header->shard_id,
+             header->to_string());
+        return false;
+    }
+
+    if (header->blob_id != blob_id) {
+        LOGE("expecting blob_id={}, Invalid blob_id={} in header: [header={}]", blob_id, header->blob_id,
+             header->to_string());
+        return false;
+    }
+
+    std::string user_key = header->user_key_size
+        ? std::string((const char*)(blob_data + sizeof(HSHomeObject::BlobHeader)), (size_t)header->user_key_size)
+        : std::string{};
+
+    uint8_t const* blob_bytes = blob_data + header->data_offset;
+    uint8_t computed_hash[HSHomeObject::BlobHeader::blob_max_hash_len]{};
+    compute_blob_payload_hash(header->hash_algorithm, blob_bytes, header->blob_size, uintptr_cast(user_key.data()),
+                              header->user_key_size, computed_hash, HSHomeObject::BlobHeader::blob_max_hash_len);
+
+    if (std::memcmp(computed_hash, header->hash, HSHomeObject::BlobHeader::blob_max_hash_len) != 0) {
+        LOGE("Hash mismatch header, [header={}] [computed={:np}]", header->to_string(),
+             spdlog::to_hex(computed_hash, computed_hash + HSHomeObject::BlobHeader::blob_max_hash_len));
+        return false;
+    }
+
+    return true;
+}
+
 } // namespace homeobject

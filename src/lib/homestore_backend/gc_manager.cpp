@@ -798,12 +798,16 @@ bool GCManager::pdev_gc_actor::copy_valid_data(chunk_id_t move_from_chunk, chunk
                                             data_sgs = std::move(data_sgs), pba](auto&& err) {
                                     RELEASE_ASSERT(data_sgs.iovs.size() == 1,
                                                    "data_sgs.iovs.size() should be 1, but not!");
+
+                                    const auto shard_id = k.key().shard;
+                                    const auto blob_id = k.key().blob;
+
                                     if (err) {
                                         GCLOGE(task_id,
                                                "Failed to read blob from move_from_chunk={}, shard_id={}, blob_id={}, "
                                                "err={}, err_category={}, err_message={}",
-                                               move_from_chunk, k.key().shard, k.key().blob, err.value(),
-                                               err.category().name(), err.message());
+                                               move_from_chunk, shard_id, blob_id, err.value(), err.category().name(),
+                                               err.message());
                                         iomanager.iobuf_free(reinterpret_cast< uint8_t* >(data_sgs.iovs[0].iov_base));
                                         return folly::makeFuture< bool >(false);
                                     }
@@ -811,16 +815,14 @@ bool GCManager::pdev_gc_actor::copy_valid_data(chunk_id_t move_from_chunk, chunk
                                     GCLOGD(task_id,
                                            "successfully read blob from move_from_chunk={}, shard_id={}, "
                                            "blob_id={}, pba={}",
-                                           move_from_chunk, k.key().shard, k.key().blob, pba.to_string());
+                                           move_from_chunk, shard_id, blob_id, pba.to_string());
 
-                                    HSHomeObject::BlobHeader const* header =
-                                        r_cast< HSHomeObject::BlobHeader const* >(data_sgs.iovs[0].iov_base);
-
-                                    if (!header->valid()) {
+                                    // verify the blob
+                                    if (!m_hs_home_object->verify_blob(data_sgs.iovs[0].iov_base, shard_id, blob_id)) {
                                         GCLOGE(task_id,
-                                               "read blob header is not valid for move_from_chunk={}, "
+                                               "blob verification fails for move_from_chunk={}, "
                                                "shard_id={}, blob_id={}, pba={}",
-                                               move_from_chunk, k.key().shard, k.key().blob, pba.to_string());
+                                               move_from_chunk, shard_id, blob_id, pba.to_string());
                                         iomanager.iobuf_free(reinterpret_cast< uint8_t* >(data_sgs.iovs[0].iov_base));
                                         return folly::makeFuture< bool >(false);
                                     }
@@ -829,7 +831,7 @@ bool GCManager::pdev_gc_actor::copy_valid_data(chunk_id_t move_from_chunk, chunk
                                     // shard since we can not guarantee a certain order
                                     homestore::MultiBlkId new_pba;
                                     return data_service.async_alloc_write(data_sgs, hints, new_pba)
-                                        .thenValue([this, k, new_pba, &move_to_chunk, task_id,
+                                        .thenValue([this, shard_id, blob_id, new_pba, &move_to_chunk, task_id,
                                                     data_sgs = std::move(data_sgs)](auto&& err) {
                                             RELEASE_ASSERT(data_sgs.iovs.size() == 1,
                                                            "data_sgs.iovs.size() should be 1, but not!");
@@ -840,15 +842,14 @@ bool GCManager::pdev_gc_actor::copy_valid_data(chunk_id_t move_from_chunk, chunk
                                                     task_id,
                                                     "Failed to write blob to move_to_chunk={}, "
                                                     "shard_id={}, blob_id={}, err={}, err_category={}, err_message={}",
-                                                    move_to_chunk, k.key().shard, k.key().blob, err.value(),
+                                                    move_to_chunk, shard_id, blob_id, err.value(),
                                                     err.category().name(), err.message());
                                                 return false;
                                             }
 
                                             // insert a new entry to gc index table for this blob. [move_to_chunk_id,
                                             // shard_id, blob_id] -> [new pba]
-                                            BlobRouteByChunkKey key{
-                                                BlobRouteByChunk{move_to_chunk, k.key().shard, k.key().blob}};
+                                            BlobRouteByChunkKey key{BlobRouteByChunk{move_to_chunk, shard_id, blob_id}};
                                             BlobRouteValue value{new_pba}, existing_value;
 
                                             homestore::BtreeSinglePutRequest put_req{
@@ -858,14 +859,14 @@ bool GCManager::pdev_gc_actor::copy_valid_data(chunk_id_t move_from_chunk, chunk
                                                 GCLOGE(task_id,
                                                        "Failed to insert new key to gc index table for "
                                                        "move_to_chunk={}, shard_id={}, blob_id={}, err={}",
-                                                       move_to_chunk, k.key().shard, k.key().blob, status);
+                                                       move_to_chunk, shard_id, blob_id, status);
                                                 return false;
                                             }
 
                                             GCLOGD(task_id,
                                                    "successfully insert new key to gc index table for "
                                                    "move_to_chunk={}, shard_id={}, blob_id={}, new_pba={}",
-                                                   move_to_chunk, k.key().shard, k.key().blob, new_pba.to_string());
+                                                   move_to_chunk, shard_id, blob_id, new_pba.to_string());
 
                                             return true;
                                         });

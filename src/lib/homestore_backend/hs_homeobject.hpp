@@ -928,6 +928,7 @@ public:
     std::shared_ptr< GCBlobIndexTable > get_gc_index_table(std::string uuid) const;
     void trigger_immediate_gc();
     const HS_PG* _get_hs_pg_unlocked(pg_id_t pg_id) const;
+    bool verify_blob(const void* blob, const shard_id_t shard_id, const blob_id_t blob_id) const;
 
 private:
     std::shared_ptr< BlobIndexTable > create_pg_index_table();
