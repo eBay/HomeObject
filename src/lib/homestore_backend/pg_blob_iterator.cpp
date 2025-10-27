@@ -318,7 +318,7 @@ bool HSHomeObject::PGBlobIterator::prefetch_blobs_snapshot_data() {
                             COUNTER_INCREMENT(*metrics_, snp_dnr_error_count, 1);
                         } else {
                             LOGT("retrieved blob,  blob={} pbas={}", info.blob_id, info.pbas.to_string());
-                            HISTOGRAM_OBSERVE(*metrics_, snp_dnr_blob_process_latency, get_elapsed_time_us(blob_start));
+                            HISTOGRAM_OBSERVE(*metrics_, snp_dnr_blob_process_latency, get_elapsed_time_ms(blob_start));
                         }
                         return result;
                     }));
