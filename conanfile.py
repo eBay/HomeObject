@@ -10,7 +10,7 @@ required_conan_version = ">=1.60.0"
 
 class HomeObjectConan(ConanFile):
     name = "homeobject"
-    version = "2.7.12"
+    version = "3.0.0"
 
     homepage = "https://github.com/eBay/HomeObject"
     description = "Blob Store built on HomeReplication"
@@ -46,14 +46,12 @@ class HomeObjectConan(ConanFile):
                     raise ConanInvalidConfiguration("Coverage/Sanitizer requires Testing!")
 
     def build_requirements(self):
-        self.test_requires("gtest/1.14.0")
+        self.test_requires("gtest/1.17.0")
 
     def requirements(self):
-        self.requires("sisl/[^12.2]@oss/master", transitive_headers=True)
-        self.requires("homestore/[^6.20.25]@oss/master")
-        self.requires("iomgr/[^11.3]@oss/master")
-        self.requires("lz4/1.9.4", override=True)
-        self.requires("openssl/[^3.1]", override=True)
+        self.requires("sisl/[^13.0]@oss/master", transitive_headers=True)
+        self.requires("homestore/[^7.0]@oss/master")
+        self.requires("iomgr/[^12.0]@oss/master")
 
     def validate(self):
         if self.info.settings.compiler.cppstd:
@@ -61,7 +59,12 @@ class HomeObjectConan(ConanFile):
 
     def layout(self):
         self.folders.source = "."
-        self.folders.build = join("build", str(self.settings.build_type))
+        if self.options.get_safe("sanitize"):
+            self.folders.build = join("build", "Sanitized")
+        elif self.options.get_safe("coverage"):
+            self.folders.build = join("build", "Coverage")
+        else:
+            self.folders.build = join("build", str(self.settings.build_type))
         self.folders.generators = join(self.folders.build, "generators")
 
         self.cpp.source.components["homestore"].includedirs = ["src/include"]

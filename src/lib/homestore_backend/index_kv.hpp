@@ -142,7 +142,7 @@ struct formatter< homeobject::BlobRouteKey > {
 
     template < typename FormatContext >
     auto format(homeobject::BlobRouteKey const& r, FormatContext& ctx) {
-        return format_to(ctx.out(), "{}", r.key());
+        return fmt::v10::format_to(ctx.out(), "{}", r.key());
     }
 };
 
@@ -155,7 +155,7 @@ struct formatter< homeobject::BlobRouteByChunkKey > {
 
     template < typename FormatContext >
     auto format(homeobject::BlobRouteByChunkKey const& r, FormatContext& ctx) {
-        return format_to(ctx.out(), "{}", r.key());
+        return fmt::v10::format_to(ctx.out(), "{}", r.key());
     }
 };
 } // namespace fmt

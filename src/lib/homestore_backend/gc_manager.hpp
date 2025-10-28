@@ -4,7 +4,11 @@
 #include <folly/concurrency/ConcurrentHashMap.h>
 #include <folly/executors/IOThreadPoolExecutor.h>
 #include <folly/MPMCQueue.h>
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wuninitialized"
+#pragma GCC diagnostic ignored "-Wmaybe-uninitialized"
 #include <folly/futures/Future.h>
+#pragma GCC diagnostic pop
 
 #include <sisl/utility/enum.hpp>
 #include <sisl/logging/logging.h>

@@ -3,7 +3,11 @@
 #include <boost/uuid/uuid.hpp>
 #include <folly/Expected.h>
 #include <folly/Unit.h>
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wuninitialized"
+#pragma GCC diagnostic ignored "-Wmaybe-uninitialized"
 #include <folly/futures/Future.h>
+#pragma GCC diagnostic pop
 
 #include <sisl/logging/logging.h>
 #include <random>

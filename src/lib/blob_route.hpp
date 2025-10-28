@@ -45,8 +45,8 @@ struct formatter< homeobject::BlobRouteByChunk > {
 
     template < typename FormatContext >
     auto format(homeobject::BlobRouteByChunk const& r, FormatContext& ctx) {
-        return format_to(ctx.out(), "{:04x}:{:04x}:{:012x}:{:016x}", r.chunk, (r.shard >> homeobject::shard_width),
-                         (r.shard & homeobject::shard_mask), r.blob);
+        return fmt::v10::format_to(ctx.out(), "{:04x}:{:04x}:{:012x}:{:016x}", r.chunk,
+                                   (r.shard >> homeobject::shard_width), (r.shard & homeobject::shard_mask), r.blob);
     }
 };
 
@@ -59,8 +59,8 @@ struct formatter< homeobject::BlobRoute > {
 
     template < typename FormatContext >
     auto format(homeobject::BlobRoute const& r, FormatContext& ctx) {
-        return format_to(ctx.out(), "{:04x}:{:012x}:{:016x}", (r.shard >> homeobject::shard_width),
-                         (r.shard & homeobject::shard_mask), r.blob);
+        return fmt::v10::format_to(ctx.out(), "{:04x}:{:012x}:{:016x}", (r.shard >> homeobject::shard_width),
+                                   (r.shard & homeobject::shard_mask), r.blob);
     }
 };
 
