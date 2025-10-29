@@ -3,7 +3,10 @@
 #include <atomic>
 #include <utility>
 
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wmaybe-uninitialized"
 #include <folly/concurrency/ConcurrentHashMap.h>
+#pragma GCC diagnostic pop
 #include "lib/homeobject_impl.hpp"
 #include "lib/blob_route.hpp"
 

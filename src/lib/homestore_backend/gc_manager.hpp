@@ -1,7 +1,10 @@
 #pragma once
 #include <string>
 
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wmaybe-uninitialized"
 #include <folly/concurrency/ConcurrentHashMap.h>
+#pragma GCC diagnostic pop
 #include <folly/executors/IOThreadPoolExecutor.h>
 #include <folly/MPMCQueue.h>
 #pragma GCC diagnostic push
