@@ -431,7 +431,14 @@ public:
             case HashAlgorithm::CRC32: {
                 std::memset(header_hash, 0, blob_max_hash_len);
                 uint32_t computed_hash = crc32_ieee(0, (uint8_t*)this, sizeof(BlobHeader));
+
+                static_assert(sizeof(header_hash) == blob_max_hash_len && blob_max_hash_len >= sizeof(uint32_t),
+                              "buffer too small!!");
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wstringop-overflow"
                 std::memcpy(header_hash, &computed_hash, sizeof(uint32_t));
+#pragma GCC diagnostic pop
+
                 return true;
             }
             case HashAlgorithm::MD5:
