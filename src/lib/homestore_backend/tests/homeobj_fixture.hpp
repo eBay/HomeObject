@@ -66,7 +66,8 @@ public:
         g_helper->delete_homeobject();
     }
 
-    void restart(uint32_t shutdown_delay_secs = 0u, uint32_t restart_delay_secs = 0u, uint32_t disk_lost_num = 0u, bool clean_lost_disk = false) {
+    void restart(uint32_t shutdown_delay_secs = 0u, uint32_t restart_delay_secs = 0u, uint32_t disk_lost_num = 0u,
+                 bool clean_lost_disk = false) {
         g_helper->sync();
         LOGINFO("Restarting homeobject replica={}", g_helper->my_replica_id());
         LOGTRACE("Metrics={}", sisl::MetricsFarm::getInstance().get_result_in_json().dump(2));
@@ -506,9 +507,7 @@ public:
         ASSERT_EQ(chunk_selector->m_per_pg_chunks.find(pg_id), chunk_selector->m_per_pg_chunks.end());
     }
 
-    void destroy_pg(pg_id_t pg_id) {
-        _obj_inst->pg_manager()->destroy_pg(pg_id);
-    }
+    void destroy_pg(pg_id_t pg_id) { _obj_inst->pg_manager()->destroy_pg(pg_id); }
 
     void verify_hs_pg(HSHomeObject::HS_PG* lhs_pg, HSHomeObject::HS_PG* rhs_pg) {
         // verify index table

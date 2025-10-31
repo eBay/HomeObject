@@ -628,7 +628,13 @@ void HSHomeObject::on_blob_message_rollback(int64_t lsn, sisl::blob const& heade
     }
 }
 
-bool HSHomeObject::verify_blob(const void* blob, const shard_id_t shard_id, const blob_id_t blob_id) const {
+bool HSHomeObject::verify_blob(const void* blob, const shard_id_t shard_id, const blob_id_t blob_id,
+                               bool allow_delete_marker) const {
+    if (0 == std::memcmp(blob, delete_marker_blob_data.data(), delete_marker_blob_data.size()) && allow_delete_marker) {
+        LOGW("find delete_marker for shard_id={}, blob_id={}, skipping verification!", shard_id, blob_id);
+        return true;
+    }
+
     uint8_t const* blob_data = static_cast< uint8_t const* >(blob);
     HSHomeObject::BlobHeader const* header = r_cast< HSHomeObject::BlobHeader const* >(blob_data);
 
