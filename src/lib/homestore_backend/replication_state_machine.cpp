@@ -728,7 +728,14 @@ folly::Future< std::error_code > ReplicationStateMachine::on_fetch_data(const in
                          "blob_id={}, "
                          "shardID=0x{:x}, pg={}, shard=0x{:x}",
                          blob_id, shard_id, pg_id, (shard_id & homeobject::shard_mask));
-                    // returning whatever data is good , since client will never read it.
+
+                    // we return a specific blob as a delete marker if not found in index table
+                    std::memset(given_buffer, 0, total_size);
+                    RELEASE_ASSERT(HSHomeObject::delete_marker_blob_data.size() <= total_size,
+                                   "delete marker blob size is larger than total_size");
+                    std::memcpy(given_buffer, HSHomeObject::delete_marker_blob_data.data(),
+                                HSHomeObject::delete_marker_blob_data.size());
+
                     throw std::system_error(std::error_code{});
                 }
 

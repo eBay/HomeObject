@@ -817,8 +817,13 @@ bool GCManager::pdev_gc_actor::copy_valid_data(chunk_id_t move_from_chunk, chunk
                                            "blob_id={}, pba={}",
                                            move_from_chunk, shard_id, blob_id, pba.to_string());
 
-                                    // verify the blob
-                                    if (!m_hs_home_object->verify_blob(data_sgs.iovs[0].iov_base, shard_id, blob_id)) {
+                                    // after a blob is deleted at originator, if it receives a fetch_data request of
+                                    // this blob, a fake delete_marker blob will be returned to the requester. This case
+                                    // happens in incremental resync scenario. when verifying blob, if it is a
+                                    // delete_marker, we let it pass the verification in gc scenario so that it will not
+                                    // block any gc task.
+                                    if (!m_hs_home_object->verify_blob(data_sgs.iovs[0].iov_base, shard_id, blob_id,
+                                                                       true)) {
                                         GCLOGE(task_id,
                                                "blob verification fails for move_from_chunk={}, "
                                                "shard_id={}, blob_id={}, pba={}",
@@ -914,9 +919,9 @@ bool GCManager::pdev_gc_actor::copy_valid_data(chunk_id_t move_from_chunk, chunk
                                 //  1 any blob copy fails, then err is operation_canceled
                                 //  2 write footer fails， then err is the error code of write footer
                                 GCLOGE(task_id,
-                                       "Failed or skip writing shard footer for move_to_chunk={} "
+                                       "Failed to copy some blos or failed to write shard footer for move_to_chunk={} "
                                        "shard_id={}, err={}, error_category={}, error_message={}, pls check the log "
-                                       "for detailed info",
+                                       "for more detailed info",
                                        move_to_chunk, shard_id, err.value(), err.category().name(), err.message());
                                 return false;
                             }
