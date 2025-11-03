@@ -684,23 +684,15 @@ folly::Future< std::error_code > ReplicationStateMachine::on_fetch_data(const in
                     throw std::system_error(err);
                 }
 
-            // folly future has no machenism to bypass the later thenValue in the then value chain. so for all
-            // the case that no need to schedule the later async_read, we throw a system_error with no error
-            // code to bypass the next thenValue.
-#ifdef _PRERELEASE
-                if (iomgr_flip::instance()->test_flip("local_blk_data_invalid")) {
-                    LOGI("Simulating forcing to read by indextable");
-                } else if (home_object_->verify_blob(given_buffer, shard_id, blob_id)) {
-                    LOGD("local_blk_id matches blob data, lsn={}, blob_id={}, shard=0x{:x}", lsn, blob_id, shard_id);
-                    throw std::system_error(std::error_code{});
-                }
-#else
+                // folly future has no machenism to bypass the later thenValue in the then value chain. so for all
+                // the case that no need to schedule the later async_read, we throw a system_error with no error
+                // code to bypass the next thenValue.
+
                 // if data matches
                 if (home_object_->verify_blob(given_buffer, shard_id, blob_id)) {
                     LOGD("local_blk_id matches blob data, lsn={}, blob_id={}, shard_id={}", lsn, blob_id, shard_id);
                     throw std::system_error(std::error_code{});
                 }
-#endif
 
                 // if data does not match, try to read data according to the index table. this might happen if the
                 // chunk has once been gc.
@@ -728,7 +720,14 @@ folly::Future< std::error_code > ReplicationStateMachine::on_fetch_data(const in
                          "blob_id={}, "
                          "shardID=0x{:x}, pg={}, shard=0x{:x}",
                          blob_id, shard_id, pg_id, (shard_id & homeobject::shard_mask));
-                    // returning whatever data is good , since client will never read it.
+
+                    // we return a specific blob as a delete marker if not found in index table
+                    std::memset(given_buffer, 0, total_size);
+                    RELEASE_ASSERT(HSHomeObject::delete_marker_blob_data.size() <= total_size,
+                                   "delete marker blob size is larger than total_size");
+                    std::memcpy(given_buffer, HSHomeObject::delete_marker_blob_data.data(),
+                                HSHomeObject::delete_marker_blob_data.size());
+
                     throw std::system_error(std::error_code{});
                 }
 
