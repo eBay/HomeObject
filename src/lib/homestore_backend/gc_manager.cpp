@@ -816,6 +816,7 @@ bool GCManager::pdev_gc_actor::copy_valid_data(chunk_id_t move_from_chunk, chunk
                                     HSHomeObject::BlobHeader const* header =
                                         r_cast< HSHomeObject::BlobHeader const* >(data_sgs.iovs[0].iov_base);
 
+#if 0
                                     if (!header->valid()) {
                                         GCLOGE(task_id,
                                                "read blob header is not valid for move_from_chunk={}, "
@@ -824,6 +825,7 @@ bool GCManager::pdev_gc_actor::copy_valid_data(chunk_id_t move_from_chunk, chunk
                                         iomanager.iobuf_free(reinterpret_cast< uint8_t* >(data_sgs.iovs[0].iov_base));
                                         return folly::makeFuture< bool >(false);
                                     }
+#endif
 
                                     // write the blob to the move_to_chunk. we do not care about the blob order in a
                                     // shard since we can not guarantee a certain order
