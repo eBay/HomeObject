@@ -397,8 +397,6 @@ void HomeObjectFixture::ReplaceMember(bool withGC) {
         pg_shard_id_vec[pg_id].emplace_back(derived_shard_id);
     }
 
-    // TODO:: if we add delete blobs case in baseline resync, we need also derive the last blob_id in this pg for spare
-    // replicas
     pg_blob_id[pg_id] = 0;
 
     // put and verify blobs in the pg, excluding the spare replicas
@@ -407,8 +405,49 @@ void HomeObjectFixture::ReplaceMember(bool withGC) {
     verify_get_blob(pg_shard_id_vec, num_blobs_per_shard);
     verify_obj_count(1, num_shards_per_pg, num_blobs_per_shard, false);
 
+    // before schedule blob deletion, we record the active and tombstone object count
+    std::unordered_map< pg_id_t, uint32_t > pg_active_objects;
+    std::unordered_map< pg_id_t, uint32_t > pg_tombstone_objects;
+    pg_active_objects[1] = num_shards_per_pg * num_blobs_per_shard;
+    pg_tombstone_objects[1] = 0;
+
+    std::map< shard_id_t, std::set< blob_id_t > > blobs_to_delete;
     if (withGC) {
+        /**
+         * This test case verifies the delete_marker_blob_data functionality in a multi-process setup.
+         *
+         * Background:
+         * - delete_marker_blob_data is a special marker string: "HOMEOBJECT_BLOB_DELETE_MARKER"
+         * - It's used when a blob doesn't exist or has been garbage collected on the leader
+         * - During fetch_data (incremental resync), if a blob is not found in the index table,
+         *   the leader returns this delete marker instead of actual data
+         * - The follower needs to handle this delete marker gracefully when verifying blob data in gc
+         *
+         * Test Scenario:
+         * 1. Delete some blobs on leader and trigger GC to clean them up
+         * 2. Replace a member to add a new replica
+         * 3. During incremental(fetch_data):
+         *    - The leader tries to send logs for the deleted blobs
+         *    - Since these blobs are already GC'ed, leader returns delete_marker_blob_data
+         *    - The follower should skip verification for delete markers (allow_delete_marker=true)
+         * 4. Verify the system handles delete markers correctly
+         */
+        // Delete the first 2 blobs in each shard
+        blob_id_t current_blob_id = 0;
+        for (const auto& shard_id : pg_shard_id_vec[pg_id]) {
+            for (uint64_t k = 0; k < 2 && k < num_blobs_per_shard; k++) {
+                blobs_to_delete[shard_id].insert(current_blob_id);
+                current_blob_id++;
+            }
+            current_blob_id += (num_blobs_per_shard - 2); // Move to next shard
+        }
+
+        LOGINFO("Deleting {} blobs from each shard", blobs_to_delete.begin()->second.size());
+        del_blobs(pg_id, blobs_to_delete);
+
         run_if_in_pg(pg_id, [&]() {
+            // trigger GC manually to make sure gc happens and clean all the tombstone blobs
+            LOGINFO("Triggering EGC to clean up tombstone blobs");
             auto gc_mgr = _obj_inst->gc_manager();
             std::vector< folly::SemiFuture< bool > > futs;
             for (const auto& [pg_id, shards] : pg_shard_id_vec) {
@@ -430,7 +469,12 @@ void HomeObjectFixture::ReplaceMember(bool withGC) {
                 .get();
 
             futs.clear();
+            LOGINFO("EGC completed!");
         });
+
+        // although we schedule blob deletions, after gc ,there should be no tombstone blobs, so we only update
+        // pg_active_objects
+        pg_active_objects[1] -= 2 * num_shards_per_pg;
     }
 
     // all the replicas , including the spare ones, sync at this point
@@ -460,6 +504,7 @@ void HomeObjectFixture::ReplaceMember(bool withGC) {
     set_basic_flip("snapshot_receiver_blob_write_data_error", 4, 15);  // simulate blob write data error
     set_basic_flip("snapshot_receiver_blk_allocation_error", 4, 15);   // simulate blob allocation error
 #endif
+
     std::string task_id = "task_id";
     LOGINFO("start replace member, pg={}, task_id={}", pg_id, task_id);
     run_on_pg_leader(pg_id, [&]() {
@@ -470,6 +515,7 @@ void HomeObjectFixture::ReplaceMember(bool withGC) {
     });
 
     // the new member should wait until it joins the pg and all the blobs are replicated to it
+    // the in_member will receive delete_marker_blob_data for the deleted blobs during incremental resync
     if (in_member_id == g_helper->my_replica_id()) {
         while (!am_i_in_pg(pg_id)) {
             std::this_thread::sleep_for(std::chrono::milliseconds(1000));
@@ -480,16 +526,69 @@ void HomeObjectFixture::ReplaceMember(bool withGC) {
                       num_shards_per_pg * num_blobs_per_shard - 1 /*the last blob id in this pg*/);
 
         sleep(5); // wait for incremental append-log requests to complete
+
+        // now there must be delete marker in the in_member if we have ever scheduled blob deletion, let`s trigger GC
+        // manually to make sure gc happens and emergent gc should succeed even if we have delete_marker blobs. This
+        // step will also clean up all the tombstone in the pg index table if exist
+        LOGINFO("Triggering EGC to clean up tombstone blobs on in_member");
+        auto gc_mgr = _obj_inst->gc_manager();
+        std::vector< folly::SemiFuture< bool > > futs;
+        for (const auto& [pg_id, shards] : pg_shard_id_vec) {
+            for (const auto& shard_id : shards) {
+                auto chunk_id_opt = _obj_inst->get_shard_p_chunk_id(shard_id);
+                RELEASE_ASSERT(chunk_id_opt.has_value(), "failed to get chunk_id for shard {}", shard_id);
+                futs.emplace_back(gc_mgr->submit_gc_task(task_priority::emergent, chunk_id_opt.value()));
+            }
+        }
+        // wait for all egc completed
+        folly::collectAllUnsafe(futs)
+            .thenValue([](auto&& results) {
+                for (auto const& ok : results) {
+                    ASSERT_TRUE(ok.hasValue());
+                    // all egc task should be completed
+                    ASSERT_TRUE(ok.value());
+                }
+            })
+            .get();
+
+        futs.clear();
+        LOGINFO("EGC completed on in_member!");
+    }
+
+    // Only verify blobs that were not deleted (blobs 2 to num_blobs_per_shard-1 in each shard)
+    std::map< shard_id_t, std::set< blob_id_t > > existing_blobs;
+    auto current_blob_id = 0;
+    for (const auto& shard_id : pg_shard_id_vec[pg_id]) {
+        for (uint64_t k = 0; k < num_blobs_per_shard; k++) {
+            if (blobs_to_delete[shard_id].find(current_blob_id) == blobs_to_delete[shard_id].end()) {
+                existing_blobs[shard_id].insert(current_blob_id);
+            }
+            current_blob_id++;
+        }
     }
 
     // step 4: after completing replace member, verify the blob on all the members of this pg including the newly added
     // spare replica,
     run_if_in_pg(pg_id, [&]() {
-        verify_get_blob(pg_shard_id_vec, num_blobs_per_shard);
-        verify_obj_count(1, num_shards_per_pg, num_blobs_per_shard, false);
+        LOGINFO("Verifying {} existing blobs on new member",
+                existing_blobs.begin()->second.size() * existing_blobs.size());
+        verify_shard_blobs(existing_blobs);
+        verify_obj_count(1, pg_active_objects, pg_tombstone_objects);
+
+        // Verify deleted blobs are indeed deleted
+        for (const auto& [shard_id, blob_ids] : blobs_to_delete) {
+            for (const auto& blob_id : blob_ids) {
+                auto tid = generateRandomTraceId();
+                auto g = _obj_inst->blob_manager()->get(shard_id, blob_id, 0, 0, tid).get();
+                // Deleted blobs should return UNKNOWN_BLOB error
+                ASSERT_TRUE(g.hasError() && g.error().code == BlobErrorCode::UNKNOWN_BLOB)
+                    << "Deleted blob should not be accessible, shard_id=" << shard_id << " blob_id=" << blob_id;
+            }
+        }
     });
 
     g_helper->sync();
+
     // Because we don't know when hs triggers complete_replace_member, so it's hard to find an accurate time slot to
     // verify verify_start_replace_member_result(pg_id, out_member_id, in_member_id); step 5: Verify no pg related data
     // in out_member
@@ -513,11 +612,24 @@ void HomeObjectFixture::ReplaceMember(bool withGC) {
         ASSERT_TRUE(verify_complete_replace_member_result(pg_id, task_id, out_member_id, in_member_id));
     }
 
-    // Step 6: restart, verify the blobs again on all members, including the new spare replica, and out_member
+    // Step 5: restart, verify the blobs again on all members, including the new spare replica, and out_member
     restart();
     run_if_in_pg(pg_id, [&]() {
-        verify_get_blob(pg_shard_id_vec, num_blobs_per_shard);
-        verify_obj_count(1, num_shards_per_pg, num_blobs_per_shard, false);
+        LOGINFO("Verifying {} existing blobs on new member",
+                existing_blobs.begin()->second.size() * existing_blobs.size());
+        verify_shard_blobs(existing_blobs);
+        verify_obj_count(1, pg_active_objects, pg_tombstone_objects);
+
+        // Verify deleted blobs are indeed deleted
+        for (const auto& [shard_id, blob_ids] : blobs_to_delete) {
+            for (const auto& blob_id : blob_ids) {
+                auto tid = generateRandomTraceId();
+                auto g = _obj_inst->blob_manager()->get(shard_id, blob_id, 0, 0, tid).get();
+                // Deleted blobs should return UNKNOWN_BLOB error
+                ASSERT_TRUE(g.hasError() && g.error().code == BlobErrorCode::UNKNOWN_BLOB)
+                    << "Deleted blob should not be accessible, shard_id=" << shard_id << " blob_id=" << blob_id;
+            }
+        }
         LOGINFO("After restart, check pg related data in pg members successfully");
     });
 
@@ -533,6 +645,18 @@ void HomeObjectFixture::ReplaceMember(bool withGC) {
     } else {
         ASSERT_TRUE(verify_complete_replace_member_result(pg_id, task_id, out_member_id, in_member_id));
     }
+
+#ifdef _PRERELEASE
+    remove_flip("pg_blob_iterator_create_snapshot_data_error");
+    remove_flip("pg_blob_iterator_generate_shard_blob_list_error");
+    remove_flip("pg_blob_iterator_load_blob_data_error");
+
+    remove_flip("state_machine_write_corrupted_data");
+    remove_flip("snapshot_receiver_pg_error");
+    remove_flip("snapshot_receiver_shard_write_data_error");
+    remove_flip("snapshot_receiver_blob_write_data_error");
+    remove_flip("snapshot_receiver_blk_allocation_error");
+#endif
 }
 
 // Need to restart the leader for process sync

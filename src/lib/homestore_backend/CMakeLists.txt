@@ -124,9 +124,10 @@ add_test(NAME HomestoreResyncTestWithLeaderRestart
         --override_config homestore_config.consensus.laggy_threshold=2000
         --gtest_filter=HomeObjectFixture.RestartLeader*)
 
-# GC tests
 add_test(NAME FetchDataWithOriginatorGC
         COMMAND homestore_test_dynamic -csv error --executor immediate --config_path ./
+        # make sure we go through incremental resync path for this test case
+        --override_config homestore_config.consensus.snapshot_freq_distance:0
         --gtest_filter=HomeObjectFixture.FetchDataWithOriginatorGC)
 
 add_executable(homestore_test_gc)

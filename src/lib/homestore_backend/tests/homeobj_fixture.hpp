@@ -485,6 +485,28 @@ public:
         }
     }
 
+    void verify_obj_count(uint32_t num_pgs, std::unordered_map< pg_id_t, uint32_t > const& pg_active_objects,
+                          std::unordered_map< pg_id_t, uint32_t > const& pg_tombstone_objects) {
+        for (uint32_t i = 1; i <= num_pgs; ++i) {
+            if (!am_i_in_pg(i)) continue;
+            PGStats stats;
+            _obj_inst->pg_manager()->get_stats(i, stats);
+
+            auto it = pg_active_objects.find(i);
+            ASSERT_FALSE(it == pg_active_objects.end());
+            const auto expected_active_objects = it->second;
+
+            it = pg_tombstone_objects.find(i);
+            ASSERT_FALSE(it == pg_tombstone_objects.end());
+            const auto expected_tombstone_objects = it->second;
+
+            LOGW("verify obj count in pg={}", i);
+            ASSERT_EQ(stats.num_active_objects, expected_active_objects)
+                << "Active objs stats not correct " << g_helper->replica_num() << "pg_id" << i;
+            ASSERT_EQ(stats.num_tombstone_objects, expected_tombstone_objects) << "Deleted objs stats not correct";
+        }
+    }
+
     void verify_pg_destroy(pg_id_t pg_id, const string& index_table_uuid_str,
                            const std::vector< shard_id_t >& shard_id_vec, bool wait_for_destroy = false) {
         // check pg

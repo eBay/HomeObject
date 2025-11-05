@@ -443,6 +443,23 @@ TEST_F(HomeObjectFixture, DeleteNonExistBlob) {
     del_blob(1, shard_id, 1);
 }
 
+TEST_F(HomeObjectFixture, VerifyDeleteMarkerBlobDataConstant) {
+    // Verify the marker can be detected in verify_blob
+    // Create a buffer with delete marker
+    auto marker_size = HSHomeObject::delete_marker_blob_data.size();
+    std::vector< uint8_t > buffer(marker_size + 100, 0); // Extra space
+    std::memcpy(buffer.data(), HSHomeObject::delete_marker_blob_data.data(), marker_size);
+
+    // The verify_blob function should return true when allow_delete_marker is true
+    shard_id_t test_shard_id = 1;
+    blob_id_t test_blob_id = 1;
+
+    bool result = _obj_inst->verify_blob(buffer.data(), test_shard_id, test_blob_id, true);
+    ASSERT_TRUE(result) << "verify_blob should return true for delete marker when allow_delete_marker=true";
+
+    LOGINFO("Delete marker constant verification passed!");
+}
+
 #ifdef _PRERELEASE
 TEST_F(HomeObjectFixture, BasicPutGetBlobWithPushDataDisabled) {
     // disable leader push data. As a result, followers have to fetch data to exercise the fetch_data implementation of
