@@ -10,7 +10,7 @@ required_conan_version = ">=1.60.0"
 
 class HomeObjectConan(ConanFile):
     name = "homeobject"
-    version = "3.0.3"
+    version = "3.0.4"
 
     homepage = "https://github.com/eBay/HomeObject"
     description = "Blob Store built on HomeReplication"
@@ -86,6 +86,8 @@ class HomeObjectConan(ConanFile):
         tc.variables["CTEST_OUTPUT_ON_FAILURE"] = "ON"
         tc.variables["MEMORY_SANITIZER_ON"] = "OFF"
         tc.variables["CODE_COVERAGE"] = "OFF"
+        tc.variables["CONAN_PACKAGE_NAME"] = self.name
+        tc.variables["CONAN_PACKAGE_VERSION"] = self.version
         if self.settings.build_type == "Debug":
             if self.options.get_safe("coverage"):
                 tc.variables['CODE_COVERAGE'] = 'ON'

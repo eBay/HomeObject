@@ -9,6 +9,7 @@
 #include <homestore/replication_service.hpp>
 #include <homestore/index_service.hpp>
 #include <iomgr/io_environment.hpp>
+#include <sisl/version.hpp>
 
 #include <homeobject/homeobject.hpp>
 #include "hs_homeobject.hpp"
@@ -29,6 +30,13 @@ struct svc_info_superblk_t {
 extern std::shared_ptr< HomeObject > init_homeobject(std::weak_ptr< HomeObjectApplication >&& application) {
     LOGI("Initializing HomeObject");
     auto instance = std::make_shared< HSHomeObject >(std::move(application));
+    std::string version = PACKAGE_VERSION;
+    #ifndef NDEBUG
+        LOGINFO("HomeObject DEBUG version: {}", version);
+    #else
+        LOGINFO("HomeObject RELEASE version: {}", version);
+    #endif
+    sisl::VersionMgr::addVersion(PACKAGE_NAME, version::Semver200_version(PACKAGE_VERSION));
     instance->init_homestore();
     instance->init_cp();
     instance->init_gc();

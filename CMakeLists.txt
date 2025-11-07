@@ -33,11 +33,12 @@ if (CCACHE_FOUND)
 endif ()
 
 # add component version information
-add_flags("-DPACKAGE_NAME=${PROJECT_NAME}")
+add_flags("-DPACKAGE_NAME=\\\"${PROJECT_NAME}\\\"")
+message(STATUS "Conan package version: ${CONAN_PACKAGE_VERSION}")
 if (NOT DEFINED CONAN_PACKAGE_VERSION)
    set(CONAN_PACKAGE_VERSION "0.0.0")
 endif ()
-add_flags("-DPACKAGE_VERSION=${CONAN_PACKAGE_VERSION}")
+add_flags("-DPACKAGE_VERSION=\\\"${CONAN_PACKAGE_VERSION}\\\"")
 
 add_subdirectory(src)
 
