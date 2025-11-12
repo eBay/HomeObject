@@ -1,17 +1,18 @@
 #include "mem_homeobject.hpp"
 
 namespace homeobject {
-PGManager::NullAsyncResult MemoryHomeObject::_create_pg(PGInfo&& pg_info, std::set< peer_id_t > const&, trace_id_t tid) {
+PGManager::NullAsyncResult MemoryHomeObject::_create_pg(PGInfo&& pg_info, std::set< peer_id_t > const&,
+                                                        trace_id_t tid) {
     (void)tid;
     auto lg = std::scoped_lock(_pg_lock);
     auto [it1, _] = _pg_map.try_emplace(pg_info.id, std::make_unique< PG >(pg_info));
     RELEASE_ASSERT(_pg_map.end() != it1, "Unknown map insert error!");
-    return folly::makeSemiFuture< PGManager::NullResult >(folly::Unit());
+    return folly::makeSemiFuture< PGManager::NullResult >(PGManager::NullResult());
 }
 
-PGManager::NullAsyncResult MemoryHomeObject::_replace_member(pg_id_t id, std::string& task_id, peer_id_t const& old_member,
-                                                             PGMember const& new_member, uint32_t commit_quorum,
-                                                             trace_id_t tid) {
+PGManager::NullAsyncResult MemoryHomeObject::_replace_member(pg_id_t id, std::string& task_id,
+                                                             peer_id_t const& old_member, PGMember const& new_member,
+                                                             uint32_t commit_quorum, trace_id_t tid) {
     (void)old_member;
     (void)new_member;
     (void)commit_quorum;
@@ -19,14 +20,16 @@ PGManager::NullAsyncResult MemoryHomeObject::_replace_member(pg_id_t id, std::st
     auto lg = std::shared_lock(_pg_lock);
     auto it = _pg_map.find(id);
     if (_pg_map.end() == it) {
-        return folly::makeSemiFuture< PGManager::NullResult >(folly::makeUnexpected(PGError::UNKNOWN_PG));
+        return folly::makeSemiFuture< PGManager::NullResult >(std::unexpected(PGError::UNKNOWN_PG));
     }
-    return folly::makeSemiFuture< PGManager::NullResult >(folly::makeUnexpected(PGError::UNSUPPORTED_OP));
+    return folly::makeSemiFuture< PGManager::NullResult >(std::unexpected(PGError::UNSUPPORTED_OP));
 }
 
-PGReplaceMemberStatus MemoryHomeObject::_get_replace_member_status(pg_id_t id, std::string& task_id, const PGMember& old_member,
-                                              const PGMember& new_member, const std::vector< PGMember >& others,
-                                              uint64_t trace_id) const {
+PGReplaceMemberStatus MemoryHomeObject::_get_replace_member_status(pg_id_t id, std::string& task_id,
+                                                                   const PGMember& old_member,
+                                                                   const PGMember& new_member,
+                                                                   const std::vector< PGMember >& others,
+                                                                   uint64_t trace_id) const {
     (void)id;
     (void)task_id;
     (void)old_member;

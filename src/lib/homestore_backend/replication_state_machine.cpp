@@ -171,26 +171,26 @@ void ReplicationStateMachine::on_error(ReplServiceError error, const sisl::blob&
     switch (msg_header->msg_type) {
     case ReplicationMessageType::CREATE_PG_MSG: {
         auto result_ctx = boost::static_pointer_cast< repl_result_ctx< PGManager::NullResult > >(ctx).get();
-        result_ctx->promise_.setValue(folly::makeUnexpected(homeobject::toPgError(error)));
+        result_ctx->promise_.setValue(std::unexpected(homeobject::toPgError(error)));
         break;
     }
     case ReplicationMessageType::CREATE_SHARD_MSG: {
         bool res = home_object_->release_chunk_based_on_create_shard_message(header);
         if (!res) { LOGW("failed to release chunk based on create shard msg"); }
         auto result_ctx = boost::static_pointer_cast< repl_result_ctx< ShardManager::Result< ShardInfo > > >(ctx).get();
-        result_ctx->promise_.setValue(folly::makeUnexpected(toShardError(error)));
+        result_ctx->promise_.setValue(std::unexpected(toShardError(error)));
         break;
     }
     case ReplicationMessageType::SEAL_SHARD_MSG: {
         auto result_ctx = boost::static_pointer_cast< repl_result_ctx< ShardManager::Result< ShardInfo > > >(ctx).get();
-        result_ctx->promise_.setValue(folly::makeUnexpected(toShardError(error)));
+        result_ctx->promise_.setValue(std::unexpected(toShardError(error)));
         break;
     }
     case ReplicationMessageType::PUT_BLOB_MSG:
     case ReplicationMessageType::DEL_BLOB_MSG: {
         auto result_ctx =
             boost::static_pointer_cast< repl_result_ctx< BlobManager::Result< HSHomeObject::BlobInfo > > >(ctx).get();
-        result_ctx->promise_.setValue(folly::makeUnexpected(toBlobError(error)));
+        result_ctx->promise_.setValue(std::unexpected(toBlobError(error)));
         break;
     }
     default: {

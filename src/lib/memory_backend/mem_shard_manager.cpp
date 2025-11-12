@@ -14,7 +14,7 @@ ShardManager::AsyncResult< ShardInfo > MemoryHomeObject::_create_shard(pg_id_t p
     {
         auto lg = std::scoped_lock(_pg_lock, _shard_lock);
         auto pg_it = _pg_map.find(pg_owner);
-        if (_pg_map.end() == pg_it) return folly::makeUnexpected(ShardError(ShardErrorCode::UNKNOWN_PG));
+        if (_pg_map.end() == pg_it) return std::unexpected(ShardError(ShardErrorCode::UNKNOWN_PG));
 
         auto& s_list = pg_it->second->shards_;
         info.id = make_new_shard_id(pg_owner, s_list.size());

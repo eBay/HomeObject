@@ -245,7 +245,7 @@ BlobManager::AsyncResult< blob_read_result > HSHomeObject::PGBlobIterator::load_
                 LOGE("Failed to get blob, shardID=0x{:x}, pg={}, shard=0x{:x}, blob_id={}, err={}", shard_id,
                      (shard_id >> homeobject::shard_width), (shard_id & homeobject::shard_mask), blob_id,
                      result.value());
-                return folly::makeUnexpected(BlobError(BlobErrorCode::READ_FAILED));
+                return std::unexpected(BlobError(BlobErrorCode::READ_FAILED));
             }
 
             BlobHeader const* header = r_cast< BlobHeader const* >(read_buf.cbytes());
@@ -320,7 +320,7 @@ bool HSHomeObject::PGBlobIterator::prefetch_blobs_snapshot_data() {
 #ifdef _PRERELEASE
         if (iomgr_flip::instance()->test_flip("pg_blob_iterator_load_blob_data_error")) {
             LOGW("Simulating loading blob data error");
-            prefetched_blobs_.emplace(info.blob_id, folly::makeUnexpected(BlobError(BlobErrorCode::READ_FAILED)));
+            prefetched_blobs_.emplace(info.blob_id, std::unexpected(BlobError(BlobErrorCode::READ_FAILED)));
             continue;
         }
         auto delay = iomgr_flip::instance()->get_test_flip< long >("simulate_read_snapshot_load_blob_delay",
@@ -341,7 +341,7 @@ bool HSHomeObject::PGBlobIterator::prefetch_blobs_snapshot_data() {
                 .via(folly::getKeepAliveToken(folly::InlineExecutor::instance()))
                 .thenValue(
                     [&, info, blob_start](auto&& result) mutable -> BlobManager::AsyncResult< blob_read_result > {
-                        if (result.hasError() && result.error().code == BlobErrorCode::READ_FAILED) {
+                        if (!result.has_value() && result.error().code == BlobErrorCode::READ_FAILED) {
                             LOGE("Failed to retrieve blob for shardID=0x{:x}, pg={}, shard=0x{:x} blob={} pbas={}",
                                  info.shard_id, (info.shard_id >> homeobject::shard_width),
                                  (info.shard_id & homeobject::shard_mask), info.blob_id, info.pbas.to_string());
@@ -400,7 +400,7 @@ bool HSHomeObject::PGBlobIterator::create_blobs_snapshot_data(sisl::io_blob_safe
             auto res = std::move(it->second).get();
             prefetched_blobs_.erase(it);
 
-            if (res.hasError()) {
+            if (!res.has_value()) {
                 LOGE("blob {} hit error {}", info.blob_id, res.error());
                 hit_error = true;
                 break;

@@ -10,7 +10,7 @@ required_conan_version = ">=1.60.0"
 
 class HomeObjectConan(ConanFile):
     name = "homeobject"
-    version = "4.0.1"
+    version = "4.0.2"
 
     homepage = "https://github.com/eBay/HomeObject"
     description = "Blob Store built on HomeReplication"
@@ -55,7 +55,7 @@ class HomeObjectConan(ConanFile):
 
     def validate(self):
         if self.info.settings.compiler.cppstd:
-            check_min_cppstd(self, 20)
+            check_min_cppstd(self, 23)
 
     def layout(self):
         self.folders.source = "."

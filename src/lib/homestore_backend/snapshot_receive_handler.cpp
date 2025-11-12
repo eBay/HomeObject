@@ -119,13 +119,13 @@ int HSHomeObject::SnapshotReceiveHandler::process_shard_snapshot_data(ResyncShar
                              // TODO: do we need to update repl_dev metrics?
                              if (err) {
                                  LOGE("Failed to write shard info to blk_id={}", blk_id.to_string());
-                                 return folly::makeUnexpected(BlobError(BlobErrorCode::REPLICATION_ERROR));
+                                 return std::unexpected(BlobError(BlobErrorCode::REPLICATION_ERROR));
                              }
                              LOGD("Shard info written to blk_id={}", blk_id.to_string());
                              return 0;
                          })
                          .get();
-    if (ret.hasError()) {
+    if (!ret.has_value()) {
         LOGE("Failed to write shard info of shardID=0x{:x}, pg={}, shard=0x{:x} to blk_id={}", shard_meta.shard_id(),
              (shard_meta.shard_id() >> homeobject::shard_width), (shard_meta.shard_id() & homeobject::shard_mask),
              blk_id.to_string());
