@@ -84,7 +84,7 @@ PGManager::NullAsyncResult HSHomeObject::_create_pg(PGInfo&& pg_info, std::set< 
                                                     trace_id_t tid) {
     if (is_shutting_down()) {
         LOGI("service is being shut down");
-        return folly::makeUnexpected(PGError::SHUTTING_DOWN);
+        return std::unexpected(PGError::SHUTTING_DOWN);
     }
     incr_pending_request_num();
 
@@ -95,25 +95,25 @@ PGManager::NullAsyncResult HSHomeObject::_create_pg(PGInfo&& pg_info, std::set< 
             LOGW("PG already exists with different info! pg={}, pg_info={}, hs_pg_info={}", pg_id, pg_info.to_string(),
                  hs_pg->pg_info_.to_string());
             decr_pending_request_num();
-            return folly::makeUnexpected(PGError::INVALID_ARG);
+            return std::unexpected(PGError::INVALID_ARG);
         }
         LOGW("PG already exists! pg={}", pg_id);
         decr_pending_request_num();
-        return folly::Unit();
+        return PGManager::NullResult();
     }
 
     const auto chunk_size = chunk_selector()->get_chunk_size();
     if (pg_info.size < chunk_size) {
         LOGW("Not support to create PG which pg_size={} < chunk_size={}", pg_info.size, chunk_size);
         decr_pending_request_num();
-        return folly::makeUnexpected(PGError::INVALID_ARG);
+        return std::unexpected(PGError::INVALID_ARG);
     }
 
     auto const num_chunk = chunk_selector()->select_chunks_for_pg(pg_id, pg_info.size);
     if (!num_chunk.has_value()) {
         LOGW("Failed to select chunks for pg={}", pg_id);
         decr_pending_request_num();
-        return folly::makeUnexpected(PGError::NO_SPACE_LEFT);
+        return std::unexpected(PGError::NO_SPACE_LEFT);
     }
     if (pg_info.expected_member_num == 0) { pg_info.expected_member_num = pg_info.members.size(); }
     pg_info.chunk_size = chunk_size;
@@ -130,7 +130,7 @@ PGManager::NullAsyncResult HSHomeObject::_create_pg(PGInfo&& pg_info, std::set< 
             }
 #endif
 
-            if (v.hasError()) { return folly::makeUnexpected(toPgError(v.error())); }
+            if (v.hasError()) { return std::unexpected(toPgError(v.error())); }
             // we will write a PGHeader across the raft group and when it is committed
             // all raft members will create PGinfo and index table for this PG.
 
@@ -139,7 +139,7 @@ PGManager::NullAsyncResult HSHomeObject::_create_pg(PGInfo&& pg_info, std::set< 
         })
         .thenValue([this, pg_id, repl_dev_group_id, tid](auto&& r) -> PGManager::NullAsyncResult {
             // reclaim resources if failed to create pg
-            if (r.hasError()) {
+            if (!r.has_value()) {
                 bool res = chunk_selector_->return_pg_chunks_to_dev_heap(pg_id);
                 RELEASE_ASSERT(res, "Failed to return pg={} chunks to dev_heap", pg_id);
                 // no matter if create repl dev successfully, remove it.
@@ -152,11 +152,11 @@ PGManager::NullAsyncResult HSHomeObject::_create_pg(PGInfo&& pg_info, std::set< 
                         }
                         decr_pending_request_num();
                         // still return the original error
-                        return folly::makeUnexpected(r.error());
+                        return std::unexpected(r.error());
                     });
             }
             decr_pending_request_num();
-            return folly::Unit();
+            return PGManager::NullResult();
         });
 }
 
@@ -175,15 +175,15 @@ PGManager::NullAsyncResult HSHomeObject::do_create_pg(cshared< homestore::ReplDe
 #ifdef _PRERELEASE
     if (iomgr_flip::instance()->test_flip("create_pg_raft_message_error")) {
         LOGW("Simulating raft message error in creating pg");
-        return folly::makeUnexpected(PGError::UNKNOWN);
+        return std::unexpected(PGError::UNKNOWN);
     }
 #endif
 
     // replicate this create pg message to all raft members of this group
     repl_dev->async_alloc_write(req->header_buf(), sisl::blob{}, sisl::sg_list{}, req, false /* part_of_batch */, tid);
     return req->result().deferValue([req](auto const& e) -> PGManager::NullAsyncResult {
-        if (!e) { return folly::makeUnexpected(e.error()); }
-        return folly::Unit();
+        if (!e) { return std::unexpected(e.error()); }
+        return PGManager::NullResult();
     });
 }
 
@@ -252,7 +252,7 @@ void HSHomeObject::on_create_pg_message_commit(int64_t lsn, sisl::blob const& he
     if (msg_header->corrupted()) {
         LOGE("create PG message header is corrupted , lsn={}; header={}, trace_id={}", lsn, msg_header->to_string(),
              tid);
-        if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(PGError::CRC_MISMATCH)); }
+        if (ctx) { ctx->promise_.setValue(std::unexpected(PGError::CRC_MISMATCH)); }
         return;
     }
 
@@ -262,7 +262,7 @@ void HSHomeObject::on_create_pg_message_commit(int64_t lsn, sisl::blob const& he
     if (crc32_ieee(init_crc32, serailized_pg_info_buf, serailized_pg_info_size) != msg_header->payload_crc) {
         // header & value is inconsistent;
         LOGE("create PG message header is inconsistent with value, lsn={}, trace_id={}", lsn, tid);
-        if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(PGError::CRC_MISMATCH)); }
+        if (ctx) { ctx->promise_.setValue(std::unexpected(PGError::CRC_MISMATCH)); }
         return;
     }
 
@@ -270,9 +270,9 @@ void HSHomeObject::on_create_pg_message_commit(int64_t lsn, sisl::blob const& he
     auto ret = local_create_pg(std::move(repl_dev), pg_info);
     if (ctx) {
         if (ret.hasError()) {
-            ctx->promise_.setValue(folly::makeUnexpected(ret.error()));
+            ctx->promise_.setValue(std::unexpected(ret.error()));
         } else {
-            ctx->promise_.setValue(folly::Unit());
+            ctx->promise_.setValue(PGManager::NullResult());
         }
     }
 }
@@ -286,21 +286,21 @@ PGManager::NullAsyncResult HSHomeObject::_replace_member(pg_id_t pg_id, std::str
                                                          uint32_t commit_quorum, trace_id_t tid) {
     if (is_shutting_down()) {
         LOGI("service is being shut down, trace_id={}", tid);
-        return folly::makeUnexpected(PGError::SHUTTING_DOWN);
+        return std::unexpected(PGError::SHUTTING_DOWN);
     }
     incr_pending_request_num();
 
     auto hs_pg = get_hs_pg(pg_id);
     if (hs_pg == nullptr) {
         decr_pending_request_num();
-        return folly::makeUnexpected(PGError::UNKNOWN_PG);
+        return std::unexpected(PGError::UNKNOWN_PG);
     }
 
     auto& repl_dev = pg_repl_dev(*hs_pg);
     if (!repl_dev.is_leader() && commit_quorum == 0) {
         // Only leader can replace a member
         decr_pending_request_num();
-        return folly::makeUnexpected(PGError::NOT_LEADER);
+        return std::unexpected(PGError::NOT_LEADER);
     }
     auto group_id = repl_dev.group_id();
 
@@ -316,8 +316,8 @@ PGManager::NullAsyncResult HSHomeObject::_replace_member(pg_id_t pg_id, std::str
         .via(executor_)
         .thenValue([this](auto&& v) mutable -> PGManager::NullAsyncResult {
             decr_pending_request_num();
-            if (v.hasError()) { return folly::makeUnexpected(toPgError(v.error())); }
-            return folly::Unit();
+            if (v.hasError()) { return std::unexpected(toPgError(v.error())); }
+            return PGManager::NullResult();
         });
 }
 
@@ -867,7 +867,7 @@ void HSHomeObject::on_create_pg_message_rollback(int64_t lsn, sisl::blob const& 
 
     if (msg_header->corrupted()) {
         LOGE("create PG message header is corrupted , lsn={}, header={}", lsn, msg_header->to_string());
-        if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(PGError::CRC_MISMATCH)); }
+        if (ctx) { ctx->promise_.setValue(std::unexpected(PGError::CRC_MISMATCH)); }
         return;
     }
 
@@ -877,7 +877,7 @@ void HSHomeObject::on_create_pg_message_rollback(int64_t lsn, sisl::blob const& 
     if (crc32_ieee(init_crc32, serailized_pg_info_buf, serailized_pg_info_size) != msg_header->payload_crc) {
         // header & value is inconsistent;
         LOGE("create PG message header is inconsistent with value, lsn={}", lsn);
-        if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(PGError::CRC_MISMATCH)); }
+        if (ctx) { ctx->promise_.setValue(std::unexpected(PGError::CRC_MISMATCH)); }
         return;
     }
 
@@ -885,7 +885,7 @@ void HSHomeObject::on_create_pg_message_rollback(int64_t lsn, sisl::blob const& 
     case ReplicationMessageType::CREATE_PG_MSG: {
         // TODO:: add rollback logic for create pg rollback if necessary
         LOGI("lsn={}, msg_type={}, pg={}, create pg is rollbacked", lsn, msg_header->msg_type, msg_header->pg_id);
-        if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(PGError::ROLL_BACK)); }
+        if (ctx) { ctx->promise_.setValue(std::unexpected(PGError::ROLL_BACK)); }
         break;
     }
     default: {

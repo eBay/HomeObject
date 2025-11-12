@@ -16,27 +16,28 @@ PGManager::NullAsyncResult HomeObjectImpl::create_pg(PGInfo&& pg_info, trace_id_
         if (member.priority > 0) saw_leader = true;
         peers.insert(member.id);
     }
-    if (!saw_ourself || !saw_leader) { return folly::makeUnexpected(PGError::INVALID_ARG); }
+    if (!saw_ourself || !saw_leader) { return std::unexpected(PGError::INVALID_ARG); }
     return _create_pg(std::move(pg_info), peers, tid);
 }
 
 PGManager::NullAsyncResult HomeObjectImpl::replace_member(pg_id_t id, std::string& task_id, peer_id_t const& old_member,
                                                           PGMember const& new_member, uint32_t commit_quorum,
                                                           trace_id_t tid) {
-    LOGI("[pg={}] replace member [{}] with [{}]  task_id [{}] quorum [{}] trace_id [{}]",
-         id, to_string(old_member), to_string(new_member.id), task_id, commit_quorum, tid);
+    LOGI("[pg={}] replace member [{}] with [{}]  task_id [{}] quorum [{}] trace_id [{}]", id, to_string(old_member),
+         to_string(new_member.id), task_id, commit_quorum, tid);
     if (old_member == new_member.id) {
-        LOGW("rejecting identical replacement SvcId [{}]! task_id [{}] trace_id [{}]", to_string(old_member), task_id, tid);
-        return folly::makeUnexpected(PGError::INVALID_ARG);
+        LOGW("rejecting identical replacement SvcId [{}]! task_id [{}] trace_id [{}]", to_string(old_member), task_id,
+             tid);
+        return std::unexpected(PGError::INVALID_ARG);
     }
 
     return _replace_member(id, task_id, old_member, new_member, commit_quorum, tid);
 }
 
-PGReplaceMemberStatus HomeObjectImpl::get_replace_member_status(pg_id_t id, std::string& task_id, const PGMember& old_member,
-                                                              const PGMember& new_member,
-                                                              const std::vector< PGMember >& others,
-                                                              uint64_t trace_id) const {
+PGReplaceMemberStatus HomeObjectImpl::get_replace_member_status(pg_id_t id, std::string& task_id,
+                                                                const PGMember& old_member, const PGMember& new_member,
+                                                                const std::vector< PGMember >& others,
+                                                                uint64_t trace_id) const {
     return _get_replace_member_status(id, task_id, old_member, new_member, others, trace_id);
 }
 

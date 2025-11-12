@@ -104,12 +104,12 @@ HSHomeObject::get_blob_from_index_table(shared< BlobIndexTable > index_table, sh
 
     if (homestore::btree_status_t::success != index_table->get(get_req)) {
         LOGDEBUG("Failed to get from index table [route={}]", index_key);
-        return folly::makeUnexpected(BlobError(BlobErrorCode::UNKNOWN_BLOB));
+        return std::unexpected(BlobError(BlobErrorCode::UNKNOWN_BLOB));
     }
 
     // blob get API
     if (const auto& pbas = index_value.pbas(); pbas != tombstone_pbas) return pbas;
-    return folly::makeUnexpected(BlobError(BlobErrorCode::UNKNOWN_BLOB));
+    return std::unexpected(BlobError(BlobErrorCode::UNKNOWN_BLOB));
 }
 
 void HSHomeObject::print_btree_index(pg_id_t pg_id) const {
@@ -153,7 +153,7 @@ HSHomeObject::query_blobs_in_shard(pg_id_t pg_id, uint64_t cur_shard_seq_num, bl
     auto const ret = index_table->query(query_req, out_vector);
     if (ret != homestore::btree_status_t::success && ret != homestore::btree_status_t::has_more) {
         LOGE("Failed to query blobs in index table for ret={} shard={} start_blob_id={}", ret, shard_id, start_blob_id);
-        return folly::makeUnexpected(BlobErrorCode::INDEX_ERROR);
+        return std::unexpected(BlobErrorCode::INDEX_ERROR);
     }
 
     std::vector< BlobInfo > blob_info_vec;

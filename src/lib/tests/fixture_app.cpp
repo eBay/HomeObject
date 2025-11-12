@@ -52,11 +52,11 @@ void TestFixture::SetUp() {
     LOGDEBUG("Setup Shards, trace_id={}", tid);
     auto s_e = homeobj_->shard_manager()->create_shard(_pg_id, Mi, tid).get();
     ASSERT_TRUE(!!s_e);
-    s_e.then([this](auto&& i) { _shard_1 = std::move(i); });
+    _shard_1 = std::move(s_e.value());
 
     s_e = homeobj_->shard_manager()->create_shard(_pg_id, Mi, tid).get();
     ASSERT_TRUE(!!s_e);
-    s_e.then([this](auto&& i) { _shard_2 = std::move(i); });
+    _shard_2 = std::move(s_e.value());
 
     LOGDEBUG("Get on empty Shard={}, trace_id={}", _shard_1.id, tid);
     auto g_e = homeobj_->blob_manager()->get(_shard_1.id, 0, 0, 0, tid).get();
@@ -68,14 +68,12 @@ void TestFixture::SetUp() {
                    ->put(_shard_1.id, homeobject::Blob{sisl::io_blob_safe(4 * Ki, 512u), "test_blob", 4 * Mi}, tid)
                    .get();
     EXPECT_TRUE(!!o_e);
-    o_e.then([this](auto&& b) mutable { _blob_id = std::move(b); });
+    _blob_id = std::move(o_e.value());
 
     g_e = homeobj_->blob_manager()->get(_shard_1.id, _blob_id, 0, 0, tid).get();
     EXPECT_TRUE(!!g_e);
-    g_e.then([](auto&& blob) {
-        EXPECT_STREQ(blob.user_key.c_str(), "test_blob");
-        EXPECT_EQ(blob.object_off, 4 * Mi);
-    });
+    EXPECT_STREQ(g_e.value().user_key.c_str(), "test_blob");
+    EXPECT_EQ(g_e.value().object_off, 4 * Mi);
 
     // cover the memory version of get_stats
     // homestore version has a dedicated test for this.

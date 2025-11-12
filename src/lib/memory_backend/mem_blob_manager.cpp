@@ -46,7 +46,7 @@ BlobManager::AsyncResult< Blob > MemoryHomeObject::_get_blob(ShardInfo const& _s
     WITH_SHARD
     WITH_ROUTE(_blob)
     IF_BLOB_ALIVE { return blob_it->second.blob_->clone(); }
-    return folly::makeUnexpected(BlobError(BlobErrorCode::UNKNOWN_BLOB));
+    return std::unexpected(BlobError(BlobErrorCode::UNKNOWN_BLOB));
 }
 
 // Tombstone BlobExt entry
@@ -58,7 +58,7 @@ BlobManager::NullAsyncResult MemoryHomeObject::_del_blob(ShardInfo const& _shard
         shard.btree_.assign_if_equal(route, blob_it->second,
                                      BlobExt{.state_ = BlobState::DELETED, .blob_ = blob_it->second.blob_});
     }
-    return folly::Unit();
+    return BlobManager::NullResult();
 }
 
 } // namespace homeobject

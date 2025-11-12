@@ -1,7 +1,7 @@
 cmake_minimum_required (VERSION 3.11)
 project (homeobject LANGUAGES CXX)
 
-set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD 23)
 
 if (NOT DEFINED CMAKE_BUILD_TYPE)
     set (CMAKE_BUILD_TYPE "Debug")
