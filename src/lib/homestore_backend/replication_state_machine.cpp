@@ -365,19 +365,14 @@ int ReplicationStateMachine::read_snapshot_obj(std::shared_ptr< homestore::snaps
     log_str = fmt::format("{} shard_seq_num=0x{:x} batch_num={}", log_str, obj_id.shard_seq_num, obj_id.batch_id);
 
     LOGD("read current snp obj {}", log_str)
-    // invalid Id
     if (!pg_iter->update_cursor(obj_id)) {
-        // There is a known cornor case(not sure if it is the only case): If free_user_snp_ctx and
-        // read_snapshot_obj(we enable nuraft bg snapshot) occur at the same time, and free_user_snp_ctx is called
-        // first, pg_iter is released, and then in read_snapshot_obj, pg_iter will be created with cur_obj_id_ = 0|0
-        // while the
-        //  next_obj_id will be x|y which may hit into invalid objId condition.
-        // If inconsistency happens, reset the cursor to the beginning(0|0), and let follower to validate(lsn may
-        // change) and reset its cursor to the checkpoint to proceed with snapshot resync.
-        LOGW("Invalid objId in snapshot read, {}, current shard_seq_num={}, current batch_num={}, reset cursor to "
-             "the "
-             "beginning",
-             log_str, pg_iter->cur_obj_id.shard_seq_num, pg_iter->cur_obj_id.batch_id);
+        // There is a known corner case (not sure if it is the only case): If free_user_snp_ctx and read_snapshot_obj
+        // (we enable NuRaft bg snapshot) occur at the same time, and free_user_snp_ctx is called first, pg_iter is
+        // released, and then in read_snapshot_obj, pg_iter will be created with cur_obj_id_ = 0|0 while the next_obj_id
+        // will be x|y which may hit into invalid objId condition. If inconsistency happens, reset the cursor to the
+        // beginning(0|0), and let follower validate (lsn may change) and reset its cursor to the checkpoint to proceed
+        // with snapshot resync.
+        LOGW("Invalid objId in snapshot read, reset cursor to the beginning, {}", log_str);
         pg_iter->reset_cursor();
         return 0;
     }

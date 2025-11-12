@@ -543,7 +543,6 @@ public:
         std::vector< BlobInfo > cur_blob_list_{0};
         uint64_t inflight_prefetch_bytes_{0};
         std::map< blob_id_t, BlobManager::AsyncResult< blob_read_result > > prefetched_blobs_;
-        std::mutex prefetch_lock_;
         uint64_t cur_start_blob_idx_{0};
         uint64_t cur_batch_blob_count_{0};
         Clock::time_point cur_batch_start_time_;
@@ -555,6 +554,7 @@ public:
         uint64_t max_batch_size_;
         std::unique_ptr< DonerSnapshotMetrics > metrics_;
         bool stopped_{false};
+        std::mutex op_mut_; // Protects all operations and coordinates with stop()
     };
 
     class SnapshotReceiveHandler {
