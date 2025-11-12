@@ -126,7 +126,7 @@ PGManager::NullAsyncResult HSHomeObject::_create_pg(PGInfo&& pg_info, std::set< 
 #ifdef _PRERELEASE
             if (iomgr_flip::instance()->test_flip("create_pg_create_repl_dev_error")) {
                 LOGW("Simulating create repl dev error in creating pg");
-                v = std::unexpected(ReplServiceError::FAILED);
+                v = folly::makeUnexpected(ReplServiceError::FAILED);
             }
 #endif
 

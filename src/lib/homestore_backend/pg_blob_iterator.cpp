@@ -325,7 +325,7 @@ bool HSHomeObject::PGBlobIterator::prefetch_blobs_snapshot_data() {
 #ifdef _PRERELEASE
         if (iomgr_flip::instance()->test_flip("pg_blob_iterator_load_blob_data_error")) {
             LOGW("Simulating loading blob data error");
-            prefetched_blobs_.emplace(info.blob_id, folly::makeUnexpected(BlobError(BlobErrorCode::READ_FAILED)));
+            prefetched_blobs_.emplace(info.blob_id, std::unexpected(BlobError(BlobErrorCode::READ_FAILED)));
             continue;
         }
         auto delay = iomgr_flip::instance()->get_test_flip< long >("simulate_read_snapshot_load_blob_delay",
