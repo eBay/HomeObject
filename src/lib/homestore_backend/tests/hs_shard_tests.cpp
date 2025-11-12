@@ -87,7 +87,7 @@ TEST_F(HomeObjectFixture, SealShard) {
         // expect to create shard failed
         run_on_pg_leader(pg_id, [&]() {
             auto s = _obj_inst->shard_manager()->create_shard(pg_id, 64 * Mi).get();
-            ASSERT_TRUE(s.hasError());
+            ASSERT_TRUE(!s.has_value());
             ASSERT_EQ(ShardErrorCode::NO_SPACE_LEFT, s.error().getCode());
         });
 
@@ -279,14 +279,14 @@ TEST_F(HomeObjectFixture, CreateShardOnDiskLostMemeber) {
 
         auto tid = generateRandomTraceId();
         auto s = _obj_inst->shard_manager()->seal_shard(pg_shard_id_map[degrade_pg_id], tid).get();
-        ASSERT_TRUE(s.hasError()) << "degraded pg on error member should return seal shard fail, pg_id "
-                                  << degrade_pg_id << "shard_id " << pg_shard_id_map[degrade_pg_id]
-                                  << " replica number " << g_helper->replica_num();
+        ASSERT_TRUE(!s.has_value()) << "degraded pg on error member should return seal shard fail, pg_id "
+                                    << degrade_pg_id << "shard_id " << pg_shard_id_map[degrade_pg_id]
+                                    << " replica number " << g_helper->replica_num();
 
         tid = generateRandomTraceId();
         s = _obj_inst->shard_manager()->create_shard(degrade_pg_id, 64 * Mi, tid).get();
-        ASSERT_TRUE(s.hasError()) << "degraded pg on error member should return create shard fail, pg_id "
-                                  << degrade_pg_id << " replica number " << g_helper->replica_num();
+        ASSERT_TRUE(!s.has_value()) << "degraded pg on error member should return create shard fail, pg_id "
+                                    << degrade_pg_id << " replica number " << g_helper->replica_num();
     } else {
         restart();
         sleep(10);

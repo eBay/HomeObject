@@ -79,8 +79,8 @@ uint64_t HSHomeObject::get_sequence_num_from_shard_id(uint64_t shard_id) {
 }
 
 pg_id_t HSHomeObject::get_pg_id_from_shard_id(uint64_t shard_id) {
-    //get highest 16bit
-        return shard_id >> shard_width;
+    // get highest 16bit
+    return shard_id >> shard_width;
 }
 
 std::string HSHomeObject::serialize_shard_info(const ShardInfo& info) {
@@ -115,7 +115,7 @@ ShardManager::AsyncResult< ShardInfo > HSHomeObject::_create_shard(pg_id_t pg_ow
 
     if (is_shutting_down()) {
         LOGI("service is being shut down");
-        return folly::makeUnexpected(ShardError(ShardErrorCode::SHUTTING_DOWN));
+        return std::unexpected(ShardError(ShardErrorCode::SHUTTING_DOWN));
     }
     incr_pending_request_num();
 
@@ -123,31 +123,31 @@ ShardManager::AsyncResult< ShardInfo > HSHomeObject::_create_shard(pg_id_t pg_ow
     if (!hs_pg) {
         LOGW("failed to create shard with non-exist pg={}", pg_owner);
         decr_pending_request_num();
-        return folly::makeUnexpected(ShardError(ShardErrorCode::UNKNOWN_PG));
+        return std::unexpected(ShardError(ShardErrorCode::UNKNOWN_PG));
     }
     if (hs_pg->pg_state_.is_state_set(PGStateMask::DISK_DOWN)) {
         LOGW("failed to create shard for pg={}, pg is disk down and not leader", pg_owner);
         decr_pending_request_num();
-        return folly::makeUnexpected(ShardError(ShardErrorCode::NOT_LEADER));
+        return std::unexpected(ShardError(ShardErrorCode::NOT_LEADER));
     }
     auto repl_dev = hs_pg->repl_dev_;
 
     if (!repl_dev) {
         LOGW("failed to get repl dev instance for pg={}", pg_owner);
         decr_pending_request_num();
-        return folly::makeUnexpected(ShardError(ShardErrorCode::PG_NOT_READY));
+        return std::unexpected(ShardError(ShardErrorCode::PG_NOT_READY));
     }
 
     if (!repl_dev->is_leader()) {
         LOGW("failed to create shard for pg={}, not leader", pg_owner);
         decr_pending_request_num();
-        return folly::makeUnexpected(ShardError(ShardErrorCode::NOT_LEADER, repl_dev->get_leader_id()));
+        return std::unexpected(ShardError(ShardErrorCode::NOT_LEADER, repl_dev->get_leader_id()));
     }
 
     if (!repl_dev->is_ready_for_traffic()) {
         LOGW("failed to create shard for pg={}, not ready for traffic", pg_owner);
         decr_pending_request_num();
-        return folly::makeUnexpected(ShardError(ShardErrorCode::RETRY_REQUEST));
+        return std::unexpected(ShardError(ShardErrorCode::RETRY_REQUEST));
     }
     auto new_shard_id = generate_new_shard_id(pg_owner);
     SLOGD(tid, new_shard_id, "Create shard request: pg={}, size={}", pg_owner, size_bytes);
@@ -158,7 +158,7 @@ ShardManager::AsyncResult< ShardInfo > HSHomeObject::_create_shard(pg_id_t pg_ow
     if (!v_chunkID.has_value()) {
         SLOGW(tid, new_shard_id, "no availble chunk left to create shard for pg={}", pg_owner);
         decr_pending_request_num();
-        return folly::makeUnexpected(ShardError(ShardErrorCode::NO_SPACE_LEFT));
+        return std::unexpected(ShardError(ShardErrorCode::NO_SPACE_LEFT));
     }
     const auto v_chunk_id = v_chunkID.value();
     SLOGD(tid, new_shard_id, "vchunk_id={}", v_chunk_id);
@@ -206,7 +206,7 @@ ShardManager::AsyncResult< ShardInfo > HSHomeObject::_create_shard(pg_id_t pg_ow
     repl_dev->async_alloc_write(req->cheader_buf(), sisl::blob{}, req->data_sgs(), req, false /* part_of_batch */, tid);
     return req->result().deferValue([this, req, repl_dev, tid, pg_owner, new_shard_id,
                                      v_chunk_id](const auto& result) -> ShardManager::AsyncResult< ShardInfo > {
-        if (result.hasError()) {
+        if (!result.has_value()) {
             auto err = result.error();
             if (err.getCode() == ShardErrorCode::NOT_LEADER) { err.current_leader = repl_dev->get_leader_id(); }
 
@@ -223,7 +223,7 @@ ShardManager::AsyncResult< ShardInfo > HSHomeObject::_create_shard(pg_id_t pg_ow
             }
 
             decr_pending_request_num();
-            return folly::makeUnexpected(err);
+            return std::unexpected(err);
         }
         auto shard_info = result.value();
         SLOGD(tid, shard_info.id, "Shard created success.");
@@ -235,7 +235,7 @@ ShardManager::AsyncResult< ShardInfo > HSHomeObject::_create_shard(pg_id_t pg_ow
 ShardManager::AsyncResult< ShardInfo > HSHomeObject::_seal_shard(ShardInfo const& info, trace_id_t tid) {
     if (is_shutting_down()) {
         LOGI("service is being shut down");
-        return folly::makeUnexpected(ShardError(ShardErrorCode::SHUTTING_DOWN));
+        return std::unexpected(ShardError(ShardErrorCode::SHUTTING_DOWN));
     }
     incr_pending_request_num();
 
@@ -246,32 +246,32 @@ ShardManager::AsyncResult< ShardInfo > HSHomeObject::_seal_shard(ShardInfo const
     if (!hs_pg) {
         SLOGW(tid, shard_id, "pg={} not found", pg_id);
         decr_pending_request_num();
-        return folly::makeUnexpected(ShardError(ShardErrorCode::UNKNOWN_PG));
+        return std::unexpected(ShardError(ShardErrorCode::UNKNOWN_PG));
     }
 
     if (hs_pg->pg_state_.is_state_set(PGStateMask::DISK_DOWN)) {
         LOGW("failed to seal shard for pg={}, pg is disk down and not leader", pg_id);
         decr_pending_request_num();
-        return folly::makeUnexpected(ShardError(ShardErrorCode::NOT_LEADER));
+        return std::unexpected(ShardError(ShardErrorCode::NOT_LEADER));
     }
 
     auto repl_dev = hs_pg->repl_dev_;
     if (!repl_dev) {
         SLOGW(tid, shard_id, "failed to get repl dev instance for pg={}", pg_id);
         decr_pending_request_num();
-        return folly::makeUnexpected(ShardError(ShardErrorCode::PG_NOT_READY));
+        return std::unexpected(ShardError(ShardErrorCode::PG_NOT_READY));
     }
 
     if (!repl_dev->is_leader()) {
         SLOGW(tid, shard_id, "failed to seal shard, not leader");
         decr_pending_request_num();
-        return folly::makeUnexpected(ShardError(ShardErrorCode::NOT_LEADER, repl_dev->get_leader_id()));
+        return std::unexpected(ShardError(ShardErrorCode::NOT_LEADER, repl_dev->get_leader_id()));
     }
 
     if (!repl_dev->is_ready_for_traffic()) {
         SLOGW(tid, shard_id, "failed to seal shard, not ready for traffic");
         decr_pending_request_num();
-        return folly::makeUnexpected(ShardError(ShardErrorCode::RETRY_REQUEST));
+        return std::unexpected(ShardError(ShardErrorCode::RETRY_REQUEST));
     }
 
     ShardInfo tmp_info = info;
@@ -303,11 +303,11 @@ ShardManager::AsyncResult< ShardInfo > HSHomeObject::_seal_shard(ShardInfo const
     repl_dev->async_alloc_write(req->cheader_buf(), sisl::blob{}, req->data_sgs(), req, false /* part_of_batch */, tid);
     return req->result().deferValue(
         [this, req, repl_dev, tid](const auto& result) -> ShardManager::AsyncResult< ShardInfo > {
-            if (result.hasError()) {
+            if (!result.has_value()) {
                 auto err = result.error();
                 if (err.getCode() == ShardErrorCode::NOT_LEADER) { err.current_leader = repl_dev->get_leader_id(); }
                 decr_pending_request_num();
-                return folly::makeUnexpected(err);
+                return std::unexpected(err);
             }
             auto shard_info = result.value();
             SLOGD(tid, shard_info.id, "Seal shard request: Shard sealed success, is_open={}", shard_info.is_open());
@@ -333,7 +333,7 @@ bool HSHomeObject::on_shard_message_pre_commit(int64_t lsn, sisl::blob const& he
     const ReplicationMessageHeader* msg_header = r_cast< const ReplicationMessageHeader* >(header.cbytes());
     if (msg_header->corrupted()) {
         LOGW("replication message header is corrupted with crc error, lsn={}, traceID={}", lsn, tid);
-        if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(ShardError(ShardErrorCode::CRC_MISMATCH))); }
+        if (ctx) { ctx->promise_.setValue(std::unexpected(ShardError(ShardErrorCode::CRC_MISMATCH))); }
         // TODO::if fail to pre_commit, shuold we crash here?
 
         return false;
@@ -386,7 +386,7 @@ void HSHomeObject::on_shard_message_rollback(int64_t lsn, sisl::blob const& head
     switch (msg_header->msg_type) {
     case ReplicationMessageType::CREATE_SHARD_MSG: {
         if (ctx) {
-            ctx->promise_.setValue(folly::makeUnexpected(ShardError(ShardErrorCode::RETRY_REQUEST)));
+            ctx->promise_.setValue(std::unexpected(ShardError(ShardErrorCode::RETRY_REQUEST)));
         } else {
             // we have already added release_chunk logic to thenValue of hoemobject#create_shard in originator, so here
             // we just need to release_chunk for non-originater case since it will bring a bug if a chunk is released
@@ -426,7 +426,7 @@ void HSHomeObject::on_shard_message_rollback(int64_t lsn, sisl::blob const& head
             }
         }
         // TODO:set a proper error code
-        if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(ShardError(ShardErrorCode::RETRY_REQUEST))); }
+        if (ctx) { ctx->promise_.setValue(std::unexpected(ShardError(ShardErrorCode::RETRY_REQUEST))); }
 
         break;
     }
@@ -479,7 +479,7 @@ void HSHomeObject::on_shard_message_commit(int64_t lsn, sisl::blob const& h, hom
     auto header = r_cast< const ReplicationMessageHeader* >(h.cbytes());
     if (header->corrupted()) {
         LOGW("replication message header is corrupted with crc error, lsn={}, traceID={}", lsn, tid);
-        if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(ShardError(ShardErrorCode::CRC_MISMATCH))); }
+        if (ctx) { ctx->promise_.setValue(std::unexpected(ShardError(ShardErrorCode::CRC_MISMATCH))); }
         // TODO::if fail to commit, shuold we crash here?
         return;
     }
@@ -494,14 +494,14 @@ void HSHomeObject::on_shard_message_commit(int64_t lsn, sisl::blob const& h, hom
     std::error_code err = repl_dev->async_read(blkids, value_sgs, value_blob.size()).get();
     if (err) {
         LOGW("failed to read data from homestore blks, lsn={}", lsn);
-        if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(ShardError(ShardErrorCode::UNKNOWN))); }
+        if (ctx) { ctx->promise_.setValue(std::unexpected(ShardError(ShardErrorCode::UNKNOWN))); }
         return;
     }
 
     if (crc32_ieee(init_crc32, value.cbytes(), value.size()) != header->payload_crc) {
         // header & value is inconsistent;
         LOGW("replication message header is inconsistent with value, lsn={}", lsn);
-        if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(ShardError(ShardErrorCode::CRC_MISMATCH))); }
+        if (ctx) { ctx->promise_.setValue(std::unexpected(ShardError(ShardErrorCode::CRC_MISMATCH))); }
         return;
     }
 #endif

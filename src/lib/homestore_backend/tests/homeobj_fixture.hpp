@@ -413,7 +413,7 @@ public:
                     }
 
                     auto g = _obj_inst->blob_manager()->get(shard_id, current_blob_id, off, len, tid).get();
-                    while (wait_when_not_exist && g.hasError() && g.error().code == BlobErrorCode::UNKNOWN_BLOB) {
+                    while (wait_when_not_exist && !g.has_value() && g.error().code == BlobErrorCode::UNKNOWN_BLOB) {
                         LOGDEBUG("blob not exist at the moment, waiting for sync, shard {} blob {}", shard_id,
                                  current_blob_id);
                         wait_for_blob(shard_id, current_blob_id);

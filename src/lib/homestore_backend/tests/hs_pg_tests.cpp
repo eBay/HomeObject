@@ -64,7 +64,7 @@ TEST_F(HomeObjectFixture, PGExceedSpaceTest) {
             }
         }
         auto p = _obj_inst->pg_manager()->create_pg(std::move(info)).get();
-        ASSERT_TRUE(p.hasError());
+        ASSERT_TRUE(!p.has_value());
         PGError error = p.error();
         ASSERT_EQ(PGError::NO_SPACE_LEFT, error);
     } else {
@@ -103,7 +103,7 @@ TEST_F(HomeObjectFixture, PGSizeLessThanChunkTest) {
             }
         }
         auto p = _obj_inst->pg_manager()->create_pg(std::move(info)).get();
-        ASSERT_TRUE(p.hasError());
+        ASSERT_TRUE(!p.has_value());
         PGError error = p.error();
         ASSERT_EQ(PGError::INVALID_ARG, error);
     } else {
@@ -306,9 +306,11 @@ TEST_F(HomeObjectFixture, DuplicateCreatePG) {
         info.size = pg_size + 1 * Mi;
         for (const auto& member : members) {
             if (leader_replica_num == member.second) {
-                info.members.insert(homeobject::PGMember{member.first, g_helper->name() + std::to_string(member.second), 1});
+                info.members.insert(
+                    homeobject::PGMember{member.first, g_helper->name() + std::to_string(member.second), 1});
             } else {
-                info.members.insert(homeobject::PGMember{member.first, g_helper->name() + std::to_string(member.second), 0});
+                info.members.insert(
+                    homeobject::PGMember{member.first, g_helper->name() + std::to_string(member.second), 0});
             }
         }
         auto p = _obj_inst->pg_manager()->create_pg(std::move(info)).get();
@@ -323,7 +325,8 @@ TEST_F(HomeObjectFixture, DuplicateCreatePG) {
         info.size = pg_size;
         for (const auto& member : members) {
             if (leader_replica_num == member.second) {
-                info.members.insert(homeobject::PGMember{member.first, g_helper->name() + std::to_string(member.second), 1});
+                info.members.insert(
+                    homeobject::PGMember{member.first, g_helper->name() + std::to_string(member.second), 1});
             } else {
                 auto uuid = boost::uuids::random_generator()();
                 info.members.insert(homeobject::PGMember{uuid, g_helper->name() + std::to_string(member.second), 0});
@@ -342,9 +345,11 @@ TEST_F(HomeObjectFixture, DuplicateCreatePG) {
         for (const auto& member : members) {
             // set member 1 with priority 1, others with priority 0
             if (member.second == 1) {
-                info.members.insert(homeobject::PGMember{member.first, g_helper->name() + std::to_string(member.second), 1});
+                info.members.insert(
+                    homeobject::PGMember{member.first, g_helper->name() + std::to_string(member.second), 1});
             } else {
-                info.members.insert(homeobject::PGMember{member.first, g_helper->name() + std::to_string(member.second), 0});
+                info.members.insert(
+                    homeobject::PGMember{member.first, g_helper->name() + std::to_string(member.second), 0});
             }
         }
         auto p = _obj_inst->pg_manager()->create_pg(std::move(info)).get();
