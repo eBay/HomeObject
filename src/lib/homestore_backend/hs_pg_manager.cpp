@@ -1007,6 +1007,7 @@ void HSHomeObject::update_pg_meta_after_gc(const pg_id_t pg_id, const homestore:
         hs_pg->pg_sb_->tombstone_blob_count =
             hs_pg->durable_entities().tombstone_blob_count.load(std::memory_order_relaxed);
 
+        // we need to persist the updated pg superblk since we have updated the pg_chunks
         hs_pg->pg_sb_.write();
 
         // 2 change the pg_chunkcollection in chunk selector.

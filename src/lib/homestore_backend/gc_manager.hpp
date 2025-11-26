@@ -316,6 +316,7 @@ private:
     std::shared_ptr< HeapChunkSelector > m_chunk_selector;
     folly::ConcurrentHashMap< uint32_t, std::shared_ptr< pdev_gc_actor > > m_pdev_gc_actors;
     iomgr::timer_handle_t m_gc_timer_hdl{iomgr::null_timer_handle};
+    iomgr::io_fiber_t m_gc_timer_fiber{nullptr};
     HSHomeObject* m_hs_home_object{nullptr};
     std::list< homestore::superblk< GCManager::gc_task_superblk > > m_recovered_gc_tasks;
     std::unordered_map< pg_id_t, atomic_uint64_t > m_pending_gc_task_num_per_pg;
