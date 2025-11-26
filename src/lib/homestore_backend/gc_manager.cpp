@@ -121,9 +121,24 @@ void GCManager::start() {
 
     const auto gc_scan_interval_sec = HS_BACKEND_DYNAMIC_CONFIG(gc_scan_interval_sec);
 
-    m_gc_timer_hdl = iomanager.schedule_global_timer(
-        gc_scan_interval_sec * 1000 * 1000 * 1000, true, nullptr /*cookie*/, iomgr::reactor_regex::all_user,
-        [this](void*) { scan_chunks_for_gc(); }, true /* wait_to_schedule */);
+    // the initial idea here is that we want gc timer to run in a reactor that not shared with other fibers that
+    // probably hold a lock before fiber switching(for example , cp io reactor) to prevent some potential dead lock
+    // issue. here, we make gc timer run in a random worker reactor, which is created by iomanager itself(not created
+    // by user). worker reactor is mainly used for handling disk io(async_write/async_read, sync_write/sync_read), and
+    // they are all handled in the main_fiber. moreover, the timer assigned to the worker reactor is also handled in the
+    // main_fiber. as a result, only main fiber works for all the io and timer and no fiber swithing happens, unless
+    // user explicitly selectes a sync_io_fiber of a worker reactor to do some io operation, which does not happens in
+    // homestore backend and homeobject code base.
+
+    // theoretically， there is no way to make a user created reactor totally pure, because even if we create a separate
+    // user reactor for gc timer, if some one user all_user to do io operation or set timer, then this reactor will be
+    // polluted by other fibers or timer
+    iomanager.run_on_wait(iomgr::reactor_regex::random_worker, [&]() {
+        m_gc_timer_fiber = iomanager.iofiber_self();
+        m_gc_timer_hdl = iomanager.schedule_thread_timer(gc_scan_interval_sec * 1000 * 1000 * 1000, true,
+                                                         nullptr /*cookie*/, [this](void*) { scan_chunks_for_gc(); });
+    });
+
     LOGINFOMOD(gcmgr, "gc scheduler timer has started, interval is set to {} seconds", gc_scan_interval_sec);
 }
 
@@ -134,10 +149,15 @@ void GCManager::stop() {
         LOGWARNMOD(gcmgr, "gc scheduler timer is not running, no need to stop it");
         return;
     }
+    RELEASE_ASSERT(m_gc_timer_fiber,
+                   "m_gc_timer_hdl is not null_timer_handle, but m_gc_timer_fiber is null, fatal erro!");
 
     LOGINFOMOD(gcmgr, "stop gc scheduler timer");
-    iomanager.cancel_timer(m_gc_timer_hdl, true);
-    m_gc_timer_hdl = iomgr::null_timer_handle;
+    iomanager.run_on_wait(m_gc_timer_fiber, [&]() {
+        iomanager.cancel_timer(m_gc_timer_hdl, true);
+        m_gc_timer_hdl = iomgr::null_timer_handle;
+    });
+    m_gc_timer_fiber = nullptr;
 
     for (const auto& [pdev_id, gc_actor] : m_pdev_gc_actors) {
         gc_actor->stop();
@@ -551,14 +571,14 @@ bool GCManager::pdev_gc_actor::replace_blob_index(
 
         const auto ret = pg_index_table->put(update_req);
 
-        // 1 if the key exist, and the filter returns homestore::put_filter_decision::replace, then ret will be
+        // 1 if the key exist, and the filter returns homestore::put_filter_decision::replace, the ret will be
         // homestore::btree_status_t::success
 
         // 2 if the key exist , and the filter returns homestore::put_filter_decision::remove,  the ret will be
-        // homestore::btree_status_t::filtered_out.(this might happen is a key is deleted after data copy but before
+        // homestore::btree_status_t::filtered_out.(this might happen if a key is deleted after data copy but before
         // replace index)
 
-        // 3 if the key doest not exist, the ret will be homestore::btree_status_t::not_found(this might
+        // 3 if the key does not exist, the ret will be homestore::btree_status_t::not_found(this might
         // happen when crash recovery)
 
         if (ret != homestore::btree_status_t::success && ret != homestore::btree_status_t::filtered_out &&
