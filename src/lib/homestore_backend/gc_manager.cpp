@@ -19,14 +19,14 @@ SISL_LOGGING_DECL(gcmgr)
 
 GCManager::GCManager(HSHomeObject* homeobject) :
         m_chunk_selector{homeobject->chunk_selector()}, m_hs_home_object{homeobject} {
-    homestore::HomeStore::instance()->meta_service().register_handler(
+    homestore::meta_service().register_handler(
         GCManager::_gc_actor_meta_name,
         [this](homestore::meta_blk* mblk, sisl::byte_view buf, size_t size) {
             on_gc_actor_meta_blk_found(std::move(buf), voidptr_cast(mblk));
         },
         nullptr, true);
 
-    homestore::HomeStore::instance()->meta_service().register_handler(
+    homestore::meta_service().register_handler(
         GCManager::_gc_reserved_chunk_meta_name,
         [this](homestore::meta_blk* mblk, sisl::byte_view buf, size_t size) {
             on_reserved_chunk_meta_blk_found(std::move(buf), voidptr_cast(mblk));
@@ -38,7 +38,7 @@ GCManager::GCManager(HSHomeObject* homeobject) :
         },
         true);
 
-    homestore::HomeStore::instance()->meta_service().register_handler(
+    homestore::meta_service().register_handler(
         GCManager::_gc_task_meta_name,
         [this](homestore::meta_blk* mblk, sisl::byte_view buf, size_t size) {
             on_gc_task_meta_blk_found(std::move(buf), voidptr_cast(mblk));

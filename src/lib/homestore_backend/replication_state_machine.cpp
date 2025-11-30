@@ -59,7 +59,7 @@ void ReplicationStateMachine::notify_committed_lsn(int64_t lsn) {
     if (repl_dev()->is_leader()) {
         // no need to handle stale no_space_left as a leader, since that log(casuing no_space_left) is not in the
         // log store, and will not be committed.
-        LOGT("I am leader, reset no_space_left_error_info(lsn={}, chunk_id={}) after lsn={} is commited", target_lsn,
+        LOGT("I am leader, reset no_space_left_error_info(lsn={}, chunk_id={}) after lsn={} is committed", target_lsn,
              chunk_id, lsn);
         reset_no_space_left_error_info();
         return;

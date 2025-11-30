@@ -86,6 +86,7 @@ private:
     std::unordered_map< std::string, PgIndexTable > index_table_pg_map_;
     std::unordered_map< std::string, std::shared_ptr< GCBlobIndexTable > > gc_index_table_map;
     std::once_flag replica_restart_flag_;
+    bool is_first_time_startup_{false};
 
     // mapping from chunk to shard list.
     std::unordered_map< homestore::chunk_num_t, std::set< shard_id_t > > chunk_to_shards_map_;
@@ -361,7 +362,7 @@ public:
         void reconcile_leader() const;
 
         void yield_leadership_to_follower() const;
-        
+
         /**
          * Returns all shards
          */
@@ -743,8 +744,6 @@ public:
      *
      */
     void init_cp();
-
-    void init_gc();
 
     /**
      * @brief Callback function invoked when createPG message is committed on a shard.
