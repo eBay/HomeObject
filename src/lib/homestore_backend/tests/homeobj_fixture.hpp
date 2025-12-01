@@ -829,7 +829,7 @@ private:
         auto blob_size = blob.body.size();
 
         uint64_t actual_written_size{
-            uint32_cast(sisl::round_up(sizeof(HSHomeObject::BlobHeader) + blob.user_key.size(), io_align))};
+            uint32_cast(sisl::round_up(sizeof(HSHomeObject::BlobHeader), io_align))};
 
         if (((r_cast< uintptr_t >(blob.body.cbytes()) % io_align) != 0) || ((blob_size % io_align) != 0)) {
             blob_size = sisl::round_up(blob_size, io_align);
