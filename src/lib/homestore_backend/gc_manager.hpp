@@ -295,12 +295,13 @@ public:
 
     bool is_eligible_for_gc(chunk_id_t chunk_id);
 
+    void handle_all_recovered_gc_tasks();
+
     void start();
     void stop();
     bool is_started();
 
     void scan_chunks_for_gc();
-    void handle_all_recovered_gc_tasks();
     void drain_pg_pending_gc_task(const pg_id_t pg_id);
     void decr_pg_pending_gc_task(const pg_id_t pg_id);
     void incr_pg_pending_gc_task(const pg_id_t pg_id);
