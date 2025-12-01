@@ -165,7 +165,7 @@ public:
     };
 
     struct DataHeader {
-        static constexpr uint8_t data_header_version = 0x01;
+        static constexpr uint8_t data_header_version = 0x02;
         static constexpr uint64_t data_header_magic = 0x21fdffdba8d68fc6; // echo "BlobHeader" | md5sum
 
         enum class data_type_t : uint32_t { SHARD_INFO = 1, BLOB_INFO = 2 };
@@ -385,6 +385,7 @@ public:
     // Padding of zeroes is added to make sure the whole payload be aligned to device block size.
     struct BlobHeader : DataHeader {
         static constexpr uint64_t blob_max_hash_len = 32;
+        static constexpr uint64_t max_user_key_length = 1024 + 1;
 
         enum class HashAlgorithm : uint8_t {
             NONE = 0,
@@ -400,13 +401,21 @@ public:
         blob_id_t blob_id;
         uint32_t blob_size;
         uint64_t object_offset; // Offset of this blob in the object. Provided by GW.
-        uint32_t data_offset;   // Offset of actual data blob stored after the metadata.
+        uint32_t data_offset;   // Offset of actual data blob stored after the metadata
         uint32_t user_key_size; // Actual size of the user key.
+        uint8_t user_key[max_user_key_length]{};
+        uint8_t padding[2957]{};  // data_block_size is 4K, so total size of BlobHeader is 4096 bytes
+
+        std::string get_user_key() const {
+            std::string ret = user_key_size ? std::string((const char*)user_key, (size_t)user_key_size) : std::string{};
+            return ret;
+        }
 
         std::string to_string() const {
-            return fmt::format("magic={:#x} version={} shard={:#x} blob_size={} user_size={} algo={} hash={:np}\n",
-                               magic, version, shard_id, blob_size, user_key_size, (uint8_t)hash_algorithm,
-                               spdlog::to_hex(hash, hash + blob_max_hash_len));
+            return fmt::format(
+                "magic={:#x} version={} shard={:#x} blob_size={} user_size={} algo={} hash={:np}, user_key={}\n", magic,
+                version, shard_id, blob_size, user_key_size, (uint8_t)hash_algorithm,
+                spdlog::to_hex(hash, hash + blob_max_hash_len), get_user_key());
         }
 
         bool valid() const {
@@ -457,7 +466,8 @@ public:
         }
     };
 #pragma pack()
-
+    // size of BlobHeader should be smaller than _data_block_size
+    static_assert(sizeof(BlobHeader) == _data_block_size);
     struct BlobInfo {
         shard_id_t shard_id;
         blob_id_t blob_id;
@@ -927,8 +937,7 @@ public:
     homestore::ReplResult< homestore::blk_alloc_hints >
     blob_put_get_blk_alloc_hints(sisl::blob const& header, cintrusive< homestore::repl_req_ctx >& ctx);
     void compute_blob_payload_hash(BlobHeader::HashAlgorithm algorithm, const uint8_t* blob_bytes, size_t blob_size,
-                                   const uint8_t* user_key_bytes, size_t user_key_size, uint8_t* hash_bytes,
-                                   size_t hash_len) const;
+                                   uint8_t* hash_bytes, size_t hash_len) const;
 
     std::shared_ptr< homestore::IndexTableBase >
     recover_index_table(homestore::superblk< homestore::index_table_sb >&& sb);

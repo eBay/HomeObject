@@ -11,7 +11,6 @@ TEST_F(HomeObjectFixture, BasicEquivalence) {
     EXPECT_EQ(_obj_inst.get(), dynamic_cast< homeobject::HomeObject* >(pg_mgr.get()));
     EXPECT_EQ(_obj_inst.get(), dynamic_cast< homeobject::HomeObject* >(blob_mgr.get()));
 }
-
 TEST_F(HomeObjectFixture, BasicPutGetDelBlobWithRestart) {
     // test recovery with pristine state firstly
     restart();
