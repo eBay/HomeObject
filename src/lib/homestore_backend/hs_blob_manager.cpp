@@ -352,32 +352,14 @@ BlobManager::AsyncResult< Blob > HSHomeObject::_get_blob_data(const shared< home
                 return folly::makeUnexpected(BlobError(BlobErrorCode::READ_FAILED));
             }
 
+            auto verify_result = do_verify_blob(read_buf.cbytes(), shard_id, 0 /* no blob_id check */);
+            if (!verify_result.hasValue()) {
+                decr_pending_request_num();
+                return folly::makeUnexpected(verify_result.error());
+            }
+            std::string user_key = std::move(verify_result.value());
+
             BlobHeader const* header = r_cast< BlobHeader const* >(read_buf.cbytes());
-            if (!header->valid()) {
-                BLOGE(tid, shard_id, blob_id, "Invalid header found: [header={}]", header->to_string());
-                decr_pending_request_num();
-                return folly::makeUnexpected(BlobError(BlobErrorCode::READ_FAILED));
-            }
-
-            if (header->shard_id != shard_id) {
-                BLOGE(tid, shard_id, blob_id, "Invalid shard_id in header: [header={}]", header->to_string());
-                decr_pending_request_num();
-                return folly::makeUnexpected(BlobError(BlobErrorCode::READ_FAILED));
-            }
-
-            std::string user_key = header->get_user_key();
-
-            uint8_t const* blob_bytes = read_buf.bytes() + header->data_offset;
-            uint8_t computed_hash[BlobHeader::blob_max_hash_len]{};
-            compute_blob_payload_hash(header->hash_algorithm, blob_bytes, header->blob_size, computed_hash,
-                                      BlobHeader::blob_max_hash_len);
-            if (std::memcmp(computed_hash, header->hash, BlobHeader::blob_max_hash_len) != 0) {
-                BLOGE(tid, shard_id, blob_id, "Hash mismatch header, [header={}] [computed={:np}]", header->to_string(),
-                      spdlog::to_hex(computed_hash, computed_hash + BlobHeader::blob_max_hash_len));
-                decr_pending_request_num();
-                return folly::makeUnexpected(BlobError(BlobErrorCode::CHECKSUM_MISMATCH));
-            }
-
             if (req_offset + req_len > header->blob_size) {
                 BLOGE(tid, shard_id, blob_id, "Invalid offset length requested in get blob offset={} len={} size={}",
                       req_offset, req_len, header->blob_size);
@@ -389,6 +371,7 @@ BlobManager::AsyncResult< Blob > HSHomeObject::_get_blob_data(const shared< home
             // whole blob size else copy only the request length.
             auto res_len = req_len == 0 ? header->blob_size - req_offset : req_len;
             auto body = sisl::io_blob_safe(res_len);
+            uint8_t const* blob_bytes = read_buf.bytes() + header->data_offset;
             std::memcpy(body.bytes(), blob_bytes + req_offset, res_len);
 
             BLOGD(tid, shard_id, blob_id, "Blob get success: blkid={}", blkid.to_string());
@@ -639,6 +622,44 @@ void HSHomeObject::on_blob_message_rollback(int64_t lsn, sisl::blob const& heade
     }
 }
 
+BlobManager::Result< std::string > HSHomeObject::do_verify_blob(const void* blob, shard_id_t expected_shard_id,
+                                                                blob_id_t expected_blob_id) const {
+    uint8_t const* blob_data = static_cast< uint8_t const* >(blob);
+    BlobHeader const* header = r_cast< BlobHeader const* >(blob_data);
+
+    // Check if header is valid
+    if (!header->valid()) {
+        LOGE("Invalid header found: [header={}]", header->to_string());
+        return folly::makeUnexpected(BlobError(BlobErrorCode::READ_FAILED));
+    }
+
+    // Check if shard_id matches
+    if (header->shard_id != expected_shard_id) {
+        LOGE("Invalid shard_id in header: [header={}]", header->to_string());
+        return folly::makeUnexpected(BlobError(BlobErrorCode::READ_FAILED));
+    }
+
+    // Check if blob_id matches (only if expected_blob_id != 0)
+    if (expected_blob_id != 0 && header->blob_id != expected_blob_id) {
+        LOGE("Invalid blob_id in header: [header={}]", header->to_string());
+        return folly::makeUnexpected(BlobError(BlobErrorCode::READ_FAILED));
+    }
+
+    // Verify hash
+    uint8_t const* blob_bytes = blob_data + header->data_offset;
+    uint8_t computed_hash[BlobHeader::blob_max_hash_len]{};
+    compute_blob_payload_hash(header->hash_algorithm, blob_bytes, header->blob_size, computed_hash,
+                              BlobHeader::blob_max_hash_len);
+
+    if (std::memcmp(computed_hash, header->hash, BlobHeader::blob_max_hash_len) != 0) {
+        LOGE("Hash mismatch header, [header={}] [computed={:np}]", header->to_string(),
+             spdlog::to_hex(computed_hash, computed_hash + BlobHeader::blob_max_hash_len));
+        return folly::makeUnexpected(BlobError(BlobErrorCode::CHECKSUM_MISMATCH));
+    }
+
+    return header->get_user_key();
+}
+
 bool HSHomeObject::verify_blob(const void* blob, const shard_id_t shard_id, const blob_id_t blob_id,
                                bool allow_delete_marker) const {
     if (allow_delete_marker && !std::memcmp(blob, delete_marker_blob_data.data(), delete_marker_blob_data.size())) {
@@ -646,40 +667,9 @@ bool HSHomeObject::verify_blob(const void* blob, const shard_id_t shard_id, cons
         return true;
     }
 
-    uint8_t const* blob_data = static_cast< uint8_t const* >(blob);
-    HSHomeObject::BlobHeader const* header = r_cast< HSHomeObject::BlobHeader const* >(blob_data);
-
-    if (!header->valid()) {
-        LOGE("read blob header is not valid for shard_id={}, blob_id={}, "
-             "Invalid header found: [header={}]",
-             shard_id, blob_id, header->to_string());
-        return false;
-    }
-
-    if (header->shard_id != shard_id) {
-        LOGE("expecting shard_id={}, Invalid shard_id={} in header: [header={}]", shard_id, header->shard_id,
-             header->to_string());
-        return false;
-    }
-
-    if (header->blob_id != blob_id) {
-        LOGE("expecting blob_id={}, Invalid blob_id={} in header: [header={}]", blob_id, header->blob_id,
-             header->to_string());
-        return false;
-    }
-
-    uint8_t const* blob_bytes = blob_data + header->data_offset;
-    uint8_t computed_hash[HSHomeObject::BlobHeader::blob_max_hash_len]{};
-    compute_blob_payload_hash(header->hash_algorithm, blob_bytes, header->blob_size, computed_hash,
-                              HSHomeObject::BlobHeader::blob_max_hash_len);
-
-    if (std::memcmp(computed_hash, header->hash, HSHomeObject::BlobHeader::blob_max_hash_len) != 0) {
-        LOGE("Hash mismatch header, [header={}] [computed={:np}]", header->to_string(),
-             spdlog::to_hex(computed_hash, computed_hash + HSHomeObject::BlobHeader::blob_max_hash_len));
-        return false;
-    }
-
-    return true;
+    // Use the new _verify_blob method
+    auto result = do_verify_blob(blob, shard_id, blob_id);
+    return result.hasValue();
 }
 
 } // namespace homeobject

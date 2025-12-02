@@ -248,32 +248,10 @@ BlobManager::AsyncResult< blob_read_result > HSHomeObject::PGBlobIterator::load_
                 return folly::makeUnexpected(BlobError(BlobErrorCode::READ_FAILED));
             }
 
-            BlobHeader const* header = r_cast< BlobHeader const* >(read_buf.cbytes());
-            if (!header->valid()) {
+            if (!home_obj_.verify_blob(read_buf.cbytes(), shard_id, 0 /* no blob_id check */)) {
                 // The metrics for corrupted blob is handled on the follower side.
-                LOGE("Invalid header found, shardID=0x{:x}, pg={}, shard=0x{:x}, blob_id={}, [header={}]", shard_id,
-                     (shard_id >> homeobject::shard_width), (shard_id & homeobject::shard_mask), blob_id,
-                     header->to_string());
-                return blob_read_result(blob_id, std::move(read_buf), ResyncBlobState::CORRUPTED);
-            }
-
-            if (header->shard_id != shard_id) {
-                // The metrics for corrupted blob is handled on the follower side.
-                LOGE("Invalid shard_id in header, shardID=0x{:x}, pg={}, shard=0x{:x}, blob_id={}, [header={}]",
-                     shard_id, (shard_id >> homeobject::shard_width), (shard_id & homeobject::shard_mask), blob_id,
-                     header->to_string());
-                return blob_read_result(blob_id, std::move(read_buf), ResyncBlobState::CORRUPTED);
-            }
-
-            uint8_t const* blob_bytes = read_buf.bytes() + header->data_offset;
-            uint8_t computed_hash[BlobHeader::blob_max_hash_len]{};
-            home_obj_.compute_blob_payload_hash(header->hash_algorithm, blob_bytes, header->blob_size, computed_hash,
-                                                BlobHeader::blob_max_hash_len);
-            if (std::memcmp(computed_hash, header->hash, BlobHeader::blob_max_hash_len) != 0) {
-                LOGE("corrupted blob found, shardID=0x{:x}, pg={}, shard=0x{:x}, blob_id={}, hash mismatch header "
-                     "[{}] [computed={:np}]",
-                     shard_id, (shard_id >> homeobject::shard_width), (shard_id & homeobject::shard_mask), blob_id,
-                     header->to_string(), spdlog::to_hex(computed_hash, computed_hash + BlobHeader::blob_max_hash_len));
+                LOGE("Blob verification failed, shardID=0x{:x}, pg={}, shard=0x{:x}, blob_id={}", shard_id,
+                     (shard_id >> homeobject::shard_width), (shard_id & homeobject::shard_mask), blob_id);
                 return blob_read_result(blob_id, std::move(read_buf), ResyncBlobState::CORRUPTED);
             }
 
