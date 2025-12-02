@@ -59,7 +59,7 @@ private:
 
     BlobManager::AsyncResult< blob_id_t > _put_blob(ShardInfo const&, Blob&&, trace_id_t tid) override;
     BlobManager::AsyncResult< Blob > _get_blob(ShardInfo const&, blob_id_t, uint64_t off, uint64_t len,
-                                               trace_id_t tid) const override;
+                                               bool allow_skip_verify, trace_id_t tid) const override;
     BlobManager::NullAsyncResult _del_blob(ShardInfo const&, blob_id_t, trace_id_t tid) override;
 
     PGManager::NullAsyncResult _create_pg(PGInfo&& pg_info, std::set< peer_id_t > const& peers,
@@ -385,7 +385,7 @@ public:
     // Padding of zeroes is added to make sure the whole payload be aligned to device block size.
     struct BlobHeader : DataHeader {
         static constexpr uint64_t blob_max_hash_len = 32;
-        static constexpr uint64_t max_user_key_length = 1024 + 1;
+        static constexpr uint64_t max_user_key_length = 1024;
 
         enum class HashAlgorithm : uint8_t {
             NONE = 0,
@@ -403,7 +403,7 @@ public:
         uint64_t object_offset; // Offset of this blob in the object. Provided by GW.
         uint32_t data_offset;   // Offset of actual data blob stored after the metadata
         uint32_t user_key_size; // Actual size of the user key.
-        uint8_t user_key[max_user_key_length]{};
+        uint8_t user_key[max_user_key_length + 1]{};
         uint8_t padding[2957]{};  // data_block_size is 4K, so total size of BlobHeader is 4096 bytes
 
         std::string get_user_key() const {
@@ -692,7 +692,13 @@ private:
     // blob related
     BlobManager::AsyncResult< Blob > _get_blob_data(const shared< homestore::ReplDev >& repl_dev, shard_id_t shard_id,
                                                     blob_id_t blob_id, uint64_t req_offset, uint64_t req_len,
-                                                    const homestore::MultiBlkId& blkid, trace_id_t tid) const;
+                                                    const homestore::MultiBlkId& blkid, trace_id_t tid,
+                                                    bool allow_skip_verify = false) const;
+
+    BlobManager::AsyncResult< Blob > _get_blob_data_partial(const shared< homestore::ReplDev >& repl_dev,
+                                                            shard_id_t shard_id, blob_id_t blob_id, uint64_t req_offset,
+                                                            uint64_t req_len, const homestore::MultiBlkId& blkid,
+                                                            trace_id_t tid) const;
 
     // create pg related
     static PGManager::NullAsyncResult do_create_pg(cshared< homestore::ReplDev > repl_dev, PGInfo&& pg_info,

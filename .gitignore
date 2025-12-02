@@ -2,6 +2,7 @@
 .idea/**
 .cache
 .clangd
+.claude/*
 
 build
 test_package/build
