@@ -963,6 +963,8 @@ public:
     BlobManager::Result< std::vector< BlobInfo > > get_shard_blobs(shard_id_t shard_id);
 
 private:
+    BlobManager::Result< std::string > do_verify_blob(const void* blob, shard_id_t expected_shard_id,
+                                                      blob_id_t expected_blob_id = 0) const;
     std::shared_ptr< BlobIndexTable > create_pg_index_table();
     std::shared_ptr< GCBlobIndexTable > create_gc_index_table();
 
