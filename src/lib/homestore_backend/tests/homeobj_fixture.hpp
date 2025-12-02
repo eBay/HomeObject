@@ -38,8 +38,8 @@ class HomeObjectFixture : public ::testing::Test {
 public:
     std::shared_ptr< homeobject::HSHomeObject > _obj_inst;
 
-    // Create blob size in range (1, 16kb) and user key in range (1, 1kb)
-    HomeObjectFixture() : rand_blob_size{1u, 16 * 1024}, rand_user_key_size{1u, 1024} {}
+    HomeObjectFixture() :
+            rand_blob_size{1u, 16 * 1024}, rand_user_key_size{1u, HSHomeObject::BlobHeader::max_user_key_length} {}
 
     void SetUp() override {
         IM_SETTINGS_FACTORY().modifiable_settings([](auto& s) {
@@ -421,32 +421,46 @@ public:
                              current_blob_id, tid);
                     auto blob = build_blob(current_blob_id);
                     len = blob.body.size();
+
+                    bool allow_skip_verify = true;
                     if (use_random_offset) {
                         std::uniform_int_distribution< uint32_t > rand_off_gen{0u, len - 1u};
                         std::uniform_int_distribution< uint32_t > rand_len_gen{1u, len};
 
                         off = rand_off_gen(rnd_engine);
                         len = rand_len_gen(rnd_engine);
-                        if ((off + len) >= blob.body.size()) { len = blob.body.size() - off; }
+                        if (off + len >= blob.body.size()) { len = blob.body.size() - off; }
+
+                        // randomly set allow_skip_verify to false to do full verification
+                        std::uniform_int_distribution< uint32_t > bool_dist(0, 1);
+                        allow_skip_verify = (bool)bool_dist(rnd_engine);
                     }
 
-                    auto g = _obj_inst->blob_manager()->get(shard_id, current_blob_id, off, len, tid).get();
+                    auto g = _obj_inst->blob_manager()
+                                 ->get(shard_id, current_blob_id, off, len, allow_skip_verify, tid)
+                                 .get();
                     while (wait_when_not_exist && g.hasError() && g.error().code == BlobErrorCode::UNKNOWN_BLOB) {
                         LOGDEBUG("blob not exist at the moment, waiting for sync, shard {} blob {}", shard_id,
                                  current_blob_id);
                         wait_for_blob(shard_id, current_blob_id);
-                        g = _obj_inst->blob_manager()->get(shard_id, current_blob_id, off, len, tid).get();
+                        g = _obj_inst->blob_manager()
+                                ->get(shard_id, current_blob_id, off, len, allow_skip_verify, tid)
+                                .get();
                     }
                     ASSERT_TRUE(!!g) << "get blob fail, shard_id " << shard_id << " blob_id " << current_blob_id
                                      << " replica number " << g_helper->replica_num();
                     auto result = std::move(g.value());
-                    LOGINFO("get blob pg={} shard {} blob {} off {} len {} data {}", pg_id, shard_id, current_blob_id,
-                            off, len, hex_bytes(result.body.cbytes(), std::min(len, 10u)));
+                    LOGINFO("get blob pg={} shard {} blob {} off {} len {} data {} allow_skip_verify {}", pg_id,
+                            shard_id, current_blob_id, off, len, hex_bytes(result.body.cbytes(), std::min(len, 10u)),
+                            allow_skip_verify);
                     EXPECT_EQ(result.body.size(), len);
                     EXPECT_EQ(std::memcmp(result.body.bytes(), blob.body.cbytes() + off, result.body.size()), 0);
-                    EXPECT_EQ(result.user_key.size(), blob.user_key.size());
-                    EXPECT_EQ(blob.user_key, result.user_key);
-                    EXPECT_EQ(blob.object_off, result.object_off);
+                    // Only verify user_key and object_off when allow_skip_verify is false
+                    if (!allow_skip_verify) {
+                        EXPECT_EQ(result.user_key.size(), blob.user_key.size());
+                        EXPECT_EQ(blob.user_key, result.user_key);
+                        EXPECT_EQ(blob.object_off, result.object_off);
+                    }
                     current_blob_id++;
                 }
             }

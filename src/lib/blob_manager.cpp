@@ -5,11 +5,11 @@ namespace homeobject {
 std::shared_ptr< BlobManager > HomeObjectImpl::blob_manager() { return shared_from_this(); }
 
 BlobManager::AsyncResult< Blob > HomeObjectImpl::get(shard_id_t shard, blob_id_t const& blob_id, uint64_t off,
-                                                     uint64_t len, trace_id_t tid) const {
+                                                     uint64_t len, bool allow_skip_verify, trace_id_t tid) const {
     return _get_shard(shard, tid)
-        .thenValue([this, blob_id, off, len, tid](auto const e) -> BlobManager::AsyncResult< Blob > {
+        .thenValue([this, blob_id, off, len, allow_skip_verify, tid](auto const e) -> BlobManager::AsyncResult< Blob > {
             if (!e) return folly::makeUnexpected(BlobError(BlobErrorCode::UNKNOWN_SHARD));
-            return _get_blob(e.value(), blob_id, off, len, tid);
+            return _get_blob(e.value(), blob_id, off, len, allow_skip_verify, tid);
         });
 }
 

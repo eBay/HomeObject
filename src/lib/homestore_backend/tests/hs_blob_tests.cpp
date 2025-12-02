@@ -389,7 +389,7 @@ TEST_F(HomeObjectFixture, BasicPutGetDelOnAllPGWithDiskLost) {
                      current_blob_id, tid);
                 auto blob = build_blob(current_blob_id);
                 len = blob.body.size();
-                auto g = _obj_inst->blob_manager()->get(shard_id, current_blob_id, off, len, tid).get();
+                auto g = _obj_inst->blob_manager()->get(shard_id, current_blob_id, off, len, false, tid).get();
                 ASSERT_TRUE(g.hasError())
                     << "degraded pg on error member should return get blob fail, shard_id " << shard_id << " blob_id "
                     << current_blob_id << " replica number " << g_helper->replica_num();
