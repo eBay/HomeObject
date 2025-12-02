@@ -284,7 +284,8 @@ void HSHomeObject::on_blob_put_commit(int64_t lsn, sisl::blob const& header, sis
 }
 
 BlobManager::AsyncResult< Blob > HSHomeObject::_get_blob(ShardInfo const& shard, blob_id_t blob_id, uint64_t req_offset,
-                                                         uint64_t req_len, trace_id_t tid) const {
+                                                         uint64_t req_len, bool allow_skip_verify,
+                                                         trace_id_t tid) const {
     if (is_shutting_down()) {
         LOGI("service is being shutdown");
         return folly::makeUnexpected(BlobErrorCode::SHUTTING_DOWN);
@@ -327,15 +328,29 @@ BlobManager::AsyncResult< Blob > HSHomeObject::_get_blob(ShardInfo const& shard,
         return folly::makeUnexpected(r.error());
     }
 
-    return _get_blob_data(repl_dev, shard.id, blob_id, req_offset, req_len, r.value() /* blkid*/, tid);
+    return _get_blob_data(repl_dev, shard.id, blob_id, req_offset, req_len, r.value() /* blkid*/, tid,
+                          allow_skip_verify)
+        .deferValue([this](auto&& result) {
+            decr_pending_request_num();
+            return std::forward< decltype(result) >(result);
+        });
 }
 
 BlobManager::AsyncResult< Blob > HSHomeObject::_get_blob_data(const shared< homestore::ReplDev >& repl_dev,
                                                               shard_id_t shard_id, blob_id_t blob_id,
                                                               uint64_t req_offset, uint64_t req_len,
-                                                              const homestore::MultiBlkId& blkid,
-                                                              trace_id_t tid) const {
-    auto const total_size = blkid.blk_count() * repl_dev->get_blk_size();
+                                                              const homestore::MultiBlkId& blkid, trace_id_t tid,
+                                                              bool allow_skip_verify) const {
+    auto const blk_size = repl_dev->get_blk_size();
+    auto const total_size = blkid.blk_count() * blk_size;
+
+    // Use partial read path only when we can skip at least 1 data block (in addition to header)
+    // to make the optimization worthwhile. This requires req_len > 0 (known exact length).
+    if (allow_skip_verify && req_len > 0 &&
+        (req_offset >= blk_size || req_offset + req_len + blk_size <= total_size - _data_block_size)) {
+        return _get_blob_data_partial(repl_dev, shard_id, blob_id, req_offset, req_len, blkid, tid);
+    }
+
     sisl::io_blob_safe read_buf{total_size, io_align};
 
     sisl::sg_list sgs;
@@ -348,13 +363,11 @@ BlobManager::AsyncResult< Blob > HSHomeObject::_get_blob_data(const shared< home
                     read_buf = std::move(read_buf)](auto&& result) mutable -> BlobManager::AsyncResult< Blob > {
             if (result) {
                 BLOGE(tid, shard_id, blob_id, "Failed to get blob: err={}", blob_id, shard_id, result.value());
-                decr_pending_request_num();
                 return folly::makeUnexpected(BlobError(BlobErrorCode::READ_FAILED));
             }
 
             auto verify_result = do_verify_blob(read_buf.cbytes(), shard_id, 0 /* no blob_id check */);
             if (!verify_result.hasValue()) {
-                decr_pending_request_num();
                 return folly::makeUnexpected(verify_result.error());
             }
             std::string user_key = std::move(verify_result.value());
@@ -363,7 +376,6 @@ BlobManager::AsyncResult< Blob > HSHomeObject::_get_blob_data(const shared< home
             if (req_offset + req_len > header->blob_size) {
                 BLOGE(tid, shard_id, blob_id, "Invalid offset length requested in get blob offset={} len={} size={}",
                       req_offset, req_len, header->blob_size);
-                decr_pending_request_num();
                 return folly::makeUnexpected(BlobError(BlobErrorCode::INVALID_ARG));
             }
 
@@ -375,8 +387,66 @@ BlobManager::AsyncResult< Blob > HSHomeObject::_get_blob_data(const shared< home
             std::memcpy(body.bytes(), blob_bytes + req_offset, res_len);
 
             BLOGD(tid, shard_id, blob_id, "Blob get success: blkid={}", blkid.to_string());
-            decr_pending_request_num();
             return Blob(std::move(body), std::move(user_key), header->object_offset, repl_dev->get_leader_id());
+        });
+}
+
+BlobManager::AsyncResult< Blob > HSHomeObject::_get_blob_data_partial(const shared< homestore::ReplDev >& repl_dev,
+                                                                      shard_id_t shard_id, blob_id_t blob_id,
+                                                                      uint64_t req_offset, uint64_t req_len,
+                                                                      const homestore::MultiBlkId& blkid,
+                                                                      trace_id_t tid) const {
+    auto const blk_size = repl_dev->get_blk_size();
+
+    // In v4, BlobHeader is fixed at _data_block_size (4KB), and data starts immediately after
+    // We can skip reading the header entirely for partial reads that don't overlap with it
+    auto const fixed_data_offset = _data_block_size;
+
+    // Calculate byte range within the storage (including header)
+    auto const read_start_byte = fixed_data_offset + req_offset;
+    auto const read_end_byte = read_start_byte + req_len;
+
+    // Calculate which blocks we need to read
+    uint32_t start_blk = read_start_byte / blk_size;
+    uint32_t num_blks = (read_end_byte + blk_size - 1) / blk_size - start_blk;
+    uint32_t read_size = num_blks * blk_size;
+
+    // Create MultiBlkId for the range we need
+    homestore::MultiBlkId read_blkid;
+    read_blkid.add(blkid.blk_num() + start_blk, num_blks, blkid.chunk_num());
+
+    sisl::io_blob_safe read_buf{read_size, io_align};
+    sisl::sg_list sgs;
+    sgs.size = read_size;
+    sgs.iovs.emplace_back(iovec{.iov_base = read_buf.bytes(), .iov_len = read_buf.size()});
+
+    BLOGD(tid, shard_id, blob_id,
+          "Reading partial data: offset={}, len={}, full_blkid={}, read_blkid={}, start_blk={}, num_blks={}",
+          req_offset, req_len, blkid.to_string(), read_blkid.to_string(), start_blk, num_blks);
+
+    return repl_dev->async_read(read_blkid, sgs, read_size)
+        .thenValue([tid, blob_id, shard_id, req_offset, req_len, blkid, repl_dev, start_blk, blk_size,
+                    read_buf = std::move(read_buf)](auto&& result) mutable -> BlobManager::AsyncResult< Blob > {
+            if (result) {
+                BLOGE(tid, shard_id, blob_id, "Failed to read partial data: err={}", result.value());
+                return folly::makeUnexpected(BlobError(BlobErrorCode::READ_FAILED));
+            }
+
+            // Calculate offset within read buffer
+            auto const data_start_in_storage = _data_block_size;
+            auto const req_start_in_storage = data_start_in_storage + req_offset;
+            auto const read_start_in_storage = start_blk * blk_size;
+            auto const offset_in_buf = req_start_in_storage - read_start_in_storage;
+
+            uint8_t const* blob_bytes = read_buf.bytes() + offset_in_buf;
+
+            // Copy the requested blob bytes
+            auto body = sisl::io_blob_safe(req_len);
+            std::memcpy(body.bytes(), blob_bytes, req_len);
+
+            BLOGD(tid, shard_id, blob_id, "Blob partial get success: blkid={}", blkid.to_string());
+            // user_key and object_offset are not available in partial read mode
+            return Blob(std::move(body), std::string{}, 0 /* object_offset */, repl_dev->get_leader_id());
         });
 }
 
@@ -671,5 +741,4 @@ bool HSHomeObject::verify_blob(const void* blob, const shard_id_t shard_id, cons
     auto result = do_verify_blob(blob, shard_id, blob_id);
     return result.hasValue();
 }
-
 } // namespace homeobject

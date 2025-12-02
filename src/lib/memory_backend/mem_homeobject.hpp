@@ -43,7 +43,7 @@ class MemoryHomeObject : public HomeObjectImpl {
     // BlobManager
     BlobManager::AsyncResult< blob_id_t > _put_blob(ShardInfo const&, Blob&&, trace_id_t tid) override;
     BlobManager::AsyncResult< Blob > _get_blob(ShardInfo const&, blob_id_t, uint64_t off, uint64_t len,
-                                               trace_id_t tid) const override;
+                                               bool allow_skip_verify, trace_id_t tid) const override;
     BlobManager::NullAsyncResult _del_blob(ShardInfo const&, blob_id_t, trace_id_t tid) override;
     ///
 

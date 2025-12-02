@@ -93,7 +93,7 @@ class HomeObjectImpl : public HomeObject,
 
     virtual BlobManager::AsyncResult< blob_id_t > _put_blob(ShardInfo const&, Blob&&, trace_id_t tid) = 0;
     virtual BlobManager::AsyncResult< Blob > _get_blob(ShardInfo const&, blob_id_t, uint64_t off, uint64_t len,
-                                                       trace_id_t tid) const = 0;
+                                                       bool allow_skip_verify, trace_id_t tid) const = 0;
     virtual BlobManager::NullAsyncResult _del_blob(ShardInfo const&, blob_id_t, trace_id_t tid) = 0;
     ///
 
@@ -197,7 +197,7 @@ public:
     /// BlobManager
     BlobManager::AsyncResult< blob_id_t > put(shard_id_t shard, Blob&&, trace_id_t tid) final;
     BlobManager::AsyncResult< Blob > get(shard_id_t shard, blob_id_t const& blob, uint64_t off, uint64_t len,
-                                         trace_id_t tid) const final;
+                                         bool allow_skip_verify, trace_id_t tid) const final;
     BlobManager::NullAsyncResult del(shard_id_t shard, blob_id_t const& blob, trace_id_t tid) final;
 };
 
