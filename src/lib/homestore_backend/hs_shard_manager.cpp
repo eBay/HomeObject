@@ -110,7 +110,7 @@ ShardInfo HSHomeObject::deserialize_shard_info(const char* json_str, size_t str_
     return shard_info;
 }
 
-ShardManager::AsyncResult< ShardInfo > HSHomeObject::_create_shard(pg_id_t pg_owner, uint64_t size_bytes,
+ShardManager::AsyncResult< ShardInfo > HSHomeObject::_create_shard(pg_id_t pg_owner, uint64_t size_bytes, std::string meta,
                                                                    trace_id_t tid) {
 
     if (is_shutting_down()) {

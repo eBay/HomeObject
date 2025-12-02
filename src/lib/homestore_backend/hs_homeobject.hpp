@@ -54,7 +54,7 @@ private:
     uint32_t _hs_reserved_blks = 0;
 
     /// Overridable Helpers
-    ShardManager::AsyncResult< ShardInfo > _create_shard(pg_id_t, uint64_t size_bytes, trace_id_t tid) override;
+    ShardManager::AsyncResult< ShardInfo > _create_shard(pg_id_t, uint64_t size_bytes, std::string meta, trace_id_t tid) override;
     ShardManager::AsyncResult< ShardInfo > _seal_shard(ShardInfo const&, trace_id_t tid) override;
 
     BlobManager::AsyncResult< blob_id_t > _put_blob(ShardInfo const&, Blob&&, trace_id_t tid) override;

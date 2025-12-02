@@ -135,7 +135,7 @@ void HomeObjectFixture::RestartFollowerDuringBaselineResyncUsingSigKill(uint64_t
     std::string task_id = "task_id";
     if (!is_restart) {
         for (uint64_t j = 0; j < num_shards_per_pg; j++)
-            create_shard(pg_id, 64 * Mi);
+            create_shard(pg_id, 64 * Mi, "shard meta");
 
         // put and verify blobs in the pg, excluding the spare replicas
         put_blobs(pg_shard_id_vec, num_blobs_per_shard, pg_blob_id);
@@ -286,7 +286,7 @@ TEST_F(HomeObjectFixture, RestartFollowerDuringBaselineResyncUsingGracefulShutdo
 #endif
 
     for (uint64_t j = 0; j < num_shards_per_pg; j++)
-        create_shard(pg_id, 64 * Mi);
+        create_shard(pg_id, 64 * Mi, "shard meta");
 
     // put and verify blobs in the pg, excluding the spare replicas
     put_blobs(pg_shard_id_vec, num_blobs_per_shard, pg_blob_id);
@@ -384,7 +384,7 @@ void HomeObjectFixture::ReplaceMember(bool withGC) {
 
     // last shard is empty shard
     for (uint64_t j = 0; j < num_shards_per_pg + 1; j++)
-        create_shard(pg_id, 64 * Mi);
+        create_shard(pg_id, 64 * Mi, "shard meta");
 
     // we can not share all the shard_id and blob_id among all the replicas including the spare ones, so we need to
     // derive them by calculating.
@@ -612,7 +612,7 @@ void HomeObjectFixture::RestartLeaderDuringBaselineResyncUsingSigKill(uint64_t f
         // ========Stage 1:  Create a pg without spare replicas and put blobs========
 
         for (uint64_t j = 0; j < num_shards_per_pg; j++)
-            create_shard(pg_id, 64 * Mi);
+            create_shard(pg_id, 64 * Mi, "shard meta");
 
         // put and verify blobs in the pg, excluding the spare replicas
         put_blobs(pg_shard_id_vec, num_blobs_per_shard, pg_blob_id);

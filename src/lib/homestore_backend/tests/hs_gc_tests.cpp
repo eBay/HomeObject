@@ -30,7 +30,7 @@ TEST_F(HomeObjectFixture, BasicGC) {
         // create a shard for each chunk
         for (const auto& [pg_id, chunk_num] : pg_chunk_nums) {
             for (uint64_t j = 0; j < chunk_num; j++) {
-                auto shard = create_shard(pg_id, 64 * Mi);
+                auto shard = create_shard(pg_id, 64 * Mi, "shard meta");
                 pg_open_shard_id_vec[pg_id].emplace_back(shard.id);
                 pg_shard_id_vec[pg_id].emplace_back(shard.id);
             }
@@ -332,7 +332,7 @@ TEST_F(HomeObjectFixture, HandlingNoSpaceLeft) {
         // create a shard for each chunk
         for (const auto& [pg_id, chunk_num] : pg_chunk_nums) {
             for (uint64_t j = 0; j < chunk_num; j++) {
-                auto shard = create_shard(pg_id, 64 * Mi);
+                auto shard = create_shard(pg_id, 64 * Mi, "shard meta");
                 pg_open_shard_id_vec[pg_id].emplace_back(shard.id);
             }
         }
@@ -441,7 +441,7 @@ void HomeObjectFixture::EmergentGC(bool with_crash_recovery) {
         // create a shard for each chunk
         for (const auto& [pg_id, chunk_num] : pg_chunk_nums) {
             for (uint64_t j = 0; j < chunk_num; j++) {
-                auto shard = create_shard(pg_id, 64 * Mi);
+                auto shard = create_shard(pg_id, 64 * Mi, "shard meta");
                 pg_open_shard_id_vec[pg_id].emplace_back(shard.id);
                 pg_shard_id_vec[pg_id].emplace_back(shard.id);
             }

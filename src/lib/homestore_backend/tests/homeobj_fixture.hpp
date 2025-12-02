@@ -146,13 +146,13 @@ public:
         }
     }
 
-    ShardInfo create_shard(pg_id_t pg_id, uint64_t size_bytes) {
+    ShardInfo create_shard(pg_id_t pg_id, uint64_t size_bytes, std::string meta) {
         g_helper->sync();
         if (!am_i_in_pg(pg_id)) return {};
         // schedule create_shard only on leader
         auto tid = generateRandomTraceId();
         run_on_pg_leader(pg_id, [&]() {
-            auto s = _obj_inst->shard_manager()->create_shard(pg_id, size_bytes, tid).get();
+            auto s = _obj_inst->shard_manager()->create_shard(pg_id, size_bytes, meta, tid).get();
             RELEASE_ASSERT(!!s, "failed to create shard");
             auto ret = s.value();
             g_helper->set_uint64_id(ret.id);

@@ -7,7 +7,7 @@ TEST_F(HomeObjectFixture, HSHomeObjectCPTestBasic) {
     // Step-1: create a PG and a shard
     std::vector< std::pair< pg_id_t, shard_id_t > > pg_shard_id_vec;
     create_pg(1 /* pg_id */);
-    auto shard_info = create_shard(1 /* pg_id */, 64 * Mi);
+    auto shard_info = create_shard(1 /* pg_id */, 64 * Mi, "shard meta");
     pg_shard_id_vec.emplace_back(1 /* pg_id */, shard_info.id);
     LOGINFO("pg={} shard {}", 1, shard_info.id);
     {
@@ -51,7 +51,7 @@ TEST_F(HomeObjectFixture, PGBlobIterator) {
     auto& shard_list = pg_shard_id_vec[pg_id];
     create_pg(pg_id);
     for (uint64_t i = 0; i < num_shards_per_pg; i++) {
-        auto shard = create_shard(pg_id, 64 * Mi);
+        auto shard = create_shard(pg_id, 64 * Mi, "shard meta");
         if (i != empty_shard_seq - 1) { shard_list.emplace_back(shard.id); }
         LOGINFO("pg={} shard {}", pg_id, shard.id);
     }
