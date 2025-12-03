@@ -1087,13 +1087,14 @@ bool GCManager::pdev_gc_actor::compare_blob_indexes(
     // there probably be some indexservice bug which will cause some blobs missing in gc index table after put, so we
     // make an aggressive check here to make sure the blob got from gc_index_table the same as those copied by gc data
     // copy, and print out the detailed info if the check fails.
+    bool ret{true};
     if (copied_blobs.size() != valid_blob_indexes.size()) {
         GCLOGW(
             task_id,
-            "the number of copied blobs number {} is not the same as the number of valid blobs number {}from gc index "
+            "the number of copied blobs number {} is not the same as the number of valid blobs number {} from gc index "
             "table",
             copied_blobs.size(), valid_blob_indexes.size());
-        return false;
+        ret = false;
     }
 
     for (const auto& [k, v] : valid_blob_indexes) {
@@ -1110,11 +1111,27 @@ bool GCManager::pdev_gc_actor::compare_blob_indexes(
                    "pba of copied blob is not the same as that in gc index table for move_to_chunk={}, "
                    "shard_id={}, blob_id={}, copied_pba={}, gc_index_table_pba={}",
                    k.key().chunk, k.key().shard, k.key().blob, it->second.pbas().to_string(), v.pbas().to_string());
-            return false;
+            ret = false;
         }
     }
 
-    return true;
+    if (!ret) {
+        GCLOGW(task_id, "copied blobs do not match those in gc index table, start printing copied blobs:");
+        for (const auto& [k, v] : copied_blobs) {
+            GCLOGW(task_id, "copied blob: move_to_chunk={}, shard_id={}, blob_id={}, pba={}", k.chunk, k.shard, k.blob,
+                   v.pbas().to_string());
+        }
+
+        GCLOGW(task_id, "start printing valid blobs from gc index table:");
+        for (const auto& [k, v] : valid_blob_indexes) {
+            GCLOGW(task_id, "valid blob: move_to_chunk={}, shard_id={}, blob_id={}, pba={}", k.key().chunk,
+                   k.key().shard, k.key().blob, v.pbas().to_string());
+        }
+
+        RELEASE_ASSERT(false, "copied blobs are not the same as the valid blobs got from gc index table");
+    }
+
+    return ret;
 }
 
 void GCManager::pdev_gc_actor::handle_error_before_persisting_gc_metablk(chunk_id_t move_from_chunk,
