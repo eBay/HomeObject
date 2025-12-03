@@ -79,8 +79,8 @@ uint64_t HSHomeObject::get_sequence_num_from_shard_id(uint64_t shard_id) {
 }
 
 pg_id_t HSHomeObject::get_pg_id_from_shard_id(uint64_t shard_id) {
-    //get highest 16bit
-        return shard_id >> shard_width;
+    // get highest 16bit
+    return shard_id >> shard_width;
 }
 
 std::string HSHomeObject::serialize_shard_info(const ShardInfo& info) {

@@ -53,7 +53,7 @@ TEST_F(HomeObjectFixture, BasicPutGetDelBlobWithRestart) {
     // Verify the stats after restart
     verify_obj_count(num_pgs, num_blobs_per_shard, num_shards_per_pg, false /* deleted */);
 
-    //  Put blob after restart to test the persistance of blob sequence number
+    //  Put blob after restart to test the persistence of blob sequence number
     put_blobs(pg_shard_id_vec, num_blobs_per_shard, pg_blob_id);
 
     // Verify all get blobs with random offset and length.
@@ -193,7 +193,7 @@ TEST_F(HomeObjectFixture, BasicPutGetDelBlobOnExistPGWithDiskLost) {
     // Verify the stats after restart
     verify_obj_count(exist_num_pgs, num_blobs_per_shard, num_shards_per_pg, false /* deleted */);
 
-    //  Put blob after restart to test the persistance of blob sequence number
+    //  Put blob after restart to test the persistence of blob sequence number
     put_blobs(exist_pg_shard_id_vec, num_blobs_per_shard, pg_blob_id);
 
     // Verify all get blobs with random offset and length.
@@ -252,7 +252,7 @@ TEST_F(HomeObjectFixture, BasicPutGetDelBlobWithDiskBack) {
     // Verify the stats after restart
     verify_obj_count(num_pgs, num_blobs_per_shard, num_shards_per_pg, false /* deleted */);
 
-    //  Put blob after restart to test the persistance of blob sequence number
+    //  Put blob after restart to test the persistence of blob sequence number
     put_blobs(pg_shard_id_vec, num_blobs_per_shard, pg_blob_id);
 
     // Verify all get blobs with random offset and length.

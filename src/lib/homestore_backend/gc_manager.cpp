@@ -57,7 +57,7 @@ void GCManager::on_gc_task_meta_blk_found(sisl::byte_view const& buf, void* meta
     // this will only be called in the metablk#readsub, so it is guaranteed to be called sequentially
 
     // here, we are under the protection of the lock of metaservice. however, we will also try to update pg and shard
-    // metablk and then destory the gc_task_sb, which will also try to acquire the lock of metaservice, as a result, a
+    // metablk and then destroy the gc_task_sb, which will also try to acquire the lock of metaservice, as a result, a
     // dead lock will happen. so here we will handle all the gc tasks after read all the their metablks
     m_recovered_gc_tasks.emplace_back(GCManager::_gc_task_meta_name);
     m_recovered_gc_tasks.back().load(buf, meta_cookie);
@@ -150,7 +150,7 @@ void GCManager::stop() {
         return;
     }
     RELEASE_ASSERT(m_gc_timer_fiber,
-                   "m_gc_timer_hdl is not null_timer_handle, but m_gc_timer_fiber is null, fatal erro!");
+                   "m_gc_timer_hdl is not null_timer_handle, but m_gc_timer_fiber is null, fatal error!");
 
     LOGINFOMOD(gcmgr, "stop gc scheduler timer");
     iomanager.run_on_wait(m_gc_timer_fiber, [&]() {
@@ -629,8 +629,9 @@ sisl::sg_list GCManager::pdev_gc_actor::generate_shard_super_blk_sg_list(shard_i
 }
 
 // note that, when we copy data, there is not create shard or put blob in this chunk, only delete blob might happen.
-bool GCManager::pdev_gc_actor::copy_valid_data(chunk_id_t move_from_chunk, chunk_id_t move_to_chunk,
-                                               const uint64_t task_id) {
+bool GCManager::pdev_gc_actor::copy_valid_data(
+    chunk_id_t move_from_chunk, chunk_id_t move_to_chunk,
+    folly::ConcurrentHashMap< BlobRouteByChunk, BlobRouteValue >& copied_blobs, const uint64_t task_id) {
     auto move_to_vchunk = m_chunk_selector->get_extend_vchunk(move_to_chunk);
     auto move_from_vchunk = m_chunk_selector->get_extend_vchunk(move_from_chunk);
 
@@ -777,7 +778,7 @@ bool GCManager::pdev_gc_actor::copy_valid_data(chunk_id_t move_from_chunk, chunk
             // 1 write the shard header to move_to_chunk
             data_service.async_alloc_write(header_sgs, hints, out_blkids)
                 .thenValue([this, &hints, &move_to_chunk, &move_from_chunk, &is_last_shard, &shard_id, &blk_size,
-                            &valid_blob_indexes, &data_service, task_id, &last_shard_state,
+                            &valid_blob_indexes, &data_service, task_id, &last_shard_state, &copied_blobs,
                             header_sgs = std::move(header_sgs)](auto&& err) {
                     RELEASE_ASSERT(header_sgs.iovs.size() == 1, "header_sgs.iovs.size() should be 1, but not!");
                     iomanager.iobuf_free(reinterpret_cast< uint8_t* >(header_sgs.iovs[0].iov_base));
@@ -815,7 +816,7 @@ bool GCManager::pdev_gc_actor::copy_valid_data(chunk_id_t move_from_chunk, chunk
                             // read blob from move_from_chunk
                             data_service.async_read(pba, data_sgs, total_size)
                                 .thenValue([this, k, &hints, &move_from_chunk, &move_to_chunk, &data_service, task_id,
-                                            data_sgs = std::move(data_sgs), pba](auto&& err) {
+                                            data_sgs = std::move(data_sgs), pba, &copied_blobs](auto&& err) {
                                     RELEASE_ASSERT(data_sgs.iovs.size() == 1,
                                                    "data_sgs.iovs.size() should be 1, but not!");
 
@@ -857,7 +858,7 @@ bool GCManager::pdev_gc_actor::copy_valid_data(chunk_id_t move_from_chunk, chunk
                                     homestore::MultiBlkId new_pba;
                                     return data_service.async_alloc_write(data_sgs, hints, new_pba)
                                         .thenValue([this, shard_id, blob_id, new_pba, &move_to_chunk, task_id,
-                                                    data_sgs = std::move(data_sgs)](auto&& err) {
+                                                    &copied_blobs, data_sgs = std::move(data_sgs)](auto&& err) {
                                             RELEASE_ASSERT(data_sgs.iovs.size() == 1,
                                                            "data_sgs.iovs.size() should be 1, but not!");
                                             iomanager.iobuf_free(
@@ -892,6 +893,13 @@ bool GCManager::pdev_gc_actor::copy_valid_data(chunk_id_t move_from_chunk, chunk
                                                    "successfully insert new key to gc index table for "
                                                    "move_to_chunk={}, shard_id={}, blob_id={}, new_pba={}",
                                                    move_to_chunk, shard_id, blob_id, new_pba.to_string());
+
+                                            BlobRouteByChunk route_key{move_to_chunk, shard_id, blob_id};
+                                            auto ret = copied_blobs.insert(route_key, value);
+                                            RELEASE_ASSERT(ret.second,
+                                                           "we should not copy the same blob twice in gc task, "
+                                                           "move_to_chunk={}, shard_id={}, blob_id={}",
+                                                           move_to_chunk, shard_id, blob_id);
 
                                             return true;
                                         });
@@ -1072,6 +1080,43 @@ bool GCManager::pdev_gc_actor::purge_reserved_chunk(chunk_id_t chunk, const uint
     return true;
 }
 
+bool GCManager::pdev_gc_actor::compare_blob_indexes(
+    folly::ConcurrentHashMap< BlobRouteByChunk, BlobRouteValue > const& copied_blobs,
+    std::vector< std::pair< BlobRouteByChunkKey, BlobRouteValue > > const& valid_blob_indexes, const uint64_t task_id) {
+
+    // there probably be some indexservice bug which will cause some blobs missing in gc index table after put, so we
+    // make an aggressive check here to make sure the blob got from gc_index_table the same as those copied by gc data
+    // copy, and print out the detailed info if the check fails.
+    if (copied_blobs.size() != valid_blob_indexes.size()) {
+        GCLOGW(
+            task_id,
+            "the number of copied blobs number {} is not the same as the number of valid blobs number {}from gc index "
+            "table",
+            copied_blobs.size(), valid_blob_indexes.size());
+        return false;
+    }
+
+    for (const auto& [k, v] : valid_blob_indexes) {
+        BlobRouteByChunk route_key{k.key().chunk, k.key().shard, k.key().blob};
+        const auto it = copied_blobs.find(route_key);
+        if (it == copied_blobs.end()) {
+            GCLOGW(task_id, "can not find copied blob in copied_blobs for move_to_chunk={}, shard_id={}, blob_id={}",
+                   k.key().chunk, k.key().shard, k.key().blob);
+            return false;
+        }
+
+        if (v.pbas() != it->second.pbas()) {
+            GCLOGW(task_id,
+                   "pba of copied blob is not the same as that in gc index table for move_to_chunk={}, "
+                   "shard_id={}, blob_id={}, copied_pba={}, gc_index_table_pba={}",
+                   k.key().chunk, k.key().shard, k.key().blob, it->second.pbas().to_string(), v.pbas().to_string());
+            return false;
+        }
+    }
+
+    return true;
+}
+
 void GCManager::pdev_gc_actor::handle_error_before_persisting_gc_metablk(chunk_id_t move_from_chunk,
                                                                          chunk_id_t move_to_chunk,
                                                                          folly::Promise< bool > task,
@@ -1117,7 +1162,7 @@ void GCManager::pdev_gc_actor::process_gc_task(chunk_id_t move_from_chunk, uint8
 
     // wait for a reserved chunk to be available. now, the amount of threads in the folly executor(thread pool) is equal
     // to the amount of reserved number, so we can make sure that a gc task handle thread can always get a reserved
-    // chunk, so acutally the blockingRead here will not block in any case and return immediately.
+    // chunk, so actually the blockingRead here will not block in any case and return immediately.
     m_reserved_chunk_queue.blockingRead(move_to_chunk);
     GCLOGD(task_id, "task for move_from_chunk={} to move_to_chunk={} with priority={} start copying data",
            move_from_chunk, move_to_chunk, priority);
@@ -1129,7 +1174,8 @@ void GCManager::pdev_gc_actor::process_gc_task(chunk_id_t move_from_chunk, uint8
         return;
     }
 
-    if (!copy_valid_data(move_from_chunk, move_to_chunk, task_id)) {
+    folly::ConcurrentHashMap< BlobRouteByChunk, BlobRouteValue > copied_blobs;
+    if (!copy_valid_data(move_from_chunk, move_to_chunk, copied_blobs, task_id)) {
         GCLOGW(task_id, "failed to copy data from move_from_chunk={} to move_to_chunk={} with priority={}",
                move_from_chunk, move_to_chunk, priority);
         handle_error_before_persisting_gc_metablk(move_from_chunk, move_to_chunk, std::move(task), task_id, priority,
@@ -1140,6 +1186,14 @@ void GCManager::pdev_gc_actor::process_gc_task(chunk_id_t move_from_chunk, uint8
     std::vector< std::pair< BlobRouteByChunkKey, BlobRouteValue > > valid_blob_indexes;
     if (!get_blobs_to_replace(move_to_chunk, valid_blob_indexes, task_id)) {
         GCLOGW(task_id, "failed to get valid blob indexes from gc index table for move_to_chunk={}", move_to_chunk);
+        handle_error_before_persisting_gc_metablk(move_from_chunk, move_to_chunk, std::move(task), task_id, priority,
+                                                  pg_id);
+        return;
+    }
+
+    if (!compare_blob_indexes(copied_blobs, valid_blob_indexes, task_id)) {
+        GCLOGW(task_id, "copied blobs are not the same as the valid blobs got from gc index table for move_to_chunk={}",
+               move_to_chunk);
         handle_error_before_persisting_gc_metablk(move_from_chunk, move_to_chunk, std::move(task), task_id, priority,
                                                   pg_id);
         return;
