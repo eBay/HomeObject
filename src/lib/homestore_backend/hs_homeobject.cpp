@@ -221,7 +221,7 @@ void HSHomeObject::init_homestore() {
             auto run_on_type = has_fast_dev ? homestore::HSDevType::Fast : homestore::HSDevType::Data;
             LOGD("Running with Single mode, all service on {}", run_on_type);
             HomeStore::instance()->format_and_start({
-                // FIXME:  this is to work around the issue in HS that varsize allocator doesnt work with small chunk
+                // FIXME:  this is to work around the issue in HS that varsize allocator doesn't work with small chunk
                 // size.
                 {HS_SERVICE::META, hs_format_params{.dev_type = run_on_type, .size_pct = 5.0, .num_chunks = 1}},
                 {HS_SERVICE::LOG, hs_format_params{.dev_type = run_on_type, .size_pct = 10.0, .chunk_size = 32 * Mi}},
@@ -236,12 +236,6 @@ void HSHomeObject::init_homestore() {
                                   .chunk_sel_type = chunk_selector_type_t::CUSTOM}},
             });
         }
-
-        // Create a superblock that contains our SvcId
-        auto svc_sb = homestore::superblk< svc_info_superblk_t >(_svc_meta_name);
-        svc_sb.create(sizeof(svc_info_superblk_t));
-        svc_sb->svc_id_ = _our_id;
-        svc_sb.write();
     } else {
         RELEASE_ASSERT(!_our_id.is_nil(), "No SvcId read after HomeStore recovery!");
         auto const new_id = app->discover_svcid(_our_id);
@@ -341,6 +335,12 @@ void HSHomeObject::on_replica_restart() {
                     reserved_chunk_sb.write();
                 }
             }
+
+            // Create a superblock that contains our SvcId
+            auto svc_sb = homestore::superblk< svc_info_superblk_t >(_svc_meta_name);
+            svc_sb.create(sizeof(svc_info_superblk_t));
+            svc_sb->svc_id_ = _our_id;
+            svc_sb.write();
         }
 
         // when initializing, there is not gc task. we need to recover reserved chunks here, so that the reserved chunks

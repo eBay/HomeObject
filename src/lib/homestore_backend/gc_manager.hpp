@@ -221,7 +221,9 @@ public:
         // copy all the valid data from the move_from_chunk to move_to_chunk. valid data means those blobs that are not
         // tombstone in the pg index table
         // return true if the data copy is successful, false otherwise.
-        bool copy_valid_data(chunk_id_t move_from_chunk, chunk_id_t move_to_chunk, const uint64_t task_id);
+        bool copy_valid_data(chunk_id_t move_from_chunk, chunk_id_t move_to_chunk,
+                             folly::ConcurrentHashMap< BlobRouteByChunk, BlobRouteValue >& copied_blobs,
+                             const uint64_t task_id);
 
         // before we select a reserved chunk and start gc, we need:
         //  1 clear all the entries of this chunk in the gc index table
@@ -242,6 +244,11 @@ public:
         void handle_error_before_persisting_gc_metablk(chunk_id_t move_from_chunk, chunk_id_t move_to_chunk,
                                                        folly::Promise< bool > task, const uint64_t task_id,
                                                        uint8_t priority, const pg_id_t& pg_id);
+
+        bool
+        compare_blob_indexes(folly::ConcurrentHashMap< BlobRouteByChunk, BlobRouteValue > const& copied_blobs,
+                             std::vector< std::pair< BlobRouteByChunkKey, BlobRouteValue > > const& valid_blob_indexes,
+                             const uint64_t task_id);
 
         pdev_gc_metrics& metrics() { return metrics_; }
 

@@ -371,7 +371,7 @@ TEST_F(HeapChunkSelectorTest, test_recovery) {
         auto pg_it = HCS_recovery.m_per_pg_chunks.find(pg_id);
         ASSERT_NE(pg_it, HCS_recovery.m_per_pg_chunks.end());
         auto pg_chunk_collection = pg_it->second;
-        ASSERT_EQ(pg_chunk_collection->m_pg_chunks.size(), 2); // size wont change
+        ASSERT_EQ(pg_chunk_collection->m_pg_chunks.size(), 2); // size won't change
         ASSERT_EQ(pg_chunk_collection->available_num_chunks, 1);
         ASSERT_EQ(pg_chunk_collection->available_blk_count, 2); // only left v_chunk_id=1
 

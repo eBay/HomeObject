@@ -80,7 +80,7 @@ public:
     }
 
     void stop() {
-        LOGINFO("Stoping homeobject replica={}", g_helper->my_replica_id());
+        LOGINFO("Stopping homeobject replica={}", g_helper->my_replica_id());
         LOGINFO("Metrics={}", sisl::MetricsFarm::getInstance().get_result_in_json().dump(2));
         _obj_inst.reset();
         g_helper->homeobj_.reset();

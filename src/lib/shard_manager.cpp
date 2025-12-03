@@ -6,10 +6,12 @@ std::shared_ptr< ShardManager > HomeObjectImpl::shard_manager() { return shared_
 
 ShardManager::AsyncResult< ShardInfo > HomeObjectImpl::create_shard(pg_id_t pg_owner, uint64_t size_bytes,
                                                                     trace_id_t tid) {
-    if (0 == size_bytes || max_shard_size() < size_bytes) return folly::makeUnexpected(ShardError(ShardErrorCode::INVALID_ARG));
-    return _defer().thenValue([this, pg_owner, size_bytes, tid](auto) mutable -> ShardManager::AsyncResult< ShardInfo > {
-        return _create_shard(pg_owner, size_bytes, tid);
-    });
+    if (0 == size_bytes || max_shard_size() < size_bytes)
+        return folly::makeUnexpected(ShardError(ShardErrorCode::INVALID_ARG));
+    return _defer().thenValue(
+        [this, pg_owner, size_bytes, tid](auto) mutable -> ShardManager::AsyncResult< ShardInfo > {
+            return _create_shard(pg_owner, size_bytes, tid);
+        });
 }
 
 ShardManager::AsyncResult< InfoList > HomeObjectImpl::list_shards(pg_id_t pgid, trace_id_t tid) const {
@@ -50,7 +52,7 @@ folly::Future< ShardManager::Result< ShardInfo > > HomeObjectImpl::_get_shard(sh
     return _defer().thenValue([this, id, tid](auto) -> ShardManager::Result< ShardInfo > {
         auto lg = std::shared_lock(_shard_lock);
         if (auto it = _shard_map.find(id); _shard_map.end() != it) return (*it->second)->info;
-        LOGE("Couldnt find shard id in shard map {}, trace_id=[{}]", id, tid);
+        LOGE("Couldn't find shard id in shard map {}, trace_id=[{}]", id, tid);
         return folly::makeUnexpected(ShardError(ShardErrorCode::UNKNOWN_SHARD));
     });
 }

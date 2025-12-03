@@ -11,7 +11,7 @@ namespace homeobject {
 
 VENUM(ReplicationMessageType, uint16_t, CREATE_PG_MSG = 0, CREATE_SHARD_MSG = 1, SEAL_SHARD_MSG = 2, PUT_BLOB_MSG = 3,
       DEL_BLOB_MSG = 4, UNKNOWN_MSG = 5);
-VENUM(SyncMessageType, uint16_t, PG_META = 0, SHARD_META = 1, SHARD_BATCH = 2,  LAST_MSG = 3);
+VENUM(SyncMessageType, uint16_t, PG_META = 0, SHARD_META = 1, SHARD_BATCH = 2, LAST_MSG = 3);
 VENUM(ResyncBlobState, uint8_t, NORMAL = 0, DELETED = 1, CORRUPTED = 2);
 
 // magic num comes from the first 8 bytes of 'echo homeobject_replication | md5sum'
@@ -21,11 +21,11 @@ static constexpr uint64_t HOMEOBJECT_RESYNC_MAGIC = 0xbb6813cb4a339f30;
 static constexpr uint32_t HOMEOBJECT_REPLICATION_PROTOCOL_VERSION_V1 = 0x01;
 static constexpr uint32_t HOMEOBJECT_RESYNC_PROTOCOL_VERSION_V1 = 0x01;
 static constexpr uint32_t init_crc32 = 0;
-static constexpr uint64_t LAST_OBJ_ID =ULLONG_MAX;
-static constexpr uint64_t DEFAULT_MAX_BATCH_SIZE_MB =128;
+static constexpr uint64_t LAST_OBJ_ID = ULLONG_MAX;
+static constexpr uint64_t DEFAULT_MAX_BATCH_SIZE_MB = 128;
 
 #pragma pack(1)
-template<typename Header>
+template < typename Header >
 struct BaseMessageHeader {
     uint64_t magic_num{HOMEOBJECT_REPLICATION_MAGIC};
     uint32_t protocol_version;
@@ -39,8 +39,8 @@ struct BaseMessageHeader {
     }
 
     uint32_t calculate_crc() const {
-        const auto* hdr=static_cast<const Header*>(this);
-        return crc32_ieee(init_crc32, reinterpret_cast<const unsigned char*>(hdr), sizeof(*hdr));
+        const auto* hdr = static_cast< const Header* >(this);
+        return crc32_ieee(init_crc32, reinterpret_cast< const unsigned char* >(hdr), sizeof(*hdr));
     }
 
     bool corrupted() const {
@@ -52,14 +52,13 @@ struct BaseMessageHeader {
     }
 
     std::string to_string() const {
-        return fmt::format(
-            "magic={:#x} version={} payload_size={} payload_crc={} header_crc={}\n",
-            magic_num, protocol_version, payload_size, payload_crc, header_crc);
+        return fmt::format("magic={:#x} version={} payload_size={} payload_crc={} header_crc={}\n", magic_num,
+                           protocol_version, payload_size, payload_crc, header_crc);
     }
 };
 
-struct ReplicationMessageHeader : public BaseMessageHeader<ReplicationMessageHeader>{
-    ReplicationMessageHeader(): BaseMessageHeader() {
+struct ReplicationMessageHeader : public BaseMessageHeader< ReplicationMessageHeader > {
+    ReplicationMessageHeader() : BaseMessageHeader() {
         magic_num = HOMEOBJECT_REPLICATION_MAGIC;
         protocol_version = HOMEOBJECT_REPLICATION_PROTOCOL_VERSION_V1;
     }
@@ -69,8 +68,9 @@ struct ReplicationMessageHeader : public BaseMessageHeader<ReplicationMessageHea
     shard_id_t shard_id{0};
     blob_id_t blob_id{0};
 
-    bool corrupted() const{
-        if (magic_num != HOMEOBJECT_REPLICATION_MAGIC || protocol_version != HOMEOBJECT_REPLICATION_PROTOCOL_VERSION_V1) {
+    bool corrupted() const {
+        if (magic_num != HOMEOBJECT_REPLICATION_MAGIC ||
+            protocol_version != HOMEOBJECT_REPLICATION_PROTOCOL_VERSION_V1) {
             return true;
         }
         return BaseMessageHeader::corrupted();
@@ -83,7 +83,7 @@ struct ReplicationMessageHeader : public BaseMessageHeader<ReplicationMessageHea
     }
 };
 
-struct SyncMessageHeader : public BaseMessageHeader<SyncMessageHeader> {
+struct SyncMessageHeader : public BaseMessageHeader< SyncMessageHeader > {
     SyncMessageHeader() : BaseMessageHeader() {
         magic_num = HOMEOBJECT_RESYNC_MAGIC;
         protocol_version = HOMEOBJECT_RESYNC_PROTOCOL_VERSION_V1;
@@ -91,7 +91,7 @@ struct SyncMessageHeader : public BaseMessageHeader<SyncMessageHeader> {
     SyncMessageType msg_type;
     uint8_t reserved_pad[6]{};
 
-    bool corrupted() const{
+    bool corrupted() const {
         if (magic_num != HOMEOBJECT_RESYNC_MAGIC || protocol_version != HOMEOBJECT_RESYNC_PROTOCOL_VERSION_V1) {
             return true;
         }
@@ -99,8 +99,8 @@ struct SyncMessageHeader : public BaseMessageHeader<SyncMessageHeader> {
     }
 
     std::string to_string() const {
-        return fmt::format("magic={:#x} version={} msg_type={} payload_size={} payload_crc={} header_crc={}",
-            magic_num, protocol_version, enum_name(msg_type), payload_size, payload_crc, header_crc);
+        return fmt::format("magic={:#x} version={} msg_type={} payload_size={} payload_crc={} header_crc={}", magic_num,
+                           protocol_version, enum_name(msg_type), payload_size, payload_crc, header_crc);
     }
 };
 #pragma pack()
@@ -114,14 +114,10 @@ struct objId {
     snp_batch_id_t batch_id;
 
     objId(shard_id_t shard_seq_num, snp_batch_id_t batch_id) : shard_seq_num(shard_seq_num), batch_id(batch_id) {
-        if (shard_seq_num != (shard_seq_num & 0xFFFFFFFFFFFF)) {
-            throw std::invalid_argument("shard_id is too large");
-        }
-        if (batch_id != (batch_id & 0x7FFF)){
-            throw std::invalid_argument("batch_id is too large");
-        }
-        //type_bit (1 bit) | shard_id (48 bits) | batch_id (15 bits)
-        value= static_cast<uint64_t>(1) << 63 | (shard_seq_num) << 15 | batch_id;
+        if (shard_seq_num != (shard_seq_num & 0xFFFFFFFFFFFF)) { throw std::invalid_argument("shard_id is too large"); }
+        if (batch_id != (batch_id & 0x7FFF)) { throw std::invalid_argument("batch_id is too large"); }
+        // type_bit (1 bit) | shard_id (48 bits) | batch_id (15 bits)
+        value = static_cast< uint64_t >(1) << 63 | (shard_seq_num) << 15 | batch_id;
     }
     explicit objId(snp_obj_id_t value) : value(value) {
         shard_seq_num = (value >> 15) & 0xFFFFFFFFFFFF;

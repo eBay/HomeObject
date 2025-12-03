@@ -43,7 +43,7 @@ PGError toPgError(ReplServiceError const& e) {
         return PGError::QUORUM_NOT_MET;
     case ReplServiceError::RETRY_REQUEST:
         return PGError::RETRY_REQUEST;
-    /* TODO: enable this after add erro type to homestore
+    /* TODO: enable this after add error type to homestore
             case ReplServiceError::CRC_MISMATCH:
                 return PGError::CRC_MISMATCH;
              */

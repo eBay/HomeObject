@@ -38,15 +38,15 @@ TEST_F(TestFixture, BasicBlobTests) {
                         ->put(i, Blob{sisl::io_blob_safe(512u, 512u), "test_blob", 0ul}, tid)
                         .deferValue([](auto const& e) { EXPECT_EQ(BlobErrorCode::UNKNOWN_SHARD, e.error().code); }));
                 LOGINFO("Calling to put blob, shard {}", _shard_1.id);
-                our_calls.push_back(homeobj_->blob_manager()
-                                        ->put(_shard_1.id, Blob{sisl::io_blob_safe(4 * Ki, 512u), "test_blob", 4 * Mi}, tid)
-                                        .deferValue([this](auto const& e) {
-                                            EXPECT_TRUE(!!e);
-                                            e.then([this](auto const& blob_id) {
-                                                LOGINFO("Successfully put blob, shard {}, blobID {}", _shard_1.id,
-                                                        blob_id);
-                                            });
-                                        }));
+                our_calls.push_back(
+                    homeobj_->blob_manager()
+                        ->put(_shard_1.id, Blob{sisl::io_blob_safe(4 * Ki, 512u), "test_blob", 4 * Mi}, tid)
+                        .deferValue([this](auto const& e) {
+                            EXPECT_TRUE(!!e);
+                            e.then([this](auto const& blob_id) {
+                                LOGINFO("Successfully put blob, shard {}, blobID {}", _shard_1.id, blob_id);
+                            });
+                        }));
                 our_calls.push_back(
                     homeobj_->blob_manager()
                         ->put(_shard_2.id, Blob{sisl::io_blob_safe(8 * Ki, 512u), "test_blob_2", 4 * Mi}, tid)
@@ -56,18 +56,20 @@ TEST_F(TestFixture, BasicBlobTests) {
                     EXPECT_EQ(BlobErrorCode::UNKNOWN_SHARD, e.error().getCode());
                 }));
                 LOGINFO("Calling to Deleting blob, shard {}, blobID {}", _shard_1.id, (i - _shard_2.id));
-                our_calls.push_back(
-                    homeobj_->blob_manager()->del(_shard_1.id, (i - _shard_2.id), tid).deferValue([this, i](auto const& e) {
-                        // It is a racing test with other threads as well as putBlob
-                        // the result should be either success or failed with UNKNOWN_BLOB
-                        LOGINFO("Deleted blob, shard {}, blobID {}, success {}", _shard_1.id, (i - _shard_2.id), !!e);
-                        if (!!e) {
-                            return;
-                        } else {
-                            EXPECT_FALSE(!!e);
-                            EXPECT_EQ(BlobErrorCode::UNKNOWN_BLOB, e.error().getCode());
-                        }
-                    }));
+                our_calls.push_back(homeobj_->blob_manager()
+                                        ->del(_shard_1.id, (i - _shard_2.id), tid)
+                                        .deferValue([this, i](auto const& e) {
+                                            // It is a racing test with other threads as well as putBlob
+                                            // the result should be either success or failed with UNKNOWN_BLOB
+                                            LOGINFO("Deleted blob, shard {}, blobID {}, success {}", _shard_1.id,
+                                                    (i - _shard_2.id), !!e);
+                                            if (!!e) {
+                                                return;
+                                            } else {
+                                                EXPECT_FALSE(!!e);
+                                                EXPECT_EQ(BlobErrorCode::UNKNOWN_BLOB, e.error().getCode());
+                                            }
+                                        }));
             }
 
             auto lg = std::scoped_lock(call_lock);
@@ -79,8 +81,9 @@ TEST_F(TestFixture, BasicBlobTests) {
     folly::collectAll(calls).via(folly::getGlobalCPUExecutor()).get();
     EXPECT_TRUE(homeobj_->shard_manager()->seal_shard(_shard_1.id).get());
     auto tid = homeobject::generateRandomTraceId();
-    auto p_e =
-        homeobj_->blob_manager()->put(_shard_1.id, Blob{sisl::io_blob_safe(4 * Ki, 512u), "test_blob", 4 * Mi}, tid).get();
+    auto p_e = homeobj_->blob_manager()
+                   ->put(_shard_1.id, Blob{sisl::io_blob_safe(4 * Ki, 512u), "test_blob", 4 * Mi}, tid)
+                   .get();
     ASSERT_FALSE(!!p_e);
     EXPECT_EQ(BlobErrorCode::SEALED_SHARD, p_e.error().getCode());
 

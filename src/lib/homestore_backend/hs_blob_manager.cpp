@@ -530,7 +530,7 @@ void HSHomeObject::on_blob_del_commit(int64_t lsn, sisl::blob const& header, sis
     RELEASE_ASSERT(hs_pg, "PG not found, pg={}", pg_id);
     auto index_table = hs_pg->index_table_;
     auto repl_dev = hs_pg->repl_dev_;
-    RELEASE_ASSERT(index_table != nullptr, "Index table not intialized");
+    RELEASE_ASSERT(index_table != nullptr, "Index table not initialized");
     RELEASE_ASSERT(repl_dev != nullptr, "Repl dev instance null");
 
     const auto shard_id = msg_header->shard_id;

@@ -33,7 +33,7 @@ TEST_F(TestFixture, CreateDuplicatePg) {
 TEST_F(TestFixture, Migrate) {
     std::string task_id = "task_id";
     EXPECT_EQ(homeobj_->pg_manager()
-                  ->replace_member(UINT16_MAX, task_id,boost::uuids::random_generator()(),
+                  ->replace_member(UINT16_MAX, task_id, boost::uuids::random_generator()(),
                                    PGMember{boost::uuids::random_generator()()}, 0)
                   .get()
                   .error(),

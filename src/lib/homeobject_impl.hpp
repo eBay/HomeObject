@@ -61,7 +61,7 @@ struct PG {
         std::atomic< blob_id_t > blob_sequence_num{0ull};
         std::atomic< uint64_t > active_blob_count{0ull};
         std::atomic< uint64_t > tombstone_blob_count{0ull};
-        std::atomic< uint64_t > total_occupied_blk_count{0ull}; // this will only decrease after GC
+        std::atomic< uint64_t > total_occupied_blk_count{0ull};  // this will only decrease after GC
         std::atomic< uint64_t > total_reclaimed_blk_count{0ull}; // this will start from 0 if baseline resync happens
     };
 
