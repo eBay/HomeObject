@@ -25,6 +25,7 @@ struct ShardError {
 };
 
 struct ShardInfo {
+    static constexpr uint64_t meta_length = 1024 + 1;
     enum class State : uint8_t {
         OPEN = 0,
         SEALED = 1,
@@ -40,6 +41,7 @@ struct ShardInfo {
     uint64_t available_capacity_bytes;
     uint64_t total_capacity_bytes;
     std::optional< peer_id_t > current_leader{std::nullopt};
+    uint8_t meta[meta_length]{};
 
     auto operator<=>(ShardInfo const& rhs) const { return id <=> rhs.id; }
     auto operator==(ShardInfo const& rhs) const { return id == rhs.id; }

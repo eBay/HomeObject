@@ -177,9 +177,15 @@ public:
     };
 
     struct shard_info_superblk : DataHeader {
+        //This version is a common version of DataHeader, each derived struct can have its own version.
+        static constexpr uint8_t shard_sb_version = 0x02;
+        uint8_t sb_version{shard_sb_version};
         ShardInfo info;
         homestore::chunk_num_t p_chunk_id;
         homestore::chunk_num_t v_chunk_id;
+
+        //backward compatibility
+        bool valid() const { return DataHeader::valid() && sb_version <= shard_sb_version; }
     };
 
     struct snapshot_ctx_superblk {
@@ -385,6 +391,7 @@ public:
     struct BlobHeader : DataHeader {
         static constexpr uint64_t blob_max_hash_len = 32;
         static constexpr uint64_t max_user_key_length = 1024;
+        static constexpr uint8_t blob_header_version = 0x02;
 
         enum class HashAlgorithm : uint8_t {
             NONE = 0,
@@ -393,6 +400,7 @@ public:
             SHA1 = 3,
         };
 
+        uint8_t blob_hdr_version{blob_header_version};
         HashAlgorithm hash_algorithm;
         mutable uint8_t header_hash[blob_max_hash_len]{};
         uint8_t hash[blob_max_hash_len]{};
@@ -403,7 +411,7 @@ public:
         uint32_t data_offset;   // Offset of actual data blob stored after the metadata
         uint32_t user_key_size; // Actual size of the user key.
         uint8_t user_key[max_user_key_length + 1]{};
-        uint8_t padding[2957]{};  // data_block_size is 4K, so total size of BlobHeader is 4096 bytes
+        uint8_t padding[2956]{};  // data_block_size is 4K, so total size of BlobHeader is 4096 bytes
 
         std::string get_user_key() const {
             std::string ret = user_key_size ? std::string((const char*)user_key, (size_t)user_key_size) : std::string{};
@@ -418,8 +426,7 @@ public:
         }
 
         bool valid() const {
-            if (!DataHeader::valid()) { return false; }
-
+            if (!DataHeader::valid() || blob_hdr_version > blob_header_version) { return false; }
             uint8_t hash_arr[blob_max_hash_len];
             std::memcpy(hash_arr, header_hash, blob_max_hash_len);
             if (!_do_seal()) {
