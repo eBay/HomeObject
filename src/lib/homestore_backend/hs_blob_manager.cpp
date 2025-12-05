@@ -715,14 +715,15 @@ BlobManager::Result< std::string > HSHomeObject::do_verify_blob(const void* blob
         return folly::makeUnexpected(BlobError(BlobErrorCode::CHECKSUM_MISMATCH));
     }
 
-    return header->get_user_key();
+    return header->get_user_key().value(); // Must have a value as header verified above
 }
 
 bool HSHomeObject::verify_blob(const void* blob, const shard_id_t shard_id, const blob_id_t blob_id,
                                bool allow_delete_marker) const {
-    if (0 == std::memcmp(blob, delete_marker_blob_data.data(), delete_marker_blob_data.size()) && allow_delete_marker) {
-        LOGW("find delete_marker for shard_id={}, blob_id={}, skipping verification!", shard_id, blob_id);
-        return true;
+    // Handle deleteMarker case
+    if (0 == std::memcmp(blob, delete_marker_blob_data.data(), delete_marker_blob_data.size())) {
+        LOGW("Found delete_marker for shard_id={}, blob_id={}, skipping verification!", shard_id, blob_id);
+        return allow_delete_marker;
     }
 
     // Use the new _verify_blob method
