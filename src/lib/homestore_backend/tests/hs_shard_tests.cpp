@@ -3,8 +3,8 @@
 TEST_F(HomeObjectFixture, CreateMultiShards) {
     pg_id_t pg_id{1};
     create_pg(pg_id);
-    auto _shard_1 = create_shard(pg_id, 64 * Mi);
-    auto _shard_2 = create_shard(pg_id, 64 * Mi);
+    auto _shard_1 = create_shard(pg_id, 64 * Mi, "shard meta");
+    auto _shard_2 = create_shard(pg_id, 64 * Mi, "shard meta");
 
     auto chunk_num_1 = _obj_inst->get_shard_p_chunk_id(_shard_1.id);
     ASSERT_TRUE(chunk_num_1.has_value());
@@ -33,14 +33,14 @@ TEST_F(HomeObjectFixture, CreateMultiShardsOnMultiPG) {
     }
 
     for (const auto pg : pgs) {
-        auto shard_info = create_shard(pg, Mi);
+        auto shard_info = create_shard(pg, Mi, "shard meta");
         auto p_chunk_ID1 = _obj_inst->get_shard_p_chunk_id(shard_info.id);
         auto v_chunk_ID1 = _obj_inst->get_shard_v_chunk_id(shard_info.id);
         ASSERT_TRUE(p_chunk_ID1.has_value());
         ASSERT_TRUE(v_chunk_ID1.has_value());
 
         // create another shard again.
-        shard_info = create_shard(pg, Mi);
+        shard_info = create_shard(pg, Mi, "shard meta");
         auto p_chunk_ID2 = _obj_inst->get_shard_p_chunk_id(shard_info.id);
         auto v_chunk_ID2 = _obj_inst->get_shard_v_chunk_id(shard_info.id);
         ASSERT_TRUE(p_chunk_ID2.has_value());
@@ -64,7 +64,7 @@ TEST_F(HomeObjectFixture, CreateMultiShardsOnMultiPG) {
 TEST_F(HomeObjectFixture, SealShard) {
     pg_id_t pg_id{1};
     create_pg(pg_id);
-    auto shard_info = create_shard(pg_id, 64 * Mi);
+    auto shard_info = create_shard(pg_id, 64 * Mi, "shard meta");
     ASSERT_EQ(ShardInfo::State::OPEN, shard_info.state);
 
     // seal the shard
@@ -77,7 +77,7 @@ TEST_F(HomeObjectFixture, SealShard) {
 
     // create shard until no space left, we have 5 chunks in one pg.
     for (auto i = 0; i < 5; i++) {
-        shard_info = create_shard(pg_id, 64 * Mi);
+        shard_info = create_shard(pg_id, 64 * Mi, "shard meta");
         ASSERT_EQ(ShardInfo::State::OPEN, shard_info.state);
     }
 
@@ -86,7 +86,7 @@ TEST_F(HomeObjectFixture, SealShard) {
 
         // expect to create shard failed
         run_on_pg_leader(pg_id, [&]() {
-            auto s = _obj_inst->shard_manager()->create_shard(pg_id, 64 * Mi).get();
+            auto s = _obj_inst->shard_manager()->create_shard(pg_id, 64 * Mi, "shard meta").get();
             ASSERT_TRUE(s.hasError());
             ASSERT_EQ(ShardErrorCode::NO_SPACE_LEFT, s.error().getCode());
         });
@@ -110,7 +110,7 @@ TEST_F(HomeObjectFixture, SealShard) {
     shard_info = seal_shard(shard_info.id);
     ASSERT_EQ(ShardInfo::State::SEALED, shard_info.state);
 
-    shard_info = create_shard(pg_id, 64 * Mi);
+    shard_info = create_shard(pg_id, 64 * Mi, "shard meta");
     ASSERT_EQ(ShardInfo::State::OPEN, shard_info.state);
 
     shard_info = seal_shard(shard_info.id);
@@ -122,7 +122,7 @@ TEST_F(HomeObjectFixture, ShardManagerRecovery) {
     create_pg(pg_id);
 
     // create one shard;
-    auto shard_info = create_shard(pg_id, Mi);
+    auto shard_info = create_shard(pg_id, Mi, "shard meta");;
     auto shard_id = shard_info.id;
     EXPECT_EQ(ShardInfo::State::OPEN, shard_info.state);
     EXPECT_EQ(Mi, shard_info.total_capacity_bytes);
@@ -162,7 +162,7 @@ TEST_F(HomeObjectFixture, ShardManagerRecovery) {
     EXPECT_EQ(1, pg_result->shard_sequence_num_);
 
     // re-create new shards on this pg works too even homeobject is restarted twice.
-    auto new_shard_info = create_shard(pg_id, Mi);
+    auto new_shard_info = create_shard(pg_id, Mi, "shard meta");;
     EXPECT_NE(shard_id, new_shard_info.id);
 
     EXPECT_EQ(ShardInfo::State::OPEN, new_shard_info.state);
@@ -177,7 +177,7 @@ TEST_F(HomeObjectFixture, SealedShardRecovery) {
     create_pg(pg_id);
 
     // create one shard and seal it.
-    auto shard_info = create_shard(pg_id, Mi);
+    auto shard_info = create_shard(pg_id, Mi, "shard meta");;
     auto shard_id = shard_info.id;
     shard_info = seal_shard(shard_id);
     EXPECT_EQ(ShardInfo::State::SEALED, shard_info.state);
@@ -210,7 +210,7 @@ TEST_F(HomeObjectFixture, SealShardWithRestart) {
     pg_id_t pg_id{1};
     create_pg(pg_id);
 
-    auto shard_info = create_shard(pg_id, 64 * Mi);
+    auto shard_info = create_shard(pg_id, 64 * Mi, "shard meta");
     auto shard_id = shard_info.id;
     auto s = _obj_inst->shard_manager()->get_shard(shard_id).get();
     ASSERT_TRUE(!!s);
@@ -263,7 +263,7 @@ TEST_F(HomeObjectFixture, CreateShardOnDiskLostMemeber) {
     create_pg(degrade_pg_id);
     std::map< pg_id_t, shard_id_t > pg_shard_id_map;
     for (int i = 1; i <= 2; i++) {
-        auto shard_info = create_shard(i, 64 * Mi);
+        auto shard_info = create_shard(i, 64 * Mi, "shard meta");
         ASSERT_EQ(ShardInfo::State::OPEN, shard_info.state);
         pg_shard_id_map[i] = shard_info.id;
         LOGINFO("pg={} shard {}", i, shard_info.id);
@@ -284,7 +284,7 @@ TEST_F(HomeObjectFixture, CreateShardOnDiskLostMemeber) {
                                   << " replica number " << g_helper->replica_num();
 
         tid = generateRandomTraceId();
-        s = _obj_inst->shard_manager()->create_shard(degrade_pg_id, 64 * Mi, tid).get();
+        s = _obj_inst->shard_manager()->create_shard(degrade_pg_id, 64 * Mi, "shard meta", tid).get();
         ASSERT_TRUE(s.hasError()) << "degraded pg on error member should return create shard fail, pg_id "
                                   << degrade_pg_id << " replica number " << g_helper->replica_num();
     } else {

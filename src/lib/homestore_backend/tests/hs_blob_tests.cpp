@@ -28,7 +28,7 @@ TEST_F(HomeObjectFixture, BasicPutGetDelBlobWithRestart) {
         create_pg(i);
         pg_blob_id[i] = 0;
         for (uint64_t j = 0; j < num_shards_per_pg; j++) {
-            auto shard = create_shard(i, 64 * Mi);
+            auto shard = create_shard(i, 64 * Mi, "shard meta");
             pg_shard_id_vec[i].emplace_back(shard.id);
             LOGINFO("pg={} shard {}", i, shard.id);
         }
@@ -154,7 +154,7 @@ TEST_F(HomeObjectFixture, BasicPutGetDelBlobOnExistPGWithDiskLost) {
         create_pg(i);
         pg_blob_id[i] = 0;
         for (uint64_t j = 0; j < num_shards_per_pg; j++) {
-            auto shard = create_shard(i, 64 * Mi);
+            auto shard = create_shard(i, 64 * Mi, "shard meta");
             pg_shard_id_vec[i].emplace_back(shard.id);
             LOGINFO("pg={} shard {}", i, shard.id);
         }
@@ -225,7 +225,7 @@ TEST_F(HomeObjectFixture, BasicPutGetDelBlobWithDiskBack) {
         create_pg(i);
         pg_blob_id[i] = 0;
         for (uint64_t j = 0; j < num_shards_per_pg; j++) {
-            auto shard = create_shard(i, 64 * Mi);
+            auto shard = create_shard(i, 64 * Mi, "shard meta");
             pg_shard_id_vec[i].emplace_back(shard.id);
             LOGINFO("pg={} shard {}", i, shard.id);
         }
@@ -355,7 +355,7 @@ TEST_F(HomeObjectFixture, BasicPutGetDelOnAllPGWithDiskLost) {
         create_pg(i);
         pg_blob_id[i] = 0;
         for (uint64_t j = 0; j < num_shards_per_pg; j++) {
-            auto shard = create_shard(i, 64 * Mi);
+            auto shard = create_shard(i, 64 * Mi, "shard meta");
             pg_shard_id_vec[i].emplace_back(shard.id);
             LOGINFO("pg={} shard {}", i, shard.id);
         }
@@ -435,7 +435,7 @@ TEST_F(HomeObjectFixture, DeleteNonExistBlob) {
     // create a pg with one shard
     const auto pg_id = 1;
     create_pg(pg_id);
-    const auto shard_id = create_shard(1, 64 * Mi).id;
+    const auto shard_id = create_shard(1, 64 * Mi, "shard meta").id;
     verify_obj_count(1, 1, 0, false /* deleted */);
 
     // do not put any blob to exercise deleting a non-exist blob, everything should goes well
@@ -464,7 +464,7 @@ TEST_F(HomeObjectFixture, BasicPutGetBlobWithPushDataDisabled) {
         create_pg(i);
         pg_blob_id[i] = 0;
         for (uint64_t j = 0; j < num_shards_per_pg; j++) {
-            auto shard = create_shard(i, 64 * Mi);
+            auto shard = create_shard(i, 64 * Mi, "shard meta");
             pg_shard_id_vec[i].emplace_back(shard.id);
             LOGINFO("pg={} shard {}", i, shard.id);
         }

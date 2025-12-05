@@ -6,7 +6,7 @@ TEST_F(HomeObjectFixture, PGStatsTest) {
     //  Create a pg, shard, put blob should succeed.
     pg_id_t pg_id{1};
     create_pg(pg_id);
-    auto shard_info = create_shard(pg_id, 64 * Mi);
+    auto shard_info = create_shard(pg_id, 64 * Mi, "shard meta");
     auto shard_id = shard_info.id;
     auto s = _obj_inst->shard_manager()->get_shard(shard_id).get();
     ASSERT_TRUE(!!s);
@@ -26,7 +26,7 @@ TEST_F(HomeObjectFixture, PGStatsTest) {
     LOGINFO("Sealed shard {}", shard_id);
 
     // create a 2nd shard
-    auto shard_info2 = create_shard(pg_id, 64 * Mi);
+    auto shard_info2 = create_shard(pg_id, 64 * Mi, "shard meta");
     auto shard_id2 = shard_info2.id;
     auto s2 = _obj_inst->shard_manager()->get_shard(shard_id2).get();
     ASSERT_TRUE(!!s2);

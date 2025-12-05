@@ -146,13 +146,13 @@ public:
         }
     }
 
-    ShardInfo create_shard(pg_id_t pg_id, uint64_t size_bytes) {
+    ShardInfo create_shard(pg_id_t pg_id, uint64_t size_bytes, std::string meta) {
         g_helper->sync();
         if (!am_i_in_pg(pg_id)) return {};
         // schedule create_shard only on leader
         auto tid = generateRandomTraceId();
         run_on_pg_leader(pg_id, [&]() {
-            auto s = _obj_inst->shard_manager()->create_shard(pg_id, size_bytes, tid).get();
+            auto s = _obj_inst->shard_manager()->create_shard(pg_id, size_bytes, meta, tid).get();
             RELEASE_ASSERT(!!s, "failed to create shard");
             auto ret = s.value();
             g_helper->set_uint64_id(ret.id);
@@ -403,6 +403,24 @@ public:
         return valid_blob_indexes.size();
     }
 
+    void verify_shard_meta(std::map< pg_id_t, std::vector< shard_id_t > > const& pg_shard_id_vec) {
+        for (const auto& [pg_id, shard_vec] : pg_shard_id_vec) {
+            if (!am_i_in_pg(pg_id)) continue;
+            for (const auto& shard_id : shard_vec) {
+                auto iter = _obj_inst->_shard_map.find(shard_id);
+                ASSERT_TRUE(iter != _obj_inst->_shard_map.end())
+                    << "shard not found in local shard_map, shard_id " << shard_id << " replica number "
+                    << g_helper->replica_num();
+                auto meta_str = "shard meta:" + std::to_string(shard_id);
+                uint8_t expected_meta[ShardInfo::meta_length]{};
+                memcpy(expected_meta, meta_str.c_str(), meta_str.length());
+                expected_meta[meta_str.length()] = '\0';
+                auto shard = iter->second->get();
+                ASSERT_TRUE(std::memcmp(shard->info.meta, expected_meta, ShardInfo::meta_length) == 0);
+            }
+        }
+    }
+
     // TODO:make this run in parallel
     void verify_get_blob(std::map< pg_id_t, std::vector< shard_id_t > > const& pg_shard_id_vec,
                          uint64_t const num_blobs_per_shard, bool const use_random_offset = false,
@@ -593,6 +611,7 @@ public:
         EXPECT_EQ(lhs.available_capacity_bytes, rhs.available_capacity_bytes);
         EXPECT_EQ(lhs.total_capacity_bytes, rhs.total_capacity_bytes);
         EXPECT_EQ(lhs.current_leader, rhs.current_leader);
+        EXPECT_TRUE(std::memcmp(lhs.meta, rhs.meta, ShardInfo::meta_length) == 0);
     }
 
     bool verify_start_replace_member_result(pg_id_t pg_id, std::string& task_id, peer_id_t out_member_id,
@@ -842,8 +861,7 @@ private:
         auto blob = build_blob(blob_id);
         auto blob_size = blob.body.size();
 
-        uint64_t actual_written_size{
-            uint32_cast(sisl::round_up(sizeof(HSHomeObject::BlobHeader), io_align))};
+        uint64_t actual_written_size{uint32_cast(sisl::round_up(sizeof(HSHomeObject::BlobHeader), io_align))};
 
         if (((r_cast< uintptr_t >(blob.body.cbytes()) % io_align) != 0) || ((blob_size % io_align) != 0)) {
             blob_size = sisl::round_up(blob_size, io_align);
