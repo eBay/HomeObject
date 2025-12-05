@@ -88,7 +88,7 @@ class HomeObjectImpl : public HomeObject,
                        public std::enable_shared_from_this< HomeObjectImpl > {
 
     /// Implementation defines these
-    virtual ShardManager::AsyncResult< ShardInfo > _create_shard(pg_id_t, uint64_t size_bytes, trace_id_t tid) = 0;
+    virtual ShardManager::AsyncResult< ShardInfo > _create_shard(pg_id_t, uint64_t size_bytes, std::string meta, trace_id_t tid) = 0;
     virtual ShardManager::AsyncResult< ShardInfo > _seal_shard(ShardInfo const&, trace_id_t tid) = 0;
 
     virtual BlobManager::AsyncResult< blob_id_t > _put_blob(ShardInfo const&, Blob&&, trace_id_t tid) = 0;
@@ -189,7 +189,7 @@ public:
 
     /// ShardManager
     ShardManager::AsyncResult< ShardInfo > get_shard(shard_id_t id, trace_id_t tid) const final;
-    ShardManager::AsyncResult< ShardInfo > create_shard(pg_id_t pg_owner, uint64_t size_bytes, trace_id_t tid) final;
+    ShardManager::AsyncResult< ShardInfo > create_shard(pg_id_t pg_owner, uint64_t size_bytes, std::string meta, trace_id_t tid) final;
     ShardManager::AsyncResult< InfoList > list_shards(pg_id_t pg, trace_id_t tid) const final;
     ShardManager::AsyncResult< ShardInfo > seal_shard(shard_id_t id, trace_id_t tid) final;
     uint64_t get_current_timestamp();

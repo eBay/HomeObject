@@ -50,11 +50,11 @@ void TestFixture::SetUp() {
     EXPECT_TRUE(homeobj_->pg_manager()->create_pg(std::move(info), tid).get());
 
     LOGDEBUG("Setup Shards, trace_id={}", tid);
-    auto s_e = homeobj_->shard_manager()->create_shard(_pg_id, Mi, tid).get();
+    auto s_e = homeobj_->shard_manager()->create_shard(_pg_id, Mi, "shard meta", tid).get();
     ASSERT_TRUE(!!s_e);
     s_e.then([this](auto&& i) { _shard_1 = std::move(i); });
 
-    s_e = homeobj_->shard_manager()->create_shard(_pg_id, Mi, tid).get();
+    s_e = homeobj_->shard_manager()->create_shard(_pg_id, Mi, "shard meta", tid).get();
     ASSERT_TRUE(!!s_e);
     s_e.then([this](auto&& i) { _shard_2 = std::move(i); });
 

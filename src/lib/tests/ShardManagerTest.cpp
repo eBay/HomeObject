@@ -9,7 +9,7 @@ using homeobject::ShardInfo;
 TEST_F(TestFixture, CreateShardTooBig) {
     EXPECT_EQ(ShardErrorCode::INVALID_ARG,
               homeobj_->shard_manager()
-                  ->create_shard(_pg_id, homeobject::ShardManager::max_shard_size() + 1)
+                  ->create_shard(_pg_id, homeobject::ShardManager::max_shard_size() + 1, "shard meta")
                   .get()
                   .error()
                   .getCode());
@@ -17,12 +17,12 @@ TEST_F(TestFixture, CreateShardTooBig) {
 
 TEST_F(TestFixture, CreateShardTooSmall) {
     EXPECT_EQ(ShardErrorCode::INVALID_ARG,
-              homeobj_->shard_manager()->create_shard(_pg_id, 0ul).get().error().getCode());
+              homeobj_->shard_manager()->create_shard(_pg_id, 0ul, "shard meta").get().error().getCode());
 }
 
 TEST_F(TestFixture, CreateShardNoPg) {
     EXPECT_EQ(ShardErrorCode::UNKNOWN_PG,
-              homeobj_->shard_manager()->create_shard(_pg_id + 1, Mi).get().error().getCode());
+              homeobj_->shard_manager()->create_shard(_pg_id + 1, Mi, "shard meta").get().error().getCode());
 }
 
 TEST_F(TestFixture, GetUnknownShard) {

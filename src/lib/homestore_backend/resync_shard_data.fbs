@@ -11,6 +11,7 @@ table ResyncShardMetaData {
     last_modified_time : ulong;       // shard last modify time
     total_capacity_bytes : ulong;    // total capacity of the shard
     vchunk_id : uint16;                     // vchunk id
+    meta: [ubyte];                             // serialized shard meta data
 }
 
 //ShardMetaData schema is the first batch(batch=0) in the shard transmission

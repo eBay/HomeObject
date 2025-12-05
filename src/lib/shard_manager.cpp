@@ -4,14 +4,12 @@ namespace homeobject {
 
 std::shared_ptr< ShardManager > HomeObjectImpl::shard_manager() { return shared_from_this(); }
 
-ShardManager::AsyncResult< ShardInfo > HomeObjectImpl::create_shard(pg_id_t pg_owner, uint64_t size_bytes,
+ShardManager::AsyncResult< ShardInfo > HomeObjectImpl::create_shard(pg_id_t pg_owner, uint64_t size_bytes, std::string meta,
                                                                     trace_id_t tid) {
-    if (0 == size_bytes || max_shard_size() < size_bytes)
-        return folly::makeUnexpected(ShardError(ShardErrorCode::INVALID_ARG));
-    return _defer().thenValue(
-        [this, pg_owner, size_bytes, tid](auto) mutable -> ShardManager::AsyncResult< ShardInfo > {
-            return _create_shard(pg_owner, size_bytes, tid);
-        });
+    if (0 == size_bytes || max_shard_size() < size_bytes) return folly::makeUnexpected(ShardError(ShardErrorCode::INVALID_ARG));
+    return _defer().thenValue([this, pg_owner, size_bytes, meta, tid](auto) mutable -> ShardManager::AsyncResult< ShardInfo > {
+        return _create_shard(pg_owner, size_bytes, meta, tid);
+    });
 }
 
 ShardManager::AsyncResult< InfoList > HomeObjectImpl::list_shards(pg_id_t pgid, trace_id_t tid) const {
