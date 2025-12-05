@@ -30,7 +30,12 @@ TEST_F(HomeObjectFixture, BasicGC) {
         // create a shard for each chunk
         for (const auto& [pg_id, chunk_num] : pg_chunk_nums) {
             for (uint64_t j = 0; j < chunk_num; j++) {
-                auto shard = create_shard(pg_id, 64 * Mi);
+                auto shard_seq = i * chunk_num + j + 1;
+                auto derived_shard_id =
+                    make_new_shard_id(pg_id, shard_seq); // shard id start from 1
+                auto shard = create_shard(pg_id, 64 * Mi, "shard meta:" + std::to_string(derived_shard_id));
+                LOGINFO("create shard pg={} shard {} in chunk {}", pg_id, shard.id, j);
+                ASSERT_EQ(derived_shard_id, shard.id);
                 pg_open_shard_id_vec[pg_id].emplace_back(shard.id);
                 pg_shard_id_vec[pg_id].emplace_back(shard.id);
             }
@@ -154,7 +159,7 @@ TEST_F(HomeObjectFixture, BasicGC) {
         }
     }
     verify_shard_blobs(remaining_shard_blobs);
-
+    verify_shard_meta(pg_shard_id_vec);
     // check vchunk to pchunk for every pg
     for (const auto& [pg_id, shard_vec] : pg_shard_id_vec) {
         // after half blobs have been deleted, the tombstone indexes(half of the total blobs) have been removed by gc
@@ -332,7 +337,7 @@ TEST_F(HomeObjectFixture, HandlingNoSpaceLeft) {
         // create a shard for each chunk
         for (const auto& [pg_id, chunk_num] : pg_chunk_nums) {
             for (uint64_t j = 0; j < chunk_num; j++) {
-                auto shard = create_shard(pg_id, 64 * Mi);
+                auto shard = create_shard(pg_id, 64 * Mi, "shard meta");
                 pg_open_shard_id_vec[pg_id].emplace_back(shard.id);
             }
         }
@@ -441,7 +446,7 @@ void HomeObjectFixture::EmergentGC(bool with_crash_recovery) {
         // create a shard for each chunk
         for (const auto& [pg_id, chunk_num] : pg_chunk_nums) {
             for (uint64_t j = 0; j < chunk_num; j++) {
-                auto shard = create_shard(pg_id, 64 * Mi);
+                auto shard = create_shard(pg_id, 64 * Mi, "shard meta");
                 pg_open_shard_id_vec[pg_id].emplace_back(shard.id);
                 pg_shard_id_vec[pg_id].emplace_back(shard.id);
             }

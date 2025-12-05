@@ -213,9 +213,10 @@ bool HSHomeObject::PGBlobIterator::create_shard_snapshot_data(sisl::io_blob_safe
     }
 
     auto shard = shard_list_[cur_shard_idx_];
-    auto shard_entry = CreateResyncShardMetaData(
+    std::vector< uint8_t > meta_bytes(shard.info.meta, shard.info.meta + ShardInfo::meta_length);
+    auto shard_entry = CreateResyncShardMetaDataDirect(
         builder_, shard.info.id, pg_id, static_cast< uint8_t >(shard.info.state), shard.info.lsn,
-        shard.info.created_time, shard.info.last_modified_time, shard.info.total_capacity_bytes, shard.v_chunk_num);
+        shard.info.created_time, shard.info.last_modified_time, shard.info.total_capacity_bytes, shard.v_chunk_num, &meta_bytes);
 
     builder_.FinishSizePrefixed(shard_entry);
 

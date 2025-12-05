@@ -84,6 +84,10 @@ int HSHomeObject::SnapshotReceiveHandler::process_shard_snapshot_data(ResyncShar
     shard_sb->info.last_modified_time = shard_meta.last_modified_time();
     shard_sb->info.available_capacity_bytes = shard_meta.total_capacity_bytes();
     shard_sb->info.total_capacity_bytes = shard_meta.total_capacity_bytes();
+    // Copy metadata into the fixed-size array (null-terminated C-style string)
+    if (shard_meta.meta() != nullptr && shard_meta.meta()->size() > 0) {
+        std::memcpy(shard_sb->info.meta, shard_meta.meta()->Data(), ShardInfo::meta_length);
+    }
     shard_sb->v_chunk_id = shard_meta.vchunk_id();
 
     homestore::blk_alloc_hints hints;
