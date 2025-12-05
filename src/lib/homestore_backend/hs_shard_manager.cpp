@@ -93,6 +93,7 @@ std::string HSHomeObject::serialize_shard_info(const ShardInfo& info) {
     j["shard_info"]["modified_time"] = info.last_modified_time;
     j["shard_info"]["total_capacity"] = info.total_capacity_bytes;
     j["shard_info"]["available_capacity"] = info.available_capacity_bytes;
+    j["shard_info"]["meta"] = std::string(reinterpret_cast< const char* >(info.meta));
     return j.dump();
 }
 
@@ -107,10 +108,13 @@ ShardInfo HSHomeObject::deserialize_shard_info(const char* json_str, size_t str_
     shard_info.last_modified_time = shard_json["shard_info"]["modified_time"].get< uint64_t >();
     shard_info.available_capacity_bytes = shard_json["shard_info"]["available_capacity"].get< uint64_t >();
     shard_info.total_capacity_bytes = shard_json["shard_info"]["total_capacity"].get< uint64_t >();
+    auto meta_str = shard_json["shard_info"]["meta"].get< std::string >();
+    std::memcpy(shard_info.meta, meta_str.data(), meta_str.length());
+    shard_info.meta[meta_str.length()] = '\0';
     return shard_info;
 }
 
-ShardManager::AsyncResult< ShardInfo > HSHomeObject::_create_shard(pg_id_t pg_owner, uint64_t size_bytes,
+ShardManager::AsyncResult< ShardInfo > HSHomeObject::_create_shard(pg_id_t pg_owner, uint64_t size_bytes, std::string meta,
                                                                    trace_id_t tid) {
 
     if (is_shutting_down()) {
@@ -118,7 +122,11 @@ ShardManager::AsyncResult< ShardInfo > HSHomeObject::_create_shard(pg_id_t pg_ow
         return folly::makeUnexpected(ShardError(ShardErrorCode::SHUTTING_DOWN));
     }
     incr_pending_request_num();
-
+    if (!meta.empty() && meta.length() > ShardInfo::meta_length - 1) {
+        LOGW("meta length {} exceeds max meta length {}, trace_id={}", meta.length(), ShardInfo::meta_length - 1, tid);
+        decr_pending_request_num();
+        return folly::makeUnexpected(ShardError(ShardErrorCode::INVALID_ARG));
+    }
     auto hs_pg = get_hs_pg(pg_owner);
     if (!hs_pg) {
         LOGW("failed to create shard with non-exist pg={}", pg_owner);
@@ -175,6 +183,10 @@ ShardManager::AsyncResult< ShardInfo > HSHomeObject::_create_shard(pg_id_t pg_ow
                          .last_modified_time = create_time,
                          .available_capacity_bytes = size_bytes,
                          .total_capacity_bytes = size_bytes};
+    if (!meta.empty()) {
+        std::memcpy(sb->info.meta, meta.data(), meta.length());
+        sb->info.meta[meta.length()] = '\0';
+    }
     sb->p_chunk_id = 0;
     sb->v_chunk_id = v_chunk_id;
 
