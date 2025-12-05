@@ -429,8 +429,9 @@ public:
         uint8_t user_key[max_user_key_length + 1]{};
         uint8_t padding[2956]{};  // data_block_size is 4K, so total size of BlobHeader is 4096 bytes
 
-        std::string get_user_key() const {
-            std::string ret = user_key_size ? std::string((const char*)user_key, (size_t)user_key_size) : std::string{};
+        std::optional< std::string > get_user_key() const {
+            if (user_key_size > max_user_key_length) { return std::nullopt; }
+            std::string ret = user_key_size ? std::string((const char*)user_key, user_key_size) : std::string{};
             return ret;
         }
 
@@ -438,11 +439,14 @@ public:
             return fmt::format(
                 "magic={:#x} version={} shard={:#x} blob_size={} user_size={} algo={} hash={:np}, user_key={}\n", magic,
                 version, shard_id, blob_size, user_key_size, (uint8_t)hash_algorithm,
-                spdlog::to_hex(hash, hash + blob_max_hash_len), get_user_key());
+                spdlog::to_hex(hash, hash + blob_max_hash_len), get_user_key().value_or("<null>"));
         }
 
         bool valid() const {
-            if (!DataHeader::valid() || blob_hdr_version > blob_header_version) { return false; }
+            if (!DataHeader::valid() || blob_hdr_version > blob_header_version || user_key_size > max_user_key_length) {
+                return false;
+            }
+
             uint8_t hash_arr[blob_max_hash_len];
             std::memcpy(hash_arr, header_hash, blob_max_hash_len);
             if (!_do_seal()) {
