@@ -596,7 +596,7 @@ void HSHomeObject::on_blob_del_commit(int64_t lsn, sisl::blob const& header, sis
     RELEASE_ASSERT(hs_pg, "PG not found, pg={}", pg_id);
     auto index_table = hs_pg->index_table_;
     auto repl_dev = hs_pg->repl_dev_;
-    RELEASE_ASSERT(index_table != nullptr, "Index table not initialized");
+    RELEASE_ASSERT(index_table != nullptr, "Index table not intialized");
     RELEASE_ASSERT(repl_dev != nullptr, "Repl dev instance null");
 
     const auto shard_id = msg_header->shard_id;
@@ -727,14 +727,15 @@ BlobManager::Result< std::string > HSHomeObject::do_verify_blob(const void* blob
         return folly::makeUnexpected(BlobError(BlobErrorCode::CHECKSUM_MISMATCH));
     }
 
-    return header->get_user_key();
+    return header->get_user_key().value(); // Must have a value as header verified above
 }
 
 bool HSHomeObject::verify_blob(const void* blob, const shard_id_t shard_id, const blob_id_t blob_id,
                                bool allow_delete_marker) const {
-    if (allow_delete_marker && !std::memcmp(blob, delete_marker_blob_data.data(), delete_marker_blob_data.size())) {
-        LOGW("find delete_marker for shard_id={}, blob_id={}, skipping verification!", shard_id, blob_id);
-        return true;
+    // Handle deleteMarker case
+    if (0 == std::memcmp(blob, delete_marker_blob_data.data(), delete_marker_blob_data.size())) {
+        LOGW("Found delete_marker for shard_id={}, blob_id={}, skipping verification!", shard_id, blob_id);
+        return allow_delete_marker;
     }
 
     // Use the new _verify_blob method
