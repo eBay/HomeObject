@@ -12,9 +12,7 @@ MemoryHomeObject::MemoryHomeObject(std::weak_ptr< HomeObjectApplication >&& appl
     _our_id = _application.lock()->discover_svcid(std::nullopt);
 }
 
-void MemoryHomeObject::shutdown() {
-    LOGI("MemoryHomeObject: Executing shutdown procedure");
-}
+void MemoryHomeObject::shutdown() { LOGI("MemoryHomeObject: Executing shutdown procedure"); }
 
 ShardIndex::~ShardIndex() {
     for (auto it = btree_.begin(); it != btree_.end(); ++it) {

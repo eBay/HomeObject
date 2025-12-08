@@ -116,7 +116,7 @@ void HSHomeObject::print_btree_index(pg_id_t pg_id) const {
     auto hs_pg = get_hs_pg(pg_id);
     RELEASE_ASSERT(hs_pg != nullptr, "Unknown PG");
     auto index_table = hs_pg->index_table_;
-    RELEASE_ASSERT(index_table != nullptr, "Index table not intialized");
+    RELEASE_ASSERT(index_table != nullptr, "Index table not initialized");
 
     LOGI("Index UUID {}", boost::uuids::to_string(index_table->uuid()));
     index_table->dump_tree_to_file();

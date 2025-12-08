@@ -189,7 +189,7 @@ public:
      *
      * This function returns the number of disks the chunk selector seen.
      * It should be the accurate source that how many disks in the system for data.
-     * If a disk is down in degraded mode, it wont be load and no chunk will be
+     * If a disk is down in degraded mode, it won't be load and no chunk will be
      * added into selector.
      */
     uint32_t total_disks() const { return m_per_dev_heap.size(); }
@@ -213,7 +213,7 @@ public:
     void update_vchunk_info_after_gc(const chunk_num_t move_from_chunk, const chunk_num_t move_to_chunk,
                                      const ChunkState final_state, const pg_id_t pg_id, const chunk_num_t vchunk_id,
                                      const uint64_t task_id);
-    
+
     nlohmann::json dump_chunks_info(pg_id_t pg_id) const;
 
 private:

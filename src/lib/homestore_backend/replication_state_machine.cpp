@@ -139,7 +139,7 @@ void ReplicationStateMachine::on_rollback(int64_t lsn, sisl::blob const& header,
 
     RELEASE_ASSERT(
         target_lsn >= lsn,
-        "wait_commit_lsn should be bigger than rollbacked lsn wait_commit_lsn={}, chunk_id={}, currrent lsn={}",
+        "wait_commit_lsn should be bigger than rollbacked lsn wait_commit_lsn={}, chunk_id={}, current lsn={}",
         target_lsn, chunk_id, lsn);
 
     // if target_lsn is int64_max, it`s is also ok to reset_no_space_left_error_info
@@ -153,7 +153,7 @@ void ReplicationStateMachine::on_config_rollback(int64_t lsn) {
 
     RELEASE_ASSERT(
         target_lsn >= lsn,
-        "wait_commit_lsn should be bigger than rollbacked lsn wait_commit_lsn={}, chunk_id={}, currrent lsn={}",
+        "wait_commit_lsn should be bigger than rollbacked lsn wait_commit_lsn={}, chunk_id={}, current lsn={}",
         target_lsn, chunk_id, lsn);
 
     // if target_lsn is int64_max, it`s is also ok to reset_no_space_left_error_info
@@ -866,7 +866,7 @@ void ReplicationStateMachine::on_no_space_left(homestore::repl_lsn_t lsn, sisl::
         const pg_id_t pg_id = msg_header->pg_id;
 
         switch (msg_header->msg_type) {
-        // this case is only that no_space_left happens when writting shard header block on follower side.
+        // this case is only that no_space_left happens when writing shard header block on follower side.
         case ReplicationMessageType::CREATE_SHARD_MSG: {
             if (!home_object_->pg_exists(pg_id)) {
                 LOGW("shardID=0x{:x}, shard=0x{:x}, can not find pg={} when handling on_no_space_left",
@@ -951,7 +951,7 @@ void ReplicationStateMachine::handle_no_space_left(homestore::repl_lsn_t lsn, ho
     // be allocated from now on.
     repl_dev()->quiesce_reqs();
 
-    // 2 clear all the in-memeory rreqs that already allocated blocks on the chunk.
+    // 2 clear all the in-memory rreqs that already allocated blocks on the chunk.
     repl_dev()->clear_chunk_req(chunk_id);
 
     // 3 handling this error. for homeobject, we will submit an emergent gc task and wait for the completion.
@@ -1011,7 +1011,7 @@ void ReplicationStateMachine::on_log_replay_done(const homestore::group_id_t& gr
         //  group(repl_dev), but have not corresponding pg.
 
         //  3 when fail to create repl_dev, there might be some stale repl_dev left on a node. for example, success to
-        //  add the first memeber but fail to add the second memeber, the there will be a stale repl_dev on leader and
+        //  add the first member but fail to add the second member, the there will be a stale repl_dev on leader and
         //  the first member. see https://github.com/eBay/HomeObject/pull/136#discussion_r1470504271
         LOGW("can not find any pg for group={}!", group_id);
         return;

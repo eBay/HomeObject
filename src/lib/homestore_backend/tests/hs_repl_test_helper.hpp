@@ -332,7 +332,7 @@ public:
                                                       bool clean_lost_disk = false) {
 
         if (shutdown_delay_secs > 0) { std::this_thread::sleep_for(std::chrono::seconds(shutdown_delay_secs)); }
-        LOGINFO("Stoping homeobject after {} secs, replica={}", shutdown_delay_secs, replica_num_);
+        LOGINFO("Stopping homeobject after {} secs, replica={}", shutdown_delay_secs, replica_num_);
         homeobj_->shutdown();
         homeobj_.reset();
         if (restart_delay_secs > 0) { std::this_thread::sleep_for(std::chrono::seconds(restart_delay_secs)); }
