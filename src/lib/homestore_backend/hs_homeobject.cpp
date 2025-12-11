@@ -550,4 +550,15 @@ void HSHomeObject::yield_pg_leadership_to_follower(int32_t pg_id) {
     }
 }
 
+void HSHomeObject::trigger_snapshot_creation(int32_t pg_id, int64_t compact_lsn, bool wait_for_commit) {
+    LOGI("Triggering snapshot creation for pg_id={}, compact_lsn={}, wait_for_commit={}", pg_id, compact_lsn,
+         wait_for_commit);
+    auto hs_pg = get_hs_pg(pg_id);
+    if (!hs_pg) {
+        LOGE("Failed to trigger snapshot: PG {} not found", pg_id);
+        return;
+    }
+    hs_pg->trigger_snapshot_creation(compact_lsn, wait_for_commit);
+}
+
 } // namespace homeobject

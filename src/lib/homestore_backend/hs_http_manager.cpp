@@ -37,6 +37,8 @@ HttpManager::HttpManager(HSHomeObject& ho) : ho_(ho) {
          Pistache::Rest::Routes::bind(&HttpManager::reconcile_leader, this)},
         {Pistache::Http::Method::Post, "/api/v1/yield_leadership_to_follower",
          Pistache::Rest::Routes::bind(&HttpManager::yield_leadership_to_follower, this)},
+        {Pistache::Http::Method::Post, "/api/v1/trigger_snapshot_creation",
+         Pistache::Rest::Routes::bind(&HttpManager::trigger_snapshot_creation, this)},
 #ifdef _PRERELEASE
         {Pistache::Http::Method::Post, "/api/v1/crashSystem",
          Pistache::Rest::Routes::bind(&HttpManager::crash_system, this)},
@@ -89,6 +91,36 @@ void HttpManager::yield_leadership_to_follower(const Pistache::Rest::Request& re
     LOGINFO("Received yield leadership request for pg_id {} to follower", pg_id);
     ho_.yield_pg_leadership_to_follower(pg_id);
     response.send(Pistache::Http::Code::Ok, "Yield leadership request submitted");
+}
+
+void HttpManager::trigger_snapshot_creation(const Pistache::Rest::Request& request,
+                                            Pistache::Http::ResponseWriter response) {
+    // Extract and validate pg_id parameter (required)
+    const auto pg_id_param = request.query().get("pg_id");
+    if (!pg_id_param) {
+        response.send(Pistache::Http::Code::Bad_Request, "pg_id is required");
+        return;
+    }
+    const int32_t pg_id = std::stoi(pg_id_param.value());
+
+    // Extract compact_lsn parameter (optional, default: -1 means use current HS status)
+    const auto compact_lsn_param = request.query().get("compact_lsn");
+    const int64_t compact_lsn = std::stoll(compact_lsn_param.value_or("-1"));
+
+    // Extract wait_for_commit parameter (optional, default: true)
+    const auto wait_for_commit_param = request.query().get("wait_for_commit");
+    std::string wait_for_commit_mode = wait_for_commit_param.value_or("true");
+    if (wait_for_commit_mode != "true" && wait_for_commit_mode != "false") {
+        response.send(Pistache::Http::Code::Bad_Request, "wait_for_commit must be 'true' or 'false'");
+        return;
+    }
+    bool wait_for_commit = (wait_for_commit_mode == "true");
+
+    LOGINFO("Received snapshot creation request for pg_id={}, compact_lsn={}, wait_for_commit={}", pg_id, compact_lsn,
+            wait_for_commit);
+
+    ho_.trigger_snapshot_creation(pg_id, compact_lsn, wait_for_commit);
+    response.send(Pistache::Http::Code::Ok, "Snapshot creation request submitted");
 }
 
 void HttpManager::get_pg(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response) {
