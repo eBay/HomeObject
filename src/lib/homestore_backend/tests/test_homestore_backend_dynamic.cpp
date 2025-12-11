@@ -22,10 +22,6 @@
 #define AFTER_BASELINE_RESYNC "AFTER_BASELINE_RESYNC"
 #define TRUNCATING_LOGS "TRUNCATING_LOGS"
 
-TEST_F(HomeObjectFixture, ReplaceMember) { ReplaceMember(false); }
-
-TEST_F(HomeObjectFixture, FetchDataWithOriginatorGC) { ReplaceMember(true); }
-
 // Restart during baseline resync
 TEST_F(HomeObjectFixture, RestartFollowerDuringBaselineResyncWithoutTimeout) {
     RestartFollowerDuringBaselineResyncUsingSigKill(10000, 1000, RECEIVING_SNAPSHOT);
@@ -138,7 +134,7 @@ void HomeObjectFixture::RestartFollowerDuringBaselineResyncUsingSigKill(uint64_t
             create_shard(pg_id, 64 * Mi);
 
         // put and verify blobs in the pg, excluding the spare replicas
-        put_blobs(pg_shard_id_vec, num_blobs_per_shard, pg_blob_id);
+        put_blobs(pg_shard_id_vec, num_blobs_per_shard, pg_blob_id, true, true);
 
         verify_get_blob(pg_shard_id_vec, num_blobs_per_shard);
         verify_obj_count(1, num_shards_per_pg, num_blobs_per_shard, false);
@@ -289,7 +285,7 @@ TEST_F(HomeObjectFixture, RestartFollowerDuringBaselineResyncUsingGracefulShutdo
         create_shard(pg_id, 64 * Mi);
 
     // put and verify blobs in the pg, excluding the spare replicas
-    put_blobs(pg_shard_id_vec, num_blobs_per_shard, pg_blob_id);
+    put_blobs(pg_shard_id_vec, num_blobs_per_shard, pg_blob_id, true, true);
 
     verify_get_blob(pg_shard_id_vec, num_blobs_per_shard);
     verify_obj_count(1, num_shards_per_pg, num_blobs_per_shard, false);
@@ -352,17 +348,9 @@ TEST_F(HomeObjectFixture, RestartFollowerDuringBaselineResyncUsingGracefulShutdo
     g_helper->sync();
 }
 
-TEST_F(HomeObjectFixture, RestartLeaderDuringBaselineResync) {
-    RestartLeaderDuringBaselineResyncUsingSigKill(10000, 1000, RECEIVING_SNAPSHOT);
-}
+TEST_F(HomeObjectFixture, ReplaceMember) { ReplaceMember(false); }
 
-TEST_F(HomeObjectFixture, RestartLeaderWhenApplySnapshot) {
-    RestartLeaderDuringBaselineResyncUsingSigKill(10000, 1000, APPLYING_SNAPSHOT);
-}
-
-TEST_F(HomeObjectFixture, RestartLeaderAfterBaselineResync) {
-    RestartLeaderDuringBaselineResyncUsingSigKill(10000, 1000, AFTER_BASELINE_RESYNC);
-}
+TEST_F(HomeObjectFixture, FetchDataWithOriginatorGC) { ReplaceMember(true); }
 
 void HomeObjectFixture::ReplaceMember(bool withGC) {
     LOGINFO("HomeObject replica={} setup completed", g_helper->replica_num());
@@ -402,7 +390,7 @@ void HomeObjectFixture::ReplaceMember(bool withGC) {
     pg_blob_id[pg_id] = 0;
 
     // put and verify blobs in the pg, excluding the spare replicas
-    put_blobs(pg_shard_id_vec, num_blobs_per_shard, pg_blob_id);
+    put_blobs(pg_shard_id_vec, num_blobs_per_shard, pg_blob_id, true, true);
 
     verify_get_blob(pg_shard_id_vec, num_blobs_per_shard);
     verify_obj_count(1, num_shards_per_pg, num_blobs_per_shard, false);
@@ -460,6 +448,7 @@ void HomeObjectFixture::ReplaceMember(bool withGC) {
     set_basic_flip("snapshot_receiver_blob_write_data_error", 4, 15);  // simulate blob write data error
     set_basic_flip("snapshot_receiver_blk_allocation_error", 4, 15);   // simulate blob allocation error
 #endif
+
     std::string task_id = "task_id";
     LOGINFO("start replace member, pg={}, task_id={}", pg_id, task_id);
     run_on_pg_leader(pg_id, [&]() {
@@ -533,6 +522,18 @@ void HomeObjectFixture::ReplaceMember(bool withGC) {
     } else {
         ASSERT_TRUE(verify_complete_replace_member_result(pg_id, task_id, out_member_id, in_member_id));
     }
+}
+
+TEST_F(HomeObjectFixture, RestartLeaderDuringBaselineResync) {
+    RestartLeaderDuringBaselineResyncUsingSigKill(10000, 1000, RECEIVING_SNAPSHOT);
+}
+
+TEST_F(HomeObjectFixture, RestartLeaderWhenApplySnapshot) {
+    RestartLeaderDuringBaselineResyncUsingSigKill(10000, 1000, APPLYING_SNAPSHOT);
+}
+
+TEST_F(HomeObjectFixture, RestartLeaderAfterBaselineResync) {
+    RestartLeaderDuringBaselineResyncUsingSigKill(10000, 1000, AFTER_BASELINE_RESYNC);
 }
 
 // Need to restart the leader for process sync
@@ -615,7 +616,7 @@ void HomeObjectFixture::RestartLeaderDuringBaselineResyncUsingSigKill(uint64_t f
             create_shard(pg_id, 64 * Mi);
 
         // put and verify blobs in the pg, excluding the spare replicas
-        put_blobs(pg_shard_id_vec, num_blobs_per_shard, pg_blob_id);
+        put_blobs(pg_shard_id_vec, num_blobs_per_shard, pg_blob_id, true, true);
 
         verify_get_blob(pg_shard_id_vec, num_blobs_per_shard);
         verify_obj_count(1, num_shards_per_pg, num_blobs_per_shard, false);

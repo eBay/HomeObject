@@ -214,7 +214,7 @@ public:
         }
     }
 
-    void put_blob(shard_id_t shard_id, Blob&& blob, bool need_sync_before_start = true) {
+    void put_blob(shard_id_t shard_id, Blob&& blob) {
         g_helper->sync();
         auto tid = generateRandomTraceId();
         auto r = _obj_inst->shard_manager()->get_shard(shard_id, tid).get();
@@ -238,11 +238,27 @@ public:
         }
     }
 
-    // TODO:make this run in parallel
+    /**
+     * Writes multiple blobs to specified shards across PGs
+     *
+     * @param pg_shard_id_vec Map of PG IDs to their shard ID vectors. Blobs are written to each shard in each PG.
+     * @param num_blobs_per_shard Number of blobs to write to each shard.
+     * @param pg_blob_id In/out map tracking next blob ID for each PG. Updated after writing blobs.
+     * @param sync_before_start If true, trigger sync across all replicas at the beginning. (default: true)
+     * @param trigger_cp_on_leader If true, triggers checkpoint on leader after each blob write. (default: false)
+     *                             Useful for baseline resync tests as log truncation depends on checkpoints.
+     *
+     * @return Map of shard IDs to their blob IDs and written block counts
+     *
+     * @note Blob IDs are sequential within each PG, starting from pg_blob_id[pg_id]
+     * @note Only writes to PGs where current replica is a member
+     * @note TODO: make this run in parallel
+     */
     std::map< shard_id_t, std::map< blob_id_t, uint64_t > >
     put_blobs(std::map< pg_id_t, std::vector< shard_id_t > > const& pg_shard_id_vec, uint64_t const num_blobs_per_shard,
-              std::map< pg_id_t, blob_id_t >& pg_blob_id, bool need_sync_before_start = true) {
-        if (need_sync_before_start) { g_helper->sync(); }
+              std::map< pg_id_t, blob_id_t >& pg_blob_id, bool sync_before_start = true,
+              bool trigger_cp_on_leader = false) {
+        if (sync_before_start) { g_helper->sync(); }
         std::map< shard_id_t, std::map< blob_id_t, uint64_t > > shard_blob_ids_map;
         for (const auto& [pg_id, shard_vec] : pg_shard_id_vec) {
             if (!am_i_in_pg(pg_id)) continue;
@@ -267,6 +283,8 @@ public:
 
                         auto blob_id = b.value();
                         ASSERT_EQ(blob_id, current_blob_id) << "the predicted blob id is not correct!";
+
+                        if (trigger_cp_on_leader) { trigger_cp(true); }
                     });
                     auto [it, _] = shard_blob_ids_map.try_emplace(shard_id, std::map< blob_id_t, uint64_t >());
                     auto& blob_ids = it->second;
