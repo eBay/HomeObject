@@ -54,7 +54,8 @@ private:
     uint32_t _hs_reserved_blks = 0;
 
     /// Overridable Helpers
-    ShardManager::AsyncResult< ShardInfo > _create_shard(pg_id_t, uint64_t size_bytes, std::string meta, trace_id_t tid) override;
+    ShardManager::AsyncResult< ShardInfo > _create_shard(pg_id_t, uint64_t size_bytes, std::string meta,
+                                                         trace_id_t tid) override;
     ShardManager::AsyncResult< ShardInfo > _seal_shard(ShardInfo const&, trace_id_t tid) override;
 
     BlobManager::AsyncResult< blob_id_t > _put_blob(ShardInfo const&, Blob&&, trace_id_t tid) override;
@@ -196,7 +197,7 @@ public:
     };
 
     struct shard_info_superblk : DataHeader {
-        //This version is a common version of DataHeader, each derived struct can have its own version.
+        // This version is a common version of DataHeader, each derived struct can have its own version.
         static constexpr uint8_t shard_sb_version = 0x02;
 
         uint8_t sb_version{shard_sb_version};
@@ -394,6 +395,8 @@ public:
 
         void yield_leadership_to_follower() const;
 
+        void trigger_snapshot_creation(int64_t compact_lsn, bool wait_for_commit) const;
+
         /**
          * Returns all shards
          */
@@ -437,7 +440,7 @@ public:
         uint32_t data_offset;   // Offset of actual data blob stored after the metadata
         uint32_t user_key_size; // Actual size of the user key.
         uint8_t user_key[max_user_key_length + 1]{};
-        uint8_t padding[2956]{};  // data_block_size is 4K, so total size of BlobHeader is 4096 bytes
+        uint8_t padding[2956]{}; // data_block_size is 4K, so total size of BlobHeader is 4096 bytes
 
         std::optional< std::string > get_user_key() const {
             if (user_key_size > max_user_key_length) { return std::nullopt; }
@@ -968,6 +971,22 @@ public:
      * @brief yield leadership to follower with newest progress, only used for test
      */
     void yield_pg_leadership_to_follower(int32_t pg_id = 1);
+
+    /**
+     * @brief Manually trigger a snapshot creation.
+     * @param compact_lsn Expected compact up to LSN. Default is -1, meaning it depends directly on the current HS
+     * status.
+     * @param wait_for_commit Wait committed lsn reaches compact_lsn. Default is true, false means the snapshot will be
+     * triggered based on its latest committed lsn and the log compaction depends on min(snapshot_lsn, compact_lsn)
+     *
+     * Recommendation:
+     * - Please keep wait_for_commit=true to make sure the compact_lsn <= committed_lsn when snapshot is created. If you
+     * just want to trigger a snapshot manually or want to update the compact_lsn (already less than committed_lsn) for
+     * log compaction, you can set wait_for_commit=false.
+     * - wait_for_commit=true might cause the caller blocked for a while until the committed_lsn reaches compact_lsn.
+     * Please keep in mind and take action if this function costs too long.
+     */
+    void trigger_snapshot_creation(int32_t pg_id, int64_t compact_lsn, bool wait_for_commit);
 
     // Blob manager related.
     void on_blob_message_rollback(int64_t lsn, sisl::blob const& header, sisl::blob const& key,
