@@ -797,6 +797,10 @@ void HSHomeObject::HS_PG::yield_leadership_to_follower() const {
     repl_dev_->yield_leadership(false /*immediate_yield*/, candidate_leader_id);
 }
 
+void HSHomeObject::HS_PG::trigger_snapshot_creation(int64_t compact_lsn, bool is_async) const {
+    repl_dev_->trigger_snapshot_creation(compact_lsn, is_async);
+}
+
 std::vector< Shard > HSHomeObject::HS_PG::get_chunk_shards(chunk_num_t v_chunk_id) const {
     std::vector< Shard > ret;
     for (auto const& s : shards_) {

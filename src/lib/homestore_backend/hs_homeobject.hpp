@@ -363,6 +363,8 @@ public:
 
         void yield_leadership_to_follower() const;
 
+        void trigger_snapshot_creation(int64_t compact_lsn, bool is_async) const;
+
         /**
          * Returns all shards
          */
@@ -915,6 +917,20 @@ public:
      * @brief yield leadership to follower with newest progress, only used for test
      */
     void yield_pg_leadership_to_follower(int32_t pg_id = 1);
+
+    /**
+     * @brief Manually trigger a snapshot creation.
+     * @param compact_lsn Expected compact up to LSN. Default is -1, meaning it depends directly on the current HS
+     * status.
+     * @param is_async Trigger mode. Default is true, meaning an async snapshot is triggered on the next earliest
+     * committed log. If false, a snapshot is triggered immediately based on the latest committed log.
+     *
+     * Recommendation:
+     * - If there is continuous traffic, it is recommended to set is_async=true. This only sets a flag, relying on
+     * subsequent commits to trigger the snapshot asynchronously, making it more lightweight.
+     * - If there is no continuous traffic, set is_async=false to trigger a snapshot immediately.
+     */
+    void trigger_snapshot_creation(int32_t pg_id, int64_t compact_lsn, bool is_async);
 
     // Blob manager related.
     void on_blob_message_rollback(int64_t lsn, sisl::blob const& header, sisl::blob const& key,
