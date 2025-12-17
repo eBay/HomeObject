@@ -293,3 +293,191 @@ TEST_F(HomeObjectFixture, CreateShardOnDiskLostMemeber) {
     }
     g_helper->sync();
 }
+
+TEST_F(HomeObjectFixture, ShardVersionMigrationRecovery) {
+    // Test migration with mixed versions (v1 and v2) to simulate partial migration or interrupted upgrade
+    // Also tests the actual bug scenario where v1 shards had incorrect type field
+    pg_id_t pg_id{1};
+    create_pg(pg_id);
+
+    // Create multiple shards with current version
+    LOGINFO("Creating 5 test shards...");
+    std::vector< ShardInfo > shard_infos;
+    std::vector< shard_id_t > shard_ids;
+    for (int i = 0; i < 5; ++i) {
+        auto shard_info = create_shard(pg_id, Mi, fmt::format("test_migration_{}", i));
+        shard_infos.push_back(shard_info);
+        shard_ids.push_back(shard_info.id);
+        EXPECT_EQ(ShardInfo::State::OPEN, shard_info.state);
+    }
+
+    // Get the PG and verify all shards are at current version
+    auto pg_result = _obj_inst->get_hs_pg(pg_id);
+    EXPECT_TRUE(pg_result != nullptr);
+    EXPECT_EQ(5, pg_result->shards_.size());
+
+    // Save original data for all shards - use map keyed by shard_id since recovery order is not guaranteed
+    struct ShardOriginalData {
+        ShardInfo info;
+        homestore::chunk_num_t p_chunk_id;
+        homestore::chunk_num_t v_chunk_id;
+        bool should_be_v1; // Track which shards should be created as v1
+    };
+    std::unordered_map< shard_id_t, ShardOriginalData > original_data_map;
+
+    // Mark which shards should be v1 vs v2 (using alternating pattern for variety)
+    // shard_ids[0], [2], [4] -> v1 (needs migration)
+    // shard_ids[1], [3] -> v2 (already migrated)
+    std::set v1_shard_ids = {shard_ids[0], shard_ids[2], shard_ids[4]};
+
+    for (auto& shard : pg_result->shards_) {
+        auto hs_shard = d_cast< HSHomeObject::HS_Shard* >(shard.get());
+        EXPECT_EQ(0x02, hs_shard->sb_->version);
+        EXPECT_EQ(0x02, hs_shard->sb_->sb_version);
+
+        auto shard_id = hs_shard->sb_->info.id;
+        original_data_map[shard_id] = {hs_shard->sb_->info, hs_shard->sb_->p_chunk_id, hs_shard->sb_->v_chunk_id,
+                                       v1_shard_ids.contains(shard_id)};
+
+        // Destroy all current superblks
+        hs_shard->sb_.destroy();
+    }
+
+    // Simulate partial migration: create shards with mixed versions
+    LOGINFO("Creating mixed version shards (3 v1 shards, 2 v2 shards)...");
+
+    for (const auto& [shard_id, orig_data] : original_data_map) {
+        if (orig_data.should_be_v1) {
+            // Create v1 shard (needs migration)
+            homestore::superblk< HSHomeObject::v1_shard_info_superblk > old_sb("ShardManager");
+            old_sb.create(sizeof(HSHomeObject::v1_shard_info_superblk));
+            old_sb->magic = HSHomeObject::DataHeader::data_header_magic;
+            old_sb->version = 0x01; // Old version
+            // Simulate the actual bug: first v1 shard has incorrect type field set to BLOB_INFO
+            if (shard_id == shard_ids[0]) {
+                old_sb->type = HSHomeObject::DataHeader::data_type_t::BLOB_INFO; // Bug scenario
+                LOGINFO("Created v1 shard {} with BLOB_INFO type (bug scenario)", shard_id);
+            } else {
+                LOGINFO("Created v1 shard {}", shard_id);
+            }
+            // Convert v2 ShardInfo to v1_ShardInfo (v1 doesn't have meta field)
+            old_sb->info.id = orig_data.info.id;
+            old_sb->info.placement_group = orig_data.info.placement_group;
+            old_sb->info.state = orig_data.info.state;
+            old_sb->info.lsn = orig_data.info.lsn;
+            old_sb->info.created_time = orig_data.info.created_time;
+            old_sb->info.last_modified_time = orig_data.info.last_modified_time;
+            old_sb->info.available_capacity_bytes = orig_data.info.available_capacity_bytes;
+            old_sb->info.total_capacity_bytes = orig_data.info.total_capacity_bytes;
+            old_sb->info.current_leader = orig_data.info.current_leader;
+            // Note: v1 doesn't have meta field, so we don't copy it
+            old_sb->p_chunk_id = orig_data.p_chunk_id;
+            old_sb->v_chunk_id = orig_data.v_chunk_id;
+            old_sb.write();
+        } else {
+            // Create v2 shard (already migrated)
+            homestore::superblk< HSHomeObject::shard_info_superblk > new_sb("ShardManager");
+            new_sb.create(sizeof(HSHomeObject::shard_info_superblk));
+            new_sb->magic = HSHomeObject::DataHeader::data_header_magic;
+            new_sb->version = 0x02; // New version
+            new_sb->type = HSHomeObject::DataHeader::data_type_t::SHARD_INFO;
+            new_sb->sb_version = 0x02;
+            new_sb->info = orig_data.info;
+            new_sb->p_chunk_id = orig_data.p_chunk_id;
+            new_sb->v_chunk_id = orig_data.v_chunk_id;
+            new_sb.write();
+            LOGINFO("Created v2 shard {}", shard_id);
+        }
+    }
+
+    auto old_size = sizeof(HSHomeObject::v1_shard_info_superblk);
+    auto new_size = sizeof(HSHomeObject::shard_info_superblk);
+    LOGINFO("Setup complete - old size={}, new size={}", old_size, new_size);
+
+    // Restart homeobject - this should migrate only v1 shards
+    LOGINFO("Restarting homeobject to trigger migration...");
+    restart();
+
+    // Verify all shards are now at v2
+    pg_result = _obj_inst->get_hs_pg(pg_id);
+    EXPECT_TRUE(pg_result != nullptr);
+    EXPECT_EQ(5, pg_result->shards_.size());
+
+    LOGINFO("Verifying all shards after migration...");
+    for (auto& shard : pg_result->shards_) {
+        auto hs_shard = d_cast< HSHomeObject::HS_Shard* >(shard.get());
+        auto shard_id = hs_shard->sb_->info.id;
+
+        // Look up the original data for this shard
+        auto it = original_data_map.find(shard_id);
+        ASSERT_NE(it, original_data_map.end()) << "Shard " << shard_id << " not found in original data";
+        const auto& orig_data = it->second;
+
+        // All shards should now be at v2
+        EXPECT_EQ(0x02, hs_shard->sb_->version) << "Shard " << shard_id << " version should be 0x02";
+        EXPECT_EQ(0x02, hs_shard->sb_->sb_version) << "Shard " << shard_id << " sb_version should be 0x02";
+
+        // Verify all shard data was preserved
+        EXPECT_EQ(HSHomeObject::DataHeader::data_header_magic, hs_shard->sb_->magic);
+        EXPECT_EQ(HSHomeObject::DataHeader::data_type_t::SHARD_INFO, hs_shard->sb_->type);
+        EXPECT_EQ(orig_data.info.id, hs_shard->sb_->info.id);
+        EXPECT_EQ(orig_data.info.placement_group, hs_shard->sb_->info.placement_group);
+        EXPECT_EQ(orig_data.info.state, hs_shard->sb_->info.state);
+        EXPECT_EQ(orig_data.p_chunk_id, hs_shard->sb_->p_chunk_id);
+        EXPECT_EQ(orig_data.v_chunk_id, hs_shard->sb_->v_chunk_id);
+
+        LOGINFO("Shard {} verified successfully (was {})", shard_id, orig_data.should_be_v1 ? "v1" : "v2");
+    }
+
+    // Verify all shards are still functional
+    LOGINFO("Verifying shard functionality...");
+    for (size_t i = 0; i < shard_ids.size(); ++i) {
+        auto s = _obj_inst->shard_manager()->get_shard(shard_ids[i]).get();
+        ASSERT_TRUE(!!s) << "Shard " << i << " should be accessible";
+        EXPECT_EQ(shard_ids[i], s.value().id);
+        EXPECT_EQ(ShardInfo::State::OPEN, s.value().state);
+    }
+
+    // Seal some v1 shards to verify they still work after migration
+    LOGINFO("Sealing two v1 shards to verify post-migration functionality...");
+    auto sealed_shard_0 = seal_shard(shard_ids[0]);
+    EXPECT_EQ(ShardInfo::State::SEALED, sealed_shard_0.state);
+
+    auto sealed_shard_2 = seal_shard(shard_ids[2]);
+    EXPECT_EQ(ShardInfo::State::SEALED, sealed_shard_2.state);
+
+    // Track which shards were sealed for later verification
+    std::set sealed_shard_ids = {shard_ids[0], shard_ids[2]};
+
+    LOGINFO("Mixed version migration test completed - 3 shards migrated from v1, 2 shards already at v2");
+
+    // Restart again to verify the migration was persisted to disk
+    LOGINFO("Second restart to verify persistence...");
+    restart();
+
+    // Verify all migrated versions persist after restart
+    pg_result = _obj_inst->get_hs_pg(pg_id);
+    EXPECT_TRUE(pg_result != nullptr);
+    EXPECT_EQ(5, pg_result->shards_.size());
+
+    LOGINFO("Verifying all shards after second restart...");
+    for (auto& shard : pg_result->shards_) {
+        auto hs_shard = d_cast< HSHomeObject::HS_Shard* >(shard.get());
+        auto shard_id = hs_shard->sb_->info.id;
+
+        EXPECT_EQ(0x02, hs_shard->sb_->version) << "Shard " << shard_id << " should still be v2 after restart";
+        EXPECT_EQ(0x02, hs_shard->sb_->sb_version) << "Shard " << shard_id << " sb_version should still be 0x02";
+
+        // Verify sealed shards remain sealed
+        if (sealed_shard_ids.contains(shard_id)) {
+            EXPECT_EQ(ShardInfo::State::SEALED, hs_shard->sb_->info.state)
+                << "Shard " << shard_id << " should remain sealed";
+        } else {
+            EXPECT_EQ(ShardInfo::State::OPEN, hs_shard->sb_->info.state)
+                << "Shard " << shard_id << " should remain open";
+        }
+    }
+
+    LOGINFO("Verified migration persisted to disk - all {} shards remain at v2 after second restart",
+            pg_result->shards_.size());
+}
