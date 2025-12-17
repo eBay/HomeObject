@@ -274,6 +274,9 @@ void HSHomeObject::on_replica_restart() {
             [this](bool success) { on_shard_meta_blk_recover_completed(success); }, true);
         homestore::meta_service().read_sub_sb(_shard_meta_name);
 
+        // Write migrated shard metadata to disk (must be called AFTER read_sub_sb returns to avoid deadlock)
+        write_migrated_shard_metablks();
+
         // recover snapshot context
         homestore::meta_service().register_handler(
             _snp_ctx_meta_name,

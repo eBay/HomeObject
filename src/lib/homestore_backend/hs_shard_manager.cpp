@@ -568,8 +568,58 @@ void HSHomeObject::on_shard_message_commit(int64_t lsn, sisl::blob const& h, hom
 }
 
 void HSHomeObject::on_shard_meta_blk_found(homestore::meta_blk* mblk, sisl::byte_view buf) {
+    // First peek at the version
+    auto* header = reinterpret_cast< const DataHeader* >(buf.bytes());
+
     homestore::superblk< shard_info_superblk > sb(_shard_meta_name);
-    sb.load(buf, mblk);
+
+    // Detect and migrate old version data (DataHeader version 0x01)
+    if (header->version == 0x01) {
+        // Read data from buffer with old v1 layout
+        auto* old_sb = reinterpret_cast< const v1_shard_info_superblk* >(buf.bytes());
+
+        const auto v1_info = old_sb->info;
+        const auto saved_p_chunk_id = old_sb->p_chunk_id;
+        const auto saved_v_chunk_id = old_sb->v_chunk_id;
+
+        LOGI("Detected v1 shard superblk (shard={}, pg={}, p_chunk={}, v_chunk={}), migrating to v2", v1_info.id,
+             v1_info.placement_group, saved_p_chunk_id, saved_v_chunk_id);
+
+        // Create a new v2 superblk with the given mblk
+        sb.load(buf, mblk);
+        sb.resize(sizeof(shard_info_superblk));
+        sb->magic = DataHeader::data_header_magic;
+        sb->version = DataHeader::data_header_version; // 0x02
+        sb->type = DataHeader::data_type_t::SHARD_INFO;
+        sb->sb_version = shard_info_superblk::shard_sb_version; // 0x02
+
+        // Migrate v1_ShardInfo to v2 ShardInfo (v2 added meta field)
+        sb->info.id = v1_info.id;
+        sb->info.placement_group = v1_info.placement_group;
+        sb->info.state = v1_info.state;
+        sb->info.lsn = v1_info.lsn;
+        sb->info.created_time = v1_info.created_time;
+        sb->info.last_modified_time = v1_info.last_modified_time;
+        sb->info.available_capacity_bytes = v1_info.available_capacity_bytes;
+        sb->info.total_capacity_bytes = v1_info.total_capacity_bytes;
+        sb->info.current_leader = v1_info.current_leader;
+        // meta field is new in v2, initialize to empty
+        std::memset(sb->info.meta, 0, ShardInfo::meta_length);
+
+        sb->p_chunk_id = saved_p_chunk_id;
+        sb->v_chunk_id = saved_v_chunk_id;
+
+        // Save shard_id and old mblk pointer for migration (cannot write or remove during callback due to
+        // metasvc lock held - would cause deadlock)
+        shards_to_migrate_.push_back(v1_info.id);
+
+        LOGI("Queued shard_id={} for migration write and old metablk removal after recovery", v1_info.id);
+    } else if (header->version == DataHeader::data_header_version) {
+        sb.load(buf, mblk);
+    } else {
+        RELEASE_ASSERT(false, "Unknown shard superblock version {}", header->version);
+    }
+
     add_new_shard_to_map(std::make_unique< HS_Shard >(std::move(sb)));
 }
 
@@ -590,6 +640,36 @@ void HSHomeObject::on_shard_meta_blk_recover_completed(bool success) {
         }
         bool res = chunk_selector_->recover_pg_chunks_states(pair.first, excluding_chunks);
         RELEASE_ASSERT(res, "Failed to recover pg chunk heap, pg={}", pair.first);
+    }
+}
+
+void HSHomeObject::write_migrated_shard_metablks() {
+    // Write all migrated shards to disk
+    // This is called AFTER read_sub_sb() returns to avoid deadlock with metasvc lock
+    if (!shards_to_migrate_.empty()) {
+        LOGI("Writing {} migrated shard v2 superblocks", shards_to_migrate_.size());
+
+        std::scoped_lock lock_guard(_shard_lock);
+        for (auto& shard_id : shards_to_migrate_) {
+            auto shard_iter = _shard_map.find(shard_id);
+            if (shard_iter == _shard_map.end()) {
+                LOGW("Shard {} not found in shard map during migration write, skipping", shard_id);
+                continue;
+            }
+
+            auto* hs_shard = d_cast< HS_Shard* >(shard_iter->second->get());
+
+            try {
+                hs_shard->sb_.write();
+                LOGI("Successfully wrote migrated v2 shard superblk for shard_id={}", shard_id);
+            } catch (const std::exception& e) {
+                LOGE("Failed to migrate shard_id={}: {}", shard_id, e.what());
+                // Continue with other shards even if one fails
+            }
+        }
+
+        shards_to_migrate_.clear();
+        LOGI("Completed migrating all shard superblocks from v1 to v2");
     }
 }
 
@@ -798,6 +878,7 @@ HSHomeObject::HS_Shard::HS_Shard(ShardInfo shard_info, homestore::chunk_num_t p_
                                  homestore::chunk_num_t v_chunk_id) :
         Shard(std::move(shard_info)), sb_(_shard_meta_name) {
     sb_.create(sizeof(shard_info_superblk));
+    sb_->type = DataHeader::data_type_t::SHARD_INFO;
     sb_->info = info;
     sb_->p_chunk_id = p_chunk_id;
     sb_->v_chunk_id = v_chunk_id;

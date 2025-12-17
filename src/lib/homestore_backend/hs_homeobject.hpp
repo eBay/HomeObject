@@ -91,6 +91,9 @@ private:
     // mapping from chunk to shard list.
     std::unordered_map< homestore::chunk_num_t, std::set< shard_id_t > > chunk_to_shards_map_;
 
+    // Shard migration info: tracks shards that need migration from v1 to v2 format
+    std::vector< shard_id_t > shards_to_migrate_;
+
 public:
 #pragma pack(1)
     struct pg_members {
@@ -180,13 +183,35 @@ public:
     struct shard_info_superblk : DataHeader {
         //This version is a common version of DataHeader, each derived struct can have its own version.
         static constexpr uint8_t shard_sb_version = 0x02;
+
         uint8_t sb_version{shard_sb_version};
         ShardInfo info;
-        homestore::chunk_num_t p_chunk_id;
-        homestore::chunk_num_t v_chunk_id;
+        homestore::chunk_num_t p_chunk_id{0};
+        homestore::chunk_num_t v_chunk_id{0};
 
-        //backward compatibility
+        // backward compatibility
         bool valid() const { return DataHeader::valid() && sb_version <= shard_sb_version; }
+    };
+
+    // Old version shard_info_superblk (v0.01) - for backward compatibility testing and migration
+    // v1 ShardInfo did not have the meta field
+    struct v1_ShardInfo {
+        shard_id_t id;
+        pg_id_t placement_group;
+        ShardInfo::State state;
+        uint64_t lsn;
+        uint64_t created_time;
+        uint64_t last_modified_time;
+        uint64_t available_capacity_bytes;
+        uint64_t total_capacity_bytes;
+        std::optional< peer_id_t > current_leader{std::nullopt};
+        // Note: meta field was added in v2
+    };
+
+    struct v1_shard_info_superblk : DataHeader {
+        v1_ShardInfo info;
+        homestore::chunk_num_t p_chunk_id{0};
+        homestore::chunk_num_t v_chunk_id{0};
     };
 
     struct snapshot_ctx_superblk {
@@ -735,6 +760,7 @@ private:
     void on_pg_meta_blk_found(sisl::byte_view const& buf, void* meta_cookie);
     void on_shard_meta_blk_found(homestore::meta_blk* mblk, sisl::byte_view buf);
     void on_shard_meta_blk_recover_completed(bool success);
+    void write_migrated_shard_metablks();
     void on_snp_ctx_meta_blk_found(homestore::meta_blk* mblk, sisl::byte_view buf);
     void on_snp_ctx_meta_blk_recover_completed(bool success);
     void on_snp_rcvr_meta_blk_found(homestore::meta_blk* mblk, sisl::byte_view buf);
