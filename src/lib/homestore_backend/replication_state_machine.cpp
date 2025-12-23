@@ -364,14 +364,14 @@ int ReplicationStateMachine::read_snapshot_obj(std::shared_ptr< homestore::snaps
     auto obj_id = objId(snp_obj->offset);
     log_str = fmt::format("{} shard_seq_num=0x{:x} batch_num={}", log_str, obj_id.shard_seq_num, obj_id.batch_id);
 
-    LOGD("read current snp obj {}", log_str)
+    LOGI("Read current snp obj {}", log_str)
     if (!pg_iter->update_cursor(obj_id)) {
         // There is a known corner case (not sure if it is the only case): If free_user_snp_ctx and read_snapshot_obj
         // (we enable NuRaft bg snapshot) occur at the same time, and free_user_snp_ctx is called first, pg_iter is
         // released, and then in read_snapshot_obj, pg_iter will be created with cur_obj_id_ = 0|0 while the next_obj_id
         // will be x|y which may hit into invalid objId condition. If inconsistency happens, reset the cursor to the
-        // beginning(0|0), and let follower validate (lsn may change) and reset its cursor to the checkpoint to proceed
-        // with snapshot resync.
+        // beginning(0|0), send an empty message, and let follower validate (lsn may change) and reset its cursor to the
+        // checkpoint to proceed with snapshot resync.
         LOGW("Invalid objId in snapshot read, reset cursor to the beginning, {}", log_str);
         pg_iter->reset_cursor();
         return 0;
@@ -425,7 +425,7 @@ void ReplicationStateMachine::write_snapshot_obj(std::shared_ptr< homestore::sna
     auto log_suffix =
         fmt::format("group={} lsn={} shard=0x{:x} batch_num={} size={}", uuids::to_string(r_dev->group_id()),
                     context->get_lsn(), obj_id.shard_seq_num, obj_id.batch_id, snp_obj->blob.size());
-    LOGI("received snapshot obj, {}", log_suffix);
+    LOGI("Received snapshot obj, {}", log_suffix);
 
     if (snp_obj->is_last_obj) {
         LOGD("Write snapshot reached is_last_obj true {}", log_suffix);
@@ -443,6 +443,11 @@ void ReplicationStateMachine::write_snapshot_obj(std::shared_ptr< homestore::sna
         return;
     }
 #endif
+    if (snp_obj->blob.size() < sizeof(SyncMessageHeader)) {
+        LOGE("invalid snapshot message size {} in write_snapshot_data, lsn={}, obj_id={} shard 0x{:x} batch={}",
+             snp_obj->blob.size(), context->get_lsn(), obj_id.value, obj_id.shard_seq_num, obj_id.batch_id);
+        return;
+    }
     auto header = r_cast< const SyncMessageHeader* >(snp_obj->blob.cbytes());
     if (header->corrupted()) {
         LOGE("corrupted message in write_snapshot_data, lsn={}, obj_id={} shard 0x{:x} batch={}", context->get_lsn(),
@@ -510,12 +515,15 @@ void ReplicationStateMachine::write_snapshot_obj(std::shared_ptr< homestore::sna
             snp_obj->offset = LAST_OBJ_ID;
             LOGW("Leader resending last batch , we already done. Setting offset to LAST_OBJ_ID", context->get_lsn(),
                  m_snp_rcv_handler->get_next_shard(), m_snp_rcv_handler->get_shard_cursor());
+        } else if (m_snp_rcv_handler->get_shard_cursor() == HSHomeObject::SnapshotReceiveHandler::invalid_shard_id) {
+            // Could happen if interrupted before the first shard is done
+            snp_obj->offset = objId(0, 0).value;
+            LOGW("No shard cursor found, resume from the beginning pg meta. lsn={}", context->get_lsn());
         } else {
             snp_obj->offset =
                 objId(HSHomeObject::get_sequence_num_from_shard_id(m_snp_rcv_handler->get_shard_cursor()), 0).value;
             LOGW("Obj id not matching with the current shard/blob cursor, resume from previous context breakpoint, "
-                 "lsn={} "
-                 "next_shard:0x{:x}, shard_cursor:0x{:x}",
+                 "lsn={} next_shard:0x{:x}, shard_cursor:0x{:x}",
                  context->get_lsn(), m_snp_rcv_handler->get_next_shard(), m_snp_rcv_handler->get_shard_cursor());
         }
         return;

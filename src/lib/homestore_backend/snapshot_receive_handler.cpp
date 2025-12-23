@@ -444,9 +444,13 @@ bool HSHomeObject::SnapshotReceiveHandler::is_valid_obj_id(const objId& obj_id) 
           obj_id.batch_id == ctx_->cur_batch_num + 1));
 }
 
-shard_id_t HSHomeObject::SnapshotReceiveHandler::get_shard_cursor() const { return ctx_->shard_cursor; }
+shard_id_t HSHomeObject::SnapshotReceiveHandler::get_shard_cursor() const {
+    return ctx_ ? ctx_->shard_cursor : invalid_shard_id;
+}
 
 shard_id_t HSHomeObject::SnapshotReceiveHandler::get_next_shard() const {
+    if (ctx_ == nullptr) { return invalid_shard_id; }
+
     if (ctx_->shard_list.empty()) { return shard_list_end_marker; }
 
     if (ctx_->shard_cursor == 0) { return ctx_->shard_list[0]; }
