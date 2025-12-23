@@ -17,10 +17,16 @@
  */
 #include "homeobj_fixture.hpp"
 
+#define BEFORE_FIRST_SHARD_DONE "BEFORE_FIRST_SHARD_DONE"
 #define RECEIVING_SNAPSHOT "RECEIVING_SNAPSHOT"
 #define APPLYING_SNAPSHOT "APPLYING_SNAPSHOT"
 #define AFTER_BASELINE_RESYNC "AFTER_BASELINE_RESYNC"
 #define TRUNCATING_LOGS "TRUNCATING_LOGS"
+
+// Restart follower before first shard is complete to test null ctx_ handling
+TEST_F(HomeObjectFixture, RestartFollowerBeforeFirstShardDone) {
+    RestartFollowerDuringBaselineResyncUsingSigKill(5000, 1000, BEFORE_FIRST_SHARD_DONE);
+}
 
 // Restart during baseline resync
 TEST_F(HomeObjectFixture, RestartFollowerDuringBaselineResyncWithoutTimeout) {
@@ -104,7 +110,18 @@ void HomeObjectFixture::RestartFollowerDuringBaselineResyncUsingSigKill(uint64_t
     auto kill_until_blob = num_blobs_per_shard * num_shards_per_pg - 1;
 #ifdef _PRERELEASE
     if (!is_restart && in_member_id == g_helper->my_replica_id()) {
-        if (restart_phase == RECEIVING_SNAPSHOT) {
+        if (restart_phase == BEFORE_FIRST_SHARD_DONE) {
+            LOGINFO("Test case: restart follower before first shard done={}", restart_phase);
+            flip::FlipCondition cond;
+            // Delay happens before writing blob 2, so we kill after blob 1 is written
+            m_fc.create_condition("blob_id", flip::Operator::EQUAL, static_cast< long >(2), &cond);
+            set_retval_flip("simulate_write_snapshot_save_blob_delay", static_cast< long >(flip_delay) /*ms*/, 1, 100,
+                            cond);
+            // Wait for blob 1, then kill before the first shard is complete (first shard has blobs 0 to
+            // num_blobs_per_shard-1)
+            kill_until_shard = pg_shard_id_vec[pg_id].front();
+            kill_until_blob = 1;
+        } else if (restart_phase == RECEIVING_SNAPSHOT) {
             LOGINFO("Test case: restart follower when receiving snapshot={}", restart_phase);
             flip::FlipCondition cond;
             // will only delay the snapshot with blob id 11 during which restart will happen
