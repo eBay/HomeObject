@@ -262,6 +262,7 @@ public:
         folly::MPMCQueue< chunk_id_t > m_reserved_chunk_queue;
         std::shared_ptr< GCBlobIndexTable > m_index_table;
         HSHomeObject* m_hs_home_object{nullptr};
+        bool m_enable_read_verify;
 
         // limit the io resource that gc thread can take, so that it will not impact the client io.
         // assuming the throughput of a HDD is 300M/s(including read and write) and gc can take 10% of the io resource,
