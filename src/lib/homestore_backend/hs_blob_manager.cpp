@@ -294,7 +294,19 @@ BlobManager::AsyncResult< Blob > HSHomeObject::_get_blob(ShardInfo const& shard,
     RELEASE_ASSERT(repl_dev != nullptr, "Repl dev instance null");
     RELEASE_ASSERT(index_table != nullptr, "Index table instance null");
 
-    if (!repl_dev->is_ready_for_traffic()) {
+    // In scenarios where a member becomes the leader but all followers are down, the leader may be unable to commit
+    // new config logs, making it unready for traffic. To address this, a config is introduced to define
+    // whether check ready for traffic or not before get blob as a workaround.
+    // Example scenario 1:
+    // T1: A member is elected as leader with a new configuration log (LSN100).
+    // T2: The member initiates `become_leader` with gate=100.
+    // T3: All followers go offline, preventing the leader from committing log LSN100 due to lack of quorum.
+    // Example scenario 2:
+    // T1: A member is elected as leader with a new configuration log (LSN100).
+    // T2: The member initiates `become_leader` with gate=100.
+    // T3: One follower goes offline, and another is stuck at appending log LSN50 (e.g., due to no space left),
+    // preventing the leader from committing log LSN100 due to no member accepting the append request.
+    if (HS_BACKEND_DYNAMIC_CONFIG(check_traffic_ready_before_get) && !repl_dev->is_ready_for_traffic()) {
         LOGW("failed to get blob for pg={}, shardID=0x{:x},pg={},shard=0x{:x}, not ready for traffic", pg_id, shard.id,
              (shard.id >> homeobject::shard_width), (shard.id & homeobject::shard_mask));
         decr_pending_request_num();
