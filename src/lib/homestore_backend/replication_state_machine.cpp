@@ -733,7 +733,6 @@ folly::Future< std::error_code > ReplicationStateMachine::on_fetch_data(const in
 
                 const auto& pbas = index_value.pbas();
                 if (sisl_unlikely(pbas == HSHomeObject::tombstone_pbas)) {
-                    // blob is deleted, so returning whatever data is good , since client will never read it.
                     LOGD("on_fetch_data: blob has been deleted, blob_id={}, shardID=0x{:x}, pg={}", blob_id, shard_id,
                          pg_id);
 
@@ -780,8 +779,8 @@ folly::Future< std::error_code > ReplicationStateMachine::on_fetch_data(const in
                          (shard_id >> homeobject::shard_width));
                 } else {
                     // if any error happens, we come to here
-                    LOGE("IO error happens when reading data for blob_id={}, shardID=0x{:x}, pg={}, error = {}",
-                         blob_id, shard_id, (shard_id >> homeobject::shard_width), e.what());
+                    LOGE("IO error happens when reading data for blob_id={}, shardID=0x{:x}, pg={}, error={}", blob_id,
+                         shard_id, (shard_id >> homeobject::shard_width), e.what());
                 }
 
                 return ec;
