@@ -47,6 +47,9 @@ table HSBackendSettings {
     // Number of times to pause the state machine
     state_machine_pause_retry_count: uint8 = 3;
 
+    // Check traffic ready before get, default true, set false for 1-replica workaround mode to allow read
+    check_traffic_ready_before_get: bool = true;
+
 }
 
 root_type HSBackendSettings;
