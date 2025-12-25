@@ -228,11 +228,11 @@ public:
         // before we select a reserved chunk and start gc, we need:
         //  1 clear all the entries of this chunk in the gc index table
         //  2 reset this chunk to make sure it is empty.
-        bool purge_reserved_chunk(chunk_id_t move_to_chunk, const uint64_t task_id);
+        bool purge_reserved_chunk(chunk_id_t move_to_chunk, const uint64_t task_id, const pg_id_t pg_id);
 
         bool get_blobs_to_replace(chunk_id_t move_to_chunk,
                                   std::vector< std::pair< BlobRouteByChunkKey, BlobRouteValue > >& valid_blob_indexes,
-                                  const uint64_t task_id);
+                                  const uint64_t task_id, const pg_id_t pg_id);
 
         // this function aims to execute the logic after gc_meta_blk has been persisted, which will shared by normal gc
         // case and recvoery case
@@ -248,7 +248,7 @@ public:
         bool
         compare_blob_indexes(folly::ConcurrentHashMap< BlobRouteByChunk, BlobRouteValue > const& copied_blobs,
                              std::vector< std::pair< BlobRouteByChunkKey, BlobRouteValue > > const& valid_blob_indexes,
-                             const uint64_t task_id);
+                             const uint64_t task_id, const pg_id_t pg_id);
 
         pdev_gc_metrics& metrics() { return metrics_; }
 
@@ -262,6 +262,7 @@ public:
         folly::MPMCQueue< chunk_id_t > m_reserved_chunk_queue;
         std::shared_ptr< GCBlobIndexTable > m_index_table;
         HSHomeObject* m_hs_home_object{nullptr};
+        bool m_enable_read_verify;
 
         // limit the io resource that gc thread can take, so that it will not impact the client io.
         // assuming the throughput of a HDD is 300M/s(including read and write) and gc can take 10% of the io resource,

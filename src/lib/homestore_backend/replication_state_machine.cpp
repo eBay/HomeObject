@@ -702,8 +702,7 @@ folly::Future< std::error_code > ReplicationStateMachine::on_fetch_data(const in
                 pg_id_t pg_id = shard_id >> homeobject::shard_width;
                 auto hs_pg = home_object_->get_hs_pg(pg_id);
                 if (!hs_pg) {
-                    LOGE("pg not found for pg={}, shardID=0x{:x}, shard=0x{:x}", pg_id, shard_id,
-                         (shard_id & homeobject::shard_mask));
+                    LOGE("pg not found for pg={}, shardID=0x{:x}", pg_id, shard_id);
                     // TODO: use a proper error code.
                     throw std::system_error(std::make_error_code(std::errc::bad_address));
                 }
@@ -713,16 +712,14 @@ folly::Future< std::error_code > ReplicationStateMachine::on_fetch_data(const in
                 BlobRouteValue index_value;
                 homestore::BtreeSingleGetRequest get_req{&index_key, &index_value};
 
-                LOGD("fetch data with blob_id={}, shardID=0x{:x}, pg={}, shard=0x{:x} from index table", blob_id,
-                     shard_id, pg_id, (shard_id & homeobject::shard_mask));
+                LOGD("fetch data with blob_id={}, shardID=0x{:x}, pg={} from index table", blob_id, shard_id, pg_id);
 
                 auto rc = index_table->get(get_req);
                 if (sisl_unlikely(homestore::btree_status_t::success != rc)) {
                     // blob never exists or has been gc
-                    LOGD("on_fetch_data failed to get from index table, blob never exists or has been gc, "
-                         "blob_id={}, "
-                         "shardID=0x{:x}, pg={}, shard=0x{:x}",
-                         blob_id, shard_id, pg_id, (shard_id & homeobject::shard_mask));
+                    LOGD("on_fetch_data failed to get from index table, blob never exists or has been gc, blob_id={}, "
+                         "shardID=0x{:x}, pg={}",
+                         blob_id, shard_id, pg_id);
 
                     // we return a specific blob as a delete marker if not found in index table
                     std::memset(given_buffer, 0, total_size);
@@ -736,17 +733,24 @@ folly::Future< std::error_code > ReplicationStateMachine::on_fetch_data(const in
 
                 const auto& pbas = index_value.pbas();
                 if (sisl_unlikely(pbas == HSHomeObject::tombstone_pbas)) {
-                    // blob is deleted, so returning whatever data is good , since client will never read it.
-                    LOGD("on_fetch_data: blob has been deleted, blob_id={}, shardID=0x{:x}, pg={}, shard=0x{:x}",
-                         blob_id, shard_id, pg_id, (shard_id & homeobject::shard_mask));
+                    LOGD("on_fetch_data: blob has been deleted, blob_id={}, shardID=0x{:x}, pg={}", blob_id, shard_id,
+                         pg_id);
+
+                    // we return a specific blob as a delete marker for tombstone pbas
+                    std::memset(given_buffer, 0, total_size);
+                    RELEASE_ASSERT(HSHomeObject::delete_marker_blob_data.size() <= total_size,
+                                   "delete marker blob size is larger than total_size");
+                    std::memcpy(given_buffer, HSHomeObject::delete_marker_blob_data.data(),
+                                HSHomeObject::delete_marker_blob_data.size());
+
                     throw std::system_error(std::error_code{});
                 }
 
                 RELEASE_ASSERT(pbas.blk_count() * repl_dev()->get_blk_size() == total_size,
                                "pbas blk size does not match total_size");
 
-                LOGD("on_fetch_data: read data with blob_id={}, shardID=0x{:x}, pg={}, shard=0x{:x} from pbas={}",
-                     blob_id, shard_id, pg_id, (shard_id & homeobject::shard_mask), pbas.to_string());
+                LOGD("on_fetch_data: read data with blob_id={}, shardID=0x{:x}, pg={} from pbas={}", blob_id, shard_id,
+                     pg_id, pbas.to_string());
 
                 return homestore::data_service().async_read(pbas, given_buffer, total_size);
             })
@@ -755,8 +759,8 @@ folly::Future< std::error_code > ReplicationStateMachine::on_fetch_data(const in
                 if (err) throw std::system_error(err);
                 // if data matches
                 if (home_object_->verify_blob(given_buffer, shard_id, blob_id)) {
-                    LOGD("pba matches blob data, lsn={}, blob_id={}, shardID=0x{:x}, pg={}, shard=0x{:x}", lsn, blob_id,
-                         shard_id, (shard_id >> homeobject::shard_width), (shard_id & homeobject::shard_mask));
+                    LOGD("pba matches blob data, lsn={}, blob_id={}, shardID=0x{:x}, pg={}", lsn, blob_id, shard_id,
+                         (shard_id >> homeobject::shard_width));
                     return std::error_code{};
                 } else {
                     // there is a scenario that the chunk is gced after we get the pba, but before we schecdule
@@ -771,14 +775,12 @@ folly::Future< std::error_code > ReplicationStateMachine::on_fetch_data(const in
                 if (!ec) {
                     // if no error code, we come to here, which means the data is valid or no need to read data
                     // again.
-                    LOGD("blob valid, blob_id={}, shardID=0x{:x}, pg={}, shard=0x{:x}", blob_id, shard_id,
-                         (shard_id >> homeobject::shard_width), (shard_id & homeobject::shard_mask));
+                    LOGD("blob valid, blob_id={}, shardID=0x{:x}, pg={}", blob_id, shard_id,
+                         (shard_id >> homeobject::shard_width));
                 } else {
                     // if any error happens, we come to here
-                    LOGE("IO error happens when reading data for blob_id={}, shardID=0x{:x}, pg={}, shard=0x{:x}, "
-                         "error={}",
-                         blob_id, shard_id, (shard_id >> homeobject::shard_width), (shard_id & homeobject::shard_mask),
-                         e.what());
+                    LOGE("IO error happens when reading data for blob_id={}, shardID=0x{:x}, pg={}, error={}", blob_id,
+                         shard_id, (shard_id >> homeobject::shard_width), e.what());
                 }
 
                 return ec;
