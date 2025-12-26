@@ -220,7 +220,7 @@ bool GCManager::is_eligible_for_gc(chunk_id_t chunk_id) {
 
     const auto total_blk_num = chunk->get_total_blks();
     const auto gc_garbage_rate_threshold = HS_BACKEND_DYNAMIC_CONFIG(gc_garbage_rate_threshold);
-    bool should_gc = 100 * defrag_blk_num >= total_blk_num * gc_garbage_rate_threshold;
+    bool should_gc = 100 * defrag_blk_num > total_blk_num * gc_garbage_rate_threshold;
 
     LOGDEBUGMOD(gcmgr,
                 "gc scan chunk_id={}, use_blks={}, available_blks={}, total_blks={}, defrag_blks={}, should_gc={}",
