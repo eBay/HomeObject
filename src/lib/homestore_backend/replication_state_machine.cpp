@@ -285,6 +285,10 @@ void ReplicationStateMachine::on_destroy(const homestore::group_id_t& group_id) 
          boost::uuids::to_string(group_id));
 }
 
+void ReplicationStateMachine::on_remove_member(const homestore::replica_id_t& member, trace_id_t tid) {
+    // TODO: Implement this
+}
+
 homestore::AsyncReplResult<>
 ReplicationStateMachine::create_snapshot(std::shared_ptr< homestore::snapshot_context > context) {
     std::lock_guard lk(m_snapshot_lock);
