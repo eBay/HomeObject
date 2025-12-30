@@ -105,6 +105,21 @@ private:
     std::vector< shard_id_t > shards_to_migrate_;
 
 public:
+    // Old version shard_info_superblk (v0.01) - for backward compatibility testing and migration
+    // v1 ShardInfo did not have the meta field
+    struct v1_ShardInfo {
+        shard_id_t id;
+        pg_id_t placement_group;
+        ShardInfo::State state;
+        uint64_t lsn;
+        uint64_t created_time;
+        uint64_t last_modified_time;
+        uint64_t available_capacity_bytes;
+        uint64_t total_capacity_bytes;
+        std::optional< peer_id_t > current_leader{std::nullopt};
+        // Note: meta field was added in v2
+    };
+
 #pragma pack(1)
     struct pg_members {
         peer_id_t id;
@@ -201,21 +216,6 @@ public:
 
         // backward compatibility
         bool valid() const { return DataHeader::valid() && sb_version <= shard_sb_version; }
-    };
-
-    // Old version shard_info_superblk (v0.01) - for backward compatibility testing and migration
-    // v1 ShardInfo did not have the meta field
-    struct v1_ShardInfo {
-        shard_id_t id;
-        pg_id_t placement_group;
-        ShardInfo::State state;
-        uint64_t lsn;
-        uint64_t created_time;
-        uint64_t last_modified_time;
-        uint64_t available_capacity_bytes;
-        uint64_t total_capacity_bytes;
-        std::optional< peer_id_t > current_leader{std::nullopt};
-        // Note: meta field was added in v2
     };
 
     struct v1_shard_info_superblk : DataHeader {
