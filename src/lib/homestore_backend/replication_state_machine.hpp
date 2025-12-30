@@ -186,6 +186,9 @@ public:
     /// @brief Called when the replica is being destroyed by nuraft;
     void on_destroy(const homestore::group_id_t& group_id) override;
 
+    /// @brief Called when remove a member.
+    void on_remove_member(const homestore::replica_id_t& member, trace_id_t tid) override;
+
     // Snapshot related functions
     homestore::AsyncReplResult<> create_snapshot(std::shared_ptr< homestore::snapshot_context > context) override;
     bool apply_snapshot(std::shared_ptr< homestore::snapshot_context > context) override;
