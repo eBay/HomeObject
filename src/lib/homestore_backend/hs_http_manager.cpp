@@ -295,8 +295,11 @@ void HttpManager::remove_member(const Pistache::Rest::Request& request, Pistache
                 boost::uuids::to_string(member_id), commit_quorum, tid);
         auto result = ho_.remove_member(pg_id, member_id, commit_quorum, tid).get();
         if (!result) {
-            response.send(Pistache::Http::Code::Internal_Server_Error,
-                          fmt::format("Failed to remove member, err={}", result.error()));
+            // Some times remove member may fail with RETRY_REQUEST if the target member is not responding,
+            // in this case return 503 so that the caller can retry later.
+            auto code = result.error() == PGError::RETRY_REQUEST ? Pistache::Http::Code::Service_Unavailable
+                                                                 : Pistache::Http::Code::Internal_Server_Error;
+            response.send(code, fmt::format("Failed to remove member, err={}", result.error()));
             return;
         }
         response.send(Pistache::Http::Code::Ok);
@@ -339,6 +342,7 @@ void HttpManager::list_pg_replace_member_task(const Pistache::Rest::Request& req
                       fmt::format("Failed to list replace member task, err={}", ret.error()));
         return;
     }
+    LOGINFO("list pg replace member tasks, count={}, tid={}", ret.value().size(), tid);
     nlohmann::json j = nlohmann::json::array();
     for (const auto& task : ret.value()) {
         nlohmann::json task_j;
@@ -398,6 +402,8 @@ void HttpManager::exit_pg(const Pistache::Rest::Request& request, Pistache::Http
         response.send(Pistache::Http::Code::Bad_Request, "Invalid group_id or replica_id query parameter");
         return;
     }
+    LOGINFO("Exit pg request received for group_id={}, peer_id={}, tid={}", group_id_str.value(), peer_id_str.value(),
+            tid);
     auto ret = ho_.exit_pg(group_id, peer_id, tid);
     if (ret.hasError()) {
         response.send(Pistache::Http::Code::Internal_Server_Error,

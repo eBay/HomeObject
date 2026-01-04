@@ -16,6 +16,7 @@
  * Homeobject Replication testing binaries shared common definitions, apis and data structures
  */
 #include "homeobj_fixture.hpp"
+#include "homeobj_fixture_http.hpp"
 
 #define BEFORE_FIRST_SHARD_DONE "BEFORE_FIRST_SHARD_DONE"
 #define RECEIVING_SNAPSHOT "RECEIVING_SNAPSHOT"
@@ -488,7 +489,7 @@ void HomeObjectFixture::ReplaceMember(bool withGC) {
         sleep(5); // wait for incremental append-log requests to complete
     }
 
-    // step 4: after completing replace member, verify the blob on all the members of this pg including the newly added
+    // step 4: after completing replace member, verify the blob on all members of this pg including the newly added
     // spare replica,
     run_if_in_pg(pg_id, [&]() {
         verify_get_blob(pg_shard_id_vec, num_blobs_per_shard);
@@ -764,6 +765,7 @@ TEST_F(HomeObjectFixture, RollbackReplaceMember) {
     pg_id_t pg_id{1};
     auto out_member_id = g_helper->replica_id(num_replicas - 1);
     auto in_member_id = g_helper->replica_id(num_replicas); /*spare replica*/
+    auto http_enabled = SISL_OPTIONS["enable_http"].as< bool >();
 
     // ======== Stage 1: Create a pg without spare replicas and put blobs ========
     std::unordered_set< uint8_t > excluding_replicas_in_pg;
@@ -844,28 +846,80 @@ TEST_F(HomeObjectFixture, RollbackReplaceMember) {
         g_helper->sync();
         LOGINFO("about to remove new member")
         run_on_pg_leader(pg_id, [&]() {
-            auto r = _obj_inst->pg_manager()->remove_member(pg_id, in_member_id, 0, 0).get();
-            ASSERT_TRUE(r);
+            bool retry = true;
+            while (retry) {
+                if (http_enabled) {
+                    HttpHelper http_helper("127.0.0.1", 5000 + g_helper->replica_num());
+                    nlohmann::json j;
+                    j["pg_id"] = std::to_string(pg_id);
+                    j["member_id"] = boost::uuids::to_string(in_member_id);
+                    j["commit_quorum"] = "0";
+                    auto r = http_helper.del("/api/v1/member", j.dump());
+                    if (r.code() == Pistache::Http::Code::Ok) {
+                        retry = false;
+                    } else if (r.code() == Pistache::Http::Code::Service_Unavailable) {
+                        LOGINFO("remove_member get RETRY_REQUEST error, will retry");
+                        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+                    } else {
+                        ASSERT_FALSE(true);
+                    }
+                } else {
+                    auto r = _obj_inst->pg_manager()->remove_member(pg_id, in_member_id, 0, 0).get();
+                    // new member can not respond to remove_member request because it is stuck at snapshot, so we may
+                    // get RETRY_REQUEST error here, but the remove_member takes effective after force removal timeout.
+                    if (!r.hasError()) {
+                        retry = false;
+                    } else if (r.error() == PGError::RETRY_REQUEST) {
+                        LOGINFO("remove_member get RETRY_REQUEST error, will retry");
+                        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+                    } else {
+                        ASSERT_FALSE(true);
+                    }
+                }
+            }
         });
         // SyncPoint4 flip learner
         g_helper->sync();
         LOGINFO("about to flip learner")
         run_on_pg_leader(pg_id, [&]() {
-            auto r = _obj_inst->pg_manager()->flip_learner_flag(pg_id, out_member_id, false, 0, 0).get();
-            ASSERT_TRUE(r);
+            if (http_enabled) {
+                HttpHelper http_helper("127.0.0.1", 5000 + g_helper->replica_num());
+                nlohmann::json j;
+                j["pg_id"] = std::to_string(pg_id);
+                j["member_id"] = boost::uuids::to_string(out_member_id);
+                j["learner"] = "false";
+                j["commit_quorum"] = "0";
+                auto r = http_helper.post("/api/v1/flip_learner", j.dump());
+                ASSERT_EQ(r.code(), Pistache::Http::Code::Ok);
+            } else {
+                auto r = _obj_inst->pg_manager()->flip_learner_flag(pg_id, out_member_id, false, 0, 0).get();
+                ASSERT_FALSE(r.hasError());
+            }
         });
         // SyncPoint5 clean task
         g_helper->sync();
         LOGINFO("about to clean task")
         run_on_pg_leader(pg_id, [&]() {
-            auto r = _obj_inst->pg_manager()->clean_replace_member_task(pg_id, task_id, 0, 0).get();
-            ASSERT_TRUE(r);
+            if (!http_enabled) {
+                auto r = _obj_inst->pg_manager()->clean_replace_member_task(pg_id, task_id, 0, 0).get();
+                ASSERT_FALSE(r.hasError());
+            } else {
+                HttpHelper http_helper("127.0.0.1", 5000 + g_helper->replica_num());
+                nlohmann::json j;
+                j["pg_id"] = std::to_string(pg_id);
+                j["task_id"] = task_id;
+                j["commit_quorum"] = "0";
+                auto r = http_helper.del("/api/v1/pg_replacemember_task", j.dump());
+                ASSERT_EQ(r.code(), Pistache::Http::Code::Ok);
+            }
         });
+        //wait for replication settled
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
         // SyncPoint6 verify
         g_helper->sync();
         LOGINFO("verify rollback result")
         ASSERT_TRUE(verify_rollback_replace_member_result(pg_id, task_id, out_member_id, in_member_id));
+
     }
     // SyncPoint7
     g_helper->sync();
@@ -878,7 +932,15 @@ TEST_F(HomeObjectFixture, RollbackReplaceMember) {
     if (in_member_id == g_helper->my_replica_id()) {
         while (am_i_in_pg(pg_id)) {
             LOGINFO("New member is going to exit pg={}", pg_id);
-            _obj_inst->pg_manager()->exit_pg(group_id, g_helper->my_replica_id(), 0);
+            if (http_enabled) {
+                HttpHelper http_helper("127.0.0.1", 5000 + g_helper->replica_num());
+                auto resource = "/api/v1/pg?group_id=" + boost::uuids::to_string(group_id) +
+                    "&replica_id=" + boost::uuids::to_string(g_helper->my_replica_id_);
+                auto r = http_helper.del(resource, "");
+                ASSERT_EQ(r.code(), Pistache::Http::Code::Ok);
+            } else {
+                _obj_inst->pg_manager()->exit_pg(group_id, g_helper->my_replica_id(), 0);
+            }
             LOGINFO("New member is waiting to leave pg={}", pg_id);
         }
         // Test idempotence of exit_pg
