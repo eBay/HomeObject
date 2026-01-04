@@ -49,7 +49,7 @@ HttpManager::HttpManager(HSHomeObject& ho) : ho_(ho) {
          Pistache::Rest::Routes::bind(&HttpManager::dump_chunk, this)},
         {Pistache::Http::Method::Get, "/api/v1/shard/dump",
          Pistache::Rest::Routes::bind(&HttpManager::dump_shard, this)},
-        {Pistache::Http::Method::Get, "/api/v1/trigger_gc",
+        {Pistache::Http::Method::Post, "/api/v1/trigger_gc",
          Pistache::Rest::Routes::bind(&HttpManager::trigger_gc, this)},
         {Pistache::Http::Method::Get, "/api/v1/gc_job_status",
          Pistache::Rest::Routes::bind(&HttpManager::get_gc_job_status, this)}};
@@ -313,7 +313,7 @@ void HttpManager::trigger_gc(const Pistache::Rest::Request& request, Pistache::H
                 // Submit GC task for this chunk
                 auto future = gc_mgr->submit_gc_task(priority, chunk_id);
                 gc_task_futures.push_back(std::move(future));
-                LOGDEBUG("GC job {} in PG {} with priority={}", job_id, chunk_id, pg_id,
+                LOGDEBUG("GC job {} for chunk {} in PG {} with priority={}", job_id, chunk_id, pg_id,
                          (priority == task_priority::emergent) ? "emergent" : "normal");
             }
         }
