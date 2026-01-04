@@ -16,6 +16,7 @@
 #include <boost/algorithm/string.hpp>
 #include <sisl/version.hpp>
 #include <sisl/settings/settings.hpp>
+#include <boost/uuid/string_generator.hpp>
 
 #include "hs_http_manager.hpp"
 #include "hs_homeobject.hpp"
@@ -37,6 +38,17 @@ HttpManager::HttpManager(HSHomeObject& ho) : ho_(ho) {
          Pistache::Rest::Routes::bind(&HttpManager::reconcile_leader, this)},
         {Pistache::Http::Method::Post, "/api/v1/yield_leadership_to_follower",
          Pistache::Rest::Routes::bind(&HttpManager::yield_leadership_to_follower, this)},
+        {Pistache::Http::Method::Get, "/api/v1/pg_quorum",
+         Pistache::Rest::Routes::bind(&HttpManager::get_pg_quorum, this)},
+        {Pistache::Http::Method::Post, "/api/v1/flip_learner",
+         Pistache::Rest::Routes::bind(&HttpManager::flip_learner_flag, this)},
+        {Pistache::Http::Method::Delete, "/api/v1/member",
+         Pistache::Rest::Routes::bind(&HttpManager::remove_member, this)},
+        {Pistache::Http::Method::Delete, "/api/v1/pg_replacemember_task",
+         Pistache::Rest::Routes::bind(&HttpManager::clean_replace_member_task, this)},
+        {Pistache::Http::Method::Get, "/api/v1/pg_replacemember_tasks",
+         Pistache::Rest::Routes::bind(&HttpManager::list_pg_replace_member_task, this)},
+        {Pistache::Http::Method::Delete, "/api/v1/pg", Pistache::Rest::Routes::bind(&HttpManager::exit_pg, this)},
 #ifdef _PRERELEASE
         {Pistache::Http::Method::Post, "/api/v1/crashSystem",
          Pistache::Rest::Routes::bind(&HttpManager::crash_system, this)},
@@ -237,6 +249,168 @@ void HttpManager::dump_shard(const Pistache::Rest::Request& request, Pistache::H
         j["blobs"].push_back(blob_json);
     }
     response.send(Pistache::Http::Code::Ok, j.dump());
+}
+
+void HttpManager::flip_learner_flag(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response) {
+    try {
+        auto body = request.body();
+        auto j = nlohmann::json::parse(body);
+
+        std::string pg_id_str = j.at("pg_id").get< std::string >();
+        pg_id_t pg_id = std::stoull(pg_id_str);
+        std::string member_id_str = j.at("member_id").get< std::string >();
+        peer_id_t member_id = boost::uuids::string_generator()(member_id_str);
+        std::string learner = j.at("learner").get< std::string >();
+        std::string commit_quorum_str = j.at("commit_quorum").get< std::string >();
+        uint32_t commit_quorum = std::stoul(commit_quorum_str);
+        auto tid = generateRandomTraceId();
+        LOGINFO("Flipping learner flag, pg_id={}, member_id={}, learner={}, commit_quorum={}, tid={}", pg_id,
+                boost::uuids::to_string(member_id), learner, commit_quorum, tid);
+        auto result = ho_.flip_learner_flag(pg_id, member_id, learner == "true", commit_quorum, tid).get();
+        if (!result) {
+            LOGI("PG flip learner flag failed, err={}", result.error());
+            response.send(Pistache::Http::Code::Internal_Server_Error,
+                          fmt::format("Failed to flip learner flag, err={}", result.error()));
+            return;
+        }
+        response.send(Pistache::Http::Code::Ok);
+    } catch (const std::exception& e) {
+        response.send(Pistache::Http::Code::Bad_Request, std::string("Invalid JSON: ") + e.what());
+    }
+}
+
+void HttpManager::remove_member(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response) {
+    try {
+        auto body = request.body();
+        auto j = nlohmann::json::parse(body);
+
+        std::string pg_id_str = j.at("pg_id").get< std::string >();
+        pg_id_t pg_id = std::stoull(pg_id_str);
+        std::string member_id_str = j.at("member_id").get< std::string >();
+        peer_id_t member_id = boost::uuids::string_generator()(member_id_str);
+        std::string commit_quorum_str = j.at("commit_quorum").get< std::string >();
+        uint32_t commit_quorum = std::stoul(commit_quorum_str);
+        auto tid = generateRandomTraceId();
+        LOGINFO("Remove member, pg_id={}, member_id={}, commit_quorum={}, tid={}", pg_id,
+                boost::uuids::to_string(member_id), commit_quorum, tid);
+        auto result = ho_.remove_member(pg_id, member_id, commit_quorum, tid).get();
+        if (!result) {
+            // Some times remove member may fail with RETRY_REQUEST if the target member is not responding,
+            // in this case return 503 so that the caller can retry later.
+            auto code = result.error() == PGError::RETRY_REQUEST ? Pistache::Http::Code::Service_Unavailable
+                                                                 : Pistache::Http::Code::Internal_Server_Error;
+            response.send(code, fmt::format("Failed to remove member, err={}", result.error()));
+            return;
+        }
+        response.send(Pistache::Http::Code::Ok);
+    } catch (const std::exception& e) {
+        response.send(Pistache::Http::Code::Bad_Request, std::string("Invalid JSON: ") + e.what());
+    }
+}
+
+void HttpManager::clean_replace_member_task(const Pistache::Rest::Request& request,
+                                            Pistache::Http::ResponseWriter response) {
+    try {
+        auto body = request.body();
+        auto j = nlohmann::json::parse(body);
+
+        std::string pg_id_str = j.at("pg_id").get< std::string >();
+        pg_id_t pg_id = std::stoull(pg_id_str);
+        std::string task_id = j.at("task_id").get< std::string >();
+        std::string commit_quorum_str = j.at("commit_quorum").get< std::string >();
+        uint32_t commit_quorum = std::stoul(commit_quorum_str);
+        auto tid = generateRandomTraceId();
+        LOGINFO("Clean replace member task, pg_id={}, task_id={}, commit_quorum={}, tid={}", pg_id, task_id,
+                commit_quorum, tid);
+        auto result = ho_.clean_replace_member_task(pg_id, task_id, commit_quorum, tid).get();
+        if (!result) {
+            response.send(Pistache::Http::Code::Internal_Server_Error,
+                          fmt::format("Failed to clean replace member task, err={}", result.error()));
+            return;
+        }
+        response.send(Pistache::Http::Code::Ok);
+    } catch (const std::exception& e) {
+        response.send(Pistache::Http::Code::Bad_Request, std::string("Invalid JSON: ") + e.what());
+    }
+}
+void HttpManager::list_pg_replace_member_task(const Pistache::Rest::Request& request,
+                                              Pistache::Http::ResponseWriter response) {
+    auto tid = generateRandomTraceId();
+    auto ret = ho_.list_all_replace_member_tasks(tid);
+    if (ret.hasError()) {
+        response.send(Pistache::Http::Code::Internal_Server_Error,
+                      fmt::format("Failed to list replace member task, err={}", ret.error()));
+        return;
+    }
+    LOGINFO("list pg replace member tasks, count={}, tid={}", ret.value().size(), tid);
+    nlohmann::json j = nlohmann::json::array();
+    for (const auto& task : ret.value()) {
+        nlohmann::json task_j;
+        task_j["task_id"] = task.task_id;
+        task_j["replica_out"] = to_string(task.replica_out);
+        task_j["replica_in"] = to_string(task.replica_in);
+        j.push_back(task_j);
+    }
+    response.send(Pistache::Http::Code::Ok, j.dump(2));
+}
+
+// This API is used to get the PG quorum status, typically used by CM to fix its view of the PG status after a pg move
+// failure.
+void HttpManager::get_pg_quorum(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response) {
+    auto pg_id_str{request.query().get("pg_id")};
+    if (pg_id_str == std::nullopt) {
+        response.send(Pistache::Http::Code::Bad_Request, "Missing pg_id query parameter");
+        return;
+    }
+    pg_id_t pg_id = std::stoull(pg_id_str.value());
+    PGStats stats;
+    if (ho_.get_stats(pg_id, stats)) {
+        nlohmann::json j;
+        j["pg_id"] = pg_id;
+        j["replica_set_uuid"] = boost::uuids::to_string(stats.replica_set_uuid);
+        j["leader"] = boost::uuids::to_string(stats.leader_id);
+        j["members"] = nlohmann::json::array();
+        for (auto peer : stats.members) {
+            nlohmann::json member_j;
+            member_j["id"] = boost::uuids::to_string(peer.id);
+            member_j["name"] = peer.name;
+            member_j["can_vote"] = peer.can_vote;
+            member_j["last_commit_lsn"] = peer.last_commit_lsn;
+            member_j["last_succ_resp_us"] = peer.last_succ_resp_us;
+            j["members"].push_back(member_j);
+        }
+        response.send(Pistache::Http::Code::Ok, j.dump(2));
+    } else {
+        response.send(Pistache::Http::Code::Internal_Server_Error, fmt::format("Failed to get pg quorum"));
+    }
+}
+
+void HttpManager::exit_pg(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response) {
+    auto group_id_str{request.query().get("group_id")};
+    auto peer_id_str{request.query().get("replica_id")};
+    auto tid = generateRandomTraceId();
+    if (group_id_str == std::nullopt || peer_id_str == std::nullopt) {
+        response.send(Pistache::Http::Code::Bad_Request, "Missing group_id or replica_id query parameter");
+        return;
+    }
+    uuid_t group_id;
+    uuid_t peer_id;
+    try {
+        group_id = boost::uuids::string_generator()(group_id_str.value());
+        peer_id = boost::uuids::string_generator()(peer_id_str.value());
+    } catch (const std::runtime_error& e) {
+        response.send(Pistache::Http::Code::Bad_Request, "Invalid group_id or replica_id query parameter");
+        return;
+    }
+    LOGINFO("Exit pg request received for group_id={}, peer_id={}, tid={}", group_id_str.value(), peer_id_str.value(),
+            tid);
+    auto ret = ho_.exit_pg(group_id, peer_id, tid);
+    if (ret.hasError()) {
+        response.send(Pistache::Http::Code::Internal_Server_Error,
+                      fmt::format("Failed to list replace member task, err={}", ret.error()));
+        return;
+    }
+    response.send(Pistache::Http::Code::Ok, "Exit pg request submitted");
 }
 
 #ifdef _PRERELEASE
