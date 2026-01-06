@@ -184,7 +184,7 @@ folly::SemiFuture< bool > GCManager::submit_gc_task(task_priority priority, chun
 
     // if the chunk has no garbage to be reclaimed, we don`t need to gc it , return true directly
     const auto defrag_blk_num = ex_vchunk->get_defrag_nblks();
-    if (!defrag_blk_num) {
+    if (!defrag_blk_num && task_priority::normal == priority) {
         LOGERRORMOD(gcmgr, "chunk {} has no garbage to be reclaimed, skip gc for this chunk!", chunk_id);
         return folly::makeFuture< bool >(true);
     }
