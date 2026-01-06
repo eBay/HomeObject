@@ -40,6 +40,8 @@ private:
     void get_shard(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response);
     void trigger_gc(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response);
     void get_gc_job_status(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response);
+    void trigger_gc_for_pg(uint16_t pg_id, const std::string& job_id);
+    void get_job_status(const std::string& job_id, nlohmann::json& result);
 
 #ifdef _PRERELEASE
     void crash_system(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response);
@@ -51,19 +53,17 @@ private:
     struct GCJobInfo {
         std::string job_id;
         GCJobStatus status;
-        std::optional< uint32_t > chunk_id;
-        std::optional< uint32_t > pdev_id;
-        std::optional< bool > result;
         std::optional< uint16_t > pg_id;
+        std::optional< uint32_t > chunk_id;
 
         // Statistics for batch GC jobs (all chunks)
         uint32_t total_chunks{0};
         uint32_t success_count{0};
         uint32_t failed_count{0};
 
-        GCJobInfo(const std::string& id, std::optional< uint32_t > cid = std::nullopt,
-                  std::optional< uint32_t > pid = std::nullopt) :
-                job_id(id), status(GCJobStatus::RUNNING), chunk_id(cid), pdev_id(pid) {}
+        GCJobInfo(const std::string& id, std::optional< uint16_t > pgid = std::nullopt,
+                  std::optional< uint32_t > cid = std::nullopt) :
+                job_id(id), status(GCJobStatus::RUNNING), pg_id(pgid), chunk_id(cid) {}
     };
 
     std::string generate_job_id();
@@ -71,7 +71,10 @@ private:
 private:
     HSHomeObject& ho_;
     std::atomic< uint64_t > job_counter_{0};
-    std::mutex gc_job_mutex_;
+    std::shared_mutex gc_job_mutex_;
+
+    // we don`t have an external DB to store the job status, so we only keep the status of the lastest 100 jobs for
+    // query. or, we can evict the job after it is completed after a timeout period.
     folly::EvictingCacheMap< std::string, std::shared_ptr< GCJobInfo > > gc_jobs_map_{100};
 };
 } // namespace homeobject

@@ -176,7 +176,20 @@ void GCManager::stop() {
 }
 
 folly::SemiFuture< bool > GCManager::submit_gc_task(task_priority priority, chunk_id_t chunk_id) {
-    auto pdev_id = m_chunk_selector->get_extend_vchunk(chunk_id)->get_pdev_id();
+    auto ex_vchunk = m_chunk_selector->get_extend_vchunk(chunk_id);
+    if (ex_vchunk == nullptr) {
+        LOGERRORMOD(gcmgr, "chunk {} not found when submit gc task!", chunk_id);
+        return folly::makeFuture< bool >(false);
+    }
+
+    // if the chunk has no garbage to be reclaimed, we don`t need to gc it , return true directly
+    const auto defrag_blk_num = ex_vchunk->get_defrag_nblks();
+    if (!defrag_blk_num) {
+        LOGERRORMOD(gcmgr, "chunk {} has no garbage to be reclaimed, skip gc for this chunk!", chunk_id);
+        return folly::makeFuture< bool >(true);
+    }
+
+    auto pdev_id = ex_vchunk->get_pdev_id();
     auto it = m_pdev_gc_actors.find(pdev_id);
     if (it == m_pdev_gc_actors.end()) {
         LOGINFOMOD(gcmgr, "pdev gc actor not found for pdev_id={}, chunk={}", pdev_id, chunk_id);
