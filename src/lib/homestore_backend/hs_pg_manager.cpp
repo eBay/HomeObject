@@ -342,7 +342,7 @@ replica_member_info HSHomeObject::to_replica_member_info(const PGMember& pg_memb
 void HSHomeObject::on_pg_start_replace_member(group_id_t group_id, const std::string& task_id,
                                               const replica_member_info& member_out,
                                               const replica_member_info& member_in, trace_id_t tid) {
-    auto lg = std::shared_lock(_pg_lock);
+    std::unique_lock lck(_pg_lock);
     for (const auto& iter : _pg_map) {
         auto& pg = iter.second;
         if (pg_repl_dev(*pg).group_id() == group_id) {
@@ -379,7 +379,7 @@ void HSHomeObject::on_pg_start_replace_member(group_id_t group_id, const std::st
 void HSHomeObject::on_pg_complete_replace_member(group_id_t group_id, const std::string& task_id,
                                                  const replica_member_info& member_out,
                                                  const replica_member_info& member_in, trace_id_t tid) {
-    auto lg = std::shared_lock(_pg_lock);
+    std::unique_lock lck(_pg_lock);
     for (const auto& iter : _pg_map) {
         auto& pg = iter.second;
         if (pg_repl_dev(*pg).group_id() == group_id) {
@@ -400,7 +400,7 @@ void HSHomeObject::on_pg_complete_replace_member(group_id_t group_id, const std:
 
 void HSHomeObject::on_remove_member(homestore::group_id_t group_id, const peer_id_t& member, trace_id_t tid) {
     LOGINFO("PG remove member, member={}, trace_id={}", boost::uuids::to_string(member), tid);
-    auto lg = std::shared_lock(_pg_lock);
+    std::unique_lock lck(_pg_lock);
     for (const auto& iter : _pg_map) {
         auto& pg = iter.second;
         auto& repl_dev = pg_repl_dev(*pg);
@@ -414,6 +414,7 @@ void HSHomeObject::on_remove_member(homestore::group_id_t group_id, const peer_i
                 LOGI("PG remove member done, member doesn't exist, member={} member_nums={}, trace_id={}",
                      boost::uuids::to_string(member), pg->pg_info_.members.size(), tid);
             }
+            return;
         }
     }
 }
