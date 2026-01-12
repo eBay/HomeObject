@@ -970,27 +970,20 @@ void ReplicationStateMachine::handle_no_space_left(homestore::repl_lsn_t lsn, ho
 
     // 3 handling this error. for homeobject, we will submit an emergent gc task and wait for the completion.
     auto gc_mgr = home_object_->gc_manager();
-    if (gc_mgr->is_started()) {
-        // FIXME:: there is a very corner case that when reaching this line, gc_mgr is stopped. fix this later.
-        gc_mgr->submit_gc_task(task_priority::emergent, chunk_id)
-            .via(&folly::InlineExecutor::instance())
-            .thenValue([this, lsn, chunk_id](auto&& res) {
-                if (!res) {
-                    LOGERROR("failed to submit emergent gc task for chunk_id={} , lsn={}, will retry again if new "
-                             "no_space_left happens",
-                             chunk_id, lsn);
-                } else {
-                    LOGD("successfully handle no_space_left error for chunk_id={} , lsn={}", chunk_id, lsn);
-                }
+    gc_mgr->submit_gc_task(task_priority::emergent, chunk_id)
+        .via(&folly::InlineExecutor::instance())
+        .thenValue([this, lsn, chunk_id](auto&& res) {
+            if (!res) {
+                LOGERROR("failed to submit emergent gc task for chunk_id={} , lsn={}, will retry again if new "
+                         "no_space_left happens",
+                         chunk_id, lsn);
+            } else {
+                LOGD("successfully handle no_space_left error for chunk_id={} , lsn={}", chunk_id, lsn);
+            }
 
-                // start accepting new requests again.
-                repl_dev()->resume_accepting_reqs();
-            });
-    } else {
-        // start accepting new requests again.
-        LOGD("gc manager is not started, skip handle no_space_left for chunk={}, lsn={}", chunk_id, lsn);
-        repl_dev()->resume_accepting_reqs();
-    }
+            // start accepting new requests again.
+            repl_dev()->resume_accepting_reqs();
+        });
 }
 
 void ReplicationStateMachine::on_log_replay_done(const homestore::group_id_t& group_id) {

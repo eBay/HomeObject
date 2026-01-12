@@ -123,7 +123,10 @@ void GCManager::start() {
         gc_actor->start();
         LOGINFOMOD(gcmgr, "start gc actor for pdev={}", pdev_id);
     }
+    start_gc_scan_timer();
+}
 
+void GCManager::start_gc_scan_timer() {
     const auto gc_scan_interval_sec = HS_BACKEND_DYNAMIC_CONFIG(gc_scan_interval_sec);
 
     // the initial idea here is that we want gc timer to run in a reactor that not shared with other fibers that
@@ -147,9 +150,7 @@ void GCManager::start() {
     LOGINFOMOD(gcmgr, "gc scheduler timer has started, interval is set to {} seconds", gc_scan_interval_sec);
 }
 
-bool GCManager::is_started() { return m_gc_timer_hdl != iomgr::null_timer_handle; }
-
-void GCManager::stop() {
+void GCManager::stop_gc_scan_timer() {
     if (m_gc_timer_hdl == iomgr::null_timer_handle) {
         LOGWARNMOD(gcmgr, "gc scheduler timer is not running, no need to stop it");
         return;
@@ -163,6 +164,10 @@ void GCManager::stop() {
         m_gc_timer_hdl = iomgr::null_timer_handle;
     });
     m_gc_timer_fiber = nullptr;
+}
+
+void GCManager::stop() {
+    stop_gc_scan_timer();
 
     for (const auto& [pdev_id, gc_actor] : m_pdev_gc_actors) {
         gc_actor->stop();
@@ -171,9 +176,20 @@ void GCManager::stop() {
 }
 
 folly::SemiFuture< bool > GCManager::submit_gc_task(task_priority priority, chunk_id_t chunk_id) {
-    if (!is_started()) return folly::makeFuture< bool >(false);
+    auto ex_vchunk = m_chunk_selector->get_extend_vchunk(chunk_id);
+    if (ex_vchunk == nullptr) {
+        LOGERRORMOD(gcmgr, "chunk {} not found when submit gc task!", chunk_id);
+        return folly::makeFuture< bool >(false);
+    }
 
-    auto pdev_id = m_chunk_selector->get_extend_vchunk(chunk_id)->get_pdev_id();
+    // if the chunk has no garbage to be reclaimed, we don`t need to gc it , return true directly
+    const auto defrag_blk_num = ex_vchunk->get_defrag_nblks();
+    if (!defrag_blk_num && task_priority::normal == priority) {
+        LOGERRORMOD(gcmgr, "chunk {} has no garbage to be reclaimed, skip gc for this chunk!", chunk_id);
+        return folly::makeFuture< bool >(true);
+    }
+
+    auto pdev_id = ex_vchunk->get_pdev_id();
     auto it = m_pdev_gc_actors.find(pdev_id);
     if (it == m_pdev_gc_actors.end()) {
         LOGINFOMOD(gcmgr, "pdev gc actor not found for pdev_id={}, chunk={}", pdev_id, chunk_id);
@@ -337,6 +353,11 @@ void GCManager::pdev_gc_actor::add_reserved_chunk(
 }
 
 folly::SemiFuture< bool > GCManager::pdev_gc_actor::add_gc_task(uint8_t priority, chunk_id_t move_from_chunk) {
+    if (m_is_stopped.load()) {
+        LOGWARNMOD(gcmgr, "pdev gc actor for pdev_id={} is not started yet or already stopped, cannot add gc task!",
+                   m_pdev_id);
+        return folly::makeSemiFuture< bool >(false);
+    }
     auto EXvchunk = m_chunk_selector->get_extend_vchunk(move_from_chunk);
     // it does not belong to any pg, so we don't need to gc it.
     if (!EXvchunk->m_pg_id.has_value()) {

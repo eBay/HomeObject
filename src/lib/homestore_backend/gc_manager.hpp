@@ -307,7 +307,11 @@ public:
 
     void start();
     void stop();
-    bool is_started();
+
+    // the following two functions should not be called concurrently. if we need to call them concurrently, we need to
+    // add lock to protect
+    void start_gc_scan_timer();
+    void stop_gc_scan_timer();
 
     void scan_chunks_for_gc();
     void drain_pg_pending_gc_task(const pg_id_t pg_id);
