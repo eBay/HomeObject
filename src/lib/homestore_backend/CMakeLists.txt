@@ -127,6 +127,17 @@ add_test(NAME HomestoreResyncTestWithLeaderRestart
         --override_config homestore_config.consensus.replace_member_sync_check_interval_ms=1000
         --override_config homestore_config.consensus.laggy_threshold=2000
         --gtest_filter=HomeObjectFixture.RestartLeader*)
+#add_test(NAME HomestoreReplaceMemberRollbackTest
+#        COMMAND homestore_test_dynamic -csv error --executor immediate --config_path ./
+#        --override_config homestore_config.consensus.snapshot_freq_distance=13
+#        --override_config homestore_config.consensus.num_reserved_log_items=13
+#        --override_config homestore_config.resource_limits.raft_logstore_reserve_threshold=13
+#        --override_config homestore_config.consensus.snapshot_sync_ctx_timeout_ms=5000
+#        --override_config homestore_config.generic.repl_dev_cleanup_interval_sec=5
+#        --override_config homestore_config.consensus.max_grpc_message_size=138412032
+#        --override_config homestore_config.consensus.replace_member_sync_check_interval_ms=60000
+#        --override_config homestore_config.consensus.laggy_threshold=1
+#        --gtest_filter=HomeObjectFixture.RollbackReplaceMember)
 
 # GC tests
 add_test(NAME FetchDataWithOriginatorGC

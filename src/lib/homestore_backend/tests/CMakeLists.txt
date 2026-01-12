@@ -19,7 +19,7 @@ target_sources(homestore_tests_misc PRIVATE test_homestore_backend.cpp homeobj_m
 target_link_libraries(homestore_tests_misc homeobject_homestore ${COMMON_TEST_DEPS})
 
 add_library(homestore_tests_dynamic OBJECT)
-target_sources(homestore_tests_dynamic PRIVATE test_homestore_backend_dynamic.cpp)
+target_sources(homestore_tests_dynamic PRIVATE test_homestore_backend_dynamic.cpp homeobj_fixture_http.hpp)
 target_link_libraries(homestore_tests_dynamic homeobject_homestore ${COMMON_TEST_DEPS})
 
 add_executable(test_heap_chunk_selector)

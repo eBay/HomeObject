@@ -13,7 +13,8 @@ namespace homeobject {
 ENUM(PGError, uint16_t, UNKNOWN = 1, INVALID_ARG, TIMEOUT, UNKNOWN_PG, NOT_LEADER, UNKNOWN_PEER, UNSUPPORTED_OP,
      CRC_MISMATCH, NO_SPACE_LEFT, DRIVE_WRITE_ERROR, RETRY_REQUEST, SHUTTING_DOWN, ROLL_BACK, CANCELLED,
      QUORUM_NOT_MET);
-ENUM(PGReplaceMemberTaskStatus, uint16_t, COMPLETED = 0, IN_PROGRESS, NOT_LEADER, TASK_ID_MISMATCH, TASK_NOT_FOUND, UNKNOWN);
+ENUM(PGReplaceMemberTaskStatus, uint16_t, COMPLETED = 0, IN_PROGRESS, NOT_LEADER, TASK_ID_MISMATCH, TASK_NOT_FOUND,
+     UNKNOWN);
 // https://github.corp.ebay.com/SDS/nuobject_proto/blob/main/src/proto/pg.proto#L52
 ENUM(PGStateMask, uint32_t, HEALTHY = 0, DISK_DOWN = 0x1, SCRUBBING = 0x2, BASELINE_RESYNC = 0x4, INCONSISTENT = 0x8,
      REPAIR = 0x10, GC_IN_PROGRESS = 0x20, RESYNCING = 0x40);
@@ -40,6 +41,12 @@ struct PGMember {
 
 using MemberSet = std::set< PGMember >;
 
+struct replace_member_task {
+    std::string task_id; // Unique task id for this replace member operation
+    uuid_t replica_out;  // The replica which is going to be replaced
+    uuid_t replica_in;   // The replica which is going to be added in place of replica_out
+};
+
 struct PGInfo {
     explicit PGInfo(pg_id_t _id) : id(_id) {}
     pg_id_t id;
@@ -55,14 +62,10 @@ struct PGInfo {
 
     // check if the PGInfo has same id, size and members with the rhs PGInfo.
     bool is_equivalent_to(PGInfo const& rhs) const {
-        if (id != rhs.id || size != rhs.size || members.size() != rhs.members.size()) {
-            return false;
-        }
+        if (id != rhs.id || size != rhs.size || members.size() != rhs.members.size()) { return false; }
         for (auto const& m : members) {
             auto it = rhs.members.find(m);
-            if (it == rhs.members.end() || it->priority != m.priority) {
-                return false;
-            }
+            if (it == rhs.members.end() || it->priority != m.priority) { return false; }
         }
         return true;
     }
@@ -72,13 +75,13 @@ struct PGInfo {
         uint32_t i = 0ul;
         for (auto const& m : members) {
             if (i++ > 0) { members_str += ", "; }
-            members_str += fmt::format("member-{}: id={}, name={}, priority={}",
-                                       i, boost::uuids::to_string(m.id), m.name, m.priority);
+            members_str += fmt::format("member-{}: id={}, name={}, priority={}", i, boost::uuids::to_string(m.id),
+                                       m.name, m.priority);
         }
         return fmt::format("PGInfo: id={}, replica_set_uuid={}, size={}, chunk_size={}, "
                            "expected_member_num={}, members={}",
-                           id, boost::uuids::to_string(replica_set_uuid), size, chunk_size,
-                           expected_member_num, members_str);
+                           id, boost::uuids::to_string(replica_set_uuid), size, chunk_size, expected_member_num,
+                           members_str);
     }
 };
 
@@ -91,25 +94,19 @@ struct peer_info {
 };
 
 struct pg_state {
-    std::atomic<uint64_t> state{0};
+    std::atomic< uint64_t > state{0};
 
     explicit pg_state(uint64_t s) : state{s} {}
 
-    void set_state(PGStateMask mask) {
-        state.fetch_or(static_cast<uint64_t>(mask), std::memory_order_relaxed);
-    }
+    void set_state(PGStateMask mask) { state.fetch_or(static_cast< uint64_t >(mask), std::memory_order_relaxed); }
 
-    void clear_state(PGStateMask mask) {
-        state.fetch_and(~static_cast<uint64_t>(mask), std::memory_order_relaxed);
-    }
+    void clear_state(PGStateMask mask) { state.fetch_and(~static_cast< uint64_t >(mask), std::memory_order_relaxed); }
 
     bool is_state_set(PGStateMask mask) const {
-        return (state.load(std::memory_order_relaxed) & static_cast<uint64_t>(mask)) != 0;
+        return (state.load(std::memory_order_relaxed) & static_cast< uint64_t >(mask)) != 0;
     }
 
-    uint64_t get() const {
-        return state.load(std::memory_order_relaxed);
-    }
+    uint64_t get() const { return state.load(std::memory_order_relaxed); }
 };
 
 struct PGStats {
@@ -171,12 +168,13 @@ struct PGReplaceMemberStatus {
 class PGManager : public Manager< PGError > {
 public:
     virtual NullAsyncResult create_pg(PGInfo&& pg_info, trace_id_t tid = 0) = 0;
-    virtual NullAsyncResult replace_member(pg_id_t id, std::string& task_id, peer_id_t const& old_member, PGMember const& new_member,
-                                           u_int32_t commit_quorum = 0, trace_id_t tid = 0) = 0;
-    virtual PGReplaceMemberStatus get_replace_member_status(pg_id_t id, std::string& task_id, const PGMember& old_member,
-                                                          const PGMember& new_member,
-                                                          const std::vector< PGMember >& others,
-                                                          uint64_t trace_id = 0) const = 0;
+    virtual NullAsyncResult replace_member(pg_id_t id, std::string& task_id, peer_id_t const& old_member,
+                                           PGMember const& new_member, u_int32_t commit_quorum = 0,
+                                           trace_id_t tid = 0) = 0;
+    virtual PGReplaceMemberStatus get_replace_member_status(pg_id_t id, std::string& task_id,
+                                                            const PGMember& old_member, const PGMember& new_member,
+                                                            const std::vector< PGMember >& others,
+                                                            uint64_t trace_id = 0) const = 0;
 
     /**
      * Retrieves the statistics for a specific PG (Placement Group) identified by its ID.
@@ -201,6 +199,68 @@ public:
      * @param pg_id The ID of the PG.
      */
     virtual void destroy_pg(pg_id_t pg_id) = 0;
+
+    /**
+     * @brief Single member exits a PG (Placement Group) identified by its ID.
+     * @param group_id The group ID of the pg.
+     * @param peer_id The peer ID of the member exiting the PG.
+     * @param trace_id The trace identifier for logging and tracking purposes.
+     */
+    virtual NullResult exit_pg(uuid_t group_id, peer_id_t peer_id, uint64_t trace_id) = 0;
+
+    /**
+     * @brief Toggle the learner flag for a specified member.
+     *
+     * This function changes the state of the learner flag for a given member in the PG.
+     * It is typically used to revert the learner flag back to false when rolling back pgmove.
+     *
+     * @param pg_id The ID of the PG where the member resides.
+     * @param member_id The ID of the member whose learner flag is to be toggled.
+     * @param is_learner The new state of the learner flag (true to set as learner, false to unset).
+     * @param commit_quorum The quorum required for committing the change.
+     * @param trace_id The trace ID for tracking the operation.
+     * @return NullAsyncResult indicating the result of the operation.
+     */
+    virtual NullAsyncResult flip_learner_flag(pg_id_t pg_id, peer_id_t const& member_id, bool is_learner,
+                                              uint32_t commit_quorum, trace_id_t trace_id) = 0;
+
+    /**
+     * @brief Remove a member from the PG.
+     *
+     * This function removes a specified member from the PG, typically used to rollback the pgmove operation.
+     *
+     * @param pg_id The ID of the PG from which the member is to be removed.
+     * @param member_id The ID of the member to be removed.
+     * @param commit_quorum The quorum required for committing the removal.
+     * @param trace_id The trace ID for tracking the operation.
+     * @return NullAsyncResult indicating the result of the operation.
+     */
+    virtual NullAsyncResult remove_member(pg_id_t pg_id, peer_id_t const& member_id, uint32_t commit_quorum,
+                                          trace_id_t trace_id) = 0;
+
+    /**
+     * @brief Clean up the replace member task in the PG.
+     *
+     * This function cleans up the replace member task, typically used to rollback the pgmove operation.
+     *
+     * @param pg_id The ID of the PG where the task is to be cleaned.
+     * @param task_id The ID of the task to be cleaned.
+     * @param commit_quorum The quorum required for committing the task cleanup.
+     * @param trace_id The trace ID for tracking the operation.
+     * @return NullAsyncResult indicating the result of the operation.
+     */
+    virtual NullAsyncResult clean_replace_member_task(pg_id_t pg_id, std::string& task_id, uint32_t commit_quorum,
+                                                      trace_id_t trace_id) = 0;
+
+    /**
+     * @brief List all replace member tasks happening on this homeobject instance.
+     *
+     * This function retrieves a list of all ongoing tasks on this homeobject instance.
+     *
+     * @param trace_id The trace ID for tracking the operation.
+     * @return Result containing a vector of replace member tasks.
+     */
+    virtual Result< std::vector< replace_member_task > > list_all_replace_member_tasks(trace_id_t trace_id) = 0;
 };
 
 } // namespace homeobject

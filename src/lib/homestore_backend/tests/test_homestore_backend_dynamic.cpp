@@ -16,6 +16,7 @@
  * Homeobject Replication testing binaries shared common definitions, apis and data structures
  */
 #include "homeobj_fixture.hpp"
+#include "homeobj_fixture_http.hpp"
 
 #define BEFORE_FIRST_SHARD_DONE "BEFORE_FIRST_SHARD_DONE"
 #define RECEIVING_SNAPSHOT "RECEIVING_SNAPSHOT"
@@ -488,7 +489,7 @@ void HomeObjectFixture::ReplaceMember(bool withGC) {
         sleep(5); // wait for incremental append-log requests to complete
     }
 
-    // step 4: after completing replace member, verify the blob on all the members of this pg including the newly added
+    // step 4: after completing replace member, verify the blob on all members of this pg including the newly added
     // spare replica,
     run_if_in_pg(pg_id, [&]() {
         verify_get_blob(pg_shard_id_vec, num_blobs_per_shard);
@@ -747,6 +748,204 @@ void HomeObjectFixture::RestartLeaderDuringBaselineResyncUsingSigKill(uint64_t f
         g_helper->sync();
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
         ASSERT_TRUE(verify_complete_replace_member_result(pg_id, task_id, out_member_id, in_member_id));
+    }
+    g_helper->sync();
+}
+
+// In this test, the new member will be stuck at snapshot, at that moment we rollback the
+// operation(remove new member, flip learner and clean the task).
+TEST_F(HomeObjectFixture, RollbackReplaceMember) {
+    LOGINFO("HomeObject replica={} setup completed", g_helper->replica_num());
+    auto spare_num_replicas = SISL_OPTIONS["spare_replicas"].as< uint8_t >();
+    ASSERT_TRUE(spare_num_replicas > 0) << "we need spare replicas for homestore backend dynamic tests";
+
+    auto num_replicas = SISL_OPTIONS["replicas"].as< uint8_t >();
+    auto num_shards_per_pg = SISL_OPTIONS["num_shards"].as< uint64_t >();
+    auto num_blobs_per_shard = SISL_OPTIONS["num_blobs"].as< uint64_t >() / num_shards_per_pg;
+    pg_id_t pg_id{1};
+    auto out_member_id = g_helper->replica_id(num_replicas - 1);
+    auto in_member_id = g_helper->replica_id(num_replicas); /*spare replica*/
+    auto http_enabled = SISL_OPTIONS["enable_http"].as< bool >();
+
+    // ======== Stage 1: Create a pg without spare replicas and put blobs ========
+    std::unordered_set< uint8_t > excluding_replicas_in_pg;
+    for (size_t i = num_replicas; i < num_replicas + spare_num_replicas; i++)
+        excluding_replicas_in_pg.insert(i);
+
+    create_pg(pg_id, 0 /* pg_leader */, excluding_replicas_in_pg);
+
+    // we can not share all the shard_id and blob_id among all the replicas including the spare ones, so we need to
+    // derive them by calculating.
+    // since shard_id = pg_id + shard_sequence_num, so we can derive shard_ids for all the shards in this pg, and these
+    // derived info is used by all replicas(including the newly added member) to verify the blobs.
+    std::map< pg_id_t, std::vector< shard_id_t > > pg_shard_id_vec;
+    std::map< pg_id_t, blob_id_t > pg_blob_id;
+    pg_blob_id[pg_id] = 0;
+    for (shard_id_t shard_id = 1; shard_id <= num_shards_per_pg; shard_id++) {
+        auto derived_shard_id = make_new_shard_id(pg_id, shard_id);
+        pg_shard_id_vec[pg_id].emplace_back(derived_shard_id);
+    }
+
+    auto kill_until_shard = pg_shard_id_vec[pg_id].back();
+    auto kill_until_blob = num_blobs_per_shard * num_shards_per_pg - 1;
+#ifdef _PRERELEASE
+    flip::FlipCondition cond;
+    // will only delay the snapshot with blob id 7 during which shutdown will happen
+    m_fc.create_condition("blob_id", flip::Operator::EQUAL, static_cast< long >(7), &cond);
+    set_retval_flip("simulate_write_snapshot_save_blob_delay", static_cast< long >(10000) /*ms*/, 1, 100, cond);
+    // kill after the last blob in the first shard is replicated
+    kill_until_shard = pg_shard_id_vec[pg_id].front();
+    kill_until_blob = num_blobs_per_shard - 1;
+#endif
+
+    for (uint64_t j = 0; j < num_shards_per_pg; j++)
+        create_shard(pg_id, 64 * Mi);
+
+    // put and verify blobs in the pg, excluding the spare replicas
+    put_blobs(pg_shard_id_vec, num_blobs_per_shard, pg_blob_id, true, true);
+
+    verify_get_blob(pg_shard_id_vec, num_blobs_per_shard);
+    verify_obj_count(1, num_shards_per_pg, num_blobs_per_shard, false);
+
+    // SyncPoint1 all the replicas , including the spare ones, sync at this point
+    g_helper->sync();
+
+    // ======== Stage 2: replace a member ========
+    std::string task_id = "task_id";
+    run_on_pg_leader(pg_id, [&]() {
+        auto r = _obj_inst->pg_manager()
+                     ->replace_member(pg_id, task_id, out_member_id, PGMember{in_member_id, "new_member", 0})
+                     .get();
+        ASSERT_TRUE(r);
+    });
+
+    // ======== Stage 3: rollback the replace member during snapshot ========
+    if (in_member_id == g_helper->my_replica_id()) {
+        while (!am_i_in_pg(pg_id)) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+            LOGINFO("new member is waiting to become a member of pg={}", pg_id);
+        }
+        LOGDEBUG("wait for the data[shard={}, blob={}] replicated to the new member", kill_until_shard,
+                 kill_until_blob);
+        wait_for_blob(kill_until_shard, kill_until_blob);
+        // SyncPoint2
+        g_helper->sync();
+        // SyncPoint3
+        g_helper->sync();
+        // SyncPoint4
+        g_helper->sync();
+        // SyncPoint5
+        g_helper->sync();
+        // SyncPoint6
+        g_helper->sync();
+    } else {
+        // SyncPoint2, verify intermediate status during replacement
+        g_helper->sync();
+        ASSERT_TRUE(verify_start_replace_member_result(pg_id, task_id, out_member_id, in_member_id));
+        // SyncPoint3 remove member
+        g_helper->sync();
+        LOGINFO("about to remove new member")
+        run_on_pg_leader(pg_id, [&]() {
+            bool retry = true;
+            while (retry) {
+                if (http_enabled) {
+                    HttpHelper http_helper("127.0.0.1", 5000 + g_helper->replica_num());
+                    nlohmann::json j;
+                    j["pg_id"] = std::to_string(pg_id);
+                    j["member_id"] = boost::uuids::to_string(in_member_id);
+                    j["commit_quorum"] = "0";
+                    auto r = http_helper.del("/api/v1/member", j.dump());
+                    if (r.code() == Pistache::Http::Code::Ok) {
+                        retry = false;
+                    } else if (r.code() == Pistache::Http::Code::Service_Unavailable) {
+                        LOGINFO("remove_member get RETRY_REQUEST error, will retry");
+                        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+                    } else {
+                        ASSERT_FALSE(true);
+                    }
+                } else {
+                    auto r = _obj_inst->pg_manager()->remove_member(pg_id, in_member_id, 0, 0).get();
+                    // new member can not respond to remove_member request because it is stuck at snapshot, so we may
+                    // get RETRY_REQUEST error here, but the remove_member takes effective after force removal timeout.
+                    if (!r.hasError()) {
+                        retry = false;
+                    } else if (r.error() == PGError::RETRY_REQUEST) {
+                        LOGINFO("remove_member get RETRY_REQUEST error, will retry");
+                        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+                    } else {
+                        ASSERT_FALSE(true);
+                    }
+                }
+            }
+        });
+        // SyncPoint4 flip learner
+        g_helper->sync();
+        LOGINFO("about to flip learner")
+        run_on_pg_leader(pg_id, [&]() {
+            if (http_enabled) {
+                HttpHelper http_helper("127.0.0.1", 5000 + g_helper->replica_num());
+                nlohmann::json j;
+                j["pg_id"] = std::to_string(pg_id);
+                j["member_id"] = boost::uuids::to_string(out_member_id);
+                j["learner"] = "false";
+                j["commit_quorum"] = "0";
+                auto r = http_helper.post("/api/v1/flip_learner", j.dump());
+                ASSERT_EQ(r.code(), Pistache::Http::Code::Ok);
+            } else {
+                auto r = _obj_inst->pg_manager()->flip_learner_flag(pg_id, out_member_id, false, 0, 0).get();
+                ASSERT_FALSE(r.hasError());
+            }
+        });
+        // SyncPoint5 clean task
+        g_helper->sync();
+        LOGINFO("about to clean task")
+        run_on_pg_leader(pg_id, [&]() {
+            if (!http_enabled) {
+                auto r = _obj_inst->pg_manager()->clean_replace_member_task(pg_id, task_id, 0, 0).get();
+                ASSERT_FALSE(r.hasError());
+            } else {
+                HttpHelper http_helper("127.0.0.1", 5000 + g_helper->replica_num());
+                nlohmann::json j;
+                j["pg_id"] = std::to_string(pg_id);
+                j["task_id"] = task_id;
+                j["commit_quorum"] = "0";
+                auto r = http_helper.del("/api/v1/pg_replacemember_task", j.dump());
+                ASSERT_EQ(r.code(), Pistache::Http::Code::Ok);
+            }
+        });
+        // wait for replication settled
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        // SyncPoint6 verify
+        g_helper->sync();
+        LOGINFO("verify rollback result")
+        ASSERT_TRUE(verify_rollback_replace_member_result(pg_id, task_id, out_member_id, in_member_id));
+    }
+    // SyncPoint7
+    g_helper->sync();
+    LOGINFO("After rollback, wait for new member to leave pg={}", pg_id);
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    // Since in member is stuck in snapshot previouly, so it may not response to remove_member request, lead to being
+    // force removed after timeout. In that case, after it recovers, it can not discover itself being removed because
+    // is_catching_up flag is set, so we need to manually remove it.
+    uuid_t group_id = get_group_id(pg_id);
+    if (in_member_id == g_helper->my_replica_id()) {
+        while (am_i_in_pg(pg_id)) {
+            LOGINFO("New member is going to exit pg={}", pg_id);
+            if (http_enabled) {
+                HttpHelper http_helper("127.0.0.1", 5000 + g_helper->replica_num());
+                auto resource = "/api/v1/pg?group_id=" + boost::uuids::to_string(group_id) +
+                    "&replica_id=" + boost::uuids::to_string(g_helper->my_replica_id_);
+                auto r = http_helper.del(resource, "");
+                ASSERT_EQ(r.code(), Pistache::Http::Code::Ok);
+            } else {
+                _obj_inst->pg_manager()->exit_pg(group_id, g_helper->my_replica_id(), 0);
+            }
+            LOGINFO("New member is waiting to leave pg={}", pg_id);
+        }
+        // Test idempotence of exit_pg
+        LOGINFO("Try to call exit_pg again pg={}", pg_id);
+        auto ret = _obj_inst->pg_manager()->exit_pg(group_id, g_helper->my_replica_id(), 0);
+        ASSERT_FALSE(ret.hasError());
     }
     g_helper->sync();
 }

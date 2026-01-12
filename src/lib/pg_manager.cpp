@@ -44,4 +44,28 @@ PGReplaceMemberStatus HomeObjectImpl::get_replace_member_status(pg_id_t id, std:
 bool HomeObjectImpl::get_stats(pg_id_t id, PGStats& stats) const { return _get_stats(id, stats); }
 void HomeObjectImpl::get_pg_ids(std::vector< pg_id_t >& pg_ids) const { return _get_pg_ids(pg_ids); }
 void HomeObjectImpl::destroy_pg(pg_id_t pg_id) { return _destroy_pg(pg_id); }
+PGManager::NullResult HomeObjectImpl::exit_pg(uuid_t group_id, peer_id_t peer_id, trace_id_t trace_id) {
+    return _exit_pg(group_id, peer_id, trace_id);
+}
+
+PGManager::NullAsyncResult HomeObjectImpl::flip_learner_flag(pg_id_t pg_id, peer_id_t const& member_id, bool is_learner,
+                                                             uint32_t commit_quorum, trace_id_t trace_id) {
+    return _flip_learner_flag(pg_id, member_id, is_learner, commit_quorum, trace_id);
+}
+
+PGManager::NullAsyncResult HomeObjectImpl::remove_member(pg_id_t pg_id, peer_id_t const& member_id,
+                                                         uint32_t commit_quorum, trace_id_t trace_id) {
+    return _remove_member(pg_id, member_id, commit_quorum, trace_id);
+}
+
+PGManager::NullAsyncResult HomeObjectImpl::clean_replace_member_task(pg_id_t pg_id, std::string& task_id,
+                                                                     uint32_t commit_quorum, trace_id_t trace_id) {
+    return _clean_replace_member_task(pg_id, task_id, commit_quorum, trace_id);
+}
+
+PGManager::Result< std::vector< replace_member_task > >
+HomeObjectImpl::list_all_replace_member_tasks(trace_id_t trace_id) {
+    return _list_all_replace_member_tasks(trace_id);
+}
+
 } // namespace homeobject
