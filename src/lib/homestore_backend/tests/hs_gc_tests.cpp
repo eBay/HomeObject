@@ -31,8 +31,7 @@ TEST_F(HomeObjectFixture, BasicGC) {
         for (const auto& [pg_id, chunk_num] : pg_chunk_nums) {
             for (uint64_t j = 0; j < chunk_num; j++) {
                 auto shard_seq = i * chunk_num + j + 1;
-                auto derived_shard_id =
-                    make_new_shard_id(pg_id, shard_seq); // shard id start from 1
+                auto derived_shard_id = make_new_shard_id(pg_id, shard_seq); // shard id start from 1
                 auto shard = create_shard(pg_id, 64 * Mi, "shard meta:" + std::to_string(derived_shard_id));
                 LOGINFO("create shard pg={} shard {} in chunk {}", pg_id, shard.id, j);
                 ASSERT_EQ(derived_shard_id, shard.id);
