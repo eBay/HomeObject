@@ -306,7 +306,6 @@ void GCManager::pdev_gc_actor::start() {
     // for gc
     m_gc_executor = std::make_shared< folly::IOThreadPoolExecutor >(reserved_chunk_num_per_pdev -
                                                                     reserved_chunk_num_per_pdev_for_egc);
-
     m_egc_executor = std::make_shared< folly::IOThreadPoolExecutor >(reserved_chunk_num_per_pdev_for_egc);
 
     LOGINFOMOD(gcmgr, "pdev gc actor for pdev_id={} has started", m_pdev_id);
@@ -345,7 +344,6 @@ folly::SemiFuture< bool > GCManager::pdev_gc_actor::add_gc_task(uint8_t priority
     }
 
     const auto pg_id = EXvchunk->m_pg_id.value();
-
     m_hs_home_object->gc_manager()->incr_pg_pending_gc_task(pg_id);
 
     if (!m_hs_home_object->can_chunks_in_pg_be_gc(pg_id)) {
@@ -666,7 +664,6 @@ bool GCManager::pdev_gc_actor::copy_valid_data(
     }
 
     auto& data_service = homestore::data_service();
-
     const auto last_shard_id = *(shards.rbegin());
     const auto& shard_info = m_hs_home_object->_get_hs_shard(last_shard_id)->info;
     const auto& last_shard_state = shard_info.state;
@@ -985,13 +982,11 @@ bool GCManager::pdev_gc_actor::copy_valid_data(
     const auto used_blks = move_to_vchunk->get_used_blks();
     if (used_blks) {
         homestore::MultiBlkId commit_blk_id(used_blks - 1, 1, move_to_chunk);
-
         if (data_service.commit_blk(commit_blk_id) != homestore::BlkAllocStatus::SUCCESS) {
             GCLOGE(task_id, pg_id, NO_SHARD_ID, "fail to commit_blk for move_to_chunk={}, commit_blk_id={}",
                    move_to_chunk, commit_blk_id.to_string());
             return false;
         }
-
         GCLOGD(task_id, pg_id, NO_SHARD_ID, "successfully commit_blk in move_to_chunk={}, commit_blk_id={}",
                move_to_chunk, commit_blk_id.to_string());
     } else {
@@ -1025,11 +1020,9 @@ bool GCManager::pdev_gc_actor::copy_valid_data(
             GCLOGW(task_id, pg_id, shard_id, "fail to remove tombstone, ret={}", status);
         }
         // TODO:: after the completion of indexsvc bug fix, we need to retry according to the returned status.
-
         GCLOGD(task_id, pg_id, shard_id, "remove tombstone successfully, ret={}, move_from_chunk={}, move_to_chunk={}",
                status, move_from_chunk, move_to_chunk);
     }
-
     GCLOGD(task_id, pg_id, NO_SHARD_ID, "data copied successfully for move_from_chunk={} to move_to_chunk={}",
            move_from_chunk, move_to_chunk);
 
@@ -1070,7 +1063,6 @@ bool GCManager::pdev_gc_actor::purge_reserved_chunk(chunk_id_t chunk, const uint
     }};
 
     std::vector< std::pair< BlobRouteByChunkKey, BlobRouteValue > > valid_blob_indexes;
-
     status = m_index_table->query(query_req, valid_blob_indexes);
     if (status != homestore::btree_status_t::success) {
         GCLOGE(task_id, pg_id, NO_SHARD_ID,
@@ -1164,10 +1156,8 @@ void GCManager::pdev_gc_actor::handle_error_before_persisting_gc_metablk(chunk_i
     const auto final_state =
         priority == static_cast< uint8_t >(task_priority::normal) ? ChunkState::AVAILABLE : ChunkState::INUSE;
     m_chunk_selector->mark_chunk_out_of_gc_state(move_from_chunk, final_state, task_id);
-
     task.setValue(false);
     m_reserved_chunk_queue.blockingWrite(move_to_chunk);
-
     durable_entities_update([this, priority](auto& de) {
         priority == static_cast< uint8_t >(task_priority::normal) ? de.failed_gc_task_count.fetch_add(1)
                                                                   : de.failed_egc_task_count.fetch_add(1);
@@ -1195,7 +1185,6 @@ void GCManager::pdev_gc_actor::process_gc_task(chunk_id_t move_from_chunk, uint8
     RELEASE_ASSERT(vchunk->m_v_chunk_id.has_value(), "pg={}, chunk_id={} is expected to have a vchunk id, but not!",
                    pg_id, move_from_chunk);
     const auto vchunk_id = vchunk->m_v_chunk_id.value();
-
     chunk_id_t move_to_chunk;
 
     // wait for a reserved chunk to be available. now, the amount of threads in the folly executor(thread pool) is equal
@@ -1350,7 +1339,6 @@ bool GCManager::pdev_gc_actor::process_after_gc_metablk_persisted(
 
     m_chunk_selector->update_vchunk_info_after_gc(move_from_chunk, move_to_chunk, final_state, pg_id, vchunk_id,
                                                   task_id);
-
     GCLOGD(
         task_id, pg_id, NO_SHARD_ID,
         "vchunk_id={} has been update from move_from_chunk={} to move_to_chunk={}, {} blks are reclaimed, final state "
