@@ -718,29 +718,28 @@ folly::Future< std::error_code > ReplicationStateMachine::on_fetch_data(const in
 
                 LOGD("fetch data with blob_id={}, shardID=0x{:x}, pg={} from index table", blob_id, shard_id, pg_id);
 
+                bool should_return_delete_marker{false};
+                homestore::MultiBlkId pbas;
+
                 auto rc = index_table->get(get_req);
                 if (sisl_unlikely(homestore::btree_status_t::success != rc)) {
                     // blob never exists or has been gc
                     LOGD("on_fetch_data failed to get from index table, blob never exists or has been gc, blob_id={}, "
                          "shardID=0x{:x}, pg={}",
                          blob_id, shard_id, pg_id);
-
-                    // we return a specific blob as a delete marker if not found in index table
-                    std::memset(given_buffer, 0, total_size);
-                    RELEASE_ASSERT(HSHomeObject::delete_marker_blob_data.size() <= total_size,
-                                   "delete marker blob size is larger than total_size");
-                    std::memcpy(given_buffer, HSHomeObject::delete_marker_blob_data.data(),
-                                HSHomeObject::delete_marker_blob_data.size());
-
-                    throw std::system_error(std::error_code{});
+                    should_return_delete_marker = true;
+                } else {
+                    pbas = index_value.pbas();
+                    if (sisl_unlikely(pbas == HSHomeObject::tombstone_pbas)) {
+                        LOGD("on_fetch_data: blob has been deleted, blob_id={}, shardID=0x{:x}, pg={}", blob_id,
+                             shard_id, pg_id);
+                        should_return_delete_marker = true;
+                    }
                 }
 
-                const auto& pbas = index_value.pbas();
-                if (sisl_unlikely(pbas == HSHomeObject::tombstone_pbas)) {
-                    LOGD("on_fetch_data: blob has been deleted, blob_id={}, shardID=0x{:x}, pg={}", blob_id, shard_id,
+                if (should_return_delete_marker) {
+                    LOGD("on_fetch_data: return delete marker for blob_id={}, shardID=0x{:x}, pg={}", blob_id, shard_id,
                          pg_id);
-
-                    // we return a specific blob as a delete marker for tombstone pbas
                     std::memset(given_buffer, 0, total_size);
                     RELEASE_ASSERT(HSHomeObject::delete_marker_blob_data.size() <= total_size,
                                    "delete marker blob size is larger than total_size");
