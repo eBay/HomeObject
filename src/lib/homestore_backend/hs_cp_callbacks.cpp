@@ -56,7 +56,7 @@ folly::Future< bool > HSHomeObject::MyCPCallbacks::cp_flush(CP* cp) {
 
     // flush gc durable_entities
     auto gc_manager = home_obj_.gc_manager();
-    auto& gc_actor_superblks = gc_manager->get_gc_actore_superblks();
+    auto& gc_actor_superblks = gc_manager->get_gc_actor_superblks();
     for (auto& gc_actor_sb : gc_actor_superblks) {
         const auto pdev_id = gc_actor_sb->pdev_id;
         const auto gc_actor = gc_manager->get_pdev_gc_actor(pdev_id);

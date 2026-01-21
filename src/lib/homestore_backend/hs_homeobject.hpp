@@ -479,10 +479,6 @@ public:
         homestore::MultiBlkId pbas;
     };
 
-    struct BlobInfoData : public BlobInfo {
-        Blob blob;
-    };
-
     enum class BlobState : uint8_t {
         ALIVE = 0,
         TOMBSTONE = 1,

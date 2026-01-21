@@ -724,14 +724,14 @@ folly::Future< std::error_code > ReplicationStateMachine::on_fetch_data(const in
                 auto rc = index_table->get(get_req);
                 if (sisl_unlikely(homestore::btree_status_t::success != rc)) {
                     // blob never exists or has been gc
-                    LOGD("on_fetch_data failed to get from index table, blob never exists or has been gc, blob_id={}, "
+                    LOGD("on_fetch_data: failed to get from index table, blob never exists or has been gc, blob_id={}, "
                          "shardID=0x{:x}, pg={}",
                          blob_id, shard_id, pg_id);
                     should_return_delete_marker = true;
                 } else {
                     pbas = index_value.pbas();
                     if (sisl_unlikely(pbas == HSHomeObject::tombstone_pbas)) {
-                        LOGD("on_fetch_data: blob has been deleted, blob_id={}, shardID=0x{:x}, pg={}", blob_id,
+                        LOGD("on_fetch_data: got tombstone pba for blob_id={}, shardID=0x{:x}, pg={}", blob_id,
                              shard_id, pg_id);
                         should_return_delete_marker = true;
                     }

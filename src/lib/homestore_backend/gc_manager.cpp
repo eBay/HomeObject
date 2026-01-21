@@ -774,9 +774,6 @@ bool GCManager::pdev_gc_actor::copy_valid_data(
             */
         }
 #endif
-
-        // for emergent gc, we directly use the current shard header as the new header
-
         // TODO::involve ratelimiter in the following code, where read/write are scheduled. or do we need a central
         // ratelimter shared by all components except client io?
         auto succeed_copying_shard =
@@ -786,6 +783,8 @@ bool GCManager::pdev_gc_actor::copy_valid_data(
                             &valid_blob_indexes, &data_service, task_id, &last_shard_state, &copied_blobs, pg_id,
                             header_sgs = std::move(header_sgs)](auto&& err) {
                     RELEASE_ASSERT(header_sgs.iovs.size() == 1, "header_sgs.iovs.size() should be 1, but not!");
+                    // shard header occupies one blk
+                    metrics_.inc_gc_write_blk_count(1);
                     iomanager.iobuf_free(reinterpret_cast< uint8_t* >(header_sgs.iovs[0].iov_base));
                     if (err) {
                         GCLOGE(task_id, pg_id, shard_id,
@@ -822,6 +821,7 @@ bool GCManager::pdev_gc_actor::copy_valid_data(
                             data_service.async_read(pba, data_sgs, total_size)
                                 .thenValue([this, k, &hints, &move_from_chunk, &move_to_chunk, &data_service, task_id,
                                             pg_id, data_sgs = std::move(data_sgs), pba, &copied_blobs](auto&& err) {
+                                    metrics_.inc_gc_read_blk_count(pba.blk_count());
                                     RELEASE_ASSERT(data_sgs.iovs.size() == 1,
                                                    "data_sgs.iovs.size() should be 1, but not!");
 
@@ -865,6 +865,7 @@ bool GCManager::pdev_gc_actor::copy_valid_data(
                                     return data_service.async_alloc_write(data_sgs, hints, new_pba)
                                         .thenValue([this, shard_id, blob_id, new_pba, &move_to_chunk, task_id, pg_id,
                                                     &copied_blobs, data_sgs = std::move(data_sgs)](auto&& err) {
+                                            metrics_.inc_gc_write_blk_count(new_pba.blk_count());
                                             RELEASE_ASSERT(data_sgs.iovs.size() == 1,
                                                            "data_sgs.iovs.size() should be 1, but not!");
                                             iomanager.iobuf_free(
@@ -939,6 +940,7 @@ bool GCManager::pdev_gc_actor::copy_valid_data(
 
                             // write shard footer
                             homestore::MultiBlkId out_blkids;
+                            metrics_.inc_gc_write_blk_count(1);
                             return data_service.async_alloc_write(footer_sgs, hints, out_blkids);
                         })
                         .thenValue([this, &move_to_chunk, &shard_id, footer_sgs, task_id, pg_id](auto&& err) {
