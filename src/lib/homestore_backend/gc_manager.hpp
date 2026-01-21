@@ -132,8 +132,8 @@ public:
                 REGISTER_GAUGE(failed_egc_task_count, "Number of failed emergent gc tasks");
                 REGISTER_GAUGE(total_reclaimed_space_by_gc, "Total reclaimed space by gc task");
                 REGISTER_GAUGE(total_reclaimed_space_by_egc, "Total reclaimed space by emergent gc task");
-                REGISTER_GAUGE(gc_read_blk_count, "Total read blk count by gc in this pdev");
-                REGISTER_GAUGE(gc_write_blk_count, "Total writted blk count by gc in this pdev");
+                REGISTER_COUNTER(gc_read_blk_count, "Total read blk count by gc in this pdev");
+                REGISTER_COUNTER(gc_write_blk_count, "Total writted blk count by gc in this pdev");
 
                 // gc task level histogram metrics
                 REGISTER_HISTOGRAM(reclaim_ratio_gc, "the ratio of reclaimed blks to total blks in a gc task",
@@ -175,20 +175,11 @@ public:
                     *this, total_reclaimed_space_by_egc,
                     gc_actor_.durable_entities().total_reclaimed_blk_count_by_egc.load(std::memory_order_relaxed) *
                         blk_size_);
-
-                GAUGE_UPDATE(*this, gc_read_blk_count, gc_read_blk_count.load(std::memory_order_relaxed));
-                GAUGE_UPDATE(*this, gc_write_blk_count, gc_write_blk_count.load(std::memory_order_relaxed));
             }
-
-        public:
-            void inc_gc_read_blk_count(uint64_t count) { gc_read_blk_count.fetch_add(count); }
-            void inc_gc_write_blk_count(uint64_t count) { gc_write_blk_count.fetch_add(count); }
 
         private:
             pdev_gc_actor const& gc_actor_;
             uint32_t blk_size_;
-            atomic_uint64_t gc_read_blk_count{0ull};
-            atomic_uint64_t gc_write_blk_count{0ull};
         };
 
     public:
