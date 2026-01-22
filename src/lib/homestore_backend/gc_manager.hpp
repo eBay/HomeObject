@@ -133,7 +133,7 @@ public:
                 REGISTER_GAUGE(total_reclaimed_space_by_gc, "Total reclaimed space by gc task");
                 REGISTER_GAUGE(total_reclaimed_space_by_egc, "Total reclaimed space by emergent gc task");
                 REGISTER_COUNTER(gc_read_blk_count, "Total read blk count by gc in this pdev");
-                REGISTER_COUNTER(gc_write_blk_count, "Total writted blk count by gc in this pdev");
+                REGISTER_COUNTER(gc_write_blk_count, "Total written blk count by gc in this pdev");
 
                 // gc task level histogram metrics
                 REGISTER_HISTOGRAM(reclaim_ratio_gc, "the ratio of reclaimed blks to total blks in a gc task",
