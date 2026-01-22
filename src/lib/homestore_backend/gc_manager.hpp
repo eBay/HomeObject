@@ -132,6 +132,8 @@ public:
                 REGISTER_GAUGE(failed_egc_task_count, "Number of failed emergent gc tasks");
                 REGISTER_GAUGE(total_reclaimed_space_by_gc, "Total reclaimed space by gc task");
                 REGISTER_GAUGE(total_reclaimed_space_by_egc, "Total reclaimed space by emergent gc task");
+                REGISTER_COUNTER(gc_read_blk_count, "Total read blk count by gc in this pdev");
+                REGISTER_COUNTER(gc_write_blk_count, "Total written blk count by gc in this pdev");
 
                 // gc task level histogram metrics
                 REGISTER_HISTOGRAM(reclaim_ratio_gc, "the ratio of reclaimed blks to total blks in a gc task",
@@ -149,6 +151,7 @@ public:
                 register_me_to_farm();
                 attach_gather_cb(std::bind(&pdev_gc_metrics::on_gather, this));
             }
+
             ~pdev_gc_metrics() { deregister_me_from_farm(); }
             pdev_gc_metrics(const pdev_gc_metrics&) = delete;
             pdev_gc_metrics(pdev_gc_metrics&&) noexcept = delete;
@@ -313,7 +316,7 @@ public:
     void drain_pg_pending_gc_task(const pg_id_t pg_id);
     void decr_pg_pending_gc_task(const pg_id_t pg_id);
     void incr_pg_pending_gc_task(const pg_id_t pg_id);
-    auto& get_gc_actore_superblks() { return m_gc_actor_sbs; }
+    auto& get_gc_actor_superblks() { return m_gc_actor_sbs; }
     std::shared_ptr< pdev_gc_actor > get_pdev_gc_actor(uint32_t pdev_id);
 
 private:
