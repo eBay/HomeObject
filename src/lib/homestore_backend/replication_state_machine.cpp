@@ -274,6 +274,13 @@ void ReplicationStateMachine::on_complete_replace_member(const std::string& task
     home_object_->on_pg_complete_replace_member(repl_dev()->group_id(), task_id, member_out, member_in, tid);
 }
 
+void ReplicationStateMachine::on_clean_replace_member_task(const std::string& task_id,
+                                                           const homestore::replica_member_info& member_out,
+                                                           const homestore::replica_member_info& member_in,
+                                                           trace_id_t tid) {
+    home_object_->on_pg_clean_replace_member_task(repl_dev()->group_id(), task_id, member_out, member_in, tid);
+}
+
 void ReplicationStateMachine::on_destroy(const homestore::group_id_t& group_id) {
     auto PG_ID = home_object_->get_pg_id_with_group_id(group_id);
     if (!PG_ID.has_value()) {
