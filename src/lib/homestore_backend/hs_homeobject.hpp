@@ -789,7 +789,25 @@ public:
                                        const homestore::replica_member_info& member_out,
                                        const homestore::replica_member_info& member_in, trace_id_t tid);
 
+    /**
+     * @brief Called when clean replace member task (rollback)
+     * @param group_id Group ID
+     * @param task_id Task ID
+     * @param member_out Member which should be restored to group
+     * @param member_in Member which should be removed from group
+     * */
+    void on_pg_clean_replace_member_task(homestore::group_id_t group_id, const std::string& task_id,
+                                         const homestore::replica_member_info& member_out,
+                                         const homestore::replica_member_info& member_in, trace_id_t tid);
+
     void on_remove_member(homestore::group_id_t group_id, const peer_id_t& member, trace_id_t tid = 0);
+
+    /**
+     * @brief Reconcile PG membership by synchronizing with raft's actual member list
+     * @param pg_id PG ID to reconcile
+     * @return true if reconciled successfully, false otherwise
+     */
+    bool reconcile_membership(pg_id_t pg_id);
 
     /**
      * @brief Cleans up and recycles resources for the PG identified by the given pg_id on the current node.

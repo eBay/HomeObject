@@ -48,6 +48,8 @@ HttpManager::HttpManager(HSHomeObject& ho) : ho_(ho) {
          Pistache::Rest::Routes::bind(&HttpManager::clean_replace_member_task, this)},
         {Pistache::Http::Method::Get, "/api/v1/pg_replacemember_tasks",
          Pistache::Rest::Routes::bind(&HttpManager::list_pg_replace_member_task, this)},
+        {Pistache::Http::Method::Post, "/api/v1/reconcile_membership",
+         Pistache::Rest::Routes::bind(&HttpManager::reconcile_membership, this)},
         {Pistache::Http::Method::Delete, "/api/v1/pg", Pistache::Rest::Routes::bind(&HttpManager::exit_pg, this)},
 #ifdef _PRERELEASE
         {Pistache::Http::Method::Post, "/api/v1/crashSystem",
@@ -333,6 +335,35 @@ void HttpManager::clean_replace_member_task(const Pistache::Rest::Request& reque
         response.send(Pistache::Http::Code::Bad_Request, std::string("Invalid JSON: ") + e.what());
     }
 }
+void HttpManager::reconcile_membership(const Pistache::Rest::Request& request,
+                                       Pistache::Http::ResponseWriter response) {
+    try {
+        auto body = request.body();
+        auto j = nlohmann::json::parse(body);
+
+        std::string pg_id_str = j.at("pg_id").get< std::string >();
+        pg_id_t pg_id = std::stoull(pg_id_str);
+
+        LOGINFO("Reconcile membership for pg_id={}", pg_id);
+
+        bool success = ho_.reconcile_membership(pg_id);
+        if (!success) {
+            response.send(Pistache::Http::Code::Internal_Server_Error,
+                          fmt::format("Failed to reconcile membership for pg_id={}", pg_id));
+            return;
+        }
+
+        nlohmann::json result;
+        result["status"] = "success";
+        result["pg_id"] = pg_id;
+        result["message"] = "Membership reconciled successfully";
+
+        response.send(Pistache::Http::Code::Ok, result.dump());
+    } catch (const std::exception& e) {
+        response.send(Pistache::Http::Code::Bad_Request, std::string("Invalid JSON: ") + e.what());
+    }
+}
+
 void HttpManager::list_pg_replace_member_task(const Pistache::Rest::Request& request,
                                               Pistache::Http::ResponseWriter response) {
     auto tid = generateRandomTraceId();

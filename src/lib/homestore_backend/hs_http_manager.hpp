@@ -37,6 +37,7 @@ private:
     void remove_member(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response);
     void clean_replace_member_task(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response);
     void list_pg_replace_member_task(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response);
+    void reconcile_membership(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response);
     void get_pg_quorum(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response);
     void exit_pg(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response);
 
