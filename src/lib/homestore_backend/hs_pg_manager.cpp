@@ -398,6 +398,108 @@ void HSHomeObject::on_pg_complete_replace_member(group_id_t group_id, const std:
          boost::uuids::to_string(member_out.id), boost::uuids::to_string(member_in.id), tid);
 }
 
+//This function actually perform rollback for replace member task:  Remove in_member, and ensure out_member exists
+void HSHomeObject::on_pg_clean_replace_member_task(group_id_t group_id, const std::string& task_id,
+                                                    const replica_member_info& member_out,
+                                                    const replica_member_info& member_in, trace_id_t tid) {
+    std::unique_lock lck(_pg_lock);
+    for (const auto& iter : _pg_map) {
+        auto& pg = iter.second;
+        if (pg_repl_dev(*pg).group_id() == group_id) {
+            auto hs_pg = static_cast< HSHomeObject::HS_PG* >(pg.get());
+
+            // Remove the in_member (the one that was added but now needs to be removed)
+            auto removed_count = pg->pg_info_.members.erase(PGMember(member_in.id));
+
+            // Ensure out_member exists
+            // Using emplace is safe - it won't overwrite if already exists
+            auto out_pg_member = to_pg_member(member_out);
+            auto [it, inserted] = pg->pg_info_.members.emplace(std::move(out_pg_member));
+
+            // Update superblock
+            hs_pg->update_membership(pg->pg_info_.members);
+
+            LOGI("PG clean replace member task done (rollback), task_id={}, removed in_member={} (removed={}), "
+                 "ensured out_member={} (inserted={}), member_nums={}, trace_id={}",
+                 task_id, boost::uuids::to_string(member_in.id), removed_count,
+                 boost::uuids::to_string(member_out.id), inserted, pg->pg_info_.members.size(), tid);
+            return;
+        }
+    }
+    LOGE("PG clean replace member task failed, pg not found, task_id={}, member_out={}, member_in={}, trace_id={}", task_id,
+         boost::uuids::to_string(member_out.id), boost::uuids::to_string(member_in.id), tid);
+}
+
+bool HSHomeObject::reconcile_membership(pg_id_t pg_id) {
+    std::unique_lock lck(_pg_lock);
+    auto hs_pg = const_cast< HS_PG* >(_get_hs_pg_unlocked(pg_id));
+    if (!hs_pg) {
+        LOGE("PG {} not found for reconcile_membership", pg_id);
+        return false;
+    }
+
+    // Get actual members from replication layer
+    auto& repl_dev = hs_pg->repl_dev_;
+    auto actual_members = repl_dev->get_replication_quorum();
+    if (actual_members.empty()) {
+        LOGW("Failed to get replication quorum for PG {}, repl_dev may not be ready", pg_id);
+        return false;
+    }
+
+    // Build new member set from actual members
+    std::set< PGMember > new_members;
+    for (auto& member_id : actual_members) {
+        auto existing = hs_pg->pg_info_.members.find(PGMember(member_id));
+        if (existing != hs_pg->pg_info_.members.end()) {
+            // Keep the existing member with its name and priority
+            new_members.insert(*existing);
+        } else {
+            // New member not in our records, add with default name
+            PGMember new_member(member_id);
+            new_members.insert(std::move(new_member));
+            LOGE("Adding new member {} to pg={} membership, should not happen!", boost::uuids::to_string(member_id), hs_pg->pg_info_.id);
+        }
+    }
+    // Check if membership changed
+    if (new_members == hs_pg->pg_info_.members) {
+        LOGD("Membership already in sync for pg={}, no update needed", hs_pg->pg_info_.id);
+        return true;
+    }
+
+    // Log the differences
+    std::vector< peer_id_t > removed_members;
+    std::vector< peer_id_t > added_members;
+
+    for (auto& old_member : hs_pg->pg_info_.members) {
+        if (new_members.find(old_member) == new_members.end()) {
+            removed_members.push_back(old_member.id);
+        }
+    }
+
+    for (auto& new_member : new_members) {
+        if (hs_pg->pg_info_.members.find(new_member) == hs_pg->pg_info_.members.end()) {
+            added_members.push_back(new_member.id);
+        }
+    }
+
+    LOGI("Reconciling PG {} membership: removing {} members, adding {} members, old membership count {}, new membership count: {}",
+         pg_id, removed_members.size(), added_members.size(), hs_pg->pg_info_.members.size(), new_members.size());
+
+    for (auto& member_id : removed_members) {
+        LOGI("  - Removing member: {}", boost::uuids::to_string(member_id));
+    }
+    for (auto& member_id : added_members) {
+        LOGI("  - Adding member: {}", boost::uuids::to_string(member_id));
+    }
+
+    // Update membership
+    hs_pg->pg_info_.members = std::move(new_members);
+    hs_pg->update_membership(hs_pg->pg_info_.members);
+
+    LOGI("Successfully reconciled PG {} membership, new member_count={}", pg_id, hs_pg->pg_info_.members.size());
+    return true;
+}
+
 void HSHomeObject::on_remove_member(homestore::group_id_t group_id, const peer_id_t& member, trace_id_t tid) {
     LOGINFO("PG remove member, member={}, trace_id={}", boost::uuids::to_string(member), tid);
     std::unique_lock lck(_pg_lock);
