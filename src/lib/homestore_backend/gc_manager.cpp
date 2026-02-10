@@ -25,14 +25,14 @@ SISL_LOGGING_DECL(gcmgr)
 GCManager::GCManager(HSHomeObject* homeobject) :
         m_chunk_selector{homeobject->chunk_selector()}, m_hs_home_object{homeobject} {
     homestore::meta_service().register_handler(
-        GCManager::_gc_actor_meta_name,
+        _gc_actor_meta_name,
         [this](homestore::meta_blk* mblk, sisl::byte_view buf, size_t size) {
             on_gc_actor_meta_blk_found(std::move(buf), voidptr_cast(mblk));
         },
         nullptr, true);
 
     homestore::meta_service().register_handler(
-        GCManager::_gc_reserved_chunk_meta_name,
+        _gc_reserved_chunk_meta_name,
         [this](homestore::meta_blk* mblk, sisl::byte_view buf, size_t size) {
             on_reserved_chunk_meta_blk_found(std::move(buf), voidptr_cast(mblk));
         },
@@ -44,7 +44,7 @@ GCManager::GCManager(HSHomeObject* homeobject) :
         true);
 
     homestore::meta_service().register_handler(
-        GCManager::_gc_task_meta_name,
+        _gc_task_meta_name,
         [this](homestore::meta_blk* mblk, sisl::byte_view buf, size_t size) {
             on_gc_task_meta_blk_found(std::move(buf), voidptr_cast(mblk));
         },
@@ -63,8 +63,8 @@ void GCManager::on_gc_task_meta_blk_found(sisl::byte_view const& buf, void* meta
 
     // here, we are under the protection of the lock of metaservice. however, we will also try to update pg and shard
     // metablk and then destroy the gc_task_sb, which will also try to acquire the lock of metaservice, as a result, a
-    // dead lock will happen. so here we will handle all the gc tasks after read all the their metablks
-    m_recovered_gc_tasks.emplace_back(GCManager::_gc_task_meta_name);
+    // dead lock will happen. so here we will handle all the gc tasks after read all the metablks
+    m_recovered_gc_tasks.emplace_back(_gc_task_meta_name);
     m_recovered_gc_tasks.back().load(buf, meta_cookie);
 }
 
@@ -89,7 +89,7 @@ void GCManager::handle_all_recovered_gc_tasks() {
 }
 
 void GCManager::on_gc_actor_meta_blk_found(sisl::byte_view const& buf, void* meta_cookie) {
-    m_gc_actor_sbs.emplace_back(GCManager::_gc_actor_meta_name);
+    m_gc_actor_sbs.emplace_back(_gc_actor_meta_name);
     auto& gc_actor_sb = m_gc_actor_sbs.back();
     gc_actor_sb.load(buf, meta_cookie);
     auto pdev_id = gc_actor_sb->pdev_id;
@@ -100,8 +100,7 @@ void GCManager::on_gc_actor_meta_blk_found(sisl::byte_view const& buf, void* met
 }
 
 void GCManager::on_reserved_chunk_meta_blk_found(sisl::byte_view const& buf, void* meta_cookie) {
-    homestore::superblk< GCManager::gc_reserved_chunk_superblk > reserved_chunk_sb(
-        GCManager::_gc_reserved_chunk_meta_name);
+    homestore::superblk< gc_reserved_chunk_superblk > reserved_chunk_sb(_gc_reserved_chunk_meta_name);
     auto chunk_id = reserved_chunk_sb.load(buf, meta_cookie)->chunk_id;
     auto EXVchunk = m_chunk_selector->get_extend_vchunk(chunk_id);
     if (EXVchunk == nullptr) {
@@ -184,8 +183,7 @@ folly::SemiFuture< bool > GCManager::submit_gc_task(task_priority priority, chun
 }
 
 std::shared_ptr< GCManager::pdev_gc_actor >
-GCManager::try_create_pdev_gc_actor(uint32_t pdev_id,
-                                    const homestore::superblk< GCManager::gc_actor_superblk >& gc_actor_sb) {
+GCManager::try_create_pdev_gc_actor(uint32_t pdev_id, const homestore::superblk< gc_actor_superblk >& gc_actor_sb) {
     auto const [it, happened] = m_pdev_gc_actors.try_emplace(
         pdev_id, std::make_shared< pdev_gc_actor >(gc_actor_sb, m_chunk_selector, m_hs_home_object));
     RELEASE_ASSERT((it != m_pdev_gc_actors.end()), "Unexpected error in m_pdev_gc_actors!!!");
@@ -776,7 +774,7 @@ bool GCManager::pdev_gc_actor::copy_valid_data(
 #endif
         // TODO::involve ratelimiter in the following code, where read/write are scheduled. or do we need a central
         // ratelimter shared by all components except client io?
-        auto succeed_copying_shard =
+        const auto succeed_copying_shard =
             // 1 write the shard header to move_to_chunk
             data_service.async_alloc_write(header_sgs, hints, out_blkids)
                 .thenValue([this, &hints, &move_to_chunk, &move_from_chunk, &is_last_shard, &shard_id, &blk_size,
@@ -968,11 +966,9 @@ bool GCManager::pdev_gc_actor::copy_valid_data(
                    move_from_chunk, move_to_chunk);
             return false;
         }
-
         GCLOGD(task_id, pg_id, shard_id, "successfully copy blobs from move_from_chunk={} to move_to_chunk={}",
                move_from_chunk, move_to_chunk);
     }
-
     GCLOGD(task_id, pg_id, NO_SHARD_ID, "all valid blobs are copied from move_from_chunk={} to move_to_chunk={}",
            move_from_chunk, move_to_chunk);
 
@@ -1132,17 +1128,14 @@ bool GCManager::pdev_gc_actor::compare_blob_indexes(
             GCLOGW(task_id, pg_id, shard_id, "copied blob: move_to_chunk={}, blob_id={}, pba={}", k.chunk, k.blob,
                    v.pbas().to_string());
         }
-
         GCLOGW(task_id, pg_id, NO_SHARD_ID, "start printing valid blobs from gc index table:");
         for (const auto& [k, v] : valid_blob_indexes) {
             const auto shard_id = k.key().shard;
             GCLOGW(task_id, pg_id, shard_id, "valid blob: move_to_chunk={}, blob_id={}, pba={}", k.key().chunk,
                    k.key().blob, v.pbas().to_string());
         }
-
         RELEASE_ASSERT(false, "copied blobs are not the same as the valid blobs got from gc index table");
     }
-
     return ret;
 }
 
@@ -1325,6 +1318,7 @@ bool GCManager::pdev_gc_actor::process_after_gc_metablk_persisted(
         }
     }
 
+    // now, all the blob indexes have been replaced successfully, we can destroy the gc task superblk
     gc_task_sb.destroy();
 
     const auto reclaimed_blk_count = m_chunk_selector->get_extend_vchunk(move_from_chunk)->get_used_blks() -

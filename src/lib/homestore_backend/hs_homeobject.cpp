@@ -349,6 +349,24 @@ void HSHomeObject::on_replica_restart() {
         homestore::meta_service().read_sub_sb(GCManager::_gc_reserved_chunk_meta_name);
         homestore::meta_service().read_sub_sb(GCManager::_gc_task_meta_name);
 
+        // it is safe to handle recovered gc tasks before log replay done. gc task superblk is persisted until all
+        // the valid blobs are copied from move_from_chunk to move_to_chunk and all the new pba indexes are flushed into
+        // gc indextable by cp(cp also flushes pg index table) before crash. moreover, gc superblk means there is an
+        // ongoing gc task for move_from_chunk and move_to_chunk, and there should be no new put_blob to these two chunk
+        // until this task is done. when replaying log for put_blob_commit, if the blob index is already in index
+        // table(all the index item has been flushed by cp before persisting gc task superblk), it will not override the
+        // existing item.
+
+        // 2 we need to handle all the recovered gc tasks before replaying log. when log replay done, in
+        // ReplicationStateMachine::on_log_replay_done, we need select_specific_chunk for all the chunks with open shard
+        // to mark the states of these chunks to inuse. if crash happens after the shard metablk has been updated(the
+        // pchunk of this shard is changed to move_to_chunk)) but before reserved_chunk_superblk has been persisted
+        // (move_to_chunk is now still a reserved chunk), when log replay is done and try to select_specific_chunk for
+        // the chunk with open shard, since the state of move_to_chunk is reserved, and thus its state is GC and can not
+        // be selected, and will be stuck in on_log_replay_done.
+
+        // after handling all the recovered gc tasks, move_to_chunk will be marked to inuse, and thus can be selected in
+        // on_log_replay_done, and the log replay can be completed successfully.
         gc_mgr_->handle_all_recovered_gc_tasks();
 
         if (HS_BACKEND_DYNAMIC_CONFIG(enable_gc)) {
@@ -411,6 +429,7 @@ void HSHomeObject::shutdown() {
     }
 
     LOGI("start shutting down HomeObject");
+
 #if 0
     if (ho_timer_thread_handle_.first) {
         iomanager.cancel_timer(ho_timer_thread_handle_, true);
@@ -432,7 +451,6 @@ void HSHomeObject::shutdown() {
     // to persist gc task metablk if there is any ongoing gc task. after stopping gc manager, there is no gc task
     // anymore, and thus now new gc task will be written to metaservice during homestore shutdown.
     gc_mgr_->stop();
-
     LOGI("start shutting down HomeStore");
     homestore::HomeStore::instance()->shutdown();
     homestore::HomeStore::reset_instance();
