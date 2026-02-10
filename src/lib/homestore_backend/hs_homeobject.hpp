@@ -332,6 +332,9 @@ public:
         shared< homestore::ReplDev > repl_dev_;
         std::shared_ptr< BlobIndexTable > index_table_;
         PGMetrics metrics_;
+        int64_t gc_latch_lsn_; // the chunks in this pg can only be gc after commit_lsn >= gc_latch_lsn_
+        bool read_for_gc{false};
+
         mutable pg_state pg_state_{0};
 
         // Snapshot receiver progress info, used as a checkpoint for recovery
@@ -981,6 +984,8 @@ public:
     const HS_PG* _get_hs_pg_unlocked(pg_id_t pg_id) const;
     bool verify_blob(const void* blob, const shard_id_t shard_id, const blob_id_t blob_id,
                      bool allow_delete_marker = false) const;
+    void on_pg_lsn_commit(pg_id_t pg_id, int64_t lsn);
+    void on_pg_lsn_rollback(pg_id_t pg_id, int64_t lsn);
 
     BlobManager::Result< std::vector< BlobInfo > > get_shard_blobs(shard_id_t shard_id);
 

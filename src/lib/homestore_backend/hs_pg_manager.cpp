@@ -398,10 +398,10 @@ void HSHomeObject::on_pg_complete_replace_member(group_id_t group_id, const std:
          boost::uuids::to_string(member_out.id), boost::uuids::to_string(member_in.id), tid);
 }
 
-//This function actually perform rollback for replace member task:  Remove in_member, and ensure out_member exists
+// This function actually perform rollback for replace member task:  Remove in_member, and ensure out_member exists
 void HSHomeObject::on_pg_clean_replace_member_task(group_id_t group_id, const std::string& task_id,
-                                                    const replica_member_info& member_out,
-                                                    const replica_member_info& member_in, trace_id_t tid) {
+                                                   const replica_member_info& member_out,
+                                                   const replica_member_info& member_in, trace_id_t tid) {
     std::unique_lock lck(_pg_lock);
     for (const auto& iter : _pg_map) {
         auto& pg = iter.second;
@@ -421,13 +421,13 @@ void HSHomeObject::on_pg_clean_replace_member_task(group_id_t group_id, const st
 
             LOGI("PG clean replace member task done (rollback), task_id={}, removed in_member={} (removed={}), "
                  "ensured out_member={} (inserted={}), member_nums={}, trace_id={}",
-                 task_id, boost::uuids::to_string(member_in.id), removed_count,
-                 boost::uuids::to_string(member_out.id), inserted, pg->pg_info_.members.size(), tid);
+                 task_id, boost::uuids::to_string(member_in.id), removed_count, boost::uuids::to_string(member_out.id),
+                 inserted, pg->pg_info_.members.size(), tid);
             return;
         }
     }
-    LOGE("PG clean replace member task failed, pg not found, task_id={}, member_out={}, member_in={}, trace_id={}", task_id,
-         boost::uuids::to_string(member_out.id), boost::uuids::to_string(member_in.id), tid);
+    LOGE("PG clean replace member task failed, pg not found, task_id={}, member_out={}, member_in={}, trace_id={}",
+         task_id, boost::uuids::to_string(member_out.id), boost::uuids::to_string(member_in.id), tid);
 }
 
 bool HSHomeObject::reconcile_membership(pg_id_t pg_id) {
@@ -457,7 +457,8 @@ bool HSHomeObject::reconcile_membership(pg_id_t pg_id) {
             // New member not in our records, add with default name
             PGMember new_member(member_id);
             new_members.insert(std::move(new_member));
-            LOGE("Adding new member {} to pg={} membership, should not happen!", boost::uuids::to_string(member_id), hs_pg->pg_info_.id);
+            LOGE("Adding new member {} to pg={} membership, should not happen!", boost::uuids::to_string(member_id),
+                 hs_pg->pg_info_.id);
         }
     }
     // Check if membership changed
@@ -471,9 +472,7 @@ bool HSHomeObject::reconcile_membership(pg_id_t pg_id) {
     std::vector< peer_id_t > added_members;
 
     for (auto& old_member : hs_pg->pg_info_.members) {
-        if (new_members.find(old_member) == new_members.end()) {
-            removed_members.push_back(old_member.id);
-        }
+        if (new_members.find(old_member) == new_members.end()) { removed_members.push_back(old_member.id); }
     }
 
     for (auto& new_member : new_members) {
@@ -482,7 +481,8 @@ bool HSHomeObject::reconcile_membership(pg_id_t pg_id) {
         }
     }
 
-    LOGI("Reconciling PG {} membership: removing {} members, adding {} members, old membership count {}, new membership count: {}",
+    LOGI("Reconciling PG {} membership: removing {} members, adding {} members, old membership count {}, new "
+         "membership count: {}",
          pg_id, removed_members.size(), added_members.size(), hs_pg->pg_info_.members.size(), new_members.size());
 
     for (auto& member_id : removed_members) {
@@ -808,7 +808,7 @@ bool HSHomeObject::can_chunks_in_pg_be_gc(pg_id_t pg_id) const {
         return false;
     }
 
-    return hs_pg->pg_sb_->state == PGState::ALIVE;
+    return hs_pg->pg_sb_->state == PGState::ALIVE && hs_pg->read_for_gc;
 }
 
 void HSHomeObject::destroy_hs_resources(pg_id_t pg_id) { chunk_selector_->reset_pg_chunks(pg_id); }
@@ -977,6 +977,7 @@ HSHomeObject::HS_PG::HS_PG(PGInfo info, shared< homestore::ReplDev > rdev, share
         repl_dev_{std::move(rdev)},
         index_table_{std::move(index_table)},
         metrics_{*this},
+        gc_latch_lsn_{repl_dev_->get_last_append_lsn()},
         snp_rcvr_info_sb_{_snp_rcvr_meta_name},
         snp_rcvr_shard_list_sb_{_snp_rcvr_shard_list_meta_name} {
     RELEASE_ASSERT(pg_chunk_ids != nullptr, "PG chunks null, pg={}", pg_info_.id);
@@ -1014,7 +1015,11 @@ HSHomeObject::HS_PG::HS_PG(PGInfo info, shared< homestore::ReplDev > rdev, share
 }
 
 HSHomeObject::HS_PG::HS_PG(superblk< pg_info_superblk >&& sb, shared< ReplDev > rdev) :
-        PG{pg_info_from_sb(sb)}, pg_sb_{std::move(sb)}, repl_dev_{std::move(rdev)}, metrics_{*this} {
+        PG{pg_info_from_sb(sb)},
+        pg_sb_{std::move(sb)},
+        repl_dev_{std::move(rdev)},
+        metrics_{*this},
+        gc_latch_lsn_{repl_dev_->get_last_append_lsn()} {
     durable_entities_.blob_sequence_num = pg_sb_->blob_sequence_num;
     durable_entities_.active_blob_count = pg_sb_->active_blob_count;
     durable_entities_.tombstone_blob_count = pg_sb_->tombstone_blob_count;
@@ -1318,6 +1323,44 @@ void HSHomeObject::update_pg_meta_after_gc(const pg_id_t pg_id, const homestore:
         // 2 change the pg_chunkcollection in chunk selector.
         chunk_selector()->switch_chunks_for_pg(pg_id, move_from_chunk, move_to_chunk, task_id);
     }
+}
+
+void HSHomeObject::on_pg_lsn_commit(pg_id_t pg_id, int64_t lsn) {
+    std::lock_guard lck(_pg_lock);
+    auto iter = _pg_map.find(pg_id);
+    if (iter == _pg_map.end()) {
+        LOGW("pg_id={} is not found in pg_map when on_pg_lsn_commit is called", pg_id);
+        return;
+    }
+
+    auto hs_pg = dynamic_cast< HS_PG* >(iter->second.get());
+    if (hs_pg == nullptr) {
+        LOGW("pg_id={} is not found in pg_map when on_pg_lsn_commit is called", pg_id);
+        return;
+    }
+
+    if (hs_pg->gc_latch_lsn_ <= lsn && !(hs_pg->read_for_gc)) {
+        LOGD("set read_for_gc to true for pg_id={}, gc_latch_lsn_={}, committed_lsn={}", pg_id, hs_pg->gc_latch_lsn_,
+             lsn);
+        hs_pg->read_for_gc = true;
+    }
+}
+
+void HSHomeObject::on_pg_lsn_rollback(pg_id_t pg_id, int64_t lsn) {
+    std::lock_guard lck(_pg_lock);
+    auto iter = _pg_map.find(pg_id);
+    if (iter == _pg_map.end()) {
+        LOGW("pg_id={} is not found in pg_map when on_pg_lsn_commit is called", pg_id);
+        return;
+    }
+
+    auto hs_pg = dynamic_cast< HS_PG* >(iter->second.get());
+    if (hs_pg == nullptr) {
+        LOGW("pg_id={} is not found in pg_map when on_pg_lsn_commit is called", pg_id);
+        return;
+    }
+
+    hs_pg->gc_latch_lsn_ = std::min(lsn - 1, hs_pg->gc_latch_lsn_);
 }
 
 } // namespace homeobject

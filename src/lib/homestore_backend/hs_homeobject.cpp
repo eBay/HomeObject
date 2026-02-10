@@ -252,8 +252,9 @@ void HSHomeObject::init_homestore() {
         std::memset(zpad_bufs_[i].bytes(), 0, size);
     }
 
-    // when reaching , all the repl_dev has joined raft group  we only start gc after all the appended log are
-    // committed. otherwise, the log replay of put_blob might lead to a data loss issue as following:
+    // when reaching , all the log replay are completed, and the gc_target_lsn of pg has been set. we can gc the chunks
+    // of a pg only after the commit_lsn > gc_target_lsn. otherwise, the log replay of put_blob might lead to a data
+    // loss issue as following:
 
     /*
     let`s say cp_lsn and dc_lsn is 10, lsn 11 is put_blob (blob -> pba-chunk-1), and lsn 12 is seal_shard(shard-1 ,
@@ -273,36 +274,6 @@ void HSHomeObject::init_homestore() {
     to chunk-2. but on_blob_put_commit adds blob to indextable with a stale pba belongs to chunk-1 , which is now a
     reserved chunk and will be purged later.ing stale blocks that no longer contain the correct shard’s data.
     */
-
-    {
-        std::shared_lock lock_guard(_pg_lock);
-        for (const auto& [id, pg] : _pg_map) {
-            auto hs_pg = static_cast< HS_PG* >(pg.get());
-            if (hs_pg->pg_state_.is_state_set(PGStateMask::DISK_DOWN)) {
-                LOGW("PG {} is disk down, skip waiting for it to commit logs", id);
-                continue;
-            }
-
-            auto& repl_dev = hs_pg->repl_dev_;
-            auto last_append_lsn = repl_dev->get_last_append_lsn();
-            // wait until all the logs are committed.
-            while (true) {
-                // rollback might happen, which will move back the last_append_lsn, so we need to get last_append_lsn in
-                // each loop.
-                last_append_lsn = min(last_append_lsn, repl_dev->get_last_append_lsn());
-                const auto last_commit_lsn = repl_dev->get_last_commit_lsn();
-
-                if (last_append_lsn > last_commit_lsn) {
-                    LOGI("Waiting for PG {} to commit all logs. target_lsn={}, last_commit_lsn={}", id, last_append_lsn,
-                         last_commit_lsn);
-                    std::this_thread::sleep_for(std::chrono::seconds(1));
-                } else {
-                    break;
-                }
-            }
-        }
-    }
-
     if (HS_BACKEND_DYNAMIC_CONFIG(enable_gc)) {
         LOGI("Starting GC manager");
         gc_mgr_->start();

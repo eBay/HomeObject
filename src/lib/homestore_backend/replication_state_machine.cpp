@@ -70,6 +70,11 @@ void ReplicationStateMachine::notify_committed_lsn(int64_t lsn) {
         handle_no_space_left(lsn, chunk_id);
         reset_no_space_left_error_info();
     }
+
+    const auto group_id = repl_dev()->group_id();
+    auto pg_id_opt = home_object_->get_pg_id_with_group_id(group_id);
+    RELEASE_ASSERT(pg_id_opt.has_value(), "pg not found for group={} in notify_committed_lsn", group_id);
+    home_object_->on_pg_lsn_commit(pg_id_opt.value(), lsn);
 }
 
 bool ReplicationStateMachine::on_pre_commit(int64_t lsn, sisl::blob const& header, sisl::blob const& key,
@@ -106,12 +111,16 @@ bool ReplicationStateMachine::on_pre_commit(int64_t lsn, sisl::blob const& heade
 
 void ReplicationStateMachine::on_rollback(int64_t lsn, sisl::blob const& header, sisl::blob const& key,
                                           cintrusive< homestore::repl_req_ctx >& ctx) {
-    LOGI("on_rollback  with lsn={}", lsn);
+
     const ReplicationMessageHeader* msg_header = r_cast< const ReplicationMessageHeader* >(header.cbytes());
     if (msg_header->corrupted()) {
-        LOGE("corrupted message in rollback, lsn={}", lsn);
+        RELEASE_ASSERT(false, "corrupted message in rollback, lsn={}", lsn);
         return;
     }
+
+    const auto& pg_id = msg_header->pg_id;
+    LOGI("on_rollback  with lsn={}, pg={}", lsn, pg_id);
+
     switch (msg_header->msg_type) {
     case ReplicationMessageType::CREATE_SHARD_MSG:
     case ReplicationMessageType::SEAL_SHARD_MSG: {
@@ -144,6 +153,8 @@ void ReplicationStateMachine::on_rollback(int64_t lsn, sisl::blob const& header,
 
     // if target_lsn is int64_max, it`s is also ok to reset_no_space_left_error_info
     reset_no_space_left_error_info();
+
+    home_object_->on_pg_lsn_rollback(pg_id, lsn);
 }
 
 void ReplicationStateMachine::on_config_rollback(int64_t lsn) {
@@ -158,6 +169,11 @@ void ReplicationStateMachine::on_config_rollback(int64_t lsn) {
 
     // if target_lsn is int64_max, it`s is also ok to reset_no_space_left_error_info
     reset_no_space_left_error_info();
+
+    const auto group_id = repl_dev()->group_id();
+    auto pg_id_opt = home_object_->get_pg_id_with_group_id(group_id);
+    RELEASE_ASSERT(pg_id_opt.has_value(), "pg not found for group={} in on_config_rollback", group_id);
+    home_object_->on_pg_lsn_rollback(pg_id_opt.value(), lsn);
 }
 
 void ReplicationStateMachine::on_restart() { LOGD("ReplicationStateMachine::on_restart"); }
