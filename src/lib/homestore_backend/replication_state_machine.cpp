@@ -1039,6 +1039,7 @@ void ReplicationStateMachine::on_log_replay_done(const homestore::group_id_t& gr
 
     const auto pg_id = pg_id_opt.value();
     RELEASE_ASSERT(home_object_->pg_exists(pg_id), "pg={} should exist, but not! fatal error!", pg_id);
+    LOGI("log replay done for pg={}, group_id={}", pg_id, group_id);
 
     const auto& shards_in_pg = (const_cast< HSHomeObject::HS_PG* >(home_object_->_get_hs_pg_unlocked(pg_id)))->shards_;
     auto chunk_selector = home_object_->chunk_selector();
