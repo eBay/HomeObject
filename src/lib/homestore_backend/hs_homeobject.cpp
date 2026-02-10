@@ -252,9 +252,8 @@ void HSHomeObject::init_homestore() {
         std::memset(zpad_bufs_[i].bytes(), 0, size);
     }
 
-    // when reaching , all the repl_dev has joined raft group and no new request comes in before we return. we only
-    // start gc after all the appended log are committed. otherwise, the log replay of put_blob might lead to a data
-    // loss issue as following:
+    // when reaching , all the repl_dev has joined raft group  we only start gc after all the appended log are
+    // committed. otherwise, the log replay of put_blob might lead to a data loss issue as following:
 
     /*
     let`s say cp_lsn and dc_lsn is 10, lsn 11 is put_blob (blob -> pba-chunk-1), and lsn 12 is seal_shard(shard-1 ,
@@ -285,17 +284,19 @@ void HSHomeObject::init_homestore() {
             }
 
             auto& repl_dev = hs_pg->repl_dev_;
+            auto last_append_lsn = repl_dev->get_last_append_lsn();
             // wait until all the logs are committed.
             while (true) {
+                // rollback might happen, which will move back the last_append_lsn, so we need to get last_append_lsn in
+                // each loop.
+                last_append_lsn = min(last_append_lsn, repl_dev->get_last_append_lsn());
                 const auto last_commit_lsn = repl_dev->get_last_commit_lsn();
-                const auto last_append_lsn = repl_dev->get_last_append_lsn();
+
                 if (last_append_lsn > last_commit_lsn) {
-                    LOGI("Waiting for PG {} to commit all logs. last_append_lsn={}, last_commit_lsn={}", id,
-                         last_append_lsn, last_commit_lsn);
-                    std::this_thread::sleep_for(std::chrono::seconds(2));
-                } else {
-                    LOGI("PG {} has committed all logs. last_append_lsn={}, last_commit_lsn={}", id, last_append_lsn,
+                    LOGI("Waiting for PG {} to commit all logs. target_lsn={}, last_commit_lsn={}", id, last_append_lsn,
                          last_commit_lsn);
+                    std::this_thread::sleep_for(std::chrono::seconds(1));
+                } else {
                     break;
                 }
             }
