@@ -808,6 +808,28 @@ bool HSHomeObject::can_chunks_in_pg_be_gc(pg_id_t pg_id) const {
         return false;
     }
 
+    // we can gc the chunks of a pg only after the commit_lsn > gc_target_lsn. otherwise, the log replay of put_blob
+    // might lead to a data loss issue as following:
+
+    /*
+    let`s say cp_lsn and dc_lsn is 10, lsn 11 is put_blob (blob -> pba-chunk-1), and lsn 12 is seal_shard(shard-1 ,
+    chunk-1).
+
+    1 before crash, lsn 11 and lsn 12 are both committed. as a result , we have a "blob -> pba-chunk-1" in the wbcache
+    of indextable and a persisted superblk of shard-1 with a state sealed.
+
+    2 crash happens. after restart, "blob -> pba-chunk-1" is lost since it only existes in wbcache and not be flushed to
+    disk. but shard-1 has a stat of sealed since shard superblk is persisted before crash. now, since no open shard in
+    chunk-1, chunk-1 is selected for gc and all the blobs of shard-1 are moved to chunk-2 , and chunk-1 becomes a
+    reserved chunk.
+
+    3 since dc_lsn is 10, after log replay(only committing logs with lsn <= dc_lsn), we start committing lsn 11. since
+    "blob -> pba-chunk-1" does not exist in pg-index-table, on_blob_put_commit will insert a new item
+    "blob -> pba-chunk-1" to pg-index-table. this is where issue happens. blob belong to shard-1, which has been moved
+    to chunk-2. but on_blob_put_commit adds blob to indextable with a stale pba belongs to chunk-1 , which is now a
+    reserved chunk and will be purged later.ing stale blocks that no longer contain the correct shard’s data.
+    */
+
     return hs_pg->pg_sb_->state == PGState::ALIVE && hs_pg->read_for_gc;
 }
 

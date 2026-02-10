@@ -251,35 +251,6 @@ void HSHomeObject::init_homestore() {
         zpad_bufs_[i] = std::move(sisl::io_blob_safe(uint32_cast(size), io_align));
         std::memset(zpad_bufs_[i].bytes(), 0, size);
     }
-
-    // when reaching , all the log replay are completed, and the gc_target_lsn of pg has been set. we can gc the chunks
-    // of a pg only after the commit_lsn > gc_target_lsn. otherwise, the log replay of put_blob might lead to a data
-    // loss issue as following:
-
-    /*
-    let`s say cp_lsn and dc_lsn is 10, lsn 11 is put_blob (blob -> pba-chunk-1), and lsn 12 is seal_shard(shard-1 ,
-    chunk-1).
-
-    1 before crash, lsn 11 and lsn 12 are both committed. as a result , we have a "blob -> pba-chunk-1" in the wbcache
-    of indextable and a persisted superblk of shard-1 with a state sealed.
-
-    2 crash happens. after restart, "blob -> pba-chunk-1" is lost since it only existes in wbcache and not be flushed to
-    disk. but shard-1 has a stat of sealed since shard superblk is persisted before crash. now, since no open shard in
-    chunk-1, chunk-1 is selected for gc and all the blobs of shard-1 are moved to chunk-2 , and chunk-1 becomes a
-    reserved chunk.
-
-    3 since dc_lsn is 10, after log replay(only committing logs with lsn <= dc_lsn), we start committing lsn 11. since
-    "blob -> pba-chunk-1" does not exist in pg-index-table, on_blob_put_commit will insert a new item
-    "blob -> pba-chunk-1" to pg-index-table. this is where issue happens. blob belong to shard-1, which has been moved
-    to chunk-2. but on_blob_put_commit adds blob to indextable with a stale pba belongs to chunk-1 , which is now a
-    reserved chunk and will be purged later.ing stale blocks that no longer contain the correct shard’s data.
-    */
-    if (HS_BACKEND_DYNAMIC_CONFIG(enable_gc)) {
-        LOGI("Starting GC manager");
-        gc_mgr_->start();
-    } else {
-        LOGI("GC is disabled");
-    }
 }
 
 void HSHomeObject::on_replica_restart() {
@@ -397,6 +368,13 @@ void HSHomeObject::on_replica_restart() {
         // after handling all the recovered gc tasks, move_to_chunk will be marked to inuse, and thus can be selected in
         // on_log_replay_done, and the log replay can be completed successfully.
         gc_mgr_->handle_all_recovered_gc_tasks();
+
+        if (HS_BACKEND_DYNAMIC_CONFIG(enable_gc)) {
+            LOGI("Starting GC manager");
+            gc_mgr_->start();
+        } else {
+            LOGI("GC is disabled");
+        }
     });
 }
 
