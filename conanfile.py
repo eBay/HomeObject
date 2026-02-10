@@ -50,7 +50,7 @@ class HomeObjectConan(ConanFile):
 
     def requirements(self):
         self.requires("sisl/[^13.0]@oss/master", transitive_headers=True)
-        self.requires("homestore/[^7.3]@oss/master")
+        self.requires("homestore/[^7.4]@oss/master")
         self.requires("iomgr/[^12.0]@oss/master")
 
     def validate(self):

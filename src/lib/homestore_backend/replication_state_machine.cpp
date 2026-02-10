@@ -261,24 +261,22 @@ ReplicationStateMachine::get_blk_alloc_hints(sisl::blob const& header, uint32_t 
     return homestore::blk_alloc_hints();
 }
 
-void ReplicationStateMachine::on_start_replace_member(const std::string& task_id,
-                                                      const homestore::replica_member_info& member_out,
-                                                      const homestore::replica_member_info& member_in, trace_id_t tid) {
-    home_object_->on_pg_start_replace_member(repl_dev()->group_id(), task_id, member_out, member_in, tid);
+void ReplicationStateMachine::on_start_replace_member(const homestore::replace_member_ctx& ctx,
+                                                      const std::vector< homestore::replica_id_t >& member_ids,
+                                                      homestore::trace_id_t tid) {
+    home_object_->on_pg_start_replace_member(repl_dev()->group_id(), ctx, member_ids, tid);
 }
 
-void ReplicationStateMachine::on_complete_replace_member(const std::string& task_id,
-                                                         const homestore::replica_member_info& member_out,
-                                                         const homestore::replica_member_info& member_in,
-                                                         trace_id_t tid) {
-    home_object_->on_pg_complete_replace_member(repl_dev()->group_id(), task_id, member_out, member_in, tid);
+void ReplicationStateMachine::on_complete_replace_member(const homestore::replace_member_ctx& ctx,
+                                                         const std::vector< homestore::replica_id_t >& member_ids,
+                                                         homestore::trace_id_t tid) {
+    home_object_->on_pg_complete_replace_member(repl_dev()->group_id(), ctx, member_ids, tid);
 }
 
-void ReplicationStateMachine::on_clean_replace_member_task(const std::string& task_id,
-                                                           const homestore::replica_member_info& member_out,
-                                                           const homestore::replica_member_info& member_in,
-                                                           trace_id_t tid) {
-    home_object_->on_pg_clean_replace_member_task(repl_dev()->group_id(), task_id, member_out, member_in, tid);
+void ReplicationStateMachine::on_clean_replace_member_task(const homestore::replace_member_ctx& ctx,
+                                                           const std::vector< homestore::replica_id_t >& member_ids,
+                                                           homestore::trace_id_t tid) {
+    home_object_->on_pg_clean_replace_member_task(repl_dev()->group_id(), ctx, member_ids, tid);
 }
 
 void ReplicationStateMachine::on_destroy(const homestore::group_id_t& group_id) {

@@ -771,34 +771,41 @@ public:
      * @brief Function invoked when start a member replacement
      *
      * @param group_id The group id of replication device.
-     * @param member_out Member which is removed from group
-     * @param member_in Member which is added to group
+     * @param ctx The replace member context containing task_id, member_out, member_in
+     * @param member_ids Complete list of member IDs from raft config (single source of truth)
+     * @param tid Trace ID
      * */
-    void on_pg_start_replace_member(homestore::group_id_t group_id, const std::string& task_id,
-                                    const homestore::replica_member_info& member_out,
-                                    const homestore::replica_member_info& member_in, trace_id_t tid);
+    void on_pg_start_replace_member(homestore::group_id_t group_id, const homestore::replace_member_ctx& ctx,
+                                    const std::vector< homestore::replica_id_t >& member_ids,
+                                    homestore::trace_id_t tid);
 
     /**
      * @brief Function invoked when complete a member replacement
      *
+     * IMPORTANT: This callback must be idempotent as it may be called multiple times during log replay.
+     *
      * @param group_id The group id of replication device.
-     * @param member_out Member which is removed from group
-     * @param member_in Member which is added to group
+     * @param ctx The replace member context containing task_id, member_out, member_in
+     * @param member_ids Complete list of member IDs from consensus layer (single source of truth)
+     * @param tid Trace ID
      * */
-    void on_pg_complete_replace_member(homestore::group_id_t group_id, const std::string& task_id,
-                                       const homestore::replica_member_info& member_out,
-                                       const homestore::replica_member_info& member_in, trace_id_t tid);
+    void on_pg_complete_replace_member(homestore::group_id_t group_id, const homestore::replace_member_ctx& ctx,
+                                       const std::vector< homestore::replica_id_t >& member_ids,
+                                       homestore::trace_id_t tid);
 
     /**
      * @brief Called when clean replace member task (rollback)
-     * @param group_id Group ID
-     * @param task_id Task ID
-     * @param member_out Member which should be restored to group
-     * @param member_in Member which should be removed from group
-     * */
-    void on_pg_clean_replace_member_task(homestore::group_id_t group_id, const std::string& task_id,
-                                         const homestore::replica_member_info& member_out,
-                                         const homestore::replica_member_info& member_in, trace_id_t tid);
+     *
+     * IMPORTANT: This callback must be idempotent as it may be called multiple times during log replay.
+     *
+     * @param group_id The group id of replication device.
+     * @param ctx The replace member context containing task_id, member_out, member_in
+     * @param member_ids Complete list of member IDs from consensus layer (single source of truth)
+     * @param tid Trace ID
+     */
+    void on_pg_clean_replace_member_task(homestore::group_id_t group_id, const homestore::replace_member_ctx& ctx,
+                                          const std::vector< homestore::replica_id_t >& member_ids,
+                                          homestore::trace_id_t tid);
 
     void on_remove_member(homestore::group_id_t group_id, const peer_id_t& member, trace_id_t tid = 0);
 
@@ -1068,6 +1075,18 @@ private:
     }
     homestore::replica_member_info to_replica_member_info(const PGMember& pg_member) const;
     PGMember to_pg_member(const homestore::replica_member_info& replica_info) const;
+
+    /**
+     * @brief Reconcile PG membership with authoritative member ID list from replication layer
+     * Preserves existing member metadata (name, priority) where possible
+     *
+     * @param existing_members Current PG members (for metadata preservation)
+     * @param member_ids Authoritative member IDs from replication consensus
+     * @return New membership set reconciled with the authoritative list
+     */
+    std::set<PGMember> reconcile_membership_with_config(
+        const std::set<PGMember>& existing_members,
+        const std::vector<homestore::replica_id_t>& member_ids);
 };
 
 class BlobIndexServiceCallbacks : public homestore::IndexServiceCallbacks {
