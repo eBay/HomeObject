@@ -830,7 +830,7 @@ bool HSHomeObject::can_chunks_in_pg_be_gc(pg_id_t pg_id) const {
     reserved chunk and will be purged later.ing stale blocks that no longer contain the correct shard’s data.
     */
 
-    return hs_pg->pg_sb_->state == PGState::ALIVE && hs_pg->read_for_gc;
+    return hs_pg->pg_sb_->state == PGState::ALIVE && hs_pg->ready_for_gc;
 }
 
 void HSHomeObject::destroy_hs_resources(pg_id_t pg_id) { chunk_selector_->reset_pg_chunks(pg_id); }
@@ -999,7 +999,7 @@ HSHomeObject::HS_PG::HS_PG(PGInfo info, shared< homestore::ReplDev > rdev, share
         repl_dev_{std::move(rdev)},
         index_table_{std::move(index_table)},
         metrics_{*this},
-        gc_latch_lsn_{repl_dev_->get_last_append_lsn()},
+        gc_ready_lsn_{repl_dev_->get_last_append_lsn()},
         snp_rcvr_info_sb_{_snp_rcvr_meta_name},
         snp_rcvr_shard_list_sb_{_snp_rcvr_shard_list_meta_name} {
     RELEASE_ASSERT(pg_chunk_ids != nullptr, "PG chunks null, pg={}", pg_info_.id);
@@ -1041,7 +1041,7 @@ HSHomeObject::HS_PG::HS_PG(superblk< pg_info_superblk >&& sb, shared< ReplDev > 
         pg_sb_{std::move(sb)},
         repl_dev_{std::move(rdev)},
         metrics_{*this},
-        gc_latch_lsn_{repl_dev_->get_last_append_lsn()} {
+        gc_ready_lsn_{repl_dev_->get_last_append_lsn()} {
     durable_entities_.blob_sequence_num = pg_sb_->blob_sequence_num;
     durable_entities_.active_blob_count = pg_sb_->active_blob_count;
     durable_entities_.tombstone_blob_count = pg_sb_->tombstone_blob_count;
@@ -1361,10 +1361,10 @@ void HSHomeObject::on_pg_lsn_commit(pg_id_t pg_id, int64_t lsn) {
         return;
     }
 
-    if (hs_pg->gc_latch_lsn_ <= lsn && !(hs_pg->read_for_gc)) {
-        LOGD("set read_for_gc to true for pg_id={}, gc_latch_lsn_={}, committed_lsn={}", pg_id, hs_pg->gc_latch_lsn_,
+    if (hs_pg->gc_ready_lsn_ <= lsn && !(hs_pg->ready_for_gc)) {
+        LOGD("set ready_for_gc to true for pg_id={}, gc_ready_lsn_={}, committed_lsn={}", pg_id, hs_pg->gc_ready_lsn_,
              lsn);
-        hs_pg->read_for_gc = true;
+        hs_pg->ready_for_gc = true;
     }
 }
 
@@ -1382,7 +1382,7 @@ void HSHomeObject::on_pg_lsn_rollback(pg_id_t pg_id, int64_t lsn) {
         return;
     }
 
-    hs_pg->gc_latch_lsn_ = std::min(lsn - 1, hs_pg->gc_latch_lsn_);
+    hs_pg->gc_ready_lsn_ = std::min(lsn - 1, hs_pg->gc_ready_lsn_);
 }
 
 } // namespace homeobject

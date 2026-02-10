@@ -332,8 +332,8 @@ public:
         shared< homestore::ReplDev > repl_dev_;
         std::shared_ptr< BlobIndexTable > index_table_;
         PGMetrics metrics_;
-        int64_t gc_latch_lsn_; // the chunks in this pg can only be gc after commit_lsn >= gc_latch_lsn_
-        bool read_for_gc{false};
+        int64_t gc_ready_lsn_; // the chunks in this pg can only be gc after commit_lsn >= gc_ready_lsn_
+        bool ready_for_gc{false};
 
         mutable pg_state pg_state_{0};
 
