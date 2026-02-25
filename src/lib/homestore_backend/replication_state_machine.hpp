@@ -176,16 +176,19 @@ public:
                         cintrusive< homestore::repl_req_ctx >& hs_ctx) override;
 
     /// @brief Called when start replacing an existing member with a new member
-    void on_start_replace_member(const std::string& task_id, const homestore::replica_member_info& member_out,
-                                 const homestore::replica_member_info& member_in, trace_id_t tid = 0) override;
+    void on_start_replace_member(const homestore::replace_member_ctx& ctx,
+                                 const std::vector< homestore::replica_id_t >& member_ids,
+                                 homestore::trace_id_t tid) override;
 
     /// @brief Called when complete replacing an existing member with a new member
-    void on_complete_replace_member(const std::string& task_id, const homestore::replica_member_info& member_out,
-                                    const homestore::replica_member_info& member_in, trace_id_t tid = 0) override;
+    void on_complete_replace_member(const homestore::replace_member_ctx& ctx,
+                                    const std::vector< homestore::replica_id_t >& member_ids,
+                                    homestore::trace_id_t tid) override;
 
     /// @brief Called when clean replace member task (rollback)
-    void on_clean_replace_member_task(const std::string& task_id, const homestore::replica_member_info& member_out,
-                                      const homestore::replica_member_info& member_in, trace_id_t tid = 0) override;
+    void on_clean_replace_member_task(const homestore::replace_member_ctx& ctx,
+                                      const std::vector< homestore::replica_id_t >& member_ids,
+                                      homestore::trace_id_t tid) override;
 
     /// @brief Called when the replica is being destroyed by nuraft;
     void on_destroy(const homestore::group_id_t& group_id) override;
