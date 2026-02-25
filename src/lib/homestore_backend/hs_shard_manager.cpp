@@ -529,15 +529,41 @@ void HSHomeObject::on_shard_message_commit(int64_t lsn, sisl::blob const& h, hom
             state = (*iter->second)->info.state;
         }
 
-        if (state == ShardInfo::State::SEALED) {
-            auto pg_id = shard_info.placement_group;
-            auto v_chunkID = get_shard_v_chunk_id(shard_info.id);
-            RELEASE_ASSERT(v_chunkID.has_value(), "v_chunk id not found");
-            bool res = chunk_selector()->release_chunk(pg_id, v_chunkID.value());
-            RELEASE_ASSERT(res, "Failed to release v_chunk_id={}, pg={}", v_chunkID.value(), pg_id);
-            update_shard_in_map(shard_info);
-        } else
-            SLOGW(tid, shard_info.id, "try to commit SEAL_SHARD_MSG but shard state is not sealed.");
+        RELEASE_ASSERT(state == ShardInfo::State::SEALED,
+                       "try to commit SEAL_SHARD_MSG but shard state is not sealed. shardID={}", shard_info.id);
+
+        auto pg_id = shard_info.placement_group;
+        auto v_chunkID = get_shard_v_chunk_id(shard_info.id);
+        RELEASE_ASSERT(v_chunkID.has_value(), "v_chunk id not found");
+        bool res = chunk_selector()->release_chunk(pg_id, v_chunkID.value());
+        RELEASE_ASSERT(res, "Failed to release v_chunk_id={}, pg={}", v_chunkID.value(), pg_id);
+
+        // Corner case:
+        // Assume cp_lsn = dc_lsn = 10.
+        // lsn 11: put_blob (blob -> pba in chunk-1)
+        // lsn 12: seal_shard(shard-1, chunk-1)
+        //
+        // 1) Before crash, both lsn 11 and lsn 12 are committed.
+        //    - blob -> pba(chunk-1) exists only in index-table WB cache
+        //    - shard-1 superblk is persisted with state = SEALED
+        //
+        // 2) Crash and restart:
+        //    - blob -> pba(chunk-1) is lost (WB cache was not flushed)
+        //    - shard-1 remains SEALED (superblk is durable)
+        //    - with no OPEN shard in chunk-1, GC may move shard-1 data to chunk-2
+        //      and mark chunk-1 as reserved
+        //
+        // 3) Replay starts from dc_lsn = 10, so lsn 11 is committed again.
+        //    Since blob -> pba(chunk-1) is missing in pg-index-table,
+        //    on_blob_put_commit re-inserts it with a stale pba in chunk-1.
+        //    This is incorrect because shard-1 has already moved to chunk-2.
+        //
+        // Fix:
+        // Before persisting shard state transition to SEALED, persist repl_dev's dc_lsn.
+        // This guarantees all logs before SEAL_SHARD are replay-committed before GC starts.
+        repl_dev->flush_durable_commit_lsn();
+        update_shard_in_map(shard_info);
+
         if (ctx) { ctx->promise_.setValue(ShardManager::Result< ShardInfo >(shard_info)); }
         SLOGD(tid, shard_info.id, "Commit done for sealing shard");
 
