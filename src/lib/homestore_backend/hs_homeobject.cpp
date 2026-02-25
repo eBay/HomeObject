@@ -251,6 +251,14 @@ void HSHomeObject::init_homestore() {
         zpad_bufs_[i] = std::move(sisl::io_blob_safe(uint32_cast(size), io_align));
         std::memset(zpad_bufs_[i].bytes(), 0, size);
     }
+
+    // when reaching here, all the logs before dc_lsn have been replayed. we can start gc now.
+    if (HS_BACKEND_DYNAMIC_CONFIG(enable_gc)) {
+        LOGI("Starting GC manager");
+        gc_mgr_->start();
+    } else {
+        LOGI("GC is disabled");
+    }
 }
 
 void HSHomeObject::on_replica_restart() {
@@ -349,14 +357,22 @@ void HSHomeObject::on_replica_restart() {
         homestore::meta_service().read_sub_sb(GCManager::_gc_reserved_chunk_meta_name);
         homestore::meta_service().read_sub_sb(GCManager::_gc_task_meta_name);
 
-        gc_mgr_->handle_all_recovered_gc_tasks();
+        // At this point, log replay has not started yet. We must process all recovered GC tasks before replay begins.
+        // After log replay completes, ReplicationStateMachine::on_log_replay_done() calls select_specific_chunk() for
+        // every chunk that has an open shard, marking those chunks as in-use.
+        //
+        // Crash scenario:
+        // - shard metablk is updated (pchunk moved to move_to_chunk)
+        // - process crashes before reserved_chunk_superblk is persisted
+        //   (move_to_chunk is still marked as reserved)
+        //
+        // In that case, during on_log_replay_done(), select_specific_chunk() cannot select move_to_chunk because it is
+        // still in reserved/GC state, causing replay to stall.
+        //
+        // By handling recovered GC tasks first, move_to_chunk is marked in-use, so on_log_replay_done() can select it
+        // and log replay can complete successfully.
 
-        if (HS_BACKEND_DYNAMIC_CONFIG(enable_gc)) {
-            LOGI("Starting GC manager");
-            gc_mgr_->start();
-        } else {
-            LOGI("GC is disabled");
-        }
+        gc_mgr_->handle_all_recovered_gc_tasks();
     });
 }
 
