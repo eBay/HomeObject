@@ -259,6 +259,14 @@ void HSHomeObject::init_homestore() {
     } else {
         LOGI("GC is disabled");
     }
+
+    // start scrubber
+    if (HS_BACKEND_DYNAMIC_CONFIG(enable_scrubber)) {
+        LOGI("Starting scrub manager");
+        scrub_mgr_->start();
+    } else {
+        LOGI("scrub manager is disabled");
+    }
 }
 
 void HSHomeObject::on_replica_restart() {
@@ -309,7 +317,6 @@ void HSHomeObject::on_replica_restart() {
 
         // gc_manager will be created only once here. we need make sure gc manager is created after all the pg meta blk
         // are replayed since we build pdev chunk heap in the constructor of gc manager , which depends on the pg meta.
-
         // gc metablk handlers are registered in the constructor of gc manager
         gc_mgr_ = std::make_shared< GCManager >(this);
 
@@ -326,7 +333,7 @@ void HSHomeObject::on_replica_restart() {
                 gc_index_table_map.emplace(boost::uuids::to_string(uuid), gc_index_table);
 
                 // 2 create gc actor superblk for each pdev, which contains the pdev_id and index table uuid.
-                homestore::superblk< GCManager::gc_actor_superblk > gc_actor_sb{GCManager::_gc_actor_meta_name};
+                homestore::superblk< GCManager::gc_actor_superblk > gc_actor_sb{GCManager::gc_actor_meta_name};
                 gc_actor_sb.create(sizeof(GCManager::gc_actor_superblk));
                 gc_actor_sb->pdev_id = pdev_id;
                 gc_actor_sb->index_table_uuid = uuid;
@@ -340,7 +347,7 @@ void HSHomeObject::on_replica_restart() {
                 for (size_t i = 0; i < reserved_chunk_num_per_pdev; ++i) {
                     auto chunk = chunks[i];
                     homestore::superblk< GCManager::gc_reserved_chunk_superblk > reserved_chunk_sb{
-                        GCManager::_gc_reserved_chunk_meta_name};
+                        GCManager::gc_reserved_chunk_meta_name};
                     reserved_chunk_sb.create(sizeof(GCManager::gc_reserved_chunk_superblk));
                     reserved_chunk_sb->chunk_id = chunk;
                     reserved_chunk_sb.write();
@@ -356,9 +363,9 @@ void HSHomeObject::on_replica_restart() {
 
         // when initializing, there is not gc task. we need to recover reserved chunks here, so that the reserved chunks
         // will not be put into pdev heap when built
-        homestore::meta_service().read_sub_sb(GCManager::_gc_actor_meta_name);
-        homestore::meta_service().read_sub_sb(GCManager::_gc_reserved_chunk_meta_name);
-        homestore::meta_service().read_sub_sb(GCManager::_gc_task_meta_name);
+        homestore::meta_service().read_sub_sb(GCManager::gc_actor_meta_name);
+        homestore::meta_service().read_sub_sb(GCManager::gc_reserved_chunk_meta_name);
+        homestore::meta_service().read_sub_sb(GCManager::gc_task_meta_name);
 
         // At this point, log replay has not started yet. We must process all recovered GC tasks before replay begins.
         // After log replay completes, ReplicationStateMachine::on_log_replay_done() calls select_specific_chunk() for
@@ -377,6 +384,9 @@ void HSHomeObject::on_replica_restart() {
 
         gc_mgr_->handle_all_recovered_gc_tasks();
     });
+
+    // initialize scrub manager
+    scrub_mgr_ = std::make_shared< ScrubManager >(this);
 }
 
 #if 0
@@ -446,16 +456,20 @@ void HSHomeObject::shutdown() {
         LOGI("waiting for {} pending requests to complete", pending_reqs);
         std::this_thread::sleep_for(std::chrono::milliseconds(1000));
     };
-    LOGI("start stopping GC");
+    LOGI("stopping GC");
     // we need stop gc before shutting down homestore(where metaservice is shutdown), because gc mgr needs metaservice
     // to persist gc task metablk if there is any ongoing gc task. after stopping gc manager, there is no gc task
     // anymore, and thus now new gc task will be written to metaservice during homestore shutdown.
-    gc_mgr_->stop();
+    if (gc_mgr_) gc_mgr_->stop();
+
+    LOGI("stopping scrubbing");
+    if (scrub_mgr_) scrub_mgr_->stop();
 
     LOGI("start shutting down HomeStore");
     homestore::HomeStore::instance()->shutdown();
     homestore::HomeStore::reset_instance();
     gc_mgr_.reset();
+    scrub_mgr_.reset();
     iomanager.stop();
     LOGI("complete shutting down HomeStore");
 }

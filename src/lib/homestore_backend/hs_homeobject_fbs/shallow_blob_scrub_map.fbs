@@ -1,0 +1,13 @@
+include "scrub_common.fbs";
+
+namespace homeobject;
+
+table ShallowBlobScrubMap {
+  scrub_info: ScrubInfo;
+  start: uint64;
+  end: uint64;
+  blobs: [BlobKey];
+}
+
+// this is used for sending shallow blob scrub map
+root_type ShallowBlobScrubMap;

@@ -23,6 +23,10 @@ table HSBackendSettings {
     //TODO: make this hotswap after gc is well tested
     enable_gc: bool = true;
 
+    //Enable scrubber
+    //TODO: make this hotswap after scrubber is well tested
+    enable_scrubber: bool = false;
+
     //Total reserved chunk num (dedicated for gc/egc) per pdev 
     reserved_chunk_num_per_pdev: uint8 = 6;
 

@@ -1,0 +1,16 @@
+include "shallow_shard_scrub_map.fbs";
+
+namespace homeobject;
+
+table DeepShardScrubResultEntry {
+  shard_id: uint64;
+  result: ScrubResult;
+}
+
+table DeepShardScrubMap {
+  shallow_map: ShallowShardScrubMap;
+  problematic_shards: [DeepShardScrubResultEntry];
+}
+
+// this is used for sending deep shard scrub map
+root_type DeepShardScrubMap;

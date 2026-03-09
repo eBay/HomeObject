@@ -14,10 +14,27 @@
 #include "homeobject/common.hpp"
 #include "index_kv.hpp"
 #include "gc_manager.hpp"
+#include "scrub_manager.hpp"
 #include "hs_backend_config.hpp"
 #include "generated/resync_pg_data_generated.h"
 #include "generated/resync_shard_data_generated.h"
 #include "generated/resync_blob_data_generated.h"
+#include "generated/blob_scrub_req_generated.h"
+#include "generated/deep_blob_scrub_map_generated.h"
+#include "generated/shallow_blob_scrub_map_generated.h"
+#include "generated/shard_scrub_req_generated.h"
+#include "generated/shallow_shard_scrub_map_generated.h"
+#include "generated/deep_shard_scrub_map_generated.h"
+#include "generated/pg_meta_scrub_req_generated.h"
+#include "generated/pg_meta_scrub_map_generated.h"
+#include "generated/scrub_common_generated.h"
+
+#define SCRUB_RESULT_STRING(type_)                                                                                     \
+    ((type_) == ScrubResult::NONE            ? "NONE"                                                                  \
+         : (type_) == ScrubResult::IO_ERROR  ? "IO_ERROR"                                                              \
+         : (type_) == ScrubResult::MISMATCH  ? "MISMATCH"                                                              \
+         : (type_) == ScrubResult::NOT_FOUND ? "NOT_FOUND"                                                             \
+                                             : "UNKNOWN")
 
 namespace homestore {
 struct meta_blk;
@@ -364,6 +381,7 @@ public:
         shared< homestore::ReplDev > repl_dev_;
         std::shared_ptr< BlobIndexTable > index_table_;
         PGMetrics metrics_;
+        HSHomeObject& home_obj_;
         mutable pg_state pg_state_{0};
 
         // Snapshot receiver progress info, used as a checkpoint for recovery
@@ -372,8 +390,8 @@ public:
         mutable homestore::superblk< snapshot_rcvr_shard_list_superblk > snp_rcvr_shard_list_sb_;
 
         HS_PG(PGInfo info, shared< homestore::ReplDev > rdev, shared< BlobIndexTable > index_table,
-              std::shared_ptr< const std::vector< homestore::chunk_num_t > > pg_chunk_ids);
-        HS_PG(homestore::superblk< pg_info_superblk >&& sb, shared< homestore::ReplDev > rdev);
+              std::shared_ptr< const std::vector< homestore::chunk_num_t > > pg_chunk_ids, HSHomeObject& home_obj);
+        HS_PG(homestore::superblk< pg_info_superblk >&& sb, shared< homestore::ReplDev > rdev, HSHomeObject& home_obj);
         ~HS_PG() override = default;
 
         static PGInfo pg_info_from_sb(homestore::superblk< pg_info_superblk > const& sb);
@@ -416,6 +434,19 @@ public:
          * Update membership in pg's superblock.
          */
         void update_membership(const MemberSet& members);
+
+        /*
+         * RPC handlers for scrub:
+         * 1. on_scrub_req_received: receive the scrub req from leader
+         * 2. on_scrub_map_received: receive the scrub map from followers
+         */
+        void on_scrub_req_received(boost::intrusive_ptr< sisl::GenericRpcData >& rpc_data);
+        void on_scrub_map_received(boost::intrusive_ptr< sisl::GenericRpcData >& rpc_data);
+
+        /**
+         * Register data RPC handlers for this PG
+         */
+        void register_data_rpc_handlers();
     };
 
     struct HS_Shard : public Shard {
@@ -536,6 +567,11 @@ public:
 
     inline const static homestore::MultiBlkId tombstone_pbas{0, 0, 0};
     inline const static std::string delete_marker_blob_data{"HOMEOBJECT_BLOB_DELETE_MARKER"};
+
+    // ask followers to scrub
+    inline const static std::string PUSH_SCRUB_REQ{"scrub_req"};
+    // return scrub map to leader
+    inline const static std::string PUSH_SCRUB_MAP{"push_scrub_map"};
 
     class PGBlobIterator {
     public:
@@ -736,6 +772,7 @@ private:
     mutable std::shared_mutex snp_sbs_lock_;
     shared< HeapChunkSelector > chunk_selector_;
     shared< GCManager > gc_mgr_;
+    shared< ScrubManager > scrub_mgr_;
     unique< HttpManager > http_mgr_;
 
     static constexpr size_t max_zpad_bufs = _data_block_size / io_align;
@@ -771,6 +808,7 @@ private:
     void local_create_shard(ShardInfo shard_info, homestore::chunk_num_t v_chunk_id, homestore::chunk_num_t p_chunk_id,
                             homestore::blk_count_t blk_count, trace_id_t tid = 0);
     void add_new_shard_to_map(std::unique_ptr< HS_Shard > shard);
+    void delete_shard_from_map(shard_id_t shard_id);
     void update_shard_in_map(const ShardInfo& shard_info);
 
     // recover part
@@ -990,6 +1028,7 @@ public:
 
     cshared< HeapChunkSelector > chunk_selector() const { return chunk_selector_; }
     cshared< GCManager > gc_manager() const { return gc_mgr_; }
+    cshared< ScrubManager > scrub_manager() const { return scrub_mgr_; }
 
     /**
      * @brief Reconciles the leaders for all PGs or a specific PG identified by pg_id.

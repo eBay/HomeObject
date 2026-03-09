@@ -30,6 +30,8 @@ target_sources("${PROJECT_NAME}_homestore" PRIVATE
     hs_cp_callbacks.cpp
     hs_http_manager.cpp
     gc_manager.cpp
+    scrub_manager.cpp
+    MPMCPriorityQueue.hpp
     $<TARGET_OBJECTS:${PROJECT_NAME}_core>
 )
 target_link_libraries("${PROJECT_NAME}_homestore" PUBLIC
@@ -42,10 +44,19 @@ settings_gen_cpp(
     ${FLATBUFFERS_FLATC_EXECUTABLE}
     ${CMAKE_CURRENT_BINARY_DIR}/generated/
     "${PROJECT_NAME}_homestore"
-    hs_backend_config.fbs
-    resync_pg_data.fbs
-    resync_shard_data.fbs
-    resync_blob_data.fbs
+    hs_homeobject_fbs/hs_backend_config.fbs
+    hs_homeobject_fbs/resync_pg_data.fbs
+    hs_homeobject_fbs/resync_shard_data.fbs
+    hs_homeobject_fbs/resync_blob_data.fbs
+    hs_homeobject_fbs/deep_blob_scrub_map.fbs
+    hs_homeobject_fbs/shallow_blob_scrub_map.fbs
+    hs_homeobject_fbs/blob_scrub_req.fbs
+    hs_homeobject_fbs/shard_scrub_req.fbs
+    hs_homeobject_fbs/deep_shard_scrub_map.fbs
+    hs_homeobject_fbs/shallow_shard_scrub_map.fbs
+    hs_homeobject_fbs/pg_meta_scrub_req.fbs
+    hs_homeobject_fbs/pg_meta_scrub_map.fbs
+    hs_homeobject_fbs/scrub_common.fbs
   )
 
 # Unit test objects
@@ -154,4 +165,12 @@ add_test(NAME HomestoreTestGC COMMAND homestore_test_gc -csv error --executor im
         --override_config hs_backend_config.gc_enable_read_verify=true
         --override_config hs_backend_config.gc_garbage_rate_threshold=0 
         --override_config hs_backend_config.gc_scan_interval_sec=5)
+
+add_executable(homestore_test_scrubber)
+target_sources(homestore_test_scrubber PRIVATE $<TARGET_OBJECTS:homestore_tests_scrubber>)
+target_link_libraries(homestore_test_scrubber PUBLIC homeobject_homestore ${COMMON_TEST_DEPS})
+add_test(NAME HomestoreTestScrubber COMMAND homestore_test_scrubber -csv error --executor immediate --config_path ./
+        --override_config hs_backend_config.enable_scrubber=true
+        --override_config nuraft_mesg_config.mesg_factory_config.data_request_deadline_secs:10)
+
 

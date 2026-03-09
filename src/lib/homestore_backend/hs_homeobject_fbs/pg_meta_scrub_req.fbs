@@ -1,0 +1,10 @@
+include "scrub_common.fbs";
+
+namespace homeobject;
+
+table PgMetaScrubReq {
+  scrub_info: ScrubInfo;
+}
+
+// PgMetaScrubReq is used for requesting pg meta scrub map
+root_type PgMetaScrubReq;
