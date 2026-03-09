@@ -39,9 +39,10 @@ BlobManager::AsyncResult< blob_id_t > MemoryHomeObject::_put_blob(ShardInfo cons
 
 // Lookup BlobExt and duplicate underyling Blob for user; only *safe* because we defer GC.
 BlobManager::AsyncResult< Blob > MemoryHomeObject::_get_blob(ShardInfo const& _shard, blob_id_t _blob, uint64_t off,
-                                                             uint64_t len, trace_id_t tid) const {
+                                                             uint64_t len, bool allow_skip_verify, trace_id_t tid) const {
     (void)off;
     (void)len;
+    (void)allow_skip_verify;
     (void)tid;
     WITH_SHARD
     WITH_ROUTE(_blob)

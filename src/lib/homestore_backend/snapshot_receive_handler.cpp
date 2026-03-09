@@ -84,6 +84,10 @@ int HSHomeObject::SnapshotReceiveHandler::process_shard_snapshot_data(ResyncShar
     shard_sb->info.last_modified_time = shard_meta.last_modified_time();
     shard_sb->info.available_capacity_bytes = shard_meta.total_capacity_bytes();
     shard_sb->info.total_capacity_bytes = shard_meta.total_capacity_bytes();
+    // Copy metadata into the fixed-size array (null-terminated C-style string)
+    if (shard_meta.meta() != nullptr && shard_meta.meta()->size() > 0) {
+        std::memcpy(shard_sb->info.meta, shard_meta.meta()->Data(), ShardInfo::meta_length);
+    }
     shard_sb->v_chunk_id = shard_meta.vchunk_id();
 
     homestore::blk_alloc_hints hints;
@@ -218,24 +222,9 @@ int HSHomeObject::SnapshotReceiveHandler::process_blobs_snapshot_data(ResyncBlob
 
         // Check integrity of normal blobs
         if (blob->state() != static_cast< uint8_t >(ResyncBlobState::CORRUPTED)) {
-            auto header = r_cast< BlobHeader const* >(blob_data);
-            if (!header->valid()) {
-                std::unique_lock< std::shared_mutex > lock(ctx_->progress_lock);
-                ctx_->progress.error_count++;
-                LOGE("Invalid header found for blob_id={}: [header={}]", blob->blob_id(), header->to_string());
-                return INVALID_BLOB_HEADER;
-            }
-            std::string user_key = header->user_key_size
-                ? std::string(r_cast< const char* >(blob_data + sizeof(BlobHeader)), header->user_key_size)
-                : std::string{};
-
-            uint8_t computed_hash[BlobHeader::blob_max_hash_len]{};
-            home_obj_.compute_blob_payload_hash(header->hash_algorithm, blob_data + header->data_offset,
-                                                header->blob_size, uintptr_cast(user_key.data()), header->user_key_size,
-                                                computed_hash, BlobHeader::blob_max_hash_len);
-            if (std::memcmp(computed_hash, header->hash, BlobHeader::blob_max_hash_len) != 0) {
-                LOGE("Hash mismatch for blob_id={}: header [{}] [computed={:np}]", blob->blob_id(), header->to_string(),
-                     spdlog::to_hex(computed_hash, computed_hash + BlobHeader::blob_max_hash_len));
+            // Verify full blob (includes validation, shard_id check, and hash verification)
+            if (!home_obj_.verify_blob(blob_data, ctx_->shard_cursor, 0 /* no blob_id check */)) {
+                LOGE("Blob verification failed for blob_id={}", blob->blob_id());
                 std::unique_lock< std::shared_mutex > lock(ctx_->progress_lock);
                 ctx_->progress.error_count++;
                 return BLOB_DATA_CORRUPTED;

@@ -38,16 +38,18 @@ class HomeObjectFixture : public ::testing::Test {
 public:
     std::shared_ptr< homeobject::HSHomeObject > _obj_inst;
 
-    // Create blob size in range (1, 16kb) and user key in range (1, 1kb)
-    HomeObjectFixture() : rand_blob_size{1u, 16 * 1024}, rand_user_key_size{1u, 1024} {}
+    HomeObjectFixture() :
+            rand_blob_size{1u, 16 * 1024}, rand_user_key_size{1u, HSHomeObject::BlobHeader::max_user_key_length} {}
 
     void SetUp() override {
         IM_SETTINGS_FACTORY().modifiable_settings([](auto& s) {
             s.io_env.http_port = 5000 + g_helper->replica_num();
             LOGD("setup http port to {}", s.io_env.http_port);
         });
+
         HSHomeObject::_hs_chunk_size = SISL_OPTIONS["chunk_size"].as< uint64_t >() * Mi;
         _obj_inst = std::dynamic_pointer_cast< HSHomeObject >(g_helper->build_new_homeobject());
+        
         // Used to export metrics, it should be called after init_homeobject
         if (SISL_OPTIONS["enable_http"].as< bool >()) { g_helper->app->start_http_server(); }
         if (!g_helper->is_current_testcase_restarted()) {
@@ -146,13 +148,13 @@ public:
         }
     }
 
-    ShardInfo create_shard(pg_id_t pg_id, uint64_t size_bytes) {
+    ShardInfo create_shard(pg_id_t pg_id, uint64_t size_bytes, std::string meta) {
         g_helper->sync();
         if (!am_i_in_pg(pg_id)) return {};
         // schedule create_shard only on leader
         auto tid = generateRandomTraceId();
         run_on_pg_leader(pg_id, [&]() {
-            auto s = _obj_inst->shard_manager()->create_shard(pg_id, size_bytes, tid).get();
+            auto s = _obj_inst->shard_manager()->create_shard(pg_id, size_bytes, meta, tid).get();
             RELEASE_ASSERT(!!s, "failed to create shard");
             auto ret = s.value();
             g_helper->set_uint64_id(ret.id);
@@ -403,6 +405,24 @@ public:
         return valid_blob_indexes.size();
     }
 
+    void verify_shard_meta(std::map< pg_id_t, std::vector< shard_id_t > > const& pg_shard_id_vec) {
+        for (const auto& [pg_id, shard_vec] : pg_shard_id_vec) {
+            if (!am_i_in_pg(pg_id)) continue;
+            for (const auto& shard_id : shard_vec) {
+                auto iter = _obj_inst->_shard_map.find(shard_id);
+                ASSERT_TRUE(iter != _obj_inst->_shard_map.end())
+                    << "shard not found in local shard_map, shard_id " << shard_id << " replica number "
+                    << g_helper->replica_num();
+                auto meta_str = "shard meta:" + std::to_string(shard_id);
+                uint8_t expected_meta[ShardInfo::meta_length]{};
+                memcpy(expected_meta, meta_str.c_str(), meta_str.length());
+                expected_meta[meta_str.length()] = '\0';
+                auto shard = iter->second->get();
+                ASSERT_TRUE(std::memcmp(shard->info.meta, expected_meta, ShardInfo::meta_length) == 0);
+            }
+        }
+    }
+
     // TODO:make this run in parallel
     void verify_get_blob(std::map< pg_id_t, std::vector< shard_id_t > > const& pg_shard_id_vec,
                          uint64_t const num_blobs_per_shard, bool const use_random_offset = false,
@@ -421,32 +441,46 @@ public:
                              current_blob_id, tid);
                     auto blob = build_blob(current_blob_id);
                     len = blob.body.size();
+
+                    bool allow_skip_verify = true;
                     if (use_random_offset) {
                         std::uniform_int_distribution< uint32_t > rand_off_gen{0u, len - 1u};
                         std::uniform_int_distribution< uint32_t > rand_len_gen{1u, len};
 
                         off = rand_off_gen(rnd_engine);
                         len = rand_len_gen(rnd_engine);
-                        if ((off + len) >= blob.body.size()) { len = blob.body.size() - off; }
+                        if (off + len >= blob.body.size()) { len = blob.body.size() - off; }
+
+                        // randomly set allow_skip_verify to false to do full verification
+                        std::uniform_int_distribution< uint32_t > bool_dist(0, 1);
+                        allow_skip_verify = (bool)bool_dist(rnd_engine);
                     }
 
-                    auto g = _obj_inst->blob_manager()->get(shard_id, current_blob_id, off, len, tid).get();
+                    auto g = _obj_inst->blob_manager()
+                                 ->get(shard_id, current_blob_id, off, len, allow_skip_verify, tid)
+                                 .get();
                     while (wait_when_not_exist && g.hasError() && g.error().code == BlobErrorCode::UNKNOWN_BLOB) {
                         LOGDEBUG("blob not exist at the moment, waiting for sync, shard {} blob {}", shard_id,
                                  current_blob_id);
                         wait_for_blob(shard_id, current_blob_id);
-                        g = _obj_inst->blob_manager()->get(shard_id, current_blob_id, off, len, tid).get();
+                        g = _obj_inst->blob_manager()
+                                ->get(shard_id, current_blob_id, off, len, allow_skip_verify, tid)
+                                .get();
                     }
                     ASSERT_TRUE(!!g) << "get blob fail, shard_id " << shard_id << " blob_id " << current_blob_id
                                      << " replica number " << g_helper->replica_num();
                     auto result = std::move(g.value());
-                    LOGINFO("get blob pg={} shard {} blob {} off {} len {} data {}", pg_id, shard_id, current_blob_id,
-                            off, len, hex_bytes(result.body.cbytes(), std::min(len, 10u)));
+                    LOGINFO("get blob pg={} shard {} blob {} off {} len {} data {} allow_skip_verify {}", pg_id,
+                            shard_id, current_blob_id, off, len, hex_bytes(result.body.cbytes(), std::min(len, 10u)),
+                            allow_skip_verify);
                     EXPECT_EQ(result.body.size(), len);
                     EXPECT_EQ(std::memcmp(result.body.bytes(), blob.body.cbytes() + off, result.body.size()), 0);
-                    EXPECT_EQ(result.user_key.size(), blob.user_key.size());
-                    EXPECT_EQ(blob.user_key, result.user_key);
-                    EXPECT_EQ(blob.object_off, result.object_off);
+                    // Only verify user_key and object_off when allow_skip_verify is false
+                    if (!allow_skip_verify) {
+                        EXPECT_EQ(result.user_key.size(), blob.user_key.size());
+                        EXPECT_EQ(blob.user_key, result.user_key);
+                        EXPECT_EQ(blob.object_off, result.object_off);
+                    }
                     current_blob_id++;
                 }
             }
@@ -579,6 +613,7 @@ public:
         EXPECT_EQ(lhs.available_capacity_bytes, rhs.available_capacity_bytes);
         EXPECT_EQ(lhs.total_capacity_bytes, rhs.total_capacity_bytes);
         EXPECT_EQ(lhs.current_leader, rhs.current_leader);
+        EXPECT_TRUE(std::memcmp(lhs.meta, rhs.meta, ShardInfo::meta_length) == 0);
     }
 
     bool verify_start_replace_member_result(pg_id_t pg_id, std::string& task_id, peer_id_t out_member_id,
@@ -828,8 +863,7 @@ private:
         auto blob = build_blob(blob_id);
         auto blob_size = blob.body.size();
 
-        uint64_t actual_written_size{
-            uint32_cast(sisl::round_up(sizeof(HSHomeObject::BlobHeader) + blob.user_key.size(), io_align))};
+        uint64_t actual_written_size{uint32_cast(sisl::round_up(sizeof(HSHomeObject::BlobHeader), io_align))};
 
         if (((r_cast< uintptr_t >(blob.body.cbytes()) % io_align) != 0) || ((blob_size % io_align) != 0)) {
             blob_size = sisl::round_up(blob_size, io_align);

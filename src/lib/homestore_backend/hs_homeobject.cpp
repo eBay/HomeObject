@@ -282,6 +282,9 @@ void HSHomeObject::on_replica_restart() {
             [this](bool success) { on_shard_meta_blk_recover_completed(success); }, true);
         homestore::meta_service().read_sub_sb(_shard_meta_name);
 
+        // Write migrated shard metadata to disk (must be called AFTER read_sub_sb returns to avoid deadlock)
+        write_migrated_shard_metablks();
+
         // recover snapshot context
         homestore::meta_service().register_handler(
             _snp_ctx_meta_name,
@@ -565,6 +568,17 @@ void HSHomeObject::yield_pg_leadership_to_follower(int32_t pg_id) {
             LOGE("PG {} not found", pg_id);
         }
     }
+}
+
+void HSHomeObject::trigger_snapshot_creation(int32_t pg_id, int64_t compact_lsn, bool wait_for_commit) {
+    LOGI("Triggering snapshot creation for pg_id={}, compact_lsn={}, wait_for_commit={}", pg_id, compact_lsn,
+         wait_for_commit);
+    auto hs_pg = get_hs_pg(pg_id);
+    if (!hs_pg) {
+        LOGE("Failed to trigger snapshot: PG {} not found", pg_id);
+        return;
+    }
+    hs_pg->trigger_snapshot_creation(compact_lsn, wait_for_commit);
 }
 
 } // namespace homeobject

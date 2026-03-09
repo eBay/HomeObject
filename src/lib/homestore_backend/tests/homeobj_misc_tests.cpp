@@ -7,7 +7,7 @@ TEST_F(HomeObjectFixture, HSHomeObjectCPTestBasic) {
     // Step-1: create a PG and a shard
     std::vector< std::pair< pg_id_t, shard_id_t > > pg_shard_id_vec;
     create_pg(1 /* pg_id */);
-    auto shard_info = create_shard(1 /* pg_id */, 64 * Mi);
+    auto shard_info = create_shard(1 /* pg_id */, 64 * Mi, "shard meta");
     pg_shard_id_vec.emplace_back(1 /* pg_id */, shard_info.id);
     LOGINFO("pg={} shard {}", 1, shard_info.id);
     {
@@ -51,7 +51,7 @@ TEST_F(HomeObjectFixture, PGBlobIterator) {
     auto& shard_list = pg_shard_id_vec[pg_id];
     create_pg(pg_id);
     for (uint64_t i = 0; i < num_shards_per_pg; i++) {
-        auto shard = create_shard(pg_id, 64 * Mi);
+        auto shard = create_shard(pg_id, 64 * Mi, "shard meta" + std::to_string(i));
         if (i != empty_shard_seq - 1) { shard_list.emplace_back(shard.id); }
         LOGINFO("pg={} shard {}", pg_id, shard.id);
     }
@@ -144,6 +144,7 @@ TEST_F(HomeObjectFixture, PGBlobIterator) {
         ASSERT_EQ(shard_msg->created_time(), shard->info.created_time);
         ASSERT_EQ(shard_msg->last_modified_time(), shard->info.last_modified_time);
         ASSERT_EQ(shard_msg->total_capacity_bytes(), shard->info.total_capacity_bytes);
+        EXPECT_TRUE(std::memcmp(shard_msg->meta()->data(), shard->info.meta, ShardInfo::meta_length) == 0);
 
         // Verify blob data
         uint64_t packed_blob_size{0};
@@ -264,6 +265,9 @@ TEST_F(HomeObjectFixture, SnapshotReceiveHandler) {
         shard.last_modified_time = shard.created_time;
         shard.total_capacity_bytes = 1024 * Mi;
         shard.lsn = snp_lsn;
+        auto meta_str = "shard meta:" + std::to_string(i);
+        std::memcpy(shard.meta, meta_str.c_str(),meta_str.length());
+        shard.meta[meta_str.size()] = '\0';
 
         auto v_chunk_id = _obj_inst->chunk_selector()->get_most_available_blk_chunk(shard.id, pg_id);
 
@@ -306,8 +310,7 @@ TEST_F(HomeObjectFixture, SnapshotReceiveHandler) {
 
                 // Construct raw blob buffer
                 auto blob = build_blob(cur_blob_id);
-                const auto aligned_hdr_size =
-                    sisl::round_up(sizeof(HSHomeObject::BlobHeader) + blob.user_key.size(), io_align);
+                const auto aligned_hdr_size = sisl::round_up(sizeof(HSHomeObject::BlobHeader), _obj_inst->_data_block_size);
                 sisl::io_blob_safe blob_raw(aligned_hdr_size + blob.body.size(), io_align);
                 HSHomeObject::BlobHeader hdr;
                 hdr.type = HSHomeObject::DataHeader::data_type_t::BLOB_INFO;
@@ -318,18 +321,13 @@ TEST_F(HomeObjectFixture, SnapshotReceiveHandler) {
                 hdr.user_key_size = blob.user_key.size();
                 hdr.object_offset = blob.object_off;
                 hdr.data_offset = aligned_hdr_size;
-                _obj_inst->compute_blob_payload_hash(hdr.hash_algorithm, blob.body.cbytes(), blob.body.size(),
-                                                     reinterpret_cast< uint8_t* >(blob.user_key.data()),
-                                                     blob.user_key.size(), hdr.hash,
+                if (!blob.user_key.empty()) { std::memcpy(hdr.user_key, blob.user_key.data(), blob.user_key.size()); }
+                _obj_inst->compute_blob_payload_hash(hdr.hash_algorithm, blob.body.cbytes(), blob.body.size(), hdr.hash,
                                                      HSHomeObject::BlobHeader::blob_max_hash_len);
                 hdr.seal();
 
                 std::memcpy(blob_raw.bytes(), &hdr, sizeof(HSHomeObject::BlobHeader));
-                if (!blob.user_key.empty()) {
-                    std::memcpy((blob_raw.bytes() + sizeof(HSHomeObject::BlobHeader)), blob.user_key.data(),
-                                blob.user_key.size());
-                }
-                std::memcpy(blob_raw.bytes() + aligned_hdr_size, blob.body.cbytes(), blob.body.size());
+                std::memcpy(blob_raw.bytes() + hdr.data_offset, blob.body.cbytes(), blob.body.size());
 
                 // Simulate blob data corruption - tamper with random bytes
                 if (is_corrupted_batch || blob_state == ResyncBlobState::CORRUPTED) {

@@ -54,12 +54,13 @@ private:
     uint32_t _hs_reserved_blks = 0;
 
     /// Overridable Helpers
-    ShardManager::AsyncResult< ShardInfo > _create_shard(pg_id_t, uint64_t size_bytes, trace_id_t tid) override;
+    ShardManager::AsyncResult< ShardInfo > _create_shard(pg_id_t, uint64_t size_bytes, std::string meta,
+                                                         trace_id_t tid) override;
     ShardManager::AsyncResult< ShardInfo > _seal_shard(ShardInfo const&, trace_id_t tid) override;
 
     BlobManager::AsyncResult< blob_id_t > _put_blob(ShardInfo const&, Blob&&, trace_id_t tid) override;
     BlobManager::AsyncResult< Blob > _get_blob(ShardInfo const&, blob_id_t, uint64_t off, uint64_t len,
-                                               trace_id_t tid) const override;
+                                               bool allow_skip_verify, trace_id_t tid) const override;
     BlobManager::NullAsyncResult _del_blob(ShardInfo const&, blob_id_t, trace_id_t tid) override;
 
     PGManager::NullAsyncResult _create_pg(PGInfo&& pg_info, std::set< peer_id_t > const& peers,
@@ -101,7 +102,25 @@ private:
     // mapping from chunk to shard list.
     std::unordered_map< homestore::chunk_num_t, std::set< shard_id_t > > chunk_to_shards_map_;
 
+    // Shard migration info: tracks shards that need migration from v1 to v2 format
+    std::vector< shard_id_t > shards_to_migrate_;
+
 public:
+    // Old version shard_info_superblk (v0.01) - for backward compatibility testing and migration
+    // v1 ShardInfo did not have the meta field
+    struct v1_ShardInfo {
+        shard_id_t id;
+        pg_id_t placement_group;
+        ShardInfo::State state;
+        uint64_t lsn;
+        uint64_t created_time;
+        uint64_t last_modified_time;
+        uint64_t available_capacity_bytes;
+        uint64_t total_capacity_bytes;
+        std::optional< peer_id_t > current_leader{std::nullopt};
+        // Note: meta field was added in v2
+    };
+
 #pragma pack(1)
     struct pg_members {
         peer_id_t id;
@@ -175,7 +194,7 @@ public:
     };
 
     struct DataHeader {
-        static constexpr uint8_t data_header_version = 0x01;
+        static constexpr uint8_t data_header_version = 0x02;
         static constexpr uint64_t data_header_magic = 0x21fdffdba8d68fc6; // echo "BlobHeader" | md5sum
 
         enum class data_type_t : uint32_t { SHARD_INFO = 1, BLOB_INFO = 2 };
@@ -188,9 +207,22 @@ public:
     };
 
     struct shard_info_superblk : DataHeader {
+        // This version is a common version of DataHeader, each derived struct can have its own version.
+        static constexpr uint8_t shard_sb_version = 0x02;
+
+        uint8_t sb_version{shard_sb_version};
         ShardInfo info;
-        homestore::chunk_num_t p_chunk_id;
-        homestore::chunk_num_t v_chunk_id;
+        homestore::chunk_num_t p_chunk_id{0};
+        homestore::chunk_num_t v_chunk_id{0};
+
+        // backward compatibility
+        bool valid() const { return DataHeader::valid() && sb_version <= shard_sb_version; }
+    };
+
+    struct v1_shard_info_superblk : DataHeader {
+        v1_ShardInfo info;
+        homestore::chunk_num_t p_chunk_id{0};
+        homestore::chunk_num_t v_chunk_id{0};
     };
 
     struct snapshot_ctx_superblk {
@@ -373,6 +405,8 @@ public:
 
         void yield_leadership_to_follower() const;
 
+        void trigger_snapshot_creation(int64_t compact_lsn, bool wait_for_commit) const;
+
         /**
          * Returns all shards
          */
@@ -400,6 +434,8 @@ public:
     // Padding of zeroes is added to make sure the whole payload be aligned to device block size.
     struct BlobHeader : DataHeader {
         static constexpr uint64_t blob_max_hash_len = 32;
+        static constexpr uint64_t max_user_key_length = 1024;
+        static constexpr uint8_t blob_header_version = 0x02;
 
         enum class HashAlgorithm : uint8_t {
             NONE = 0,
@@ -408,6 +444,7 @@ public:
             SHA1 = 3,
         };
 
+        uint8_t blob_hdr_version{blob_header_version};
         HashAlgorithm hash_algorithm;
         mutable uint8_t header_hash[blob_max_hash_len]{};
         uint8_t hash[blob_max_hash_len]{};
@@ -415,17 +452,28 @@ public:
         blob_id_t blob_id;
         uint32_t blob_size;
         uint64_t object_offset; // Offset of this blob in the object. Provided by GW.
-        uint32_t data_offset;   // Offset of actual data blob stored after the metadata.
+        uint32_t data_offset;   // Offset of actual data blob stored after the metadata
         uint32_t user_key_size; // Actual size of the user key.
+        uint8_t user_key[max_user_key_length + 1]{};
+        uint8_t padding[2956]{}; // data_block_size is 4K, so total size of BlobHeader is 4096 bytes
+
+        std::optional< std::string > get_user_key() const {
+            if (user_key_size > max_user_key_length) { return std::nullopt; }
+            std::string ret = user_key_size ? std::string((const char*)user_key, user_key_size) : std::string{};
+            return ret;
+        }
 
         std::string to_string() const {
-            return fmt::format("magic={:#x} version={} shard={:#x} blob_size={} user_size={} algo={} hash={:np}\n",
-                               magic, version, shard_id, blob_size, user_key_size, (uint8_t)hash_algorithm,
-                               spdlog::to_hex(hash, hash + blob_max_hash_len));
+            return fmt::format(
+                "magic={:#x} version={} shard={:#x} blob_size={} user_size={} algo={} hash={:np}, user_key={}\n", magic,
+                version, shard_id, blob_size, user_key_size, (uint8_t)hash_algorithm,
+                spdlog::to_hex(hash, hash + blob_max_hash_len), get_user_key().value_or("<null>"));
         }
 
         bool valid() const {
-            if (!DataHeader::valid()) { return false; }
+            if (!DataHeader::valid() || blob_hdr_version > blob_header_version || user_key_size > max_user_key_length) {
+                return false;
+            }
 
             uint8_t hash_arr[blob_max_hash_len];
             std::memcpy(hash_arr, header_hash, blob_max_hash_len);
@@ -472,7 +520,8 @@ public:
         }
     };
 #pragma pack()
-
+    // size of BlobHeader should be smaller than _data_block_size
+    static_assert(sizeof(BlobHeader) == _data_block_size);
     struct BlobInfo {
         shard_id_t shard_id;
         blob_id_t blob_id;
@@ -693,7 +742,13 @@ private:
     // blob related
     BlobManager::AsyncResult< Blob > _get_blob_data(const shared< homestore::ReplDev >& repl_dev, shard_id_t shard_id,
                                                     blob_id_t blob_id, uint64_t req_offset, uint64_t req_len,
-                                                    const homestore::MultiBlkId& blkid, trace_id_t tid) const;
+                                                    const homestore::MultiBlkId& blkid, trace_id_t tid,
+                                                    bool allow_skip_verify = false) const;
+
+    BlobManager::AsyncResult< Blob > _get_blob_data_partial(const shared< homestore::ReplDev >& repl_dev,
+                                                            shard_id_t shard_id, blob_id_t blob_id, uint64_t req_offset,
+                                                            uint64_t req_len, const homestore::MultiBlkId& blkid,
+                                                            trace_id_t tid) const;
 
     // create pg related
     static PGManager::NullAsyncResult do_create_pg(cshared< homestore::ReplDev > repl_dev, PGInfo&& pg_info,
@@ -719,6 +774,7 @@ private:
     void on_pg_meta_blk_found(sisl::byte_view const& buf, void* meta_cookie);
     void on_shard_meta_blk_found(homestore::meta_blk* mblk, sisl::byte_view buf);
     void on_shard_meta_blk_recover_completed(bool success);
+    void write_migrated_shard_metablks();
     void on_snp_ctx_meta_blk_found(homestore::meta_blk* mblk, sisl::byte_view buf);
     void on_snp_ctx_meta_blk_recover_completed(bool success);
     void on_snp_rcvr_meta_blk_found(homestore::meta_blk* mblk, sisl::byte_view buf);
@@ -947,6 +1003,22 @@ public:
      */
     void yield_pg_leadership_to_follower(int32_t pg_id = 1);
 
+    /**
+     * @brief Manually trigger a snapshot creation.
+     * @param compact_lsn Expected compact up to LSN. Default is -1, meaning it depends directly on the current HS
+     * status.
+     * @param wait_for_commit Wait committed lsn reaches compact_lsn. Default is true, false means the snapshot will be
+     * triggered based on its latest committed lsn and the log compaction depends on min(snapshot_lsn, compact_lsn)
+     *
+     * Recommendation:
+     * - Please keep wait_for_commit=true to make sure the compact_lsn <= committed_lsn when snapshot is created. If you
+     * just want to trigger a snapshot manually or want to update the compact_lsn (already less than committed_lsn) for
+     * log compaction, you can set wait_for_commit=false.
+     * - wait_for_commit=true might cause the caller blocked for a while until the committed_lsn reaches compact_lsn.
+     * Please keep in mind and take action if this function costs too long.
+     */
+    void trigger_snapshot_creation(int32_t pg_id, int64_t compact_lsn, bool wait_for_commit);
+
     // Blob manager related.
     void on_blob_message_rollback(int64_t lsn, sisl::blob const& header, sisl::blob const& key,
                                   cintrusive< homestore::repl_req_ctx >& hs_ctx);
@@ -958,8 +1030,7 @@ public:
     homestore::ReplResult< homestore::blk_alloc_hints >
     blob_put_get_blk_alloc_hints(sisl::blob const& header, cintrusive< homestore::repl_req_ctx >& ctx);
     void compute_blob_payload_hash(BlobHeader::HashAlgorithm algorithm, const uint8_t* blob_bytes, size_t blob_size,
-                                   const uint8_t* user_key_bytes, size_t user_key_size, uint8_t* hash_bytes,
-                                   size_t hash_len) const;
+                                   uint8_t* hash_bytes, size_t hash_len) const;
 
     std::shared_ptr< homestore::IndexTableBase >
     recover_index_table(homestore::superblk< homestore::index_table_sb >&& sb);
@@ -985,6 +1056,8 @@ public:
     BlobManager::Result< std::vector< BlobInfo > > get_shard_blobs(shard_id_t shard_id);
 
 private:
+    BlobManager::Result< std::string > do_verify_blob(const void* blob, shard_id_t expected_shard_id,
+                                                      blob_id_t expected_blob_id = 0) const;
     std::shared_ptr< BlobIndexTable > create_pg_index_table();
     std::shared_ptr< GCBlobIndexTable > create_gc_index_table();
 

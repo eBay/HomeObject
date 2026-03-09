@@ -6,7 +6,7 @@ namespace homeobject {
 
 uint64_t ShardManager::max_shard_size() { return Gi; }
 
-ShardManager::AsyncResult< ShardInfo > MemoryHomeObject::_create_shard(pg_id_t pg_owner, uint64_t size_bytes,
+ShardManager::AsyncResult< ShardInfo > MemoryHomeObject::_create_shard(pg_id_t pg_owner, uint64_t size_bytes, std::string meta,
                                                                        trace_id_t tid) {
     (void)tid;
     auto const now = get_current_timestamp();
