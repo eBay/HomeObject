@@ -1,0 +1,13 @@
+include "scrub_common.fbs";
+
+namespace homeobject;
+
+table BlobScrubReq {
+  scrub_info: ScrubInfo;
+  start: uint64;
+  end: uint64;
+  isdeepscrub: bool;
+}
+
+// BlobScrubReq is used for requesting blob range scrub
+root_type BlobScrubReq;

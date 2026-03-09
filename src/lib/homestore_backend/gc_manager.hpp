@@ -46,9 +46,9 @@ public:
     GCManager& operator=(GCManager&&) = delete;
 
 public:
-    inline static auto const _gc_actor_meta_name = std::string("GCActor");
-    inline static auto const _gc_task_meta_name = std::string("GCTask");
-    inline static auto const _gc_reserved_chunk_meta_name = std::string("GCReservedChunk");
+    inline static auto const gc_actor_meta_name = std::string("GCActor");
+    inline static auto const gc_task_meta_name = std::string("GCTask");
+    inline static auto const gc_reserved_chunk_meta_name = std::string("GCReservedChunk");
     inline static atomic_uint64_t _gc_task_id{1}; // 0 is used for crash recovery
 
 #pragma pack(1)
@@ -61,7 +61,7 @@ public:
         uint64_t failed_egc_task_count{0ull};
         uint64_t total_reclaimed_blk_count_by_gc{0ull};
         uint64_t total_reclaimed_blk_count_by_egc{0ull};
-        static std::string name() { return _gc_actor_meta_name; }
+        static std::string name() { return gc_actor_meta_name; }
     };
 
     struct gc_task_superblk {
@@ -70,12 +70,12 @@ public:
         chunk_id_t vchunk_id;
         pg_id_t pg_id;
         uint8_t priority;
-        static std::string name() { return _gc_task_meta_name; }
+        static std::string name() { return gc_task_meta_name; }
     };
 
     struct gc_reserved_chunk_superblk {
         chunk_id_t chunk_id;
-        static std::string name() { return _gc_reserved_chunk_meta_name; }
+        static std::string name() { return gc_reserved_chunk_meta_name; }
     };
 #pragma pack()
 
