@@ -137,16 +137,16 @@ public:
 
                 // gc task level histogram metrics
                 REGISTER_HISTOGRAM(reclaim_ratio_gc, "the ratio of reclaimed blks to total blks in a gc task",
-                                   HistogramBucketsType(PercentileBuckets)); // 0% to 100% in 128 buckets
+                                   HistogramBucketsType(PercentileBuckets)); // 0% to 100% in 10 buckets (10% increments)
                 REGISTER_HISTOGRAM(
                     gc_time_duration_s_gc, "how long a successful gc task takes by second",
-                    HistogramBucketsType(LinearUpto64Buckets)); // gc task is expected to finish within 1 minutes
+                    HistogramBucketsType(LinearUpto64Buckets)); // 17 buckets covering 0-64 seconds in 4s increments
 
                 REGISTER_HISTOGRAM(reclaim_ratio_egc, "the ratio of reclaimed blks to total blks in an egc task",
-                                   HistogramBucketsType(PercentileBuckets)); // 0% to 100% in 128 buckets
+                                   HistogramBucketsType(PercentileBuckets)); // 0% to 100% in 10 buckets (10% increments)
                 REGISTER_HISTOGRAM(
                     gc_time_duration_s_egc, "how long a successful egc task takes by second",
-                    HistogramBucketsType(LinearUpto64Buckets)); // gc task is expected to finish within 1 minutes
+                    HistogramBucketsType(LinearUpto64Buckets)); // 17 buckets covering 0-64 seconds in 4s increments
 
                 register_me_to_farm();
                 attach_gather_cb(std::bind(&pdev_gc_metrics::on_gather, this));
