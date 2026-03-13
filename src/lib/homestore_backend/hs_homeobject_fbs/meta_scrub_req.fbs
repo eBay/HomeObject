@@ -1,0 +1,13 @@
+include "scrub_common.fbs";
+
+namespace homeobject;
+
+table MetaScrubReq {
+  scrub_type: ScrubType;
+  issuer_uuid : [ubyte];
+  scrub_lsn: int64;
+  scrub_task_id: int64;
+}
+
+// MetaScrubReq is used for requesting metadata scrub (PG/shard metadata)
+// root_type MetaScrubReq;

@@ -1,0 +1,13 @@
+include "scrub_common.fbs";
+
+namespace homeobject;
+
+table ShardScrubReq {
+  scrub_info: ScrubInfo;
+  start: uint64;
+  end: uint64;
+  isdeepscrub: bool;
+}
+
+// ShardScrubReq is used for requesting shard range scrub
+root_type ShardScrubReq;

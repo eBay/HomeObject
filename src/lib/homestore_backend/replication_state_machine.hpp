@@ -240,6 +240,14 @@ public:
     ///
     void on_log_replay_done(const homestore::group_id_t& group_id) override;
 
+    /// @brief  this is called when this node becomes leader for the group
+    /// @param group_id - the group , where all the logs are replayed but not join raft group
+    virtual void on_become_leader(const homestore::group_id_t& group_id) override;
+
+    /// @brief  this is called when this node becomes follower for the group
+    /// @param group_id - the group , where all the logs are replayed but not join raft group
+    virtual void on_become_follower(const homestore::group_id_t& group_id) override;
+
 private:
     HSHomeObject* home_object_{nullptr};
 

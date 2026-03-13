@@ -1,0 +1,31 @@
+include "scrub_common.fbs";
+
+namespace homeobject;
+
+table HashValue {
+  hash:[ubyte];
+}
+
+table ScrubResultValue {
+  result:ScrubResult;
+}
+
+union ScrubValue {
+  HashValue,
+  ScrubResultValue
+}
+
+table DeepBlobScrubResultEntry {
+  blob_key: BlobKey;
+  scrub_result: ScrubValue;
+}
+
+table DeepBlobScrubMap {
+  scrub_info: ScrubInfo;
+  start: uint64;
+  end: uint64;
+  deep_blob_scrub_results: [DeepBlobScrubResultEntry];
+}
+
+// this is used for sending deep scrub result
+root_type DeepBlobScrubMap;

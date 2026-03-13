@@ -30,3 +30,12 @@ add_test(NAME HeapChunkSelectorTest COMMAND test_heap_chunk_selector)
 add_library(homestore_tests_gc OBJECT)
 target_sources(homestore_tests_gc PRIVATE test_homestore_backend.cpp hs_gc_tests.cpp)
 target_link_libraries(homestore_tests_gc homeobject_homestore ${COMMON_TEST_DEPS})
+
+add_library(homestore_tests_scrubber OBJECT)
+target_sources(homestore_tests_scrubber PRIVATE test_homestore_backend.cpp hs_scrubber_tests.cpp)
+target_link_libraries(homestore_tests_scrubber homeobject_homestore ${COMMON_TEST_DEPS})
+
+add_executable(test_mpmc_priority_queue)
+target_sources(test_mpmc_priority_queue PRIVATE test_mpmc_priority_queue.cpp)
+target_link_libraries(test_mpmc_priority_queue homeobject_homestore ${COMMON_TEST_DEPS})
+add_test(NAME MPMCPriorityQueueTest COMMAND test_mpmc_priority_queue)

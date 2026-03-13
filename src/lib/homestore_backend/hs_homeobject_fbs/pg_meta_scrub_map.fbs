@@ -1,0 +1,11 @@
+include "scrub_common.fbs";
+
+namespace homeobject;
+
+table PGMetaScrubMap {
+  scrub_info: ScrubInfo;
+  pg_meta_scrub_result: ScrubResult;
+}
+
+// this is used for sending pg meta scrub result
+root_type PGMetaScrubMap;
