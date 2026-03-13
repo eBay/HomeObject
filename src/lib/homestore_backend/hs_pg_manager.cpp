@@ -398,10 +398,10 @@ void HSHomeObject::on_pg_complete_replace_member(group_id_t group_id, const std:
          boost::uuids::to_string(member_out.id), boost::uuids::to_string(member_in.id), tid);
 }
 
-//This function actually perform rollback for replace member task:  Remove in_member, and ensure out_member exists
+// This function actually perform rollback for replace member task:  Remove in_member, and ensure out_member exists
 void HSHomeObject::on_pg_clean_replace_member_task(group_id_t group_id, const std::string& task_id,
-                                                    const replica_member_info& member_out,
-                                                    const replica_member_info& member_in, trace_id_t tid) {
+                                                   const replica_member_info& member_out,
+                                                   const replica_member_info& member_in, trace_id_t tid) {
     std::unique_lock lck(_pg_lock);
     for (const auto& iter : _pg_map) {
         auto& pg = iter.second;
@@ -421,13 +421,13 @@ void HSHomeObject::on_pg_clean_replace_member_task(group_id_t group_id, const st
 
             LOGI("PG clean replace member task done (rollback), task_id={}, removed in_member={} (removed={}), "
                  "ensured out_member={} (inserted={}), member_nums={}, trace_id={}",
-                 task_id, boost::uuids::to_string(member_in.id), removed_count,
-                 boost::uuids::to_string(member_out.id), inserted, pg->pg_info_.members.size(), tid);
+                 task_id, boost::uuids::to_string(member_in.id), removed_count, boost::uuids::to_string(member_out.id),
+                 inserted, pg->pg_info_.members.size(), tid);
             return;
         }
     }
-    LOGE("PG clean replace member task failed, pg not found, task_id={}, member_out={}, member_in={}, trace_id={}", task_id,
-         boost::uuids::to_string(member_out.id), boost::uuids::to_string(member_in.id), tid);
+    LOGE("PG clean replace member task failed, pg not found, task_id={}, member_out={}, member_in={}, trace_id={}",
+         task_id, boost::uuids::to_string(member_out.id), boost::uuids::to_string(member_in.id), tid);
 }
 
 bool HSHomeObject::reconcile_membership(pg_id_t pg_id) {
@@ -457,7 +457,8 @@ bool HSHomeObject::reconcile_membership(pg_id_t pg_id) {
             // New member not in our records, add with default name
             PGMember new_member(member_id);
             new_members.insert(std::move(new_member));
-            LOGE("Adding new member {} to pg={} membership, should not happen!", boost::uuids::to_string(member_id), hs_pg->pg_info_.id);
+            LOGE("Adding new member {} to pg={} membership, should not happen!", boost::uuids::to_string(member_id),
+                 hs_pg->pg_info_.id);
         }
     }
     // Check if membership changed
@@ -471,9 +472,7 @@ bool HSHomeObject::reconcile_membership(pg_id_t pg_id) {
     std::vector< peer_id_t > added_members;
 
     for (auto& old_member : hs_pg->pg_info_.members) {
-        if (new_members.find(old_member) == new_members.end()) {
-            removed_members.push_back(old_member.id);
-        }
+        if (new_members.find(old_member) == new_members.end()) { removed_members.push_back(old_member.id); }
     }
 
     for (auto& new_member : new_members) {
@@ -482,7 +481,8 @@ bool HSHomeObject::reconcile_membership(pg_id_t pg_id) {
         }
     }
 
-    LOGI("Reconciling PG {} membership: removing {} members, adding {} members, old membership count {}, new membership count: {}",
+    LOGI("Reconciling PG {} membership: removing {} members, adding {} members, old membership count {}, new "
+         "membership count: {}",
          pg_id, removed_members.size(), added_members.size(), hs_pg->pg_info_.members.size(), new_members.size());
 
     for (auto& member_id : removed_members) {
@@ -1243,6 +1243,62 @@ uint32_t HSHomeObject::get_pg_tombstone_blob_count(pg_id_t pg_id) const {
                    pg_id);
 
     return tombstone_blob_count;
+}
+
+void HSHomeObject::refresh_pg_statistics(pg_id_t pg_id) {
+    auto hs_pg = const_cast< HS_PG* >(_get_hs_pg_unlocked(pg_id));
+    RELEASE_ASSERT(hs_pg != nullptr, "Failed to get pg={} for statistics refresh", pg_id);
+
+    // Step 1: Scan index table to count active and tombstone blobs in one pass
+    uint64_t active_count = 0;
+    uint64_t tombstone_count = 0;
+
+    auto start_key =
+        BlobRouteKey{BlobRoute{uint64_t(pg_id) << homeobject::shard_width, std::numeric_limits< uint64_t >::min()}};
+    auto end_key =
+        BlobRouteKey{BlobRoute{uint64_t(pg_id + 1) << homeobject::shard_width, std::numeric_limits< uint64_t >::min()}};
+
+    homestore::BtreeQueryRequest< BlobRouteKey > query_req{
+        homestore::BtreeKeyRange< BlobRouteKey >{std::move(start_key), true /* inclusive */, std::move(end_key),
+                                                 false /* inclusive */},
+        homestore::BtreeQueryType::SWEEP_NON_INTRUSIVE_PAGINATION_QUERY,
+        std::numeric_limits< uint32_t >::max() /* blob count in a pg will not exceed uint32_t_max*/,
+        [&active_count, &tombstone_count](homestore::BtreeKey const& key,
+                                          homestore::BtreeValue const& value) mutable -> bool {
+            BlobRouteValue blob_value{value};
+            if (blob_value.pbas() == HSHomeObject::tombstone_pbas) {
+                tombstone_count++;
+            } else {
+                active_count++;
+            }
+            return false; // Continue scanning
+        }};
+
+    std::vector< std::pair< BlobRouteKey, BlobRouteValue > > dummy_out;
+    auto ret = hs_pg->index_table_->query(query_req, dummy_out);
+    RELEASE_ASSERT(ret == homestore::btree_status_t::success || ret == homestore::btree_status_t::has_more,
+                   "Failed to scan index table for pg={}, status={}", pg_id, ret);
+
+    // Step 2: Scan chunks to calculate total occupied blocks
+    auto chunk_ids = chunk_selector()->get_pg_chunks(pg_id);
+    RELEASE_ASSERT(chunk_ids != nullptr, "Failed to get chunks for pg={}", pg_id);
+
+    uint64_t total_occupied = 0;
+    for (const auto& chunk_id : *chunk_ids) {
+        auto vchunk = chunk_selector()->get_extend_vchunk(chunk_id);
+        RELEASE_ASSERT(vchunk != nullptr, "Failed to get vchunk={} for pg={}", chunk_id, pg_id);
+        total_occupied += vchunk->get_used_blks();
+    }
+
+    // Step 3: Update durable_entities (atomic variables in memory)
+    hs_pg->durable_entities_update([active_count, tombstone_count, total_occupied](auto& de) {
+        de.active_blob_count.store(active_count, std::memory_order_relaxed);
+        de.tombstone_blob_count.store(tombstone_count, std::memory_order_relaxed);
+        de.total_occupied_blk_count.store(total_occupied, std::memory_order_relaxed);
+    });
+
+    LOGI("Refreshed statistics for pg={}: active_blobs={}, tombstone_blobs={}, occupied_blocks={}", pg_id, active_count,
+         tombstone_count, total_occupied);
 }
 
 void HSHomeObject::update_pg_meta_after_gc(const pg_id_t pg_id, const homestore::chunk_num_t move_from_chunk,
