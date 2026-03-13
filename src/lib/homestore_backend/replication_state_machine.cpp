@@ -1046,6 +1046,10 @@ void ReplicationStateMachine::on_log_replay_done(const homestore::group_id_t& gr
             LOGD("vchunk={} is selected for shard={} in pg={} when recovery", vchunk_id, shard_sb->info.id, pg_id);
         }
     }
+
+    // Refresh PG statistics after log replay
+    LOGI("Starting statistics refresh for pg={}", pg_id);
+    home_object_->refresh_pg_statistics(pg_id);
 }
 
 } // namespace homeobject
