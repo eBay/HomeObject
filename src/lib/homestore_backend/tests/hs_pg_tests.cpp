@@ -427,3 +427,86 @@ TEST_F(HomeObjectFixture, CreatePGFailed) {
     ASSERT_TRUE(pg_exist(pg_id));
 }
 #endif
+
+TEST_F(HomeObjectFixture, PGRefreshStatisticsTest) {
+    LOGINFO("HomeObject replica={} setup completed", g_helper->replica_num());
+    g_helper->sync();
+
+    // Create a pg and shard
+    pg_id_t pg_id{1};
+    create_pg(pg_id);
+    auto shard_info = create_shard(pg_id, 64 * Mi, "shard meta");
+    auto shard_id = shard_info.id;
+    auto s = _obj_inst->shard_manager()->get_shard(shard_id).get();
+    ASSERT_TRUE(!!s);
+    LOGINFO("Created shard {}", shard_info.id);
+
+    // Put some blobs to populate statistics using put_blobs
+    const uint32_t num_active_blobs = 10;
+    std::map< pg_id_t, blob_id_t > pg_blob_id;
+    pg_blob_id[pg_id] = 0;
+    std::map< pg_id_t, std::vector< shard_id_t > > pg_shard_id_vec;
+    pg_shard_id_vec[pg_id] = {shard_id};
+
+    auto shard_blob_map = put_blobs(pg_shard_id_vec, num_active_blobs, pg_blob_id);
+    LOGINFO("Put {} active blobs", num_active_blobs);
+
+    // Delete some blobs to create tombstones
+    const uint32_t num_tombstones = 3;
+    for (uint32_t i = 0; i < num_tombstones; ++i) {
+        del_blob(pg_id, shard_id, i);
+    }
+    LOGINFO("Created {} tombstone blobs", num_tombstones);
+
+    // Get PG from _pg_map
+    ASSERT_TRUE(_obj_inst->_pg_map.find(pg_id) != _obj_inst->_pg_map.end());
+    auto hs_pg = dynamic_cast< HSHomeObject::HS_PG* >(_obj_inst->_pg_map[pg_id].get());
+    ASSERT_NE(hs_pg, nullptr);
+
+    // Manually corrupt statistics to simulate desync
+    hs_pg->durable_entities_update([](auto& de) {
+        de.active_blob_count.store(999, std::memory_order_relaxed);
+        de.tombstone_blob_count.store(888, std::memory_order_relaxed);
+        de.total_occupied_blk_count.store(777, std::memory_order_relaxed);
+    });
+    LOGINFO("Corrupted statistics: active=999, tombstone=888, occupied=777");
+
+    // Call refresh_pg_statistics
+    _obj_inst->refresh_pg_statistics(pg_id);
+
+    // Verify statistics are corrected (no direct access to durable_entities_)
+    // Use PG stats API to verify
+    PGStats pg_stats;
+    auto res = _obj_inst->pg_manager()->get_stats(pg_id, pg_stats);
+    ASSERT_TRUE(res);
+    LOGINFO("Statistics after refresh: stats={}", pg_stats.to_string());
+
+    // Verify counts through stats API
+    EXPECT_EQ(pg_stats.num_active_objects, num_active_blobs - num_tombstones)
+        << "Active blob count should be " << (num_active_blobs - num_tombstones);
+    EXPECT_EQ(pg_stats.num_tombstone_objects, num_tombstones) << "Tombstone blob count should be " << num_tombstones;
+    EXPECT_GT(pg_stats.used_bytes, 0) << "Used bytes should be greater than 0";
+
+    uint64_t used_bytes_after = pg_stats.used_bytes;
+
+    // Test refresh_pg_statistics after restart (log replay scenario)
+    LOGINFO("Testing statistics refresh after restart");
+    restart();
+
+    // Get PG after restart
+    ASSERT_TRUE(_obj_inst->_pg_map.find(pg_id) != _obj_inst->_pg_map.end());
+    hs_pg = dynamic_cast< HSHomeObject::HS_PG* >(_obj_inst->_pg_map[pg_id].get());
+    ASSERT_NE(hs_pg, nullptr);
+
+    // Statistics should be preserved after restart
+    PGStats pg_stats_restart;
+    res = _obj_inst->pg_manager()->get_stats(pg_id, pg_stats_restart);
+    ASSERT_TRUE(res);
+    LOGINFO("Statistics after restart: stats={}", pg_stats_restart.to_string());
+
+    EXPECT_EQ(pg_stats_restart.num_active_objects, num_active_blobs - num_tombstones)
+        << "Active blob count should be preserved after restart";
+    EXPECT_EQ(pg_stats_restart.num_tombstone_objects, num_tombstones)
+        << "Tombstone blob count should be preserved after restart";
+    EXPECT_EQ(pg_stats_restart.used_bytes, used_bytes_after) << "Used bytes should be preserved after restart";
+}

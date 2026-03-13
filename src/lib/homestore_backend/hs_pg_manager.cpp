@@ -1247,7 +1247,7 @@ uint32_t HSHomeObject::get_pg_tombstone_blob_count(pg_id_t pg_id) const {
 
 void HSHomeObject::refresh_pg_statistics(pg_id_t pg_id) {
     auto hs_pg = const_cast< HS_PG* >(_get_hs_pg_unlocked(pg_id));
-    RELEASE_ASSERT(hs_pg != nullptr, "Failed to get pg={} for statistics refresh", pg_id);
+    RELEASE_ASSERT(hs_pg, "Failed to get pg={} for statistics refresh", pg_id);
 
     // Step 1: Scan index table to count active and tombstone blobs in one pass
     uint64_t active_count = 0;
@@ -1276,29 +1276,42 @@ void HSHomeObject::refresh_pg_statistics(pg_id_t pg_id) {
 
     std::vector< std::pair< BlobRouteKey, BlobRouteValue > > dummy_out;
     auto ret = hs_pg->index_table_->query(query_req, dummy_out);
-    RELEASE_ASSERT(ret == homestore::btree_status_t::success || ret == homestore::btree_status_t::has_more,
-                   "Failed to scan index table for pg={}, status={}", pg_id, ret);
+    RELEASE_ASSERT(ret == homestore::btree_status_t::success, "Failed to scan index table for pg={}, status={}", pg_id,
+                   ret);
 
     // Step 2: Scan chunks to calculate total occupied blocks
     auto chunk_ids = chunk_selector()->get_pg_chunks(pg_id);
-    RELEASE_ASSERT(chunk_ids != nullptr, "Failed to get chunks for pg={}", pg_id);
+    RELEASE_ASSERT(chunk_ids, "Failed to get chunks for pg={}", pg_id);
 
     uint64_t total_occupied = 0;
     for (const auto& chunk_id : *chunk_ids) {
         auto vchunk = chunk_selector()->get_extend_vchunk(chunk_id);
-        RELEASE_ASSERT(vchunk != nullptr, "Failed to get vchunk={} for pg={}", chunk_id, pg_id);
+        RELEASE_ASSERT(vchunk, "Failed to get vchunk={} for pg={}", chunk_id, pg_id);
         total_occupied += vchunk->get_used_blks();
     }
 
-    // Step 3: Update durable_entities (atomic variables in memory)
-    hs_pg->durable_entities_update([active_count, tombstone_count, total_occupied](auto& de) {
+    // Step 3: Update durable_entities and capture original values for debugging
+    uint64_t original_active_count = 0;
+    uint64_t original_tombstone_count = 0;
+    uint64_t original_occupied_count = 0;
+
+    hs_pg->durable_entities_update([active_count, tombstone_count, total_occupied, &original_active_count,
+                                    &original_tombstone_count, &original_occupied_count](auto& de) {
+        // Capture original values
+        original_active_count = de.active_blob_count.load(std::memory_order_relaxed);
+        original_tombstone_count = de.tombstone_blob_count.load(std::memory_order_relaxed);
+        original_occupied_count = de.total_occupied_blk_count.load(std::memory_order_relaxed);
+
+        // Update with corrected values
         de.active_blob_count.store(active_count, std::memory_order_relaxed);
         de.tombstone_blob_count.store(tombstone_count, std::memory_order_relaxed);
         de.total_occupied_blk_count.store(total_occupied, std::memory_order_relaxed);
     });
 
-    LOGI("Refreshed statistics for pg={}: active_blobs={}, tombstone_blobs={}, occupied_blocks={}", pg_id, active_count,
-         tombstone_count, total_occupied);
+    LOGI("[corrected] Refreshed statistics for pg={}: active_blobs={} (original={}), tombstone_blobs={} (original={}), "
+         "occupied_blocks={} (original={})",
+         pg_id, active_count, original_active_count, tombstone_count, original_tombstone_count, total_occupied,
+         original_occupied_count);
 }
 
 void HSHomeObject::update_pg_meta_after_gc(const pg_id_t pg_id, const homestore::chunk_num_t move_from_chunk,
