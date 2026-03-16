@@ -576,12 +576,10 @@ public:
                 REGISTER_COUNTER(snp_dnr_error_count, "Error times when reading blobs in baseline resync");
                 REGISTER_HISTOGRAM(snp_dnr_blob_process_latency,
                                    "Time cost(us) of successfully process a blob in baseline resync",
-                                   HistogramBucketsType(LowResolutionLatecyBuckets),
-                                   _publish_as::publish_as_sum_count);
+                                   HistogramBucketsType(LowResolutionLatecyBuckets), _publish_as::publish_as_sum_count);
                 REGISTER_HISTOGRAM(snp_dnr_batch_process_latency,
                                    "Time cost(ms) of successfully process a batch in baseline resync",
-                                   HistogramBucketsType(LowResolutionLatecyBuckets),
-                                   _publish_as::publish_as_sum_count);
+                                   HistogramBucketsType(LowResolutionLatecyBuckets), _publish_as::publish_as_sum_count);
                 REGISTER_HISTOGRAM(snp_dnr_batch_e2e_latency,
                                    "Time cost(ms) of a batch end-to-end round trip in baseline resync",
                                    HistogramBucketsType(LowResolutionLatecyBuckets));
@@ -684,12 +682,10 @@ public:
                 REGISTER_GAUGE(snp_rcvr_error_count, "Error count in baseline resync");
                 REGISTER_HISTOGRAM(snp_rcvr_blob_process_time,
                                    "Time cost(us) of successfully process a blob in baseline resync",
-                                   HistogramBucketsType(LowResolutionLatecyBuckets),
-                                   _publish_as::publish_as_sum_count);
+                                   HistogramBucketsType(LowResolutionLatecyBuckets), _publish_as::publish_as_sum_count);
                 REGISTER_HISTOGRAM(snp_rcvr_batch_process_time,
                                    "Time cost(ms) of successfully process a batch in baseline resync",
-                                   HistogramBucketsType(LowResolutionLatecyBuckets),
-                                   _publish_as::publish_as_sum_count);
+                                   HistogramBucketsType(LowResolutionLatecyBuckets), _publish_as::publish_as_sum_count);
 
                 attach_gather_cb(std::bind(&ReceiverSnapshotMetrics::on_gather, this));
                 register_me_to_farm();
@@ -1058,6 +1054,9 @@ public:
                      bool allow_delete_marker = false) const;
 
     BlobManager::Result< std::vector< BlobInfo > > get_shard_blobs(shard_id_t shard_id);
+
+    // Refresh PG statistics (called after log replay)
+    void refresh_pg_statistics(pg_id_t pg_id);
 
 private:
     BlobManager::Result< std::string > do_verify_blob(const void* blob, shard_id_t expected_shard_id,
