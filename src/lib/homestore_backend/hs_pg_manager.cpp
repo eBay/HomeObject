@@ -1308,7 +1308,7 @@ void HSHomeObject::refresh_pg_statistics(pg_id_t pg_id) {
         de.total_occupied_blk_count.store(total_occupied, std::memory_order_relaxed);
     });
 
-    LOGI("[corrected] Refreshed statistics for pg={}: active_blobs={} (original={}), tombstone_blobs={} (original={}), "
+    LOGI("Refreshed statistics for pg={}: active_blobs={} (original={}), tombstone_blobs={} (original={}), "
          "occupied_blocks={} (original={})",
          pg_id, active_count, original_active_count, tombstone_count, original_tombstone_count, total_occupied,
          original_occupied_count);

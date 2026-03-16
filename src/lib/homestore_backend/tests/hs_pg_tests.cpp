@@ -463,7 +463,7 @@ TEST_F(HomeObjectFixture, PGRefreshStatisticsTest) {
     auto hs_pg = dynamic_cast< HSHomeObject::HS_PG* >(_obj_inst->_pg_map[pg_id].get());
     ASSERT_NE(hs_pg, nullptr);
 
-    // Manually corrupt statistics to simulate desync
+    // Manually corrupt statistics to simulate inconsistency
     hs_pg->durable_entities_update([](auto& de) {
         de.active_blob_count.store(999, std::memory_order_relaxed);
         de.tombstone_blob_count.store(888, std::memory_order_relaxed);
@@ -488,6 +488,14 @@ TEST_F(HomeObjectFixture, PGRefreshStatisticsTest) {
     EXPECT_GT(pg_stats.used_bytes, 0) << "Used bytes should be greater than 0";
 
     uint64_t used_bytes_after = pg_stats.used_bytes;
+
+    // corrupt stats again to verify refresh after restart
+    hs_pg->durable_entities_update([](auto& de) {
+        de.active_blob_count.store(999, std::memory_order_relaxed);
+        de.tombstone_blob_count.store(888, std::memory_order_relaxed);
+        de.total_occupied_blk_count.store(777, std::memory_order_relaxed);
+    });
+    LOGINFO("Corrupted statistics: active=999, tombstone=888, occupied=777");
 
     // Test refresh_pg_statistics after restart (log replay scenario)
     LOGINFO("Testing statistics refresh after restart");
