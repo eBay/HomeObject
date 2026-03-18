@@ -136,14 +136,16 @@ public:
                 REGISTER_COUNTER(gc_write_blk_count, "Total written blk count by gc in this pdev");
 
                 // gc task level histogram metrics
-                REGISTER_HISTOGRAM(reclaim_ratio_gc, "the ratio of reclaimed blks to total blks in a gc task",
-                                   HistogramBucketsType(PercentileBuckets)); // 0% to 100% in 10 buckets (10% increments)
+                REGISTER_HISTOGRAM(
+                    reclaim_ratio_gc, "the ratio of reclaimed blks to total blks in a gc task",
+                    HistogramBucketsType(PercentileBuckets)); // 0% to 100% in 10 buckets (10% increments)
                 REGISTER_HISTOGRAM(
                     gc_time_duration_s_gc, "how long a successful gc task takes by second",
                     HistogramBucketsType(LinearUpto64Buckets)); // 17 buckets covering 0-64 seconds in 4s increments
 
-                REGISTER_HISTOGRAM(reclaim_ratio_egc, "the ratio of reclaimed blks to total blks in an egc task",
-                                   HistogramBucketsType(PercentileBuckets)); // 0% to 100% in 10 buckets (10% increments)
+                REGISTER_HISTOGRAM(
+                    reclaim_ratio_egc, "the ratio of reclaimed blks to total blks in an egc task",
+                    HistogramBucketsType(PercentileBuckets)); // 0% to 100% in 10 buckets (10% increments)
                 REGISTER_HISTOGRAM(
                     gc_time_duration_s_egc, "how long a successful egc task takes by second",
                     HistogramBucketsType(LinearUpto64Buckets)); // 17 buckets covering 0-64 seconds in 4s increments
@@ -226,7 +228,7 @@ public:
         // return true if the data copy is successful, false otherwise.
         bool copy_valid_data(chunk_id_t move_from_chunk, chunk_id_t move_to_chunk,
                              folly::ConcurrentHashMap< BlobRouteByChunk, BlobRouteValue >& copied_blobs,
-                             const uint64_t task_id);
+                             const uint8_t priority, const uint64_t task_id);
 
         // before we select a reserved chunk and start gc, we need:
         //  1 clear all the entries of this chunk in the gc index table
