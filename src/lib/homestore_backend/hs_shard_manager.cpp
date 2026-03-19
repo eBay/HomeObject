@@ -114,8 +114,8 @@ ShardInfo HSHomeObject::deserialize_shard_info(const char* json_str, size_t str_
     return shard_info;
 }
 
-ShardManager::AsyncResult< ShardInfo > HSHomeObject::_create_shard(pg_id_t pg_owner, uint64_t size_bytes, std::string meta,
-                                                                   trace_id_t tid) {
+ShardManager::AsyncResult< ShardInfo > HSHomeObject::_create_shard(pg_id_t pg_owner, uint64_t size_bytes,
+                                                                   std::string meta, trace_id_t tid) {
 
     if (is_shutting_down()) {
         LOGI("service is being shut down");
@@ -452,12 +452,17 @@ void HSHomeObject::local_create_shard(ShardInfo shard_info, homestore::chunk_num
     }
 
     if (!shard_exist) {
-        add_new_shard_to_map(std::make_unique< HS_Shard >(shard_info, p_chunk_id, v_chunk_id));
         // select_specific_chunk() will do something only when we are relaying journal after restart, during the
         // runtime flow chunk is already been be mark busy when we write the shard info to the repldev.
-        auto pg_id = shard_info.placement_group;
+        const auto pg_id = shard_info.placement_group;
         auto chunk = chunk_selector_->select_specific_chunk(pg_id, v_chunk_id);
         RELEASE_ASSERT(chunk != nullptr, "chunk selection failed with v_chunk_id={} in pg={}", v_chunk_id, pg_id);
+
+        // we need to add shard to map after chunk is marked in_use. Otherwise, there is a corner case that put_blob
+        // comes and try to select chunk before the chunk is marked in_use, and at the same time gc kicks in (since the
+        // chunk is still marked as available), then data loss will happen since gc is work on a chunk which is
+        // accepting new blobs.
+        add_new_shard_to_map(std::make_unique< HS_Shard >(shard_info, p_chunk_id, v_chunk_id));
     } else {
         SLOGD(tid, shard_info.id, "shard already exist, skip creating shard");
     }
@@ -544,12 +549,6 @@ void HSHomeObject::on_shard_message_commit(int64_t lsn, sisl::blob const& h, hom
         RELEASE_ASSERT(state == ShardInfo::State::SEALED,
                        "try to commit SEAL_SHARD_MSG but shard state is not sealed. shardID={}", shard_info.id);
 
-        auto pg_id = shard_info.placement_group;
-        auto v_chunkID = get_shard_v_chunk_id(shard_info.id);
-        RELEASE_ASSERT(v_chunkID.has_value(), "v_chunk id not found");
-        bool res = chunk_selector()->release_chunk(pg_id, v_chunkID.value());
-        RELEASE_ASSERT(res, "Failed to release v_chunk_id={}, pg={}", v_chunkID.value(), pg_id);
-
         // Corner case:
         // Assume cp_lsn = dc_lsn = 10.
         // lsn 11: put_blob (blob -> pba in chunk-1)
@@ -575,6 +574,12 @@ void HSHomeObject::on_shard_message_commit(int64_t lsn, sisl::blob const& h, hom
         // This guarantees all logs before SEAL_SHARD are replay-committed before GC starts.
         repl_dev->flush_durable_commit_lsn();
         update_shard_in_map(shard_info);
+
+        auto pg_id = shard_info.placement_group;
+        auto v_chunkID = get_shard_v_chunk_id(shard_info.id);
+        RELEASE_ASSERT(v_chunkID.has_value(), "v_chunk id not found");
+        bool res = chunk_selector()->release_chunk(pg_id, v_chunkID.value());
+        RELEASE_ASSERT(res, "Failed to release v_chunk_id={}, pg={}", v_chunkID.value(), pg_id);
 
         if (ctx) { ctx->promise_.setValue(ShardManager::Result< ShardInfo >(shard_info)); }
         SLOGD(tid, shard_info.id, "Commit done for sealing shard");

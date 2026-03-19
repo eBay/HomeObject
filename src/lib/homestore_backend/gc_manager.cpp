@@ -655,7 +655,9 @@ sisl::sg_list GCManager::pdev_gc_actor::generate_shard_super_blk_sg_list(shard_i
 // note that, when we copy data, there is not create shard or put blob in this chunk, only delete blob might happen.
 bool GCManager::pdev_gc_actor::copy_valid_data(
     chunk_id_t move_from_chunk, chunk_id_t move_to_chunk,
-    folly::ConcurrentHashMap< BlobRouteByChunk, BlobRouteValue >& copied_blobs, const uint64_t task_id) {
+    folly::ConcurrentHashMap< BlobRouteByChunk, BlobRouteValue >& copied_blobs, const uint8_t priority,
+    const uint64_t task_id) {
+
     auto move_to_vchunk = m_chunk_selector->get_extend_vchunk(move_to_chunk);
     auto move_from_vchunk = m_chunk_selector->get_extend_vchunk(move_from_chunk);
 
@@ -691,7 +693,13 @@ bool GCManager::pdev_gc_actor::copy_valid_data(
     // open state. but if the emergent gc is triggered by a creat_shard request, then the last shard is not in open
     // state, it is in sealed state.
     if (last_shard_state == ShardInfo::State::OPEN) {
-        GCLOGW(task_id, pg_id, last_shard_id, "last shard in move_from_chunk={} has a state of OPEN!", move_from_chunk);
+        // for normal gc, all the shards in move_from_chunk should be in sealed state.
+        if (priority == static_cast< uint8_t >(task_priority::normal)) {
+            GCLOGE(task_id, pg_id, last_shard_id,
+                   "last shard in move_from_chunk={} has a state of OPEN in a normal gc task, which is unexpected!",
+                   move_from_chunk);
+            return false;
+        }
     }
 
     homestore::blk_alloc_hints hints;
@@ -1219,7 +1227,7 @@ void GCManager::pdev_gc_actor::process_gc_task(chunk_id_t move_from_chunk, uint8
     }
 
     folly::ConcurrentHashMap< BlobRouteByChunk, BlobRouteValue > copied_blobs;
-    if (!copy_valid_data(move_from_chunk, move_to_chunk, copied_blobs, task_id)) {
+    if (!copy_valid_data(move_from_chunk, move_to_chunk, copied_blobs, priority, task_id)) {
         GCLOGW(task_id, pg_id, NO_SHARD_ID,
                "failed to copy data from move_from_chunk={} to move_to_chunk={} with priority={}", move_from_chunk,
                move_to_chunk, priority);
