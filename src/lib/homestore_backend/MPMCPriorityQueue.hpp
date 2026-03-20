@@ -72,32 +72,34 @@ public:
      * @brief Thread-safe push operation (copy)
      *
      * @param value Element to insert
-     * @note No-op if queue is closed
+     * @return true if pushed successfully, false if queue is closed
      */
-    void push(const T& value) {
+    bool push(const T& value) {
         {
             std::scoped_lock lock(mutex_);
             if (closed_) [[unlikely]] {
-                return; // Silently ignore pushes to closed queue
+                return false; // Queue is closed, cannot push
             }
             pq_.push(value);
         }
         cv_.notify_one(); // Wake one waiting consumer
+        return true;
     }
 
     /**
      * @brief Thread-safe push operation (move)
      *
      * @param value Element to insert (will be moved)
-     * @note No-op if queue is closed
+     * @return true if pushed successfully, false if queue is closed
      */
-    void push(T&& value) {
+    bool push(T&& value) {
         {
             std::scoped_lock lock(mutex_);
-            if (closed_) [[unlikely]] { return; }
+            if (closed_) [[unlikely]] { return false; }
             pq_.push(std::move(value));
         }
         cv_.notify_one();
+        return true;
     }
 
     /**

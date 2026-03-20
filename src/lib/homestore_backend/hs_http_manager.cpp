@@ -17,11 +17,37 @@
 #include <sisl/version.hpp>
 #include <sisl/settings/settings.hpp>
 #include <boost/uuid/string_generator.hpp>
+#include <boost/uuid/uuid_io.hpp>
+#include <ctime>
+#include <limits>
+#include <string>
 
 #include "hs_http_manager.hpp"
 #include "hs_homeobject.hpp"
 
 namespace homeobject {
+
+namespace {
+// Helper function to format time as ISO 8601
+std::string format_iso8601_time(const std::chrono::system_clock::time_point& tp) {
+    auto time_t = std::chrono::system_clock::to_time_t(tp);
+    std::tm tm;
+    gmtime_r(&time_t, &tm); // Thread-safe version
+    char buf[32];
+    std::strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%SZ", &tm);
+    return std::string(buf);
+}
+
+// Helper to count total items across peer map
+template < typename PeerMap >
+size_t count_peer_map_items(const PeerMap& peer_map) {
+    size_t count = 0;
+    for (const auto& [peer_id, items] : peer_map) {
+        count += items.size();
+    }
+    return count;
+}
+} // anonymous namespace
 
 HttpManager::HttpManager(HSHomeObject& ho) : ho_(ho) {
     using namespace Pistache;
@@ -74,7 +100,13 @@ HttpManager::HttpManager(HSHomeObject& ho) : ho_(ho) {
         {Pistache::Http::Method::Post, "/api/v1/trigger_gc",
          Pistache::Rest::Routes::bind(&HttpManager::trigger_gc, this)},
         {Pistache::Http::Method::Get, "/api/v1/gc_job_status",
-         Pistache::Rest::Routes::bind(&HttpManager::get_gc_job_status, this)}};
+         Pistache::Rest::Routes::bind(&HttpManager::get_gc_job_status, this)},
+        {Pistache::Http::Method::Post, "/api/v1/trigger_pg_scrub",
+         Pistache::Rest::Routes::bind(&HttpManager::trigger_pg_scrub, this)},
+        {Pistache::Http::Method::Get, "/api/v1/scrub_job_status",
+         Pistache::Rest::Routes::bind(&HttpManager::get_scrub_job_status, this)},
+        {Pistache::Http::Method::Post, "/api/v1/cancel_scrub_job",
+         Pistache::Rest::Routes::bind(&HttpManager::cancel_scrub_job, this)}};
 
     auto http_server = ioenvironment.get_http_server();
     if (!http_server) {
@@ -486,6 +518,162 @@ void HttpManager::exit_pg(const Pistache::Rest::Request& request, Pistache::Http
     response.send(Pistache::Http::Code::Ok, "Exit pg request submitted");
 }
 
+void HttpManager::trigger_pg_scrub(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response) {
+    auto scrub_mgr = ho_.scrub_manager();
+    if (!scrub_mgr) {
+        response.send(Pistache::Http::Code::Internal_Server_Error, "Scrub manager not available");
+        return;
+    }
+
+    // Get query parameters
+    const auto pg_id_param = request.query().get("pg_id");
+    const auto is_deep_param = request.query().get("deep");
+    const auto force_param = request.query().get("force");
+
+    // Validate pg_id parameter (required)
+    if (!pg_id_param || pg_id_param.value().empty()) {
+        nlohmann::json error;
+        error["error"] = "Missing required parameter: pg_id";
+        error["usage"] = "POST /api/v1/trigger_pg_scrub?pg_id=<id>&deep=<true|false>&force=<true|false>";
+        response.send(Pistache::Http::Code::Bad_Request, error.dump());
+        return;
+    }
+
+    uint16_t pg_id;
+    try {
+        auto val = std::stoul(pg_id_param.value());
+        if (val > std::numeric_limits< uint16_t >::max()) {
+            nlohmann::json error;
+            error["error"] = "pg_id out of range";
+            error["pg_id"] = pg_id_param.value();
+            response.send(Pistache::Http::Code::Bad_Request, error.dump());
+            return;
+        }
+        pg_id = static_cast< uint16_t >(val);
+    } catch (const std::invalid_argument& e) {
+        nlohmann::json error;
+        error["error"] = "Invalid pg_id format: not a number";
+        error["pg_id"] = pg_id_param.value();
+        response.send(Pistache::Http::Code::Bad_Request, error.dump());
+        return;
+    } catch (const std::out_of_range& e) {
+        nlohmann::json error;
+        error["error"] = "pg_id out of range";
+        error["pg_id"] = pg_id_param.value();
+        response.send(Pistache::Http::Code::Bad_Request, error.dump());
+        return;
+    }
+
+    // Parse optional parameters
+    bool is_deep = false;
+    if (is_deep_param && !is_deep_param.value().empty()) {
+        const auto& value = is_deep_param.value();
+        is_deep = (value == "true" || value == "1" || value == "yes");
+    }
+
+    bool force = false;
+    if (force_param && !force_param.value().empty()) {
+        const auto& value = force_param.value();
+        force = (value == "true" || value == "1" || value == "yes");
+    }
+
+    LOGINFO("Received trigger_pg_scrub request for pg_id={}, deep={}, force={}", pg_id, is_deep, force);
+
+    // Verify PG exists
+    auto hs_pg = ho_.get_hs_pg(pg_id);
+    if (!hs_pg) {
+        nlohmann::json error;
+        error["error"] = "PG not found";
+        error["pg_id"] = pg_id;
+        response.send(Pistache::Http::Code::Not_Found, error.dump());
+        return;
+    }
+
+    // Generate job ID and create job info
+    const auto job_id = generate_job_id();
+    auto job_info = std::make_shared< ScrubJobInfo >(job_id, pg_id, is_deep);
+
+    {
+        std::lock_guard< std::shared_mutex > lock(scrub_job_mutex_);
+        scrub_jobs_map_.set(job_id, job_info);
+    }
+
+    // Prepare immediate response
+    nlohmann::json result;
+    result["job_id"] = job_id;
+    result["pg_id"] = pg_id;
+    result["scrub_type"] = is_deep ? "deep" : "shallow";
+    result["force"] = force;
+    result["message"] = "Scrub task submitted, query status using /api/v1/scrub_job_status?job_id=" + job_id;
+
+    // Return immediately with HTTP 202 Accepted
+    response.send(Pistache::Http::Code::Accepted, result.dump());
+
+    // Submit scrub task (MANUALLY trigger type) - runs asynchronously
+    scrub_mgr->submit_scrub_task(pg_id, is_deep, force, SCRUB_TRIGGER_TYPE::MANUALLY)
+        .via(&folly::InlineExecutor::instance())
+        .thenValue([job_info, is_deep](std::shared_ptr< ScrubManager::ShallowScrubReport > report) {
+            if (!report) {
+                job_info->try_complete(ScrubJobStatus::FAILED, "Scrub task failed or was cancelled");
+                return;
+            }
+
+            // Build report summary
+            nlohmann::json report_summary;
+            report_summary["pg_id"] = report->get_pg_id();
+
+            // Add missing shards info
+            const auto& missing_shards = report->get_missing_shard_ids();
+            if (!missing_shards.empty()) {
+                nlohmann::json missing_shards_json;
+                for (const auto& [peer_id, shard_ids] : missing_shards) {
+                    missing_shards_json[boost::uuids::to_string(peer_id)] = shard_ids;
+                }
+                report_summary["missing_shards"] = missing_shards_json;
+            }
+
+            // Add missing blobs info
+            const auto& missing_blobs = report->get_missing_blobs();
+            if (!missing_blobs.empty()) { report_summary["missing_blobs_count"] = count_peer_map_items(missing_blobs); }
+
+            // If it's a deep scrub report, add additional info
+            if (is_deep) {
+                auto deep_report = std::dynamic_pointer_cast< ScrubManager::DeepScrubReport >(report);
+                if (deep_report) {
+                    // Add corrupted blobs count
+                    const auto& corrupted_blobs = deep_report->get_corrupted_blobs();
+                    if (!corrupted_blobs.empty()) {
+                        report_summary["corrupted_blobs_count"] = count_peer_map_items(corrupted_blobs);
+                    }
+
+                    // Add inconsistent blobs count
+                    const auto& inconsistent_blobs = deep_report->get_inconsistent_blobs();
+                    if (!inconsistent_blobs.empty()) {
+                        report_summary["inconsistent_blobs_count"] = inconsistent_blobs.size();
+                    }
+
+                    // Add corrupted shards count
+                    const auto& corrupted_shards = deep_report->get_corrupted_shards();
+                    if (!corrupted_shards.empty()) {
+                        report_summary["corrupted_shards_count"] = count_peer_map_items(corrupted_shards);
+                    }
+
+                    // Add corrupted PG meta info
+                    const auto& corrupted_pg_metas = deep_report->get_corrupted_pg_metas();
+                    if (!corrupted_pg_metas.empty()) {
+                        report_summary["corrupted_pg_metas_count"] = corrupted_pg_metas.size();
+                    }
+                }
+            }
+
+            // Complete the job with success status and report
+            job_info->try_complete(ScrubJobStatus::COMPLETED, "", report_summary);
+        })
+        .thenError([job_info](const folly::exception_wrapper& ew) {
+            job_info->try_complete(ScrubJobStatus::FAILED, ew.what().c_str());
+        });
+}
+
 void HttpManager::trigger_gc(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response) {
     auto gc_mgr = ho_.gc_manager();
     if (!gc_mgr) {
@@ -633,7 +821,7 @@ void HttpManager::trigger_gc(const Pistache::Rest::Request& request, Pistache::H
 
 std::string HttpManager::generate_job_id() {
     auto counter = job_counter_.fetch_add(1, std::memory_order_relaxed);
-    return fmt::format("trigger-gc-task-{}", counter);
+    return fmt::format("job-{}", counter);
 }
 
 void HttpManager::get_job_status(const std::string& job_id, nlohmann::json& result) {
@@ -768,6 +956,189 @@ void HttpManager::trigger_gc_for_pg(uint16_t pg_id, const std::string& job_id) {
                     job_info->success_count, job_info->failed_count);
         })
         .get();
+}
+
+void HttpManager::get_scrub_job_status(const Pistache::Rest::Request& request,
+                                       Pistache::Http::ResponseWriter response) {
+    auto job_id_param = request.query().get("job_id");
+
+    if (job_id_param && !job_id_param.value().empty()) {
+        // Query specific job
+        const auto job_id = job_id_param.value();
+        LOGINFO("Query scrub job {} status", job_id);
+
+        std::shared_ptr< ScrubJobInfo > job_info;
+        {
+            std::shared_lock lock(scrub_job_mutex_);
+            job_info = scrub_jobs_map_.get(job_id);
+        }
+
+        if (!job_info) {
+            nlohmann::json error;
+            error["error"] = "Job not found";
+            error["job_id"] = job_id;
+            response.send(Pistache::Http::Code::Not_Found, error.dump());
+            return;
+        }
+
+        nlohmann::json result = build_scrub_job_json(job_info);
+        response.send(Pistache::Http::Code::Ok, result.dump());
+        return;
+    }
+
+    // Query all jobs
+    LOGINFO("Query all scrub job status");
+    nlohmann::json result;
+    std::vector< std::shared_ptr< ScrubJobInfo > > all_jobs;
+
+    {
+        std::shared_lock lock(scrub_job_mutex_);
+        for (const auto& [k, v] : scrub_jobs_map_) {
+            all_jobs.push_back(v);
+        }
+    }
+
+    for (const auto& job_info : all_jobs) {
+        result["jobs"].push_back(build_scrub_job_json(job_info));
+    }
+
+    response.send(Pistache::Http::Code::Ok, result.dump());
+}
+
+nlohmann::json HttpManager::build_scrub_job_json(const std::shared_ptr< ScrubJobInfo >& job_info) {
+    nlohmann::json result;
+
+    // Helper to convert status enum to string
+    auto status_to_string = [](ScrubJobStatus status) -> std::string {
+        switch (status) {
+        case ScrubJobStatus::RUNNING:
+            return "running";
+        case ScrubJobStatus::COMPLETED:
+            return "completed";
+        case ScrubJobStatus::FAILED:
+            return "failed";
+        case ScrubJobStatus::CANCELLED:
+            return "cancelled";
+        default:
+            return "unknown";
+        }
+    };
+
+    // Thread-unsafe fields (read-only after construction)
+    result["job_id"] = job_info->job_id;
+    result["pg_id"] = job_info->pg_id;
+    result["scrub_type"] = job_info->is_deep ? "deep" : "shallow";
+
+    // Thread-safe fields (protected by mutex)
+    {
+        std::lock_guard< std::mutex > lock(job_info->mtx_);
+
+        // Status
+        result["status"] = status_to_string(job_info->status);
+
+        // Timestamps - convert to ISO 8601 format (no newline)
+        result["start_time"] = format_iso8601_time(job_info->start_time);
+
+        if (job_info->status != ScrubJobStatus::RUNNING) {
+            result["end_time"] = format_iso8601_time(job_info->end_time);
+
+            auto duration =
+                std::chrono::duration_cast< std::chrono::seconds >(job_info->end_time - job_info->start_time);
+            result["duration_seconds"] = duration.count();
+        }
+
+        // Error message (if any)
+        if (!job_info->error_message.empty()) { result["error_message"] = job_info->error_message; }
+
+        // Report summary (if completed)
+        if (job_info->status == ScrubJobStatus::COMPLETED && !job_info->report_summary.empty()) {
+            result["report"] = job_info->report_summary;
+        }
+    }
+
+    return result;
+}
+
+void HttpManager::cancel_scrub_job(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response) {
+    auto job_id_param = request.query().get("job_id");
+
+    if (!job_id_param || job_id_param.value().empty()) {
+        nlohmann::json error;
+        error["error"] = "Missing required parameter: job_id";
+        error["usage"] = "POST /api/v1/cancel_scrub_job?job_id=<id>";
+        response.send(Pistache::Http::Code::Bad_Request, error.dump());
+        return;
+    }
+
+    const auto job_id = job_id_param.value();
+    LOGINFO("Cancel scrub job {}", job_id);
+
+    std::shared_ptr< ScrubJobInfo > job_info;
+    {
+        std::shared_lock lock(scrub_job_mutex_);
+        job_info = scrub_jobs_map_.get(job_id);
+    }
+
+    if (!job_info) {
+        nlohmann::json error;
+        error["error"] = "Job not found";
+        error["job_id"] = job_id;
+        response.send(Pistache::Http::Code::Not_Found, error.dump());
+        return;
+    }
+
+    // Check if job is still running (thread-safe)
+    bool can_cancel = false;
+    std::string current_status_str;
+    {
+        std::lock_guard< std::mutex > lock(job_info->mtx_);
+        can_cancel = (job_info->status == ScrubJobStatus::RUNNING);
+        if (!can_cancel) {
+            // Get status string for error message
+            switch (job_info->status) {
+            case ScrubJobStatus::COMPLETED:
+                current_status_str = "completed";
+                break;
+            case ScrubJobStatus::FAILED:
+                current_status_str = "failed";
+                break;
+            case ScrubJobStatus::CANCELLED:
+                current_status_str = "cancelled";
+                break;
+            default:
+                current_status_str = "unknown";
+            }
+        }
+    }
+
+    if (!can_cancel) {
+        nlohmann::json result;
+        result["job_id"] = job_id;
+        result["message"] = "Job is not running, cannot cancel";
+        result["current_status"] = current_status_str;
+        response.send(Pistache::Http::Code::Bad_Request, result.dump());
+        return;
+    }
+
+    // Cancel the scrub task
+    auto scrub_mgr = ho_.scrub_manager();
+    if (!scrub_mgr) {
+        nlohmann::json error;
+        error["error"] = "Scrub manager not available";
+        response.send(Pistache::Http::Code::Internal_Server_Error, error.dump());
+        return;
+    }
+
+    // Cancel in scrub manager first (this will stop ongoing work)
+    scrub_mgr->cancel_scrub_task(job_info->pg_id);
+
+    // Update job status (thread-safe)
+    job_info->cancel();
+
+    nlohmann::json result;
+    result["job_id"] = job_id;
+    result["message"] = "Scrub job cancelled successfully";
+    response.send(Pistache::Http::Code::Ok, result.dump());
 }
 
 #ifdef _PRERELEASE

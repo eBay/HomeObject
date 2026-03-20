@@ -63,7 +63,7 @@ void ScrubManager::scan_pg_for_scrub() {
                 .via(&folly::InlineExecutor::instance())
                 .thenValue([this, pg_id](std::shared_ptr< ShallowScrubReport > report) {
                     if (!report) {
-                        LOGERRORMOD(scrubmgr, "deep scrub failed for pg={}", pg_id);
+                        LOGERRORMOD(scrubmgr, "shallow scrub failed for pg={}", pg_id);
                         return;
                     }
                     LOGINFOMOD(scrubmgr, "shallow scrub is completed for pg={}", pg_id);
@@ -615,7 +615,12 @@ bool ScrubManager::send_scrub_req_and_wait(pg_id_t pg_id, uint64_t task_id,
     }
 
     // Check if cancelled or incomplete
-    if (scrub_ctx->is_cancelled() || scrub_ctx->peer_sm_map_.size() != scrub_ctx->member_peer_ids_.size()) {
+    bool is_incomplete = false;
+    {
+        std::lock_guard< std::mutex > lock(scrub_ctx->mtx_);
+        is_incomplete = scrub_ctx->peer_sm_map_.size() != scrub_ctx->member_peer_ids_.size();
+    }
+    if (scrub_ctx->is_cancelled() || is_incomplete) {
         SCRUBLOGD(pg_id, task_id, "scrub task is cancelled or incomplete when scrubbing {}!", scrub_type_name);
         return false;
     }
@@ -728,9 +733,30 @@ void ScrubManager::handle_pg_scrub_task(scrub_task task) {
         }
 
         // Merge PG meta scrub results
-        pg_scrub_report->merge(scrub_ctx->peer_sm_map_);
+        {
+            std::lock_guard< std::mutex > lock(scrub_ctx->mtx_);
+            pg_scrub_report->merge(scrub_ctx->peer_sm_map_);
+        }
         SCRUBLOGD(pg_id, task_id, "PG meta scrub completed");
     }
+
+    // scrubbing probably goes with blob deletion, and thus some of blobs might be not present on some
+    // peers even if we wait for the same scrub_lsn. Theoretically, without a strong consistent snapshot , there is not
+    // a mechanism to distinguish whether a blob/shard is missing due to deletion or due to lost, this is the
+    // predicament we are in now with oure current design:
+
+    // 1 no blob delete lsn，
+    // 2 no shard sealed lsn
+    // 3 no snapshot which can provide a strong consistent view of the
+    // blob/shard existence at the scrub_lsn.
+
+    // we can only rely on the best effort of waiting for all peers to reach the same scrub_lsn, but it is not
+    // guaranteed. As a result, we might have false positive missing blobs due to deletion!!!!
+
+    // TODO: figure out a solution to mitigate the false positive issue, for example, we can add a "blob delete lsn" and
+    // "shard sealed lsn". for all the missblobs, if its deletd lsn is after scrub_lsn, then it is a false positive
+    // missing blob, and we can move it out of missblobs. this can be done by leader when merging all the scrub maps for
+    // a specific scrub req.
 
     // Step 2: Scrub Shard Range
     SCRUBLOGD(pg_id, task_id, "Starting shard range {} scrub", is_deep_scrub ? "deep" : "shallow");
@@ -791,7 +817,10 @@ void ScrubManager::handle_pg_scrub_task(scrub_task task) {
             }
 
             SCRUBLOGD(pg_id, task_id, "Merging shard scrub results for range [{}, {}]", shard_start, shard_end);
-            pg_scrub_report->merge(scrub_ctx->peer_sm_map_);
+            {
+                std::lock_guard< std::mutex > lock(scrub_ctx->mtx_);
+                pg_scrub_report->merge(scrub_ctx->peer_sm_map_);
+            }
         }
         SCRUBLOGD(pg_id, task_id, "shard scrub completed, total ranges scrubbed: {}", shard_range_count);
     }
@@ -850,7 +879,10 @@ void ScrubManager::handle_pg_scrub_task(scrub_task task) {
             }
 
             SCRUBLOGD(pg_id, task_id, "Merging blob scrub results for range [{}, {}]", blob_start, blob_end);
-            pg_scrub_report->merge(scrub_ctx->peer_sm_map_);
+            {
+                std::lock_guard< std::mutex > lock(scrub_ctx->mtx_);
+                pg_scrub_report->merge(scrub_ctx->peer_sm_map_);
+            }
         }
         SCRUBLOGD(pg_id, task_id, "blob scrub completed, total ranges scrubbed: {}", blob_range_count);
     }
@@ -920,7 +952,7 @@ void ScrubManager::save_scrub_superblk(const pg_id_t pg_id, const bool is_deep_s
         (*sb).create(sizeof(pg_scrub_superblk));
         (*sb)->pg_id = pg_id;
         (*sb)->last_deep_scrub_timestamp = current_time;
-        (*sb)->last_deep_scrub_timestamp = current_time;
+        (*sb)->last_shallow_scrub_timestamp = current_time;
         (*sb).write();
         m_pg_scrub_sb_map.emplace(pg_id, std::move(sb));
         return;
