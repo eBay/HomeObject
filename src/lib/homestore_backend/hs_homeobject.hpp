@@ -942,6 +942,8 @@ public:
 
     bool on_shard_message_pre_commit(int64_t lsn, sisl::blob const& header, sisl::blob const& key,
                                      cintrusive< homestore::repl_req_ctx >& hs_ctx);
+    bool on_blob_del_pre_commit(int64_t lsn, sisl::blob const& header, sisl::blob const& key,
+                                cintrusive< homestore::repl_req_ctx >& hs_ctx);
     void on_shard_message_rollback(int64_t lsn, sisl::blob const& header, sisl::blob const& key,
                                    cintrusive< homestore::repl_req_ctx >& hs_ctx);
 

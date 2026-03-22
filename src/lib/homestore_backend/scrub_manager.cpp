@@ -187,6 +187,17 @@ bool ScrubManager::add_scrub_map(const pg_id_t pg_id, std::shared_ptr< BaseScrub
     return pg_scrub_ctx->add_scrub_map(std::move(bsm));
 }
 
+void ScrubManager::add_pg_deleted_blob(const pg_id_t pg_id, const BlobRoute& blob_route, int64_t delete_lsn) {
+    auto pg_scrub_ctx_it = m_pg_scrub_ctx_map.find(pg_id);
+    if (pg_scrub_ctx_it == m_pg_scrub_ctx_map.end()) {
+        LOGDEBUGMOD(scrubmgr, "can not find scrub context for pg_id={}, fail to add deleted blob!", pg_id);
+        return;
+    }
+
+    auto& pg_scrub_ctx = pg_scrub_ctx_it->second;
+    pg_scrub_ctx->add_deleted_blob(blob_route, delete_lsn);
+}
+
 void ScrubManager::handle_scrub_req(std::shared_ptr< base_scrub_req > req) {
     if (!req) {
         LOGERRORMOD(scrubmgr, "scrub req is null, can not handle it!");
@@ -649,6 +660,24 @@ void ScrubManager::handle_pg_scrub_task(scrub_task task) {
         const pg_id_t& pg_id;
 
         ~scrub_task_guard() {
+            const auto scrub_ctx_it = pg_scrub_ctx_map.find(pg_id);
+            if (scrub_ctx_it != pg_scrub_ctx_map.end()) {
+                // filter out those deleted blobs in the scrub report.
+
+                // we capture all the deleted blobs when scrubbing is ongoing, and filter them out from scrub report at
+                // the end of scrub task to make sure we will not report those deleted blobs as problematic blobs in
+                // scrub report.
+                // 1 we only capture the deleted blobs when scrubbing, since we only care about those
+                // blobs deleted during scrubbing.
+                // 2 on_pre_commit is called after log append. so, if leader switch happens during pg scrub, the delete
+                // blob log will be rollbacked , but the scrub task will also be cancelled, and will not give a final
+                // full scrub report for this scrub task.
+                // 3 if leader swith not happens during scrub, thee all the deleted blobs captured in on_pre_commit
+                // should finally be commited.
+                const auto& scrub_ctx = scrub_ctx_it->second;
+                scrub_report->filter_out_deleted_blobs(scrub_ctx->deleted_blobs_when_scrubbing_);
+            }
+
             pg_scrub_ctx_map.erase(pg_id);
             task.scrub_report_promise->setValue(scrub_report);
 
@@ -739,24 +768,6 @@ void ScrubManager::handle_pg_scrub_task(scrub_task task) {
         }
         SCRUBLOGD(pg_id, task_id, "PG meta scrub completed");
     }
-
-    // scrubbing probably goes with blob deletion, and thus some of blobs might be not present on some
-    // peers even if we wait for the same scrub_lsn. Theoretically, without a strong consistent snapshot , there is not
-    // a mechanism to distinguish whether a blob/shard is missing due to deletion or due to lost, this is the
-    // predicament we are in now with oure current design:
-
-    // 1 no blob delete lsn，
-    // 2 no shard sealed lsn
-    // 3 no snapshot which can provide a strong consistent view of the
-    // blob/shard existence at the scrub_lsn.
-
-    // we can only rely on the best effort of waiting for all peers to reach the same scrub_lsn, but it is not
-    // guaranteed. As a result, we might have false positive missing blobs due to deletion!!!!
-
-    // TODO: figure out a solution to mitigate the false positive issue, for example, we can add a "blob delete lsn" and
-    // "shard sealed lsn". for all the missblobs, if its deletd lsn is after scrub_lsn, then it is a false positive
-    // missing blob, and we can move it out of missblobs. this can be done by leader when merging all the scrub maps for
-    // a specific scrub req.
 
     // Step 2: Scrub Shard Range
     SCRUBLOGD(pg_id, task_id, "Starting shard range {} scrub", is_deep_scrub ? "deep" : "shallow");
@@ -1905,6 +1916,85 @@ void ScrubManager::DeepScrubReport::merge(const std::map< peer_id_t, std::shared
                "{} corrupted shards, {} corrupted pg metas",
                pg_id_, corrupted_blobs.size(), inconsistent_blobs.size(), corrupted_shards.size(),
                corrupted_pg_metas.size());
+}
+
+void ScrubManager::ShallowScrubReport::filter_out_deleted_blobs(
+    const folly::ConcurrentHashMap< BlobRoute, int64_t >& deleted_blobs_when_scrubbing) {
+    size_t total_filtered = 0;
+
+    // Filter out deleted blobs from missing_blobs
+    for (auto& [peer_id, blob_set] : missing_blobs) {
+        auto it = blob_set.begin();
+        while (it != blob_set.end()) {
+            if (deleted_blobs_when_scrubbing.find(*it) != deleted_blobs_when_scrubbing.end()) {
+                // This blob was deleted during scrubbing, remove it from missing blobs
+                it = blob_set.erase(it);
+                ++total_filtered;
+            } else {
+                ++it;
+            }
+        }
+    }
+
+    // Remove peers with no missing blobs
+    auto peer_it = missing_blobs.begin();
+    while (peer_it != missing_blobs.end()) {
+        if (peer_it->second.empty()) {
+            peer_it = missing_blobs.erase(peer_it);
+        } else {
+            ++peer_it;
+        }
+    }
+
+    if (total_filtered > 0) {
+        LOGINFOMOD(scrubmgr, "[pg={}] Filtered out {} deleted blobs from shallow scrub report", pg_id_, total_filtered);
+    }
+}
+
+void ScrubManager::DeepScrubReport::filter_out_deleted_blobs(
+    const folly::ConcurrentHashMap< BlobRoute, int64_t >& deleted_blobs_when_scrubbing) {
+    size_t total_filtered = 0;
+
+    // First filter the base class missing_blobs
+    ShallowScrubReport::filter_out_deleted_blobs(deleted_blobs_when_scrubbing);
+
+    // Filter out deleted blobs from corrupted_blobs
+    for (auto& [peer_id, blob_map] : corrupted_blobs) {
+        auto it = blob_map.begin();
+        while (it != blob_map.end()) {
+            if (deleted_blobs_when_scrubbing.find(it->first) != deleted_blobs_when_scrubbing.end()) {
+                it = blob_map.erase(it);
+                ++total_filtered;
+            } else {
+                ++it;
+            }
+        }
+    }
+
+    // Remove peers with no corrupted blobs
+    auto peer_it = corrupted_blobs.begin();
+    while (peer_it != corrupted_blobs.end()) {
+        if (peer_it->second.empty()) {
+            peer_it = corrupted_blobs.erase(peer_it);
+        } else {
+            ++peer_it;
+        }
+    }
+
+    // Filter out deleted blobs from inconsistent_blobs
+    auto blob_it = inconsistent_blobs.begin();
+    while (blob_it != inconsistent_blobs.end()) {
+        if (deleted_blobs_when_scrubbing.find(blob_it->first) != deleted_blobs_when_scrubbing.end()) {
+            blob_it = inconsistent_blobs.erase(blob_it);
+            ++total_filtered;
+        } else {
+            ++blob_it;
+        }
+    }
+
+    if (total_filtered > 0) {
+        LOGINFOMOD(scrubmgr, "[pg={}] Filtered out {} deleted blobs from deep scrub report", pg_id_, total_filtered);
+    }
 }
 
 } // namespace homeobject

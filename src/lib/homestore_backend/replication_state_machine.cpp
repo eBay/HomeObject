@@ -97,6 +97,9 @@ bool ReplicationStateMachine::on_pre_commit(int64_t lsn, sisl::blob const& heade
     case ReplicationMessageType::SEAL_SHARD_MSG: {
         return home_object_->on_shard_message_pre_commit(lsn, header, key, ctx);
     }
+    case ReplicationMessageType::DEL_BLOB_MSG: {
+        return home_object_->on_blob_del_pre_commit(lsn, header, key, ctx);
+    }
     default: {
         break;
     }

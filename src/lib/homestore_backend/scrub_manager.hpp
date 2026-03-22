@@ -260,6 +260,8 @@ public:
         const auto& get_missing_blobs() const { return missing_blobs; }
         virtual void merge(const std::map< peer_id_t, std::shared_ptr< BaseScrubMap > >& peer_sm_map);
         virtual void print() const;
+        virtual void
+        filter_out_deleted_blobs(const folly::ConcurrentHashMap< BlobRoute, int64_t >& deleted_blobs_when_scrubbing);
 
     public:
         std::map< peer_id_t, std::set< shard_id_t > > missing_shard_ids;
@@ -291,6 +293,8 @@ public:
         const auto& get_corrupted_pg_metas() const { return corrupted_pg_metas; }
         void merge(const std::map< peer_id_t, std::shared_ptr< BaseScrubMap > >& peer_sm_map) override;
         void print() const override;
+        virtual void filter_out_deleted_blobs(
+            const folly::ConcurrentHashMap< BlobRoute, int64_t >& deleted_blobs_when_scrubbing) override;
 
     private:
         std::map< peer_id_t, std::map< BlobRoute, ScrubResult > > corrupted_blobs;
@@ -389,6 +393,9 @@ private:
         std::vector< peer_id_t > get_peers_to_retry() const;
         void cancel();
         bool is_cancelled() const { return cancelled.load(); }
+        void add_deleted_blob(const BlobRoute& blob_route, int64_t delete_lsn) {
+            deleted_blobs_when_scrubbing_.try_emplace(blob_route, delete_lsn);
+        }
 
     public:
         uint64_t task_id{0};
@@ -397,6 +404,7 @@ private:
         atomic_uint64_t req_id{0};
         mutable std::mutex mtx_;
         std::map< peer_id_t, std::shared_ptr< BaseScrubMap > > peer_sm_map_;
+        folly::ConcurrentHashMap< BlobRoute, int64_t > deleted_blobs_when_scrubbing_;
 
     private:
         std::atomic_bool cancelled{false};
@@ -424,6 +432,7 @@ public:
     std::optional< pg_scrub_superblk > get_scrub_superblk(const pg_id_t pg_id) const;
     void save_scrub_superblk(const pg_id_t pg_id, const bool is_deep_scrub, bool force_update = true);
     void add_scrub_req(std::shared_ptr< base_scrub_req > req);
+    void add_pg_deleted_blob(const pg_id_t pg_id, const BlobRoute& blob_route, int64_t delete_lsn);
 
     /*local scrub*/
 public:

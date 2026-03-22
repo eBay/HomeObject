@@ -88,7 +88,7 @@ BlobManager::AsyncResult< blob_id_t > HSHomeObject::_put_blob(ShardInfo const& s
         return folly::makeUnexpected(BlobErrorCode::SHUTTING_DOWN);
     }
     incr_pending_request_num();
-        // check user key size
+    // check user key size
     if (blob.user_key.size() > BlobHeader::max_user_key_length) {
         BLOGE(tid, shard.id, 0, "input user key length > max_user_key_length {}", blob.user_key.size(),
               BlobHeader::max_user_key_length);
@@ -167,8 +167,7 @@ BlobManager::AsyncResult< blob_id_t > HSHomeObject::_put_blob(ShardInfo const& s
 
     // Set offset of actual data after the blob header and user key (rounded off)
     req->blob_header()->data_offset = req->blob_header_buf().size();
-    RELEASE_ASSERT(req->blob_header()->data_offset == _data_block_size,
-                       "blob header should equals _data_block_size");
+    RELEASE_ASSERT(req->blob_header()->data_offset == _data_block_size, "blob header should equals _data_block_size");
     // In case blob body is not aligned, create a new aligned buffer and copy the blob body.
     if (((r_cast< uintptr_t >(blob.body.cbytes()) % io_align) != 0) || ((blob_size % io_align) != 0)) {
         // If address or size is not aligned, create a separate aligned buffer and do expensive memcpy.
@@ -367,9 +366,7 @@ BlobManager::AsyncResult< Blob > HSHomeObject::_get_blob_data(const shared< home
             }
 
             auto verify_result = do_verify_blob(read_buf.cbytes(), shard_id, 0 /* no blob_id check */);
-            if (!verify_result.hasValue()) {
-                return folly::makeUnexpected(verify_result.error());
-            }
+            if (!verify_result.hasValue()) { return folly::makeUnexpected(verify_result.error()); }
             std::string user_key = std::move(verify_result.value());
 
             BlobHeader const* header = r_cast< BlobHeader const* >(read_buf.cbytes());
@@ -741,5 +738,23 @@ bool HSHomeObject::verify_blob(const void* blob, const shard_id_t shard_id, cons
     // Use the new _verify_blob method
     auto result = do_verify_blob(blob, shard_id, blob_id);
     return result.hasValue();
+}
+
+bool HSHomeObject::on_blob_del_pre_commit(int64_t lsn, sisl::blob const& header, sisl::blob const& key,
+                                          cintrusive< homestore::repl_req_ctx >& hs_ctx) {
+    auto msg_header = r_cast< ReplicationMessageHeader* >(const_cast< uint8_t* >(header.cbytes()));
+    if (msg_header->corrupted()) {
+        // since log has been appended, we crash here immediately.
+        RELEASE_ASSERT(false, "corrupted header caught in on_blob_del_commit , lsn={}", lsn);
+        return false;
+    }
+
+    const auto& pg_id = msg_header->pg_id;
+    const auto& shard_id = msg_header->shard_id;
+    const auto& blob_id = *r_cast< blob_id_t const* >(key.cbytes());
+    LOGD("Received del_blob pre-commit for pg={}, shard=0x{:x}, blob_id={}, lsn={}", pg_id, shard_id, blob_id, lsn);
+
+    if (scrub_mgr_) { scrub_mgr_->add_pg_deleted_blob(pg_id, {shard_id, blob_id}, lsn); }
+    return true;
 }
 } // namespace homeobject
