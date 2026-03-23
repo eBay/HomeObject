@@ -130,7 +130,7 @@ csharedChunk HeapChunkSelector::select_specific_chunk(const pg_id_t pg_id, const
 
             if (chunk->m_state == ChunkState::GC) {
                 LOGDEBUGMOD(homeobject, "v_chunk_id={} for pg={} is pchunk_id={}, in GC state, wait and retry!",
-                            chunk->get_chunk_id(), v_chunk_id, pg_id);
+                            v_chunk_id, pg_id, chunk->get_chunk_id());
             } else {
                 if (chunk->m_state == ChunkState::AVAILABLE) {
                     chunk->m_state = ChunkState::INUSE;
