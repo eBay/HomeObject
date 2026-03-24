@@ -1064,6 +1064,16 @@ bool GCManager::pdev_gc_actor::purge_reserved_chunk(chunk_id_t chunk, const uint
                    "chunk_id={} is a reserved chunk, expected to have a GC state, but actuall state is {} ", chunk,
                    vchunk->m_state);
 
+    // Clear all rreqs on the reserved chunk BEFORE reset() resets its allocator.
+    // This prevents race conditions where:
+    // 1. Stale rreq frees blk on NEW allocator after reset (wrong allocator)
+    // 2. Stale rreq frees blk on OLD allocator during reset (accessing destroyed superblock)
+    // NOTE: This introduces potential double-free risk with gc_repl_reqs() background thread.
+    // See https://github.com/eBay/HomeObject/issues/401.
+    GCLOGD(task_id, pg_id, NO_SHARD_ID, "clear all rreqs on chunk={} before resetting it", vchunk->get_chunk_id());
+    auto hs_pg = m_hs_home_object->get_hs_pg(pg_id);
+    hs_pg->repl_dev_->clear_chunk_req(vchunk->get_chunk_id());
+
     GCLOGD(task_id, pg_id, NO_SHARD_ID, "reset chunk={} before using it for gc", vchunk->get_chunk_id());
     vchunk->reset(); // reset the chunk to make sure it is empty
 
