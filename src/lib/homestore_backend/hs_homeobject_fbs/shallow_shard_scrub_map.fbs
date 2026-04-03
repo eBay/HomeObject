@@ -1,0 +1,13 @@
+include "scrub_common.fbs";
+
+namespace homeobject;
+
+table ShallowShardScrubMap {
+  scrub_info: ScrubInfo;
+  start: uint64;
+  end: uint64;
+  shards: [uint64];
+}
+
+// this is used for sending shallow shard scrub map
+root_type ShallowShardScrubMap;

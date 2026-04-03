@@ -50,6 +50,9 @@ private:
     void get_gc_job_status(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response);
     void trigger_gc_for_pg(uint16_t pg_id, const std::string& job_id);
     void get_job_status(const std::string& job_id, nlohmann::json& result);
+    void trigger_pg_scrub(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response);
+    void get_scrub_job_status(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response);
+    void cancel_scrub_job(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response);
 
 #ifdef _PRERELEASE
     void crash_system(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response);
@@ -74,15 +77,66 @@ private:
                 job_id(id), status(GCJobStatus::RUNNING), pg_id(pgid), chunk_id(cid) {}
     };
 
+    enum class ScrubJobStatus { RUNNING, COMPLETED, FAILED, CANCELLED };
+
+    struct ScrubJobInfo {
+        std::string job_id;
+        uint16_t pg_id;
+        bool is_deep;
+
+        // Mutable fields protected by mutex
+        mutable std::mutex mtx_;
+        ScrubJobStatus status;
+        std::chrono::system_clock::time_point start_time;
+        std::chrono::system_clock::time_point end_time;
+        std::string error_message;
+        nlohmann::json report_summary;
+
+        // Flag to prevent status update after cancellation
+        std::atomic< bool > is_cancelled{false};
+
+        ScrubJobInfo(const std::string& id, uint16_t pgid, bool deep) :
+                job_id(id),
+                pg_id(pgid),
+                is_deep(deep),
+                status(ScrubJobStatus::RUNNING),
+                start_time(std::chrono::system_clock::now()) {}
+
+        // Thread-safe status update - returns false if already cancelled
+        bool try_complete(ScrubJobStatus new_status, const std::string& error_msg = "",
+                          const nlohmann::json& summary = nlohmann::json()) {
+            std::lock_guard< std::mutex > lock(mtx_);
+            if (is_cancelled.load(std::memory_order_acquire)) { return false; } // Already cancelled, reject update
+
+            status = new_status;
+            end_time = std::chrono::system_clock::now();
+            error_message = error_msg;
+            if (!summary.empty()) { report_summary = summary; }
+            return true;
+        }
+
+        // Thread-safe cancel
+        void cancel() {
+            std::lock_guard< std::mutex > lock(mtx_);
+            is_cancelled.store(true, std::memory_order_release);
+            status = ScrubJobStatus::CANCELLED;
+            end_time = std::chrono::system_clock::now();
+            error_message = "Cancelled by user";
+        }
+    };
+
     std::string generate_job_id();
+    nlohmann::json build_scrub_job_json(const std::shared_ptr< ScrubJobInfo >& job_info);
 
 private:
     HSHomeObject& ho_;
     std::atomic< uint64_t > job_counter_{0};
     std::shared_mutex gc_job_mutex_;
+    std::shared_mutex scrub_job_mutex_;
 
     // we don`t have an external DB to store the job status, so we only keep the status of the lastest 100 jobs for
     // query. or, we can evict the job after it is completed after a timeout period.
     folly::EvictingCacheMap< std::string, std::shared_ptr< GCJobInfo > > gc_jobs_map_{100};
+    folly::EvictingCacheMap< std::string, std::shared_ptr< ScrubJobInfo > > scrub_jobs_map_{100};
 };
 } // namespace homeobject

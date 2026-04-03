@@ -223,7 +223,7 @@ folly::Expected< HSHomeObject::HS_PG*, PGError > HSHomeObject::local_create_pg(s
     auto uuid_str = boost::uuids::to_string(index_table->uuid());
 
     repl_dev->set_custom_rdev_name(fmt::format("rdev{}", pg_info.id));
-    auto hs_pg = std::make_unique< HS_PG >(std::move(pg_info), std::move(repl_dev), index_table, chunk_ids);
+    auto hs_pg = std::make_unique< HS_PG >(std::move(pg_info), std::move(repl_dev), index_table, chunk_ids, *this);
     auto ret = hs_pg.get();
     {
         scoped_lock lck(index_lock_);
@@ -236,6 +236,9 @@ folly::Expected< HSHomeObject::HS_PG*, PGError > HSHomeObject::local_create_pg(s
         // Add to index service, so that it gets cleaned up when index service is shutdown.
         hs()->index_service().add_index_table(index_table);
         add_pg_to_map(std::move(hs_pg));
+
+        // when local_create_pg is called by BR ,pg scrub superblk will not be overrite if it already exists
+        scrub_mgr_->add_pg(pg_info.id);
     }
     return ret;
 }
@@ -350,7 +353,6 @@ void HSHomeObject::on_pg_start_replace_member(group_id_t group_id, const std::st
             auto hs_pg = static_cast< HSHomeObject::HS_PG* >(pg.get());
             pg->pg_info_.members.emplace(std::move(to_pg_member(member_in)));
             pg->pg_info_.members.emplace(std::move(to_pg_member(member_out)));
-
             uint32_t i{0};
             pg_members* sb_members = hs_pg->pg_sb_->get_pg_members_mutable();
             for (auto const& m : pg->pg_info_.members) {
@@ -815,7 +817,6 @@ void HSHomeObject::destroy_hs_resources(pg_id_t pg_id) { chunk_selector_->reset_
 
 void HSHomeObject::destroy_pg_index_table(pg_id_t pg_id) {
     std::shared_ptr< BlobIndexTable > index_table;
-
     {
         // index_table->destroy() will trigger a cp_flush, which will call homeobject#cp_flush and try to acquire
         // `_pg_lock`, so we need to release the lock here to avoid a dead lock
@@ -935,7 +936,7 @@ void HSHomeObject::on_pg_meta_blk_found(sisl::byte_view const& buf, void* meta_c
     std::vector< chunk_num_t > p_chunk_ids(pg_sb->get_chunk_ids(), pg_sb->get_chunk_ids() + pg_sb->num_chunks);
     bool set_pg_chunks_res = chunk_selector_->recover_pg_chunks(pg_id, std::move(p_chunk_ids));
     auto uuid_str = boost::uuids::to_string(pg_sb->index_table_uuid);
-    auto hs_pg = std::make_unique< HS_PG >(std::move(pg_sb), std::move(v.value()));
+    auto hs_pg = std::make_unique< HS_PG >(std::move(pg_sb), std::move(v.value()), *this);
     if (!set_pg_chunks_res) {
         hs_pg->pg_state_.set_state(PGStateMask::DISK_DOWN);
         hs_pg->repl_dev_->set_stage(homestore::repl_dev_stage_t::UNREADY);
@@ -971,12 +972,13 @@ PGInfo HSHomeObject::HS_PG::pg_info_from_sb(homestore::superblk< pg_info_superbl
 }
 
 HSHomeObject::HS_PG::HS_PG(PGInfo info, shared< homestore::ReplDev > rdev, shared< BlobIndexTable > index_table,
-                           std::shared_ptr< const std::vector< chunk_num_t > > pg_chunk_ids) :
+                           std::shared_ptr< const std::vector< chunk_num_t > > pg_chunk_ids, HSHomeObject& home_obj) :
         PG{std::move(info)},
         pg_sb_{_pg_meta_name},
         repl_dev_{std::move(rdev)},
         index_table_{std::move(index_table)},
         metrics_{*this},
+        home_obj_{home_obj},
         snp_rcvr_info_sb_{_snp_rcvr_meta_name},
         snp_rcvr_shard_list_sb_{_snp_rcvr_shard_list_meta_name} {
     RELEASE_ASSERT(pg_chunk_ids != nullptr, "PG chunks null, pg={}", pg_info_.id);
@@ -1011,15 +1013,23 @@ HSHomeObject::HS_PG::HS_PG(PGInfo info, shared< homestore::ReplDev > rdev, share
         pg_sb_chunk_ids[i] = pg_chunk_ids->at(i);
     }
     pg_sb_.write();
+
+    register_data_rpc_handlers();
 }
 
-HSHomeObject::HS_PG::HS_PG(superblk< pg_info_superblk >&& sb, shared< ReplDev > rdev) :
-        PG{pg_info_from_sb(sb)}, pg_sb_{std::move(sb)}, repl_dev_{std::move(rdev)}, metrics_{*this} {
+HSHomeObject::HS_PG::HS_PG(superblk< pg_info_superblk >&& sb, shared< ReplDev > rdev, HSHomeObject& home_obj) :
+        PG{pg_info_from_sb(sb)},
+        pg_sb_{std::move(sb)},
+        repl_dev_{std::move(rdev)},
+        metrics_{*this},
+        home_obj_{home_obj} {
     durable_entities_.blob_sequence_num = pg_sb_->blob_sequence_num;
     durable_entities_.active_blob_count = pg_sb_->active_blob_count;
     durable_entities_.tombstone_blob_count = pg_sb_->tombstone_blob_count;
     durable_entities_.total_occupied_blk_count = pg_sb_->total_occupied_blk_count;
     durable_entities_.total_reclaimed_blk_count = pg_sb_->total_reclaimed_blk_count;
+
+    register_data_rpc_handlers();
 }
 
 uint32_t HSHomeObject::HS_PG::total_shards() const { return shards_.size(); }
@@ -1113,6 +1123,212 @@ void HSHomeObject::HS_PG::update_membership(const MemberSet& members) {
     // Update the latest membership info to pg superblk.
     pg_sb_.write();
     LOGI("PG membership updated, member_nums={}", pg_sb_->num_dynamic_members);
+}
+
+void HSHomeObject::HS_PG::register_data_rpc_handlers() {
+    const auto& pg_id = pg_info_.id;
+    bool success;
+
+    success = repl_dev_->add_data_rpc_service(PUSH_SCRUB_REQ, bind_this(HS_PG::on_scrub_req_received, 1));
+    if (success) {
+        LOGI("Successfully registered PUSH_SCRUB_REQ RPC handler for pg={}", pg_id);
+    } else {
+        LOGW("PUSH_SCRUB_REQ RPC handler already registered for pg={}", pg_id);
+    }
+
+    success = repl_dev_->add_data_rpc_service(PUSH_SCRUB_MAP, bind_this(HS_PG::on_scrub_map_received, 1));
+    if (success) {
+        LOGI("Successfully registered PUSH_SCRUB_MAP RPC handler for pg={}", pg_id);
+    } else {
+        LOGW("PUSH_SCRUB_MAP RPC handler already registered for pg={}", pg_id);
+    }
+}
+
+void HSHomeObject::HS_PG::on_scrub_req_received(boost::intrusive_ptr< sisl::GenericRpcData >& rpc_data) {
+    const auto pg_id = pg_info_.id;
+    LOGD("Received scrub_blob request for pg={}", pg_id);
+
+    struct rpc_cleanup {
+        boost::intrusive_ptr< sisl::GenericRpcData >& rpc_data_;
+        ~rpc_cleanup() {
+            if (rpc_data_) { rpc_data_->send_response(); }
+        }
+    } rpc_cleanup{rpc_data};
+
+    auto const& incoming_buf = rpc_data->request_blob();
+    const auto buf_size = incoming_buf.size();
+    const auto buf_ptr = incoming_buf.cbytes();
+
+    if (!buf_ptr || !buf_size) {
+        LOGW("SCRUB_BLOB received with empty buffer for pg={}", pg_id);
+        return;
+    }
+
+    const auto scrub_type = *reinterpret_cast< const SCRUB_TYPE* >(buf_ptr);
+    const auto flatbuf_ptr = buf_ptr + sizeof(SCRUB_TYPE);
+    const auto flatbuf_size = buf_size - sizeof(SCRUB_TYPE);
+    flatbuffers::Verifier verifier(flatbuf_ptr, flatbuf_size);
+
+    std::shared_ptr< ScrubManager::base_scrub_req > scrub_req;
+    bool success_to_load{false};
+    switch (scrub_type) {
+    case SCRUB_TYPE::PG_META: {
+        if (!VerifySizePrefixedPgMetaScrubReqBuffer(verifier)) {
+            LOGW("SCRUB_BLOB received with invalid flatbuffer for pg={}", pg_id);
+            return;
+        }
+        scrub_req = std::make_shared< ScrubManager::base_scrub_req >();
+        success_to_load = scrub_req->load(flatbuf_ptr, flatbuf_size);
+        break;
+    }
+    case SCRUB_TYPE::DEEP_BLOB:
+    case SCRUB_TYPE::SHALLOW_BLOB: {
+        if (!VerifySizePrefixedBlobScrubReqBuffer(verifier)) {
+            LOGW("SCRUB_BLOB received with invalid flatbuffer for pg={}", pg_id);
+            return;
+        }
+        scrub_req = std::make_shared< ScrubManager::blob_scrub_req >();
+        success_to_load = scrub_req->load(flatbuf_ptr, flatbuf_size);
+        break;
+    }
+    case SCRUB_TYPE::DEEP_SHARD:
+    case SCRUB_TYPE::SHALLOW_SHARD: {
+        if (!VerifySizePrefixedShardScrubReqBuffer(verifier)) {
+            LOGW("SCRUB_SHARD received with invalid flatbuffer for pg={}", pg_id);
+            return;
+        }
+        scrub_req = std::make_shared< ScrubManager::shard_scrub_req >();
+        success_to_load = scrub_req->load(flatbuf_ptr, flatbuf_size);
+        break;
+    }
+    default:
+        RELEASE_ASSERT(false, "Received unknown scrub type {} for pg={}", scrub_type, pg_id);
+    }
+
+    if (!success_to_load) {
+        LOGW("Failed to load scrub_blob request from flatbuffer for pg={}", pg_id);
+        return;
+    }
+
+    if (scrub_type != scrub_req->get_scrub_type()) {
+        LOGW("Scrub type in the request {} does not match with the scrub type in the buffer {}, pg={}", scrub_type,
+             scrub_req->get_scrub_type(), pg_id);
+        return;
+    }
+
+    auto scrub_mgr = home_obj_.scrub_manager();
+    if (!scrub_mgr) {
+        LOGW("ScrubManager is not initialized in HS_PG::on_scrub_req_received for pg={}", pg_id);
+        return;
+    }
+    scrub_mgr->add_scrub_req(scrub_req);
+}
+
+void HSHomeObject::HS_PG::on_scrub_map_received(boost::intrusive_ptr< sisl::GenericRpcData >& rpc_data) {
+    const auto pg_id = pg_info_.id;
+
+    struct rpc_cleanup {
+        boost::intrusive_ptr< sisl::GenericRpcData >& rpc_data_;
+        ~rpc_cleanup() {
+            if (rpc_data_) { rpc_data_->send_response(); }
+        }
+    } rpc_cleanup{rpc_data};
+
+    auto const& incoming_buf = rpc_data->request_blob();
+    const auto buf_size = incoming_buf.size();
+    const auto buf_ptr = incoming_buf.cbytes();
+
+    if (!buf_ptr || !buf_size) {
+        LOGW("PUSH_DEEP_BLOB_SM received with empty buffer for pg={}, buffer_size={}", pg_id, buf_size);
+        return;
+    }
+
+    const auto scrub_type = *reinterpret_cast< const SCRUB_TYPE* >(buf_ptr);
+    const auto flatbuf_ptr = buf_ptr + sizeof(SCRUB_TYPE);
+    const auto flatbuf_size = buf_size - sizeof(SCRUB_TYPE);
+    flatbuffers::Verifier verifier(flatbuf_ptr, flatbuf_size);
+
+    /*
+        auto fnv1a64 = [](const void* data, std::size_t len) -> std::uint64_t {
+            const std::uint8_t* p = static_cast< const std::uint8_t* >(data);
+            std::uint64_t h = 14695981039346656037ull; // offset basis
+            for (std::size_t i = 0; i < len; ++i) {
+                h ^= p[i];
+                h *= 1099511628211ull; // FNV prime
+            }
+            return h;
+        };
+    */
+
+    std::shared_ptr< ScrubManager::BaseScrubMap > scrub_map;
+    bool success_to_load{false};
+    switch (scrub_type) {
+    case SCRUB_TYPE::SHALLOW_BLOB: {
+        if (!VerifySizePrefixedShallowBlobScrubMapBuffer(verifier)) {
+            LOGW("SHALLOW_BLOB scrub map received with invalid flatbuffer for pg={}, buffer_size={}", pg_id, buf_size);
+            return;
+        }
+        scrub_map = std::make_shared< ScrubManager::ShallowBlobScrubMap >();
+        success_to_load = scrub_map->load(flatbuf_ptr, flatbuf_size);
+        break;
+    }
+    case SCRUB_TYPE::DEEP_BLOB: {
+        if (!VerifySizePrefixedDeepBlobScrubMapBuffer(verifier)) {
+            LOGW("DEEP_BLOB scrub map received with invalid flatbuffer for pg={}, buffer_size={}", pg_id, buf_size);
+            return;
+        }
+        scrub_map = std::make_shared< ScrubManager::DeepBlobScrubMap >();
+        success_to_load = scrub_map->load(flatbuf_ptr, flatbuf_size);
+        break;
+    }
+    case SCRUB_TYPE::DEEP_SHARD: {
+        if (!VerifySizePrefixedDeepShardScrubMapBuffer(verifier)) {
+            LOGW("DEEP_SHARD scrub map received with invalid flatbuffer for pg={}, buffer_size={}", pg_id, buf_size);
+            return;
+        }
+        scrub_map = std::make_shared< ScrubManager::DeepShardScrubMap >();
+        success_to_load = scrub_map->load(flatbuf_ptr, flatbuf_size);
+        break;
+    }
+    case SCRUB_TYPE::SHALLOW_SHARD: {
+        if (!VerifySizePrefixedShallowShardScrubMapBuffer(verifier)) {
+            LOGW("SHALLOW_SHARD scrub map received with invalid flatbuffer for pg={}, buffer_size={}", pg_id, buf_size);
+            return;
+        }
+        scrub_map = std::make_shared< ScrubManager::ShallowShardScrubMap >();
+        success_to_load = scrub_map->load(flatbuf_ptr, flatbuf_size);
+        break;
+    }
+    case SCRUB_TYPE::PG_META: {
+        if (!VerifySizePrefixedPGMetaScrubMapBuffer(verifier)) {
+            LOGW("PG_META scrub map received with invalid flatbuffer for pg={}, buffer_size={}", pg_id, buf_size);
+            return;
+        }
+        scrub_map = std::make_shared< ScrubManager::PGMetaScrubMap >();
+        success_to_load = scrub_map->load(flatbuf_ptr, flatbuf_size);
+        break;
+    }
+    default:
+        RELEASE_ASSERT(false, "Received unknown scrub map type {} for pg={}", scrub_type, pg_id);
+    }
+
+    if (!success_to_load) {
+        LOGW("Failed to load scrub map from flatbuffer for pg={}, scrub_type:{}", pg_id, scrub_type);
+        return;
+    }
+
+    if (scrub_type != scrub_map->get_scrub_type()) {
+        LOGW("Scrub type in the request {} does not match with the scrub type in the buffer {}, pg={}", scrub_type,
+             scrub_map->get_scrub_type(), pg_id);
+        return;
+    }
+
+    auto scrub_mgr = home_obj_.scrub_manager();
+    if (!scrub_mgr) {
+        LOGW("ScrubManager is not initialized in HS_PG::on_scrub_map_received for pg={}", pg_id);
+        return;
+    }
+    scrub_mgr->add_scrub_map(pg_id, scrub_map);
 }
 
 // NOTE: caller should hold the _pg_lock
@@ -1324,9 +1540,9 @@ void HSHomeObject::update_pg_meta_after_gc(const pg_id_t pg_id, const homestore:
     auto hs_pg = dynamic_cast< HS_PG* >(iter->second.get());
     auto move_from_v_chunk = chunk_selector()->get_extend_vchunk(move_from_chunk);
 
-    // TODO:: for now, when updating pchunk for a vchunk, we have to update the whole pg super blk. we can optimize this
-    // by persist a single superblk for each vchunk in the pg, so that we only need to update the vchunk superblk
-    // itself.
+    // TODO:: for now, when updating pchunk for a vchunk, we have to update the whole pg super blk. we can optimize
+    // this by persist a single superblk for each vchunk in the pg, so that we only need to update the vchunk
+    // superblk itself.
 
     auto pg_chunks = hs_pg->pg_sb_->get_chunk_ids_mutable();
 
@@ -1338,7 +1554,7 @@ void HSHomeObject::update_pg_meta_after_gc(const pg_id_t pg_id, const homestore:
     if (sisl_unlikely(pg_chunks[v_chunk_id] == move_to_chunk)) {
         // this might happens when crash recovery. the crash happens after pg metablk is updated but before gc task
         // metablk is destroyed.
-        LOGD("gc task_id={}, the pchunk_id for vchunk={} for pg_id={} is already {},  update pg metablk again!",
+        LOGD("gc task_id={}, the pchunk_id for vchunk={} for pg_id={} is already {}, skip updating pg metablk!",
              task_id, v_chunk_id, pg_id, move_to_chunk);
     } else {
         RELEASE_ASSERT(pg_chunks[v_chunk_id] == move_from_chunk,
@@ -1349,35 +1565,36 @@ void HSHomeObject::update_pg_meta_after_gc(const pg_id_t pg_id, const homestore:
         LOGD("gc task_id={}, pchunk for vchunk={} of pg_id={} is updated from {} to {}", task_id, v_chunk_id, pg_id,
              move_from_chunk, move_to_chunk);
 
-        // TODO:hs_pg->shards_.size() will be decreased by 1 in delete_shard if gc finds a empty shard, which will be
-        // implemented later
-        hs_pg->durable_entities_update([this, move_from_v_chunk, &move_to_chunk, &move_from_chunk, &pg_id,
-                                        &task_id](auto& de) {
-            // active_blob_count is updated by put/delete blob, not change it here.
+        // TODO:hs_pg->shards_.size() will be decreased by 1 in delete_shard if gc finds a empty shard, which will
+        // be implemented later
+        hs_pg->durable_entities_update(
+            [this, move_from_v_chunk, &move_to_chunk, &move_from_chunk, &pg_id, &task_id](auto& de) {
+                // active_blob_count is updated by put/delete blob, not change it here.
 
-            // considering the complexity of gc crash recovery for tombstone_blob_count, we get it directly from index
-            // table , which is the most accurate.
+                // considering the complexity of gc crash recovery for tombstone_blob_count, we get it directly from
+                // index table , which is the most accurate.
 
-            // TODO::do we need this as durable entity? remove it and get all the from pg index in real time.
-            de.tombstone_blob_count = get_pg_tombstone_blob_count(pg_id);
+                // TODO::do we need this as durable entity? remove it and get all the from pg index in real time.
+                de.tombstone_blob_count = get_pg_tombstone_blob_count(pg_id);
 
-            auto move_to_v_chunk = chunk_selector()->get_extend_vchunk(move_to_chunk);
+                auto move_to_v_chunk = chunk_selector()->get_extend_vchunk(move_to_chunk);
 
-            auto total_occupied_blk_count_by_move_from_chunk = move_from_v_chunk->get_used_blks();
-            auto total_occupied_blk_count_by_move_to_chunk = move_to_v_chunk->get_used_blks();
+                auto total_occupied_blk_count_by_move_from_chunk = move_from_v_chunk->get_used_blks();
+                auto total_occupied_blk_count_by_move_to_chunk = move_to_v_chunk->get_used_blks();
 
-            // TODO::in recovery case , this might be updated again , fix me later.
-            const auto reclaimed_blk_count =
-                total_occupied_blk_count_by_move_from_chunk - total_occupied_blk_count_by_move_to_chunk;
+                // TODO::in recovery case , this might be updated again , fix me later.
+                const auto reclaimed_blk_count =
+                    total_occupied_blk_count_by_move_from_chunk - total_occupied_blk_count_by_move_to_chunk;
 
-            de.total_occupied_blk_count -= reclaimed_blk_count;
-            de.total_reclaimed_blk_count += reclaimed_blk_count;
+                de.total_occupied_blk_count -= reclaimed_blk_count;
+                de.total_reclaimed_blk_count += reclaimed_blk_count;
 
-            LOGD("gc task_id={}, move_from_chunk={}, total_occupied_blk_count_by_move_from_chunk={}, move_to_chunk={}, "
-                 "total_occupied_blk_count_by_move_to_chunk={}, total_occupied_blk_count={}",
-                 task_id, move_from_chunk, total_occupied_blk_count_by_move_from_chunk, move_to_chunk,
-                 total_occupied_blk_count_by_move_to_chunk, de.total_occupied_blk_count.load());
-        });
+                LOGD("gc task_id={}, move_from_chunk={}, total_occupied_blk_count_by_move_from_chunk={}, "
+                     "move_to_chunk={}, "
+                     "total_occupied_blk_count_by_move_to_chunk={}, total_occupied_blk_count={}",
+                     task_id, move_from_chunk, total_occupied_blk_count_by_move_from_chunk, move_to_chunk,
+                     total_occupied_blk_count_by_move_to_chunk, de.total_occupied_blk_count.load());
+            });
 
         hs_pg->pg_sb_->total_occupied_blk_count =
             hs_pg->durable_entities().total_occupied_blk_count.load(std::memory_order_relaxed);

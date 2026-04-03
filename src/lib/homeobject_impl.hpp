@@ -70,6 +70,8 @@ struct PG {
     std::atomic< bool > is_dirty_{false};
     ShardPtrList shards_;
 
+    blob_id_t get_last_blob_id() const { return durable_entities_.blob_sequence_num; }
+
     void durable_entities_update(auto&& cb, bool dirty = true) {
         cb(durable_entities_);
         if (dirty) { is_dirty_.store(true, std::memory_order_relaxed); }

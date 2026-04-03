@@ -63,15 +63,15 @@ uint64_t ShardManager::max_shard_size() { return Gi; }
 
 uint64_t ShardManager::max_shard_num_in_pg() { return ((uint64_t)0x01) << shard_width; }
 
-shard_id_t HSHomeObject::generate_new_shard_id(pg_id_t pgid) {
+shard_id_t HSHomeObject::generate_new_shard_id(pg_id_t pg_id) {
     std::scoped_lock lock_guard(_pg_lock);
-    auto hs_pg = const_cast< HS_PG* >(_get_hs_pg_unlocked(pgid));
+    auto hs_pg = const_cast< HS_PG* >(_get_hs_pg_unlocked(pg_id));
     RELEASE_ASSERT(hs_pg, "Missing pg info");
 
     auto new_sequence_num = ++hs_pg->shard_sequence_num_;
     RELEASE_ASSERT(new_sequence_num < ShardManager::max_shard_num_in_pg(),
                    "new shard id must be less than ShardManager::max_shard_num_in_pg()");
-    return make_new_shard_id(pgid, new_sequence_num);
+    return make_new_shard_id(pg_id, new_sequence_num);
 }
 
 uint64_t HSHomeObject::get_sequence_num_from_shard_id(uint64_t shard_id) {
@@ -735,6 +735,26 @@ void HSHomeObject::add_new_shard_to_map(std::unique_ptr< HS_Shard > shard) {
     // following part gives follower members a chance to catch up shard sequence num;
     auto sequence_num = get_sequence_num_from_shard_id(shard_id);
     if (sequence_num > hs_pg->shard_sequence_num_) { hs_pg->shard_sequence_num_ = sequence_num; }
+}
+
+void HSHomeObject::delete_shard_from_map(shard_id_t shard_id) {
+    std::scoped_lock lock_guard(_pg_lock, _shard_lock);
+    auto shard_iter = _shard_map.find(shard_id);
+    RELEASE_ASSERT(shard_iter != _shard_map.end(),
+                   "try to delete shardID=0x{:x}, pg={}, shard=0x{:x}, but shard does not exist", shard_id,
+                   (shard_id >> homeobject::shard_width), (shard_id & homeobject::shard_mask));
+    auto hs_shard = d_cast< HS_Shard* >((*shard_iter->second).get());
+    const auto pg_id = hs_shard->info.placement_group;
+    auto p_chunk_id = hs_shard->p_chunk_id();
+
+    auto hs_pg = const_cast< HS_PG* >(_get_hs_pg_unlocked(pg_id));
+    RELEASE_ASSERT(hs_pg, "Missing pg info, pg={}", pg_id);
+    auto& shards = hs_pg->shards_;
+    shards.remove_if([shard_id](auto& shard_it) { return (shard_it->info).id == shard_id; });
+    _shard_map.erase(shard_id);
+
+    chunk_to_shards_map_[p_chunk_id].erase(shard_id);
+    // TODO:: delete shard meta blk
 }
 
 void HSHomeObject::update_shard_in_map(const ShardInfo& shard_info) {
