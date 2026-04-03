@@ -260,15 +260,18 @@ void ScrubManager::handle_scrub_req(std::shared_ptr< base_scrub_req > req) {
     }
 
     // 2 send scrub map back to leader
-    auto flatbuffer = scrub_map->build_flat_buffer();
+    auto flatbuffer = std::make_shared< flatbuffers::DetachedBuffer >(scrub_map->build_flat_buffer());
+    auto scrub_type_buffer = std::make_shared< SCRUB_TYPE >(scrub_type);
+
     sisl::io_blob_list_t blob_list;
-    blob_list.emplace_back(reinterpret_cast< const uint8_t* >(&scrub_type), sizeof(scrub_type), false);
-    blob_list.emplace_back(flatbuffer.data(), flatbuffer.size(), false);
+    blob_list.emplace_back(reinterpret_cast< const uint8_t* >(scrub_type_buffer.get()), sizeof(scrub_type), false);
+    blob_list.emplace_back(flatbuffer->data(), flatbuffer->size(), false);
 
     // no need to retry, leader will handle retries
     pg_repl_dev->data_request_unidirectional(remote_peer_id, HSHomeObject::PUSH_SCRUB_MAP, blob_list)
         .via(&folly::InlineExecutor::instance())
-        .thenValue([pg_id, remote_peer_id, scrub_type, task_id](auto&& response) {
+        .thenValue([pg_id, remote_peer_id, task_id, flatbuffer, scrub_type_buffer](auto&& response) {
+            const auto scrub_type = *scrub_type_buffer;
             if (response.hasError()) {
                 SCRUBLOGD(pg_id, task_id, "failed to send scrub map to peer {}, scrub_type:{}, error={}",
                           remote_peer_id, scrub_type, response.error());
@@ -528,12 +531,12 @@ folly::SemiFuture< std::shared_ptr< ScrubManager::ShallowScrubReport > >
 ScrubManager::submit_scrub_task(const pg_id_t& pg_id, const bool is_deep, const bool force,
                                 SCRUB_TRIGGER_TYPE trigger_type) {
     LOGINFOMOD(scrubmgr, "submit a scrub task for pg={}, deep_scrub:{}", pg_id, is_deep);
+
+    // Check if a scrub task is already running for this PG
+    // Note: There's still a small race window between this check and task execution in handle_pg_scrub_task,
+    // but the try_emplace there provides the final guard. This check prevents unnecessary task queueing.
     auto it = m_pg_scrub_ctx_map.find(pg_id);
     if (it != m_pg_scrub_ctx_map.end()) {
-        // TODO:: there is case that two thread try to submit scrub task for the same pg at the same time, we can
-        // optimize it by adding a lock for each pg or using atomic operation to make sure only one scrub task can be
-        // submitted for each pg, and other threads can get the existing scrub task if they want to submit another scrub
-        // task for the same pg.
         LOGWARNMOD(scrubmgr, "a scrub task is already running for pg={}, no need to submit another one!", pg_id);
         return folly::makeFuture(std::shared_ptr< ScrubManager::ShallowScrubReport >(nullptr));
     }
@@ -588,22 +591,27 @@ void ScrubManager::cancel_scrub_task(const pg_id_t& pg_id) {
 }
 
 // Helper function to send scrub requests to all peers and handle retries
-bool ScrubManager::send_scrub_req_and_wait(pg_id_t pg_id, uint64_t task_id,
+bool ScrubManager::send_scrub_req_and_wait(pg_id_t pg_id, uint64_t task_id, shared< homestore::ReplDev > pg_repl_dev,
                                            const std::unordered_set< peer_id_t >& all_member_peer_ids,
-                                           const peer_id_t& my_uuid, shared< homestore::ReplDev > pg_repl_dev,
-                                           const sisl::io_blob_list_t& req_blob_list,
-                                           std::shared_ptr< PGScrubContext > scrub_ctx, uint32_t max_retries,
-                                           std::chrono::seconds timeout, const std::string& scrub_type_name) {
+                                           const peer_id_t& my_uuid,
+                                           std::shared_ptr< flatbuffers::DetachedBuffer > flat_buffer,
+                                           SCRUB_TYPE scrub_type, std::shared_ptr< PGScrubContext > scrub_ctx,
+                                           uint32_t max_retries, std::chrono::seconds timeout) {
+    auto scrub_type_buffer = std::make_shared< SCRUB_TYPE >(scrub_type);
+    sisl::io_blob_list_t blob_list;
+    blob_list.emplace_back(reinterpret_cast< const uint8_t* >(scrub_type_buffer.get()), sizeof(scrub_type), false);
+    blob_list.emplace_back(flat_buffer->data(), flat_buffer->size(), false);
+
     // Lambda to send requests to a list of peers
-    auto send_requests_to_remote_peers = [&](const auto& peer_list, bool is_retry) {
+    auto send_requests_to_remote_peers = [&, flat_buffer, scrub_type_buffer](const auto& peer_list, bool is_retry) {
         for (const auto& peer_id : peer_list) {
             if (peer_id == my_uuid) continue;
-            pg_repl_dev->data_request_unidirectional(peer_id, HSHomeObject::PUSH_SCRUB_REQ, req_blob_list)
+            pg_repl_dev->data_request_unidirectional(peer_id, HSHomeObject::PUSH_SCRUB_REQ, blob_list)
                 .via(&folly::InlineExecutor::instance())
-                .thenValue([pg_id, peer_id, task_id, scrub_type_name, is_retry](auto&& response) {
+                .thenValue([pg_id, peer_id, task_id, flat_buffer, scrub_type_buffer, is_retry](auto&& response) {
                     if (response.hasError()) {
                         SCRUBLOGE(pg_id, task_id, "{} to send {} scrub request to peer {}",
-                                  is_retry ? "retry failed" : "failed", scrub_type_name, peer_id);
+                                  is_retry ? "retry failed" : "failed", *scrub_type_buffer, peer_id);
                     }
                 });
         }
@@ -618,7 +626,7 @@ bool ScrubManager::send_scrub_req_and_wait(pg_id_t pg_id, uint64_t task_id,
             auto peers_to_retry = scrub_ctx->get_peers_to_retry();
             if (peers_to_retry.empty()) break;
 
-            SCRUBLOGD(pg_id, task_id, "Retrying {} scrub for {} peers", scrub_type_name, peers_to_retry.size());
+            SCRUBLOGD(pg_id, task_id, "Retrying {} scrub for {} peers", scrub_type, peers_to_retry.size());
             send_requests_to_remote_peers(peers_to_retry, true);
 
             if (scrub_ctx->wait_for_all_req_sms(timeout)) break;
@@ -632,7 +640,7 @@ bool ScrubManager::send_scrub_req_and_wait(pg_id_t pg_id, uint64_t task_id,
         is_incomplete = scrub_ctx->peer_sm_map_.size() != scrub_ctx->member_peer_ids_.size();
     }
     if (scrub_ctx->is_cancelled() || is_incomplete) {
-        SCRUBLOGD(pg_id, task_id, "scrub task is cancelled or incomplete when scrubbing {}!", scrub_type_name);
+        SCRUBLOGD(pg_id, task_id, "scrub task is cancelled or incomplete when scrubbing {}!", scrub_type);
         return false;
     }
     return true;
@@ -707,6 +715,8 @@ void ScrubManager::handle_pg_scrub_task(scrub_task task) {
     RELEASE_ASSERT(all_member_peer_ids.find(my_uuid) != all_member_peer_ids.end(),
                    "my uuid={} is not in the member list of this pg, something is wrong!", my_uuid);
 
+    // Use try_emplace for atomic check-and-insert to avoid race condition
+    // This is safe because try_emplace is atomic in folly::ConcurrentHashMap
     auto [ctx_it, happened] =
         m_pg_scrub_ctx_map.try_emplace(pg_id, std::make_shared< PGScrubContext >(task_id, all_member_peer_ids));
     if (!happened) {
@@ -736,14 +746,11 @@ void ScrubManager::handle_pg_scrub_task(scrub_task task) {
         SCRUBLOGD(pg_id, task_id, "Starting PG meta scrub");
         auto pg_meta_req = std::make_shared< base_scrub_req >(task_id, scrub_ctx->req_id.fetch_add(1), scrub_lsn,
                                                               my_uuid, pg_id, true);
-        // TODO:: add a lock here to protect add_scrub_map when changing current_req.
-        scrub_ctx->current_req = pg_meta_req;
-        // Send requests to all peers
-        auto flatbuffer = pg_meta_req->build_flat_buffer();
-        sisl::io_blob_list_t req_blob_list;
-        const auto scrub_type = SCRUB_TYPE::PG_META;
-        req_blob_list.emplace_back(reinterpret_cast< const uint8_t* >(&scrub_type), sizeof(scrub_type), false);
-        req_blob_list.emplace_back(flatbuffer.data(), flatbuffer.size(), false);
+        // Protect current_req update with lock to avoid race with add_scrub_map
+        {
+            std::lock_guard lock(scrub_ctx->mtx_);
+            scrub_ctx->current_req = pg_meta_req;
+        }
 
         // Scrub locally async (runs in parallel with remote requests)
         m_scrub_req_executor->add([this, pg_meta_req, scrub_ctx, pg_id, task_id]() {
@@ -756,8 +763,10 @@ void ScrubManager::handle_pg_scrub_task(scrub_task task) {
         });
 
         // Send requests to all peers and wait for responses
-        if (!send_scrub_req_and_wait(pg_id, task_id, all_member_peer_ids, my_uuid, pg_repl_dev, req_blob_list,
-                                     scrub_ctx, MAX_RETRIES, SM_REQUEST_TIMEOUT, "PG meta")) {
+        auto flatbuffer = std::make_shared< flatbuffers::DetachedBuffer >(pg_meta_req->build_flat_buffer());
+        const auto scrub_type = SCRUB_TYPE::PG_META;
+        if (!send_scrub_req_and_wait(pg_id, task_id, pg_repl_dev, all_member_peer_ids, my_uuid, flatbuffer, scrub_type,
+                                     scrub_ctx, MAX_RETRIES, SM_REQUEST_TIMEOUT)) {
             return;
         }
 
@@ -791,17 +800,21 @@ void ScrubManager::handle_pg_scrub_task(scrub_task task) {
 
         // Scrub shard range
         uint64_t shard_start = 0;
-        uint64_t shard_end = shard_scrub_range_size;
         uint64_t shard_range_count = 0;
-        for (; shard_start <= last_shard_id;
-             shard_start = shard_end + 1, shard_end = std::min(shard_end + shard_scrub_range_size, last_shard_id)) {
+        while (shard_start <= last_shard_id) {
+            // Calculate end of current range (inclusive), ensuring it doesn't exceed last_shard_id
+            uint64_t shard_end = std::min(shard_start + shard_scrub_range_size - 1, last_shard_id);
             ++shard_range_count;
             SCRUBLOGD(pg_id, task_id, "Scrubbing shard range {}: [{}, {}]", shard_range_count, shard_start, shard_end);
 
             auto shard_req = std::make_shared< shard_scrub_req >(task_id, scrub_ctx->req_id.fetch_add(1), scrub_lsn,
                                                                  my_uuid, pg_id, shard_start, shard_end, is_deep_scrub);
             scrub_ctx->reset_for_new_req();
-            scrub_ctx->current_req = shard_req;
+            // Protect current_req update with lock to avoid race with add_scrub_map
+            {
+                std::lock_guard lock(scrub_ctx->mtx_);
+                scrub_ctx->current_req = shard_req;
+            }
 
             // scrub locally async (runs in parallel with remote requests)
             m_scrub_req_executor->add([this, shard_req, scrub_ctx, pg_id, task_id, is_deep_scrub]() {
@@ -815,23 +828,23 @@ void ScrubManager::handle_pg_scrub_task(scrub_task task) {
             });
 
             // request remote peers to scrub this shard range and wait for responses
-            auto flatbuffer = shard_req->build_flat_buffer();
-            sisl::io_blob_list_t req_blob_list;
+            auto flatbuffer = std::make_shared< flatbuffers::DetachedBuffer >(shard_req->build_flat_buffer());
             const auto scrub_type = is_deep_scrub ? SCRUB_TYPE::DEEP_SHARD : SCRUB_TYPE::SHALLOW_SHARD;
-            req_blob_list.emplace_back(reinterpret_cast< const uint8_t* >(&scrub_type), sizeof(scrub_type), false);
-            req_blob_list.emplace_back(flatbuffer.data(), flatbuffer.size(), false);
 
-            if (!send_scrub_req_and_wait(pg_id, task_id, all_member_peer_ids, my_uuid, pg_repl_dev, req_blob_list,
-                                         scrub_ctx, MAX_RETRIES, SM_REQUEST_TIMEOUT, "shard")) {
+            if (!send_scrub_req_and_wait(pg_id, task_id, pg_repl_dev, all_member_peer_ids, my_uuid, flatbuffer,
+                                         scrub_type, scrub_ctx, MAX_RETRIES, SM_REQUEST_TIMEOUT)) {
                 SCRUBLOGE(pg_id, task_id, "shard scrub failed or was cancelled");
                 return;
             }
 
             SCRUBLOGD(pg_id, task_id, "Merging shard scrub results for range [{}, {}]", shard_start, shard_end);
             {
-                std::lock_guard< std::mutex > lock(scrub_ctx->mtx_);
+                std::lock_guard lock(scrub_ctx->mtx_);
                 pg_scrub_report->merge(scrub_ctx->peer_sm_map_);
             }
+
+            // Move to next range
+            shard_start = shard_end + 1;
         }
         SCRUBLOGD(pg_id, task_id, "shard scrub completed, total ranges scrubbed: {}", shard_range_count);
     }
@@ -853,17 +866,21 @@ void ScrubManager::handle_pg_scrub_task(scrub_task task) {
 
         // Scrub blob range
         uint64_t blob_start = 0;
-        uint64_t blob_end = blob_scrub_range_size;
         uint64_t blob_range_count = 0;
-        for (; blob_start <= last_blob_id;
-             blob_start = blob_end + 1, blob_end = std::min(blob_end + blob_scrub_range_size, last_blob_id)) {
+        while (blob_start <= last_blob_id) {
+            // Calculate end of current range (inclusive), ensuring it doesn't exceed last_blob_id
+            uint64_t blob_end = std::min(blob_start + blob_scrub_range_size - 1, last_blob_id);
             ++blob_range_count;
             SCRUBLOGD(pg_id, task_id, "Scrubbing blob range {}: [{}, {}]", blob_range_count, blob_start, blob_end);
 
             auto blob_req = std::make_shared< blob_scrub_req >(task_id, scrub_ctx->req_id.fetch_add(1), scrub_lsn,
                                                                my_uuid, pg_id, blob_start, blob_end, is_deep_scrub);
             scrub_ctx->reset_for_new_req();
-            scrub_ctx->current_req = blob_req;
+            // Protect current_req update with lock to avoid race with add_scrub_map
+            {
+                std::lock_guard< std::mutex > lock(scrub_ctx->mtx_);
+                scrub_ctx->current_req = blob_req;
+            }
 
             // locally scrub this blob range async (runs in parallel with remote requests)
             m_scrub_req_executor->add([this, blob_req, scrub_ctx, pg_id, task_id, is_deep_scrub]() {
@@ -877,14 +894,10 @@ void ScrubManager::handle_pg_scrub_task(scrub_task task) {
             });
 
             // request remote peers to scrub this blob range and wait for responses
-            auto flatbuffer = blob_req->build_flat_buffer();
-            sisl::io_blob_list_t req_blob_list;
+            auto flatbuffer = std::make_shared< flatbuffers::DetachedBuffer >(blob_req->build_flat_buffer());
             const auto scrub_type = is_deep_scrub ? SCRUB_TYPE::DEEP_BLOB : SCRUB_TYPE::SHALLOW_BLOB;
-            req_blob_list.emplace_back(reinterpret_cast< const uint8_t* >(&scrub_type), sizeof(scrub_type), false);
-            req_blob_list.emplace_back(flatbuffer.data(), flatbuffer.size(), false);
-
-            if (!send_scrub_req_and_wait(pg_id, task_id, all_member_peer_ids, my_uuid, pg_repl_dev, req_blob_list,
-                                         scrub_ctx, MAX_RETRIES, SM_REQUEST_TIMEOUT, "blob")) {
+            if (!send_scrub_req_and_wait(pg_id, task_id, pg_repl_dev, all_member_peer_ids, my_uuid, flatbuffer,
+                                         scrub_type, scrub_ctx, MAX_RETRIES, SM_REQUEST_TIMEOUT)) {
                 SCRUBLOGE(pg_id, task_id, "blob scrub failed or was cancelled");
                 return;
             }
@@ -894,6 +907,9 @@ void ScrubManager::handle_pg_scrub_task(scrub_task task) {
                 std::lock_guard< std::mutex > lock(scrub_ctx->mtx_);
                 pg_scrub_report->merge(scrub_ctx->peer_sm_map_);
             }
+
+            // Move to next range
+            blob_start = blob_end + 1;
         }
         SCRUBLOGD(pg_id, task_id, "blob scrub completed, total ranges scrubbed: {}", blob_range_count);
     }
@@ -901,6 +917,11 @@ void ScrubManager::handle_pg_scrub_task(scrub_task task) {
     // only if pg is successfully scrubbed, we persist scrub metablk.
     save_scrub_superblk(pg_id, is_deep_scrub, true);
     SCRUBLOGD(pg_id, task_id, "successfully complete {} scrub task!", is_deep_scrub ? "deep" : "shallow");
+
+#ifdef _PRERELEASE
+    // Trigger the callback flip to delete missing blob during scrub if enabled
+    iomgr_flip::instance()->callback_flip("delete_missing_blob_through_raft");
+#endif
 }
 
 void ScrubManager::add_pg(const pg_id_t pg_id) {

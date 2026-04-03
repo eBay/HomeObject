@@ -49,7 +49,7 @@ public:
 
         HSHomeObject::_hs_chunk_size = SISL_OPTIONS["chunk_size"].as< uint64_t >() * Mi;
         _obj_inst = std::dynamic_pointer_cast< HSHomeObject >(g_helper->build_new_homeobject());
-        
+
         // Used to export metrics, it should be called after init_homeobject
         if (SISL_OPTIONS["enable_http"].as< bool >()) { g_helper->app->start_http_server(); }
         if (!g_helper->is_current_testcase_restarted()) {
@@ -904,6 +904,27 @@ private:
         freq.set_percent(percent);
         m_fc.inject_delay_flip(flip_name, {null_cond}, freq, delay_usec);
         LOGINFO("Flip {} set", flip_name);
+    }
+
+    void set_callback_flip(const std::string flip_name, std::function< void() > callback, uint32_t count = 1,
+                           uint32_t percent = 100) {
+        flip::FlipCondition null_cond;
+        flip::FlipFrequency freq;
+        freq.set_count(count);
+        freq.set_percent(percent);
+        m_fc.inject_callback_flip(flip_name, {null_cond}, freq, callback);
+        LOGINFO("Flip {} with callback set", flip_name);
+    }
+
+    template < typename T >
+    void set_callback_retval_flip(const std::string flip_name, std::function< T() > callback, uint32_t count = 1,
+                                  uint32_t percent = 100) {
+        flip::FlipCondition null_cond;
+        flip::FlipFrequency freq;
+        freq.set_count(count);
+        freq.set_percent(percent);
+        ASSERT_TRUE(m_fc.inject_callback_retval_flip(flip_name, {null_cond}, freq, callback));
+        LOGINFO("Flip {} with callback retval set", flip_name);
     }
 
     void remove_flip(const std::string flip_name) {

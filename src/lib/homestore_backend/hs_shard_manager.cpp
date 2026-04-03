@@ -745,6 +745,7 @@ void HSHomeObject::delete_shard_from_map(shard_id_t shard_id) {
                    (shard_id >> homeobject::shard_width), (shard_id & homeobject::shard_mask));
     auto hs_shard = d_cast< HS_Shard* >((*shard_iter->second).get());
     const auto pg_id = hs_shard->info.placement_group;
+    auto p_chunk_id = hs_shard->p_chunk_id();
 
     auto hs_pg = const_cast< HS_PG* >(_get_hs_pg_unlocked(pg_id));
     RELEASE_ASSERT(hs_pg, "Missing pg info, pg={}", pg_id);
@@ -752,7 +753,6 @@ void HSHomeObject::delete_shard_from_map(shard_id_t shard_id) {
     shards.remove_if([shard_id](auto& shard_it) { return (shard_it->info).id == shard_id; });
     _shard_map.erase(shard_id);
 
-    auto p_chunk_id = hs_shard->p_chunk_id();
     chunk_to_shards_map_[p_chunk_id].erase(shard_id);
     // TODO:: delete shard meta blk
 }

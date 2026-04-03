@@ -445,11 +445,11 @@ private:
     void scan_pg_for_scrub();
     void handle_pg_scrub_task(scrub_task task);
 
-    bool send_scrub_req_and_wait(pg_id_t pg_id, uint64_t task_id,
+    bool send_scrub_req_and_wait(pg_id_t pg_id, uint64_t task_id, shared< homestore::ReplDev > pg_repl_dev,
                                  const std::unordered_set< peer_id_t >& all_member_peer_ids, const peer_id_t& my_uuid,
-                                 shared< homestore::ReplDev > pg_repl_dev, const sisl::io_blob_list_t& req_blob_list,
+                                 std::shared_ptr< flatbuffers::DetachedBuffer > flat_buffer, SCRUB_TYPE scrub_type,
                                  std::shared_ptr< PGScrubContext > scrub_ctx, uint32_t max_retries,
-                                 std::chrono::seconds timeout, const std::string& scrub_type_name);
+                                 std::chrono::seconds timeout);
 
     bool is_eligible_for_deep_scrub(const pg_id_t& pg_id);
     bool is_eligible_for_shallow_scrub(const pg_id_t& pg_id);

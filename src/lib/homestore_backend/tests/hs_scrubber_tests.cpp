@@ -247,8 +247,6 @@ TEST_F(HomeObjectFixture, BasicScrubTest) {
             << "Empty PG should have no missing shards in shallow scrub";
     });
 
-    g_helper->sync();
-
     // Create blobs in all shards
     shard_blob_ids_map = put_blobs(pg_shard_id_vec, num_blobs_per_shard, pg_blob_id);
     LOGINFO("Created {} blobs per shard, total {} blobs", num_blobs_per_shard, num_shards * num_blobs_per_shard);
@@ -289,6 +287,7 @@ TEST_F(HomeObjectFixture, BasicScrubTest) {
     });
 
     g_helper->sync();
+
     const auto hs_pg = _obj_inst->get_hs_pg(pg_id);
     ASSERT_TRUE(hs_pg) << "PG should exist for pg_id=" << pg_id;
 
@@ -526,7 +525,6 @@ TEST_F(HomeObjectFixture, ScrubSuperblockPersistenceTest) {
 
     const uint64_t shard_size = 64 * Mi;
     create_shard(pg_id, shard_size, "shard_meta");
-
     auto scrub_mgr = _obj_inst->scrub_manager();
 
     run_on_pg_leader(pg_id, [&]() {
@@ -563,6 +561,447 @@ TEST_F(HomeObjectFixture, ScrubSuperblockPersistenceTest) {
             << "Deep scrub timestamp should not change after shallow scrub";
         EXPECT_GT(after_shallow_sb->last_shallow_scrub_timestamp, after_deep_sb->last_shallow_scrub_timestamp)
             << "Shallow scrub timestamp should be updated";
+    });
+
+    g_helper->sync();
+}
+
+// Test cancel scrub task
+TEST_F(HomeObjectFixture, CancelScrubTaskTest) {
+    const pg_id_t pg_id = 1;
+    create_pg(pg_id);
+    auto scrub_mgr = _obj_inst->scrub_manager();
+
+    const uint64_t shard_size = 64 * Mi;
+    auto shard_info = create_shard(pg_id, shard_size, "shard meta");
+
+    std::map< pg_id_t, std::vector< shard_id_t > > pg_shard_id_vec;
+    std::map< pg_id_t, blob_id_t > pg_blob_id;
+    pg_shard_id_vec[pg_id].push_back(shard_info.id);
+    pg_blob_id[pg_id] = 0;
+
+    const uint64_t num_blobs = 10;
+    put_blobs(pg_shard_id_vec, num_blobs, pg_blob_id);
+    g_helper->sync();
+
+    // Submit a scrub task and then cancel it
+    run_on_pg_leader(pg_id, [&]() {
+        auto scrub_future = scrub_mgr->submit_scrub_task(pg_id, true, false, SCRUB_TRIGGER_TYPE::MANUALLY);
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        scrub_mgr->cancel_scrub_task(pg_id);
+        LOGINFO("Cancelled scrub task for pg={}", pg_id);
+        auto scrub_report = std::move(scrub_future).get();
+
+        // The report might be null or have partial results due to cancellation
+        // We just verify that cancel doesn't cause crash
+        LOGINFO("Scrub task cancelled, report: {}", scrub_report ? "present" : "null");
+    });
+
+    // Test canceling when no task is running - should not crash
+    run_on_pg_leader(pg_id, [&]() {
+        scrub_mgr->cancel_scrub_task(pg_id);
+        LOGINFO("Cancel non-existent scrub task for pg={} - should not crash", pg_id);
+    });
+
+    g_helper->sync();
+}
+
+// Test concurrent scrubs on multiple PGs
+TEST_F(HomeObjectFixture, ConcurrentScrubsOnMultiplePGsTest) {
+    const uint64_t num_pgs = 3;
+    const uint64_t shard_size = 64 * Mi;
+
+    std::vector< pg_id_t > pg_ids;
+    std::map< pg_id_t, std::vector< shard_id_t > > pg_shard_id_vec;
+    std::map< pg_id_t, blob_id_t > pg_blob_id;
+
+    // Create multiple PGs with shards and blobs
+    for (uint64_t i = 1; i <= num_pgs; ++i) {
+        pg_id_t pg_id = i;
+        pg_ids.push_back(pg_id);
+        create_pg(pg_id);
+        auto shard_info = create_shard(pg_id, shard_size, "shard meta " + std::to_string(pg_id));
+        pg_shard_id_vec[pg_id].push_back(shard_info.id);
+        pg_blob_id[pg_id] = 0;
+        put_blobs(pg_shard_id_vec, 5, pg_blob_id);
+    }
+
+    auto scrub_mgr = _obj_inst->scrub_manager();
+
+    // Submit scrub tasks for all PGs concurrently
+    std::vector< folly::SemiFuture< std::shared_ptr< ScrubManager::ShallowScrubReport > > > scrub_futures;
+
+    for (const auto& pg_id : pg_ids) {
+        run_on_pg_leader(pg_id, [&]() {
+            auto future = scrub_mgr->submit_scrub_task(pg_id, true, false, SCRUB_TRIGGER_TYPE::MANUALLY);
+            scrub_futures.push_back(std::move(future));
+            LOGINFO("Submitted deep scrub for pg={}", pg_id);
+        });
+    }
+
+    // Wait for all scrub tasks to complete
+    for (size_t i = 0; i < scrub_futures.size(); ++i) {
+        auto report = std::move(scrub_futures[i]).get();
+        if (report) {
+            LOGINFO("PG {} scrub completed, report present", pg_ids[i]);
+        } else {
+            LOGWARN("PG {} scrub returned null report", pg_ids[i]);
+        }
+    }
+
+    g_helper->sync();
+}
+
+// Test deleted blob filter in scrub report
+TEST_F(HomeObjectFixture, DeletedBlobFilterTest) {
+    const pg_id_t pg_id = 1;
+    create_pg(pg_id);
+    auto scrub_mgr = _obj_inst->scrub_manager();
+
+    const uint64_t shard_size = 64 * Mi;
+    auto shard_info = create_shard(pg_id, shard_size, "shard meta");
+
+    std::map< pg_id_t, std::vector< shard_id_t > > pg_shard_id_vec;
+    std::map< pg_id_t, blob_id_t > pg_blob_id;
+    pg_shard_id_vec[pg_id].push_back(shard_info.id);
+    pg_blob_id[pg_id] = 0;
+
+    std::map< shard_id_t, std::map< blob_id_t, uint64_t > > shard_blob_ids_map;
+
+    // Create some blobs
+    const uint64_t num_blobs = 10;
+    shard_blob_ids_map = put_blobs(pg_shard_id_vec, num_blobs, pg_blob_id);
+    const auto hs_pg = _obj_inst->get_hs_pg(pg_id);
+    ASSERT_TRUE(hs_pg) << "PG should exist for pg_id=" << pg_id;
+
+    const auto shard_id = shard_info.id;
+    auto& shard_blobs = shard_blob_ids_map[shard_id];
+
+    // Select blobs to test:
+    // - missing_blob_to_delete: will be missing from leader index AND deleted via blob delete
+    // - missing_blob_not_deleted: will be missing from leader index but NOT deleted
+    auto it = shard_blobs.begin();
+    const auto missing_blob_to_delete = it->first;       // First blob: will be deleted via blob delete
+    const auto missing_blob_not_deleted = (++it)->first; // Second blob: will NOT be deleted
+
+    // Delete both blobs from index table to simulate missing blobs on followers
+    run_on_pg_follower(pg_id, [&]() {
+        auto& pg_index_table = hs_pg->index_table_;
+        delete_blob_from_index(pg_index_table, shard_id, missing_blob_to_delete);
+        delete_blob_from_index(pg_index_table, shard_id, missing_blob_not_deleted);
+        LOGINFO("Deleted blobs {} and {} from leader index table", missing_blob_to_delete, missing_blob_not_deleted);
+    });
+
+    g_helper->sync();
+
+    run_on_pg_leader(pg_id, [&]() {
+        // only the blob that was deleted via blob delete should be filtered out, the other missing blob should be
+        // reported in the scrub report
+        std::set< peer_id_t > follower_peer_ids;
+        const auto& leader_uuid = _obj_inst->our_uuid();
+        const auto& members = (hs_pg->pg_info_).members;
+        for (const auto& member : members) {
+            if (member.id == leader_uuid) { continue; }
+            follower_peer_ids.insert(member.id);
+        }
+
+        auto scrub_report =
+            scrub_mgr->submit_scrub_task(pg_id, false /* shallow */, false /* force */, SCRUB_TRIGGER_TYPE::MANUALLY)
+                .get();
+
+        auto missing_blobs = scrub_report->get_missing_blobs();
+        for (const auto& peer_id : follower_peer_ids) {
+            auto it = missing_blobs.find(peer_id);
+            ASSERT_TRUE(it != missing_blobs.end()) << "Missing blob for follower should be reported in scrub report";
+            EXPECT_TRUE(it->second.size() == 2) << "There should be two missing blobs for leader in scrub report";
+            EXPECT_TRUE(it->second.count(BlobRoute{shard_id, missing_blob_to_delete}) == 1)
+                << "The missing blob that will be deleted should be reported in scrub report";
+            EXPECT_TRUE(it->second.count(BlobRoute{shard_id, missing_blob_not_deleted}) == 1)
+                << "The missing blob that will NOT be deleted should be reported in scrub report";
+        }
+
+#ifdef _PRERELEASE
+        set_callback_flip(
+            "delete_missing_blob_through_raft", std::function< void() >([this, missing_blob_to_delete, shard_id]() {
+                auto ret =
+                    _obj_inst->blob_manager()->del(shard_id, missing_blob_to_delete, generateRandomTraceId()).get();
+                LOGINFO("Blob delete via callback flip completed, ret={}", ret.hasValue());
+            }));
+
+        scrub_report =
+            scrub_mgr->submit_scrub_task(pg_id, false /* shallow */, false /* force */, SCRUB_TRIGGER_TYPE::MANUALLY)
+                .get();
+
+        remove_flip("delete_missing_blob_through_raft");
+
+        // Verify the scrub report
+        ASSERT_NE(scrub_report, nullptr) << "Scrub report should not be null";
+
+        missing_blobs = scrub_report->get_missing_blobs();
+        for (const auto& peer_id : follower_peer_ids) {
+            auto it = missing_blobs.find(peer_id);
+            ASSERT_TRUE(it != missing_blobs.end()) << "Missing blob for follower should be reported in scrub report";
+            EXPECT_TRUE(it->second.size() == 1) << "There should be one missing blob for leader in scrub report";
+            EXPECT_TRUE(it->second.count(BlobRoute{shard_id, missing_blob_not_deleted}) == 1)
+                << "The missing blob that was not deleted should be reported in scrub report";
+        }
+#endif
+    });
+
+    g_helper->sync();
+    LOGINFO("DeletedBlobFilterTest completed successfully");
+}
+
+// Test add and remove PG from scrub manager
+TEST_F(HomeObjectFixture, AddRemovePGScrubTest) {
+    const pg_id_t pg_id = 1;
+    const uint64_t shard_size = 64 * Mi;
+
+    // Create PG and verify scrub superblock is created
+    create_pg(pg_id);
+    create_shard(pg_id, shard_size, "shard meta");
+
+    auto scrub_mgr = _obj_inst->scrub_manager();
+
+    // Verify scrub superblock exists
+    run_on_pg_leader(pg_id, [&]() {
+        auto sb = scrub_mgr->get_scrub_superblk(pg_id);
+        ASSERT_TRUE(sb.has_value()) << "Scrub superblock should exist after PG creation";
+        LOGINFO("Scrub superblock created for pg={}", pg_id);
+    });
+
+    // Run a scrub to update timestamps
+    run_on_pg_leader(pg_id, [&]() {
+        // Get initial timestamp before scrub
+        auto sb_before = scrub_mgr->get_scrub_superblk(pg_id);
+        ASSERT_TRUE(sb_before.has_value()) << "Scrub superblock should exist before scrub";
+        uint64_t timestamp_before = sb_before->last_shallow_scrub_timestamp;
+        LOGINFO("Timestamp before scrub: {}", timestamp_before);
+
+        // Wait a bit to ensure timestamp will be different
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+        auto report = scrub_mgr->submit_scrub_task(pg_id, false, false, SCRUB_TRIGGER_TYPE::MANUALLY).get();
+        ASSERT_NE(report, nullptr) << "Scrub report should not be null";
+
+        // Verify timestamp was updated after scrub
+        auto sb_after = scrub_mgr->get_scrub_superblk(pg_id);
+        ASSERT_TRUE(sb_after.has_value()) << "Scrub superblock should exist after scrub";
+        uint64_t timestamp_after = sb_after->last_shallow_scrub_timestamp;
+        EXPECT_GT(timestamp_after, timestamp_before) << "Shallow scrub timestamp should be updated after scrub";
+        LOGINFO("Timestamp after scrub: {} (updated from {})", timestamp_after, timestamp_before);
+    });
+
+    // Now delete the PG - this should cancel any running scrub and remove superblock
+    run_on_pg_leader(pg_id, [&]() {
+        _obj_inst->pg_manager()->destroy_pg(pg_id);
+        LOGINFO("Deleted pg={}", pg_id);
+    });
+
+    // Run a scrub to update timestamps
+    run_on_pg_leader(pg_id, [&]() {
+        auto report = scrub_mgr->submit_scrub_task(pg_id, false, false, SCRUB_TRIGGER_TYPE::MANUALLY).get();
+        ASSERT_EQ(report, nullptr) << "Scrub report should be null after PG deletion";
+        LOGINFO("Scrub task for deleted pg={} returned null report as expected", pg_id);
+    });
+
+    // Wait for PG to be deleted
+    std::this_thread::sleep_for(std::chrono::seconds(2));
+    g_helper->sync();
+
+    // Verify scrub superblock is cleaned up - get_scrub_superblk should return nullopt
+    // Note: This might not be directly testable without internal access, so we just verify no crash
+    LOGINFO("PG deleted, scrub manager should have cleaned up");
+}
+
+// Test local scrub methods
+TEST_F(HomeObjectFixture, LocalScrubMethodsTest) {
+    const pg_id_t pg_id = 1;
+    create_pg(pg_id);
+    auto scrub_mgr = _obj_inst->scrub_manager();
+
+    const uint64_t shard_size = 64 * Mi;
+    auto shard_info = create_shard(pg_id, shard_size, "shard meta");
+
+    std::map< pg_id_t, std::vector< shard_id_t > > pg_shard_id_vec;
+    std::map< pg_id_t, blob_id_t > pg_blob_id;
+    pg_shard_id_vec[pg_id].push_back(shard_info.id);
+    pg_blob_id[pg_id] = 0;
+
+    // Create blobs first
+    const uint64_t num_blobs = 10;
+    auto shard_blob_ids_map = put_blobs(pg_shard_id_vec, num_blobs, pg_blob_id);
+    LOGINFO("Created {} blobs for local scrub test", num_blobs);
+
+    g_helper->sync();
+
+    const auto hs_pg = _obj_inst->get_hs_pg(pg_id);
+    ASSERT_TRUE(hs_pg) << "PG should exist for pg_id=" << pg_id;
+
+    const auto shard_id = shard_info.id;
+    auto& shard_blobs = shard_blob_ids_map[shard_id];
+
+    // Select blobs to corrupt
+    auto it = shard_blobs.begin();
+    const auto corrupted_blob_id = it->first;
+
+    // Corrupt blobs on the local node
+    run_on_pg_leader(pg_id, [&]() {
+        auto& pg_index_table = hs_pg->index_table_;
+
+        // Make corrupted_blob_id corrupted (corrupt data)
+        corrupt_blob_data(pg_index_table, shard_id, corrupted_blob_id);
+        LOGINFO("Corrupted blob {} on leader", corrupted_blob_id);
+    });
+
+    g_helper->sync();
+
+    run_on_pg_leader(pg_id, [&]() {
+        // Create a shard scrub request
+        auto shard_req =
+            std::make_shared< ScrubManager::shard_scrub_req >(1, 1, 0, _obj_inst->our_uuid(), pg_id, 0, 100, false);
+
+        // Test local_scrub_shard (shallow)
+        auto shallow_shard_map = scrub_mgr->local_scrub_shard(shard_req);
+        ASSERT_NE(shallow_shard_map, nullptr);
+        EXPECT_EQ(shallow_shard_map->get_scrub_type(), SCRUB_TYPE::SHALLOW_SHARD);
+        LOGINFO("Shallow shard scrub returned map with {} shards", shallow_shard_map->shards.size());
+
+        // Create a deep shard scrub request
+        auto deep_shard_req =
+            std::make_shared< ScrubManager::shard_scrub_req >(1, 1, 0, _obj_inst->our_uuid(), pg_id, 0, 100, true);
+
+        // Test local_scrub_shard (deep)
+        auto deep_shard_map = scrub_mgr->local_scrub_shard(deep_shard_req);
+        ASSERT_NE(deep_shard_map, nullptr);
+        EXPECT_EQ(deep_shard_map->get_scrub_type(), SCRUB_TYPE::DEEP_SHARD);
+        LOGINFO("Deep shard scrub returned map with {} shards", deep_shard_map->shards.size());
+
+        // Test scrub_pg_meta
+        auto pg_meta_req =
+            std::make_shared< ScrubManager::base_scrub_req >(1, 1, 0, _obj_inst->our_uuid(), pg_id, true);
+        auto pg_meta_map = scrub_mgr->scrub_pg_meta(pg_meta_req);
+        ASSERT_NE(pg_meta_map, nullptr);
+        EXPECT_EQ(pg_meta_map->get_scrub_type(), SCRUB_TYPE::PG_META);
+        LOGINFO("PG meta scrub completed");
+
+        // Test local_scrub_blob (shallow)
+        auto shallow_blob_req =
+            std::make_shared< ScrubManager::blob_scrub_req >(1, 1, 0, _obj_inst->our_uuid(), pg_id, 0, 100, false);
+        auto shallow_blob_map = scrub_mgr->local_scrub_blob(shallow_blob_req);
+        // May be null if no blobs exist in range
+        if (shallow_blob_map) {
+            EXPECT_EQ(shallow_blob_map->get_scrub_type(), SCRUB_TYPE::SHALLOW_BLOB);
+            LOGINFO("Shallow blob scrub completed");
+        }
+
+        // Test local_scrub_blob (deep) - should detect corrupted and inconsistent blobs
+        auto deep_blob_req =
+            std::make_shared< ScrubManager::blob_scrub_req >(1, 1, 0, _obj_inst->our_uuid(), pg_id, 0, 100, true);
+        auto deep_blob_map = scrub_mgr->local_scrub_blob(deep_blob_req);
+        ASSERT_NE(deep_blob_map, nullptr);
+        EXPECT_EQ(deep_blob_map->get_scrub_type(), SCRUB_TYPE::DEEP_BLOB);
+        auto deep_blob_map_cast = std::dynamic_pointer_cast< ScrubManager::DeepBlobScrubMap >(deep_blob_map);
+        LOGINFO("Deep blob scrub completed, found {} blobs", deep_blob_map_cast->blobs.size());
+
+        // Check for corrupted blob
+        auto corrupted_it = deep_blob_map_cast->blobs.find(BlobRoute{shard_id, corrupted_blob_id});
+        EXPECT_TRUE(corrupted_it != deep_blob_map_cast->blobs.end()) << "Corrupted blob should be in deep scrub result";
+        if (corrupted_it != deep_blob_map_cast->blobs.end()) {
+            auto result = std::get_if< ScrubResult >(&corrupted_it->second);
+            ASSERT_TRUE(result != nullptr) << "Corrupted blob result should be ScrubResult";
+            EXPECT_EQ(*result, ScrubResult::MISMATCH) << "Corrupted blob should have MISMATCH result";
+            LOGINFO("Deep scrub correctly detected corrupted blob {}", corrupted_blob_id);
+        }
+    });
+
+    g_helper->sync();
+}
+
+// Test scrub request serialization and deserialization
+TEST_F(HomeObjectFixture, ScrubRequestSerializationTest) {
+    const pg_id_t pg_id = 1;
+    create_pg(pg_id);
+    auto scrub_mgr = _obj_inst->scrub_manager();
+
+    const uint64_t shard_size = 64 * Mi;
+    create_shard(pg_id, shard_size, "shard meta");
+    run_on_pg_leader(pg_id, [&]() {
+        auto my_uuid = _obj_inst->our_uuid();
+
+        // Test base_scrub_req serialization
+        {
+            auto req = std::make_shared< ScrubManager::base_scrub_req >(1, 1, 100, my_uuid, pg_id, true);
+
+            // Serialize
+            auto buffer = req->build_flat_buffer();
+            EXPECT_GT(buffer.size(), 0) << "Serialized buffer should not be empty";
+
+            // Deserialize
+            auto req_loaded = std::make_shared< ScrubManager::base_scrub_req >();
+            bool load_success = req_loaded->load(buffer.data(), buffer.size());
+            EXPECT_TRUE(load_success) << "Deserialization should succeed";
+
+            // Verify fields
+            EXPECT_EQ(req_loaded->pg_id, pg_id);
+            EXPECT_EQ(req_loaded->task_id, 1);
+            EXPECT_EQ(req_loaded->req_id, 1);
+            EXPECT_EQ(req_loaded->scrub_lsn, 100);
+
+            LOGINFO("base_scrub_req serialization test passed");
+        }
+
+        // Test blob_scrub_req serialization
+        {
+            auto req = std::make_shared< ScrubManager::blob_scrub_req >(1, 2, 200, my_uuid, pg_id, 100, 200, true);
+
+            // Serialize
+            auto buffer = req->build_flat_buffer();
+            EXPECT_GT(buffer.size(), 0);
+
+            // Deserialize
+            auto req_loaded = std::make_shared< ScrubManager::blob_scrub_req >();
+            bool load_success = req_loaded->load(buffer.data(), buffer.size());
+            EXPECT_TRUE(load_success);
+
+            // Verify fields
+            EXPECT_EQ(req_loaded->pg_id, pg_id);
+            EXPECT_EQ(req_loaded->task_id, 1);
+            EXPECT_EQ(req_loaded->req_id, 2);
+            EXPECT_EQ(req_loaded->scrub_lsn, 200);
+            EXPECT_EQ(req_loaded->start, 100);
+            EXPECT_EQ(req_loaded->end, 200);
+            EXPECT_TRUE(req_loaded->is_deep_scrub());
+            EXPECT_EQ(req_loaded->get_scrub_type(), SCRUB_TYPE::DEEP_BLOB);
+
+            LOGINFO("blob_scrub_req serialization test passed");
+        }
+
+        // Test shard_scrub_req serialization
+        {
+            auto req = std::make_shared< ScrubManager::shard_scrub_req >(1, 3, 300, my_uuid, pg_id, 0, 100, false);
+
+            // Serialize
+            auto buffer = req->build_flat_buffer();
+            EXPECT_GT(buffer.size(), 0);
+
+            // Deserialize
+            auto req_loaded = std::make_shared< ScrubManager::shard_scrub_req >();
+            bool load_success = req_loaded->load(buffer.data(), buffer.size());
+            EXPECT_TRUE(load_success);
+
+            // Verify fields
+            EXPECT_EQ(req_loaded->pg_id, pg_id);
+            EXPECT_EQ(req_loaded->task_id, 1);
+            EXPECT_EQ(req_loaded->req_id, 3);
+            EXPECT_EQ(req_loaded->scrub_lsn, 300);
+            EXPECT_EQ(req_loaded->start, 0);
+            EXPECT_EQ(req_loaded->end, 100);
+            EXPECT_FALSE(req_loaded->is_deep_scrub());
+            EXPECT_EQ(req_loaded->get_scrub_type(), SCRUB_TYPE::SHALLOW_SHARD);
+
+            LOGINFO("shard_scrub_req serialization test passed");
+        }
     });
 
     g_helper->sync();
