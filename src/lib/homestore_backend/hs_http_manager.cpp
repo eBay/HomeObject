@@ -596,13 +596,28 @@ void HttpManager::trigger_gc(const Pistache::Rest::Request& request, Pistache::H
         gc_mgr->stop_gc_scan_timer();
 
         // we block here until all gc tasks for the pg are done
-        trigger_gc_for_pg(pg_id, job_id);
+        trigger_gc_for_pg(pg_id, job_id)
+            .thenValue([job_info](auto&&) {
+                job_info->status = job_info->failed_count ? GCJobStatus::FAILED : GCJobStatus::COMPLETED;
+                LOGINFO("GC job {} completed: total={}, success={}, failed={}", job_info->job_id,
+                        job_info->total_chunks, job_info->success_count, job_info->failed_count);
+            })
+            .get();
 
         LOGINFO("GC job {} restarting GC scan timer", job_id);
         gc_mgr->start_gc_scan_timer();
     } else {
         LOGINFO("Received trigger_gc request for all chunks");
         nlohmann::json result;
+        std::vector< pg_id_t > pg_ids;
+        ho_.get_pg_ids(pg_ids);
+
+        if (pg_ids.empty()) {
+            result["error"] = "no PG found";
+            response.send(Pistache::Http::Code::Not_Found, result.dump());
+            return;
+        }
+
         const auto job_id = generate_job_id();
         result["job_id"] = job_id;
         result["message"] = "GC triggered for all chunks, pls query job status using gc_job_status API";
@@ -615,16 +630,24 @@ void HttpManager::trigger_gc(const Pistache::Rest::Request& request, Pistache::H
             gc_jobs_map_.set(job_id, job_info);
         }
 
-        std::vector< pg_id_t > pg_ids;
-        ho_.get_pg_ids(pg_ids);
         LOGINFO("GC job {} will process {} PGs", job_id, pg_ids.size());
         LOGINFO("GC job {} stopping GC scan timer", job_id);
         gc_mgr->stop_gc_scan_timer();
 
-        // we block here until all gc tasks for the pg are done
+        // we block here until all gc tasks for all pgs are done
+        std::vector< folly::Future< folly::Unit > > pg_futures;
         for (const auto& pg_id : pg_ids) {
-            trigger_gc_for_pg(pg_id, job_id);
+            pg_futures.push_back(trigger_gc_for_pg(pg_id, job_id));
         }
+
+        // Set job status after all PGs are processed
+        folly::collectAllUnsafe(pg_futures)
+            .thenValue([job_info](auto&&) {
+                job_info->status = job_info->failed_count ? GCJobStatus::FAILED : GCJobStatus::COMPLETED;
+                LOGINFO("GC job {} completed: total={}, success={}, failed={}", job_info->job_id,
+                        job_info->total_chunks, job_info->success_count, job_info->failed_count);
+            })
+            .get();
 
         LOGINFO("GC job {} restarting GC scan timer", job_id);
         gc_mgr->start_gc_scan_timer();
@@ -703,7 +726,7 @@ void HttpManager::get_gc_job_status(const Pistache::Rest::Request& request, Pist
     response.send(Pistache::Http::Code::Ok, result.dump());
 }
 
-void HttpManager::trigger_gc_for_pg(uint16_t pg_id, const std::string& job_id) {
+folly::Future< folly::Unit > HttpManager::trigger_gc_for_pg(uint16_t pg_id, const std::string& job_id) {
     auto hs_pg = const_cast< HSHomeObject::HS_PG* >(ho_.get_hs_pg(pg_id));
     RELEASE_ASSERT(hs_pg, "HS PG {} not found during GC job {}", pg_id, job_id);
 
@@ -742,7 +765,7 @@ void HttpManager::trigger_gc_for_pg(uint16_t pg_id, const std::string& job_id) {
                  (priority == task_priority::emergent) ? "emergent" : "normal");
     }
 
-    folly::collectAllUnsafe(gc_task_futures)
+    return folly::collectAllUnsafe(gc_task_futures)
         .thenValue([job_info](auto&& results) {
             for (auto const& ok : results) {
                 RELEASE_ASSERT(ok.hasValue(), "we never throw any exception when copying data");
@@ -753,8 +776,8 @@ void HttpManager::trigger_gc_for_pg(uint16_t pg_id, const std::string& job_id) {
                 }
             }
         })
-        .thenValue([this, pg_id, job_info, gc_mgr](auto&& rets) {
-            LOGINFO("All GC tasks have been processed");
+        .thenValue([this, pg_id, job_info](auto&& rets) {
+            LOGINFO("All GC tasks for PG {} have been processed", pg_id);
             const auto& job_id = job_info->job_id;
 
             auto hs_pg = const_cast< HSHomeObject::HS_PG* >(ho_.get_hs_pg(pg_id));
@@ -762,12 +785,7 @@ void HttpManager::trigger_gc_for_pg(uint16_t pg_id, const std::string& job_id) {
             // Resume accepting new requests for this pg
             hs_pg->repl_dev_->resume_accepting_reqs();
             LOGINFO("GC job {} resumed accepting requests for PG {}", job_id, pg_id);
-
-            job_info->status = job_info->failed_count ? GCJobStatus::FAILED : GCJobStatus::COMPLETED;
-            LOGINFO("GC job {} completed: total={}, success={}, failed={}", job_id, job_info->total_chunks,
-                    job_info->success_count, job_info->failed_count);
-        })
-        .get();
+        });
 }
 
 #ifdef _PRERELEASE
