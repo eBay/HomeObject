@@ -123,6 +123,7 @@ struct PGStats {
     uint64_t num_tombstone_objects; // total number of tombstone objects on this PG;
     uint64_t pg_state;              // PG state;
     uint32_t snp_progress;          // snapshot progress, the value is set only when the peer is under baseline resync.
+    uint32_t commit_quorum;         // custom commit quorum size; 0 means default majority-based quorum.
     std::vector< peer_info > members;
 
     PGStats() :
@@ -139,6 +140,7 @@ struct PGStats {
             num_tombstone_objects{0},
             pg_state{0},
             snp_progress{0},
+            commit_quorum{0},
             members{} {}
 
     std::string to_string() {

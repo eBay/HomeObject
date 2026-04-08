@@ -1148,6 +1148,7 @@ bool HSHomeObject::_get_stats(pg_id_t id, PGStats& stats) const {
     stats.num_tombstone_objects = hs_pg->durable_entities().tombstone_blob_count.load(std::memory_order_relaxed);
 
     hs_pg->get_peer_info(stats.members);
+    stats.commit_quorum = hs_pg->repl_dev_->get_custom_commit_quorum();
 
     stats.avail_open_shards = chunk_selector()->avail_num_chunks(hs_pg->pg_info_.id);
     stats.avail_bytes = chunk_selector()->avail_blks(hs_pg->pg_info_.id) * blk_size;
