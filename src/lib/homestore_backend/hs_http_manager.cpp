@@ -595,17 +595,13 @@ void HttpManager::trigger_gc(const Pistache::Rest::Request& request, Pistache::H
         LOGINFO("GC job {} stopping GC scan timer", job_id);
         gc_mgr->stop_gc_scan_timer();
 
-        // we block here until all gc tasks for the pg are done
-        trigger_gc_for_pg(pg_id, job_id)
-            .thenValue([job_info](auto&&) {
-                job_info->status = job_info->failed_count ? GCJobStatus::FAILED : GCJobStatus::COMPLETED;
-                LOGINFO("GC job {} completed: total={}, success={}, failed={}", job_info->job_id,
-                        job_info->total_chunks, job_info->success_count, job_info->failed_count);
-            })
-            .get();
-
-        LOGINFO("GC job {} restarting GC scan timer", job_id);
-        gc_mgr->start_gc_scan_timer();
+        trigger_gc_for_pg(pg_id, job_id).thenValue([job_info, gc_mgr, job_id](auto&&) {
+            job_info->status = job_info->failed_count ? GCJobStatus::FAILED : GCJobStatus::COMPLETED;
+            LOGINFO("GC job {} completed: total={}, success={}, failed={}", job_info->job_id, job_info->total_chunks,
+                    job_info->success_count, job_info->failed_count);
+            LOGINFO("GC job {} restarting GC scan timer", job_id);
+            gc_mgr->start_gc_scan_timer();
+        });
     } else {
         LOGINFO("Received trigger_gc request for all chunks");
         nlohmann::json result;
@@ -634,23 +630,19 @@ void HttpManager::trigger_gc(const Pistache::Rest::Request& request, Pistache::H
         LOGINFO("GC job {} stopping GC scan timer", job_id);
         gc_mgr->stop_gc_scan_timer();
 
-        // we block here until all gc tasks for all pgs are done
         std::vector< folly::Future< folly::Unit > > pg_futures;
         for (const auto& pg_id : pg_ids) {
             pg_futures.push_back(trigger_gc_for_pg(pg_id, job_id));
         }
 
         // Set job status after all PGs are processed
-        folly::collectAllUnsafe(pg_futures)
-            .thenValue([job_info](auto&&) {
-                job_info->status = job_info->failed_count ? GCJobStatus::FAILED : GCJobStatus::COMPLETED;
-                LOGINFO("GC job {} completed: total={}, success={}, failed={}", job_info->job_id,
-                        job_info->total_chunks, job_info->success_count, job_info->failed_count);
-            })
-            .get();
-
-        LOGINFO("GC job {} restarting GC scan timer", job_id);
-        gc_mgr->start_gc_scan_timer();
+        folly::collectAllUnsafe(pg_futures).thenValue([job_info, gc_mgr, job_id](auto&&) {
+            job_info->status = job_info->failed_count ? GCJobStatus::FAILED : GCJobStatus::COMPLETED;
+            LOGINFO("GC job {} completed: total={}, success={}, failed={}", job_info->job_id, job_info->total_chunks,
+                    job_info->success_count, job_info->failed_count);
+            LOGINFO("GC job {} restarting GC scan timer", job_id);
+            gc_mgr->start_gc_scan_timer();
+        });
     }
 }
 
