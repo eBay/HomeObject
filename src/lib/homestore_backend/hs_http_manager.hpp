@@ -48,7 +48,7 @@ private:
     void exit_pg(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response);
     void trigger_gc(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response);
     void get_gc_job_status(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response);
-    void trigger_gc_for_pg(uint16_t pg_id, const std::string& job_id);
+    folly::Future< folly::Unit > trigger_gc_for_pg(uint16_t pg_id, const std::string& job_id);
     void get_job_status(const std::string& job_id, nlohmann::json& result);
 
 #ifdef _PRERELEASE
