@@ -608,23 +608,26 @@ void HttpManager::trigger_gc(const Pistache::Rest::Request& request, Pistache::H
         std::vector< pg_id_t > pg_ids;
         ho_.get_pg_ids(pg_ids);
 
-        if (pg_ids.empty()) {
-            result["error"] = "no PG found";
-            response.send(Pistache::Http::Code::Not_Found, result.dump());
-            return;
-        }
-
         const auto job_id = generate_job_id();
         result["job_id"] = job_id;
-        result["message"] = "GC triggered for all chunks, pls query job status using gc_job_status API";
-        // return response before starting the GC so that we don't block the client.
-        response.send(Pistache::Http::Code::Accepted, result.dump());
 
         auto job_info = std::make_shared< GCJobInfo >(job_id);
         {
             std::lock_guard lock(gc_job_mutex_);
             gc_jobs_map_.set(job_id, job_info);
         }
+
+        if (pg_ids.empty()) {
+            LOGINFO("GC job {} no PGs found, marking as completed", job_id);
+            job_info->status = GCJobStatus::COMPLETED;
+            result["message"] = "No PGs found, GC completed";
+            response.send(Pistache::Http::Code::Ok, result.dump());
+            return;
+        }
+
+        result["message"] = "GC triggered for all chunks, pls query job status using gc_job_status API";
+        // return response before starting the GC so that we don't block the client.
+        response.send(Pistache::Http::Code::Accepted, result.dump());
 
         LOGINFO("GC job {} will process {} PGs", job_id, pg_ids.size());
         LOGINFO("GC job {} stopping GC scan timer", job_id);
