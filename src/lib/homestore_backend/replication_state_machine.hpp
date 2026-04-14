@@ -249,6 +249,8 @@ private:
 
     std::unique_ptr< HSHomeObject::SnapshotReceiveHandler > m_snp_rcv_handler;
 
+    static uint64_t snapshot_offset_for_next_shard(shard_id_t shard_id);
+
     std::shared_ptr< homestore::snapshot_context > get_snapshot_context();
     void set_snapshot_context(std::shared_ptr< homestore::snapshot_context > context);
     /* no space left error handling*/

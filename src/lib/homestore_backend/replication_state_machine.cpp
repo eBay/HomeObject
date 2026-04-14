@@ -11,6 +11,12 @@
 
 namespace homeobject {
 
+uint64_t ReplicationStateMachine::snapshot_offset_for_next_shard(shard_id_t shard_id) {
+    return shard_id == HSHomeObject::SnapshotReceiveHandler::shard_list_end_marker
+        ? LAST_OBJ_ID
+        : objId(HSHomeObject::get_sequence_num_from_shard_id(shard_id), 0).value;
+}
+
 void ReplicationStateMachine::on_commit(int64_t lsn, const sisl::blob& header, const sisl::blob& key,
                                         const std::vector< homestore::MultiBlkId >& pbas,
                                         cintrusive< homestore::repl_req_ctx >& ctx) {
@@ -481,10 +487,7 @@ void ReplicationStateMachine::write_snapshot_obj(std::shared_ptr< homestore::sna
 
         if (m_snp_rcv_handler->get_context_lsn() == context->get_lsn() && m_snp_rcv_handler->get_shard_cursor() != 0) {
             // Request to resume from the beginning of shard
-            snp_obj->offset =
-                m_snp_rcv_handler->get_shard_cursor() == HSHomeObject::SnapshotReceiveHandler::shard_list_end_marker
-                ? LAST_OBJ_ID
-                : objId(HSHomeObject::get_sequence_num_from_shard_id(m_snp_rcv_handler->get_shard_cursor()), 0).value;
+            snp_obj->offset = snapshot_offset_for_next_shard(m_snp_rcv_handler->get_shard_cursor());
             LOGI("Resume from previous context breakpoint, lsn={} pg={} next_shard:0x{:x}, shard_cursor:0x{:x}",
                  context->get_lsn(), pg_data->pg_id(), m_snp_rcv_handler->get_next_shard(),
                  m_snp_rcv_handler->get_shard_cursor());
@@ -511,8 +514,7 @@ void ReplicationStateMachine::write_snapshot_obj(std::shared_ptr< homestore::sna
                  context->get_lsn(), obj_id.value, obj_id.shard_seq_num, obj_id.batch_id, ret);
             return;
         }
-        snp_obj->offset =
-            objId(HSHomeObject::get_sequence_num_from_shard_id(m_snp_rcv_handler->get_next_shard()), 0).value;
+        snp_obj->offset = snapshot_offset_for_next_shard(m_snp_rcv_handler->get_next_shard());
         LOGI("Write snapshot, processed PG data pg={} {}", pg_data->pg_id(), log_suffix);
         return;
     }
@@ -572,12 +574,7 @@ void ReplicationStateMachine::write_snapshot_obj(std::shared_ptr< homestore::sna
     }
     // Set next obj_id to fetch
     if (blob_batch->is_last_batch()) {
-        auto next_shard = m_snp_rcv_handler->get_next_shard();
-        if (next_shard == HSHomeObject::SnapshotReceiveHandler::shard_list_end_marker) {
-            snp_obj->offset = LAST_OBJ_ID;
-        } else {
-            snp_obj->offset = objId(HSHomeObject::get_sequence_num_from_shard_id(next_shard), 0).value;
-        }
+        snp_obj->offset = snapshot_offset_for_next_shard(m_snp_rcv_handler->get_next_shard());
     } else {
         snp_obj->offset = objId(obj_id.shard_seq_num, obj_id.batch_id + 1).value;
     }
