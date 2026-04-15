@@ -956,6 +956,184 @@ TEST_F(HomeObjectFixture, RollbackReplaceMember) {
     g_helper->sync();
 }
 
+// Regression test: baseline resync for a PG with no shards must complete without getting stuck
+// in an infinite loop. Without the fix, write_snapshot_obj computes
+//   objId(get_sequence_num_from_shard_id(shard_list_end_marker), 0)
+// which gives shard_seq_num=0xFFFFFFFFFFFF, causing the leader to log "Invalid objId" and
+// reset its cursor forever. With the fix it correctly returns LAST_OBJ_ID.
+TEST_F(HomeObjectFixture, BaselineResyncEmptyPG) {
+    LOGINFO("HomeObject replica={} setup completed", g_helper->replica_num());
+    auto spare_num_replicas = SISL_OPTIONS["spare_replicas"].as< uint8_t >();
+    ASSERT_TRUE(spare_num_replicas > 0) << "we need spare replicas for homestore backend dynamic tests";
+
+    auto num_replicas = SISL_OPTIONS["replicas"].as< uint8_t >();
+    std::unordered_set< uint8_t > excluding_replicas_in_pg;
+    for (size_t i = num_replicas; i < num_replicas + spare_num_replicas; i++)
+        excluding_replicas_in_pg.insert(i);
+
+    // Step 1: Create a PG with NO shards and NO blobs
+    pg_id_t pg_id{1};
+    create_pg(pg_id, 0 /* pg_leader */, excluding_replicas_in_pg);
+
+    // All replicas (incl. spare) sync before replace_member
+    g_helper->sync();
+
+    // Step 2: Force a snapshot on the leader before replace_member so the spare
+    // can exercise baseline resync from the snapshot path instead of append_entries.
+    run_on_pg_leader(pg_id, [&]() {
+        auto* hs_pg = _obj_inst->get_hs_pg(pg_id);
+        ASSERT_NE(hs_pg, nullptr);
+        const auto compact_lsn = hs_pg->repl_dev_->get_last_commit_lsn();
+        ASSERT_GT(compact_lsn, 0);
+        LOGINFO("trigger manual snapshot before replace_member, pg={}, compact_lsn={}", pg_id, compact_lsn);
+        _obj_inst->trigger_snapshot_creation(pg_id, compact_lsn, true /* wait_for_commit */);
+    });
+    g_helper->sync();
+
+    // Step 3: Replace a member to trigger baseline resync on the spare replica.
+    // The spare gets a snapshot of a PG that has an empty shard list.
+    // The follower must respond with LAST_OBJ_ID immediately after receiving PG metadata.
+    auto out_member_id = g_helper->replica_id(num_replicas - 1);
+    auto in_member_id = g_helper->replica_id(num_replicas); /*spare replica*/
+    std::string task_id = "task_id";
+
+    LOGINFO("start replace member, pg={}, task_id={}", pg_id, task_id);
+    run_on_pg_leader(pg_id, [&]() {
+        auto r = _obj_inst->pg_manager()
+                     ->replace_member(pg_id, task_id, out_member_id, PGMember{in_member_id, "new_member", 0})
+                     .get();
+        ASSERT_TRUE(r);
+    });
+
+    // Step 4: Wait for the new member to join and finish baseline resync.
+    // Because there are no blobs we cannot use wait_for_blob; instead we poll until
+    // BASELINE_RESYNC flag is cleared, which happens when is_last_obj fires.
+    if (in_member_id == g_helper->my_replica_id()) {
+        while (!am_i_in_pg(pg_id)) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+            LOGINFO("new member waiting to join pg={}", pg_id);
+        }
+        auto* hs_pg = _obj_inst->get_hs_pg(pg_id);
+        ASSERT_NE(hs_pg, nullptr);
+        // Empty-PG snapshot has exactly one message (PG metadata) and should complete in seconds.
+        // A 30-second deadline detects the "Invalid objId" infinite-loop regression where the
+        // buggy offset 0xFFFFFFFFFFFF8000 causes the leader to reset its cursor on every round
+        // and nuraft only recovers via its ~120-second sync_ctx_timeout.
+        auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+        while (hs_pg->pg_state_.is_state_set(PGStateMask::BASELINE_RESYNC)) {
+            ASSERT_LT(std::chrono::steady_clock::now(), deadline)
+                << "baseline resync timed out after 30s - likely stuck in Invalid-objId loop";
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+            LOGINFO("new member waiting for baseline resync to complete, pg={}", pg_id);
+        }
+        LOGINFO("baseline resync for empty PG completed successfully, pg={}", pg_id);
+        // The PG must exist with 0 shards
+        ASSERT_EQ(hs_pg->shards_.size(), 0u);
+    }
+
+    g_helper->sync();
+
+    if (out_member_id == g_helper->my_replica_id()) {
+        while (am_i_in_pg(pg_id)) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+            LOGINFO("old member waiting to leave pg={}", pg_id);
+        }
+    }
+    g_helper->sync();
+    if (out_member_id != g_helper->my_replica_id()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        ASSERT_TRUE(verify_complete_replace_member_result(pg_id, task_id, out_member_id, in_member_id));
+    }
+    g_helper->sync();
+}
+
+// Regression test: baseline resync for a PG with a single empty shard must complete.
+// The follower should consume shard metadata plus the final empty shard batch correctly and then
+// advance to LAST_OBJ_ID instead of looping on snapshot retries.
+TEST_F(HomeObjectFixture, BaselineResyncEmptyShard) {
+    LOGINFO("HomeObject replica={} setup completed", g_helper->replica_num());
+    auto spare_num_replicas = SISL_OPTIONS["spare_replicas"].as< uint8_t >();
+    ASSERT_TRUE(spare_num_replicas > 0) << "we need spare replicas for homestore backend dynamic tests";
+
+    auto num_replicas = SISL_OPTIONS["replicas"].as< uint8_t >();
+    std::unordered_set< uint8_t > excluding_replicas_in_pg;
+    for (size_t i = num_replicas; i < num_replicas + spare_num_replicas; i++)
+        excluding_replicas_in_pg.insert(i);
+
+    // Step 1: Create a PG with exactly one shard and zero blobs in it.
+    pg_id_t pg_id{1};
+    create_pg(pg_id, 0 /* pg_leader */, excluding_replicas_in_pg);
+    const auto empty_shard_id = make_new_shard_id(pg_id, 1);
+    create_shard(pg_id, 64 * Mi, "empty shard meta");
+
+    // All replicas (incl. spare) sync before replace_member.
+    g_helper->sync();
+
+    // Step 2: Force a snapshot on the leader before replace_member so the spare
+    // exercises the snapshot path with a shard that has no blob payload.
+    run_on_pg_leader(pg_id, [&]() {
+        auto* hs_pg = _obj_inst->get_hs_pg(pg_id);
+        ASSERT_NE(hs_pg, nullptr);
+        const auto compact_lsn = hs_pg->repl_dev_->get_last_commit_lsn();
+        ASSERT_GT(compact_lsn, 0);
+        LOGINFO("trigger manual snapshot before replace_member, pg={}, compact_lsn={}", pg_id, compact_lsn);
+        _obj_inst->trigger_snapshot_creation(pg_id, compact_lsn, true /* wait_for_commit */);
+    });
+    g_helper->sync();
+
+    // Step 3: Replace a member to trigger baseline resync on the spare replica.
+    auto out_member_id = g_helper->replica_id(num_replicas - 1);
+    auto in_member_id = g_helper->replica_id(num_replicas); /*spare replica*/
+    std::string task_id = "task_id";
+
+    LOGINFO("start replace member, pg={}, task_id={}", pg_id, task_id);
+    run_on_pg_leader(pg_id, [&]() {
+        auto r = _obj_inst->pg_manager()
+                     ->replace_member(pg_id, task_id, out_member_id, PGMember{in_member_id, "new_member", 0})
+                     .get();
+        ASSERT_TRUE(r);
+    });
+
+    // Step 4: Wait for the new member to join and finish baseline resync.
+    if (in_member_id == g_helper->my_replica_id()) {
+        while (!am_i_in_pg(pg_id)) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+            LOGINFO("new member waiting to join pg={}", pg_id);
+        }
+        auto* hs_pg = _obj_inst->get_hs_pg(pg_id);
+        ASSERT_NE(hs_pg, nullptr);
+        auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+        while (hs_pg->pg_state_.is_state_set(PGStateMask::BASELINE_RESYNC)) {
+            ASSERT_LT(std::chrono::steady_clock::now(), deadline)
+                << "baseline resync timed out after 30s - likely stuck on empty-shard snapshot completion";
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+            LOGINFO("new member waiting for baseline resync to complete, pg={}", pg_id);
+        }
+        PGStats stats;
+        ASSERT_TRUE(_obj_inst->pg_manager()->get_stats(pg_id, stats));
+        ASSERT_EQ(stats.total_shards, 1u);
+        ASSERT_EQ(stats.num_active_objects, 0u);
+        ASSERT_EQ(hs_pg->shards_.size(), 1u);
+        ASSERT_EQ(hs_pg->shards_.front()->info.id, empty_shard_id);
+        LOGINFO("baseline resync for empty shard completed successfully, pg={}, shard={}", pg_id, empty_shard_id);
+    }
+
+    g_helper->sync();
+
+    if (out_member_id == g_helper->my_replica_id()) {
+        while (am_i_in_pg(pg_id)) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+            LOGINFO("old member waiting to leave pg={}", pg_id);
+        }
+    }
+    g_helper->sync();
+    if (out_member_id != g_helper->my_replica_id()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        ASSERT_TRUE(verify_complete_replace_member_result(pg_id, task_id, out_member_id, in_member_id));
+    }
+    g_helper->sync();
+}
+
 SISL_OPTION_GROUP(
     test_homeobject_repl_common,
     (spdk, "", "spdk", "spdk", ::cxxopts::value< bool >()->default_value("false"), "true or false"),
