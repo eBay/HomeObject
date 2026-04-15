@@ -17,8 +17,8 @@ After completing PG meta and shard-level scrub, the scrub manager must perform a
 | Chunk size | 4 GB |
 | Minimum blob size | 8 KB |
 | Max blobs per shard | 4 GB ÷ 8 KB = **524,288** |
-| Blob scrub result per blob | blob_id(8B) + shard_id(8B) + result(1B) + hash(32B) = **49 B** |
-| Max in-memory result for one shard (3 replicas) | 49 × 524,288 × 3 ≈ **77.1 MB** |
+| Blob scrub result per blob | blob_id(8B) + shard_id(8B) + result(1B) + hash(8B) = **25 B** |
+| Max in-memory result for one shard (3 replicas) | 25 × 524,288 × 3 ≈ **39.3 MB** |
 | Typical HDD random IOPS (foreground active) | ~100 |
 | Worst-case full-IOPS scrub time (max shard) | 524,288 ÷ 100 ≈ **5,243 s** |
 | Worst-case scrub time at 10 % IOPS budget | 5,243 ÷ 0.1 = **52,430 s ≈ 14.6 h** |
@@ -36,7 +36,7 @@ All entries in the index table are keyed as `{shard_id, blob_id}`, sorted with `
 ### Additional Engineering Invariants
 
 - **Coverage must not depend on the leader's data integrity.** If the leader has lost blobs in a shard, its view of that shard's blob count is too low. A scrub range derived solely from the leader's local data will silently miss those blobs on followers.
-- **The leader cannot buffer the full three-replica result set before comparing.** A full PG filled with minimum-size blobs produces 128M blobs × 49 B × 3 replicas ≈ 18.8 GB — far beyond any node's acceptable working memory for scrub.
+- **The leader cannot buffer the full three-replica result set before comparing.** A full PG filled with minimum-size blobs produces 128M blobs × 25 B × 3 replicas ≈ 9.6 GB — far beyond any node's acceptable working memory for scrub.
 
 ---
 
@@ -50,65 +50,34 @@ All entries in the index table are keyed as `{shard_id, blob_id}`, sorted with `
 
 ---
 
-## Alternatives Considered
-
-### Option A: Static blob_id Equal-Width Slicing (current implementation)
-
-Partition `[0, last_blob_id]` into fixed-width intervals of size N. Issue one RPC per interval. The current code uses N = HDD\_IOPS × (timeout / 2) = 200 × 5 = 1,000 blobs.
-
-**Implementation** (`scrub_manager.cpp:handle_pg_scrub_task`):
-```cpp
-const auto blob_scrub_range_size = HDD_IOPS * (SM_REQUEST_TIMEOUT.count() / 2);
-while (blob_start <= last_blob_id) {
-    uint64_t blob_end = std::min(blob_start + blob_scrub_range_size - 1, last_blob_id);
-    // issue RPC for [blob_start, blob_end]
-    blob_start = blob_end + 1;
-}
-```
-
-**Problems:**
-
-1. **No index locality.** The index is ordered by `{shard_id, blob_id}`. A range `[{0, start_blob_id}, {UINT64_MAX, end_blob_id}]` (as written in the current `local_scrub_blob`) crosses every shard boundary and forces a full index scan rather than a seek.
-
-2. **Empty-interval RTT explosion.** In delete-intensive workloads, `blob_id` may be very sparse (consecutive valid IDs separated by millions of gaps). RTT count = `max_blob_id / N`, which can be 10–100× the actual blob count `blob_count / N`. Each RTT touches zero blobs but still pays network latency.
-
----
-
-### Option B: Follower-Driven Full Scan
-
-The leader sends `last_blob_id` once; each follower independently scans `[{0, 0}, {UINT64_MAX, last_blob_id}]`, streaming results every N blobs. The leader passively receives and aggregates.
-
-**Problems:**
-
-1. **No progress alignment.** Two followers are in different blob ranges at the same moment. The leader cannot release memory for any range until all replicas have completed it, which degenerates to buffering the full result set simultaneously.
-
-2. **Ambiguous empty vs. lost message.** If a follower's sub-response is dropped, the leader cannot distinguish "no blobs in that range" from "the message was lost." This makes fault recovery non-deterministic.
-
-3. **No flow control.** The leader cannot throttle follower throughput; one follower's unconsumed result buffer can exhaust node memory.
-
-4. **Difficult cancellation.** A leader switch mid-scrub cannot stop followers already executing a full-table range scan; they must finish before discarding results.
-
----
-
-### Option C: Per-Shard Static RPC (one RPC per shard)
-
-Issue one scrub request per shard, scoped to `[{shard_id, 0}, {shard_id, last_blob_id}]`.
-
-**Problems:**
-
-1. **Prohibitive RPC count.** A PG can hold up to ~256K shards. One RPC per shard means up to 256K sequential RTTs, even for shards that contain a single blob.
-
-2. **Leader data dependency.** The leader's shard list is its own view. If the leader has lost a shard, that shard is not scrubbed at all. Coverage correctness breaks in exactly the failure scenario scrub is designed to detect.
-
----
-
 ## Decision: Shard-Aware Bin-Packing with Streaming Sub-Responses
 
 This design combines data produced during the shard scrub phase with a dynamic bin-packing algorithm and a streaming response protocol to satisfy all three constraints simultaneously.
 
-### Step 1: Build shard_blob_count from the Shard Scrub Phase
+### Step 1: META Scrub
 
-During shard scrub, each replica already counts blobs per shard. After shard scrub completes, the leader takes the **maximum blob count across all replicas** for each shard and builds:
+META scrub covers the entire shard range `[0, last_shard_id]`. Both `last_blob_id` and `last_shard_id` are read once at scrub start and used as the scan ceiling throughout. Raft guarantees a follower's committed log never exceeds the leader's, so no per-replica negotiation is needed.
+
+The leader sends a scrub request to all followers containing:
+
+```
+{ start_shard_id, last_shard_id, last_blob_id }
+```
+
+In the first request, `start_shard_id` is 0.
+
+**Follower streaming protocol:**
+
+1. The follower executes an index range query over `[{start_shard_id, 0}, {last_shard_id, last_blob_id}]`, leveraging the `{shard_id, blob_id}` composite key for a direct seek from `start_shard_id`. The leader also performs the same query locally in the background while waiting for followers' responses. In the index range query lambda, the follower counts blobs per shard to derive each shard's `blob_count`.
+2. After reading every `MAX_SHARD_COUNT_PER_RPC` shards (configurable, reference: 100,000 shards per RPC), the follower returns the scrub results to the leader. Suppose the last shard in the returned result is `shard_id_n`, the leader then issues the next request with range `[{shard_id_n + 1, 0}, {last_shard_id, last_blob_id}]`.
+3. The follower executes a fresh index range query from `shard_id_n + 1` and returns the next batch of results.
+4. When the follower's response does not exceed `MAX_SHARD_COUNT_PER_RPC`, the leader knows there are no more shards to scrub.
+
+This protocol bounds each individual RPC to at most `MAX_SHARD_COUNT_PER_RPC` shard reads, keeping latency within any reasonable RPC timeout.
+
+The leader also performs local scrub concurrently. Once all followers have completed the entire shard scrub, the leader merges the results from the three replicas and releases memory for all the blobs in this batch as they are compared. If any follower fails to respond after 3 consecutive retries, the scrub task is aborted and reported as incomplete.
+
+**Producing `shard_blob_count` for Step 2:** After META scrub completes, the leader takes the **maximum blob count across all replicas** for each shard and builds:
 
 ```cpp
 std::map<shard_id_t, uint32_t> shard_blob_count;
@@ -160,18 +129,19 @@ finally, we get the first and the last shard in `batch_list` to get the final sh
 **What this guarantees:**
 
 - **Small-shard batching**: Many shards holding 1–2 blobs are packed into a single RPC. RTT count ≈ `Σ blob_count / MAX_BLOB_COUNT`, proportional to actual data volume, not ID span.
-- **Oversized-shard isolation**: A shard exceeding `MAX_BLOB_COUNT` is placed alone. Its result set for three replicas is at most 524,288 × 49 B × 3 ≈ 77.1 MB — within acceptable memory.
+- **Oversized-shard isolation**: A shard exceeding `MAX_BLOB_COUNT` is placed alone. Its result set for three replicas is at most 524,288 × 25 B × 3 ≈ 39.3 MB — within acceptable memory.
 - **Missing-shard isolation**: `MAX_BLOB_COUNT` can make sure missing shards always form solo batches and are covered by the worst-case range `[{shard_id, 0}, {shard_id, last_blob_id}]`.
 
 ### Step 3: Leader Issues Range Requests with Streaming Sub-Responses
 
-For each batch `[start_shard_id, end_shard_id]`, the leader sends a scrub request to all followers containing:
+the entire blob range to be scrubbed is [{0, 0}, {last_shard_id, last_blob_id}].
+`last_blob_id` and `last_shard_id` is read once at scrub start and used as the scan ceiling throughout. Raft guarantees a follower's committed log never exceeds the leader's, so no per-replica negotiation is needed.
+
+we scrub all the blobs shard range by shard range. For each shard range `[start_shard_id, end_shard_id]`, the leader sends a scrub request to all followers containing:
 
 ```
 { start_shard_id, end_shard_id, last_blob_id }
 ```
-
-`last_blob_id` is read once at scrub start and used as the scan ceiling throughout. Raft guarantees a follower's committed log never exceeds the leader's, so no per-replica negotiation is needed.
 
 **Follower streaming protocol:**
 
@@ -184,7 +154,7 @@ This protocol bounds each individual RPC to at most MAX_BLOB_COUNT_PER_RPC blob 
 
 ### Step 4: Leader Collects and Compares
 
-The leader also performs local scrub concurrently. Once all followers have completed a whole batch { start_shard_id, end_shard_id, last_blob_id }, the leader merges the results from the three replicas and then releases memory for all the blobs in this batch as it is compared. Peak memory is bounded by the largest batch's result set (≤ 77.1 MB for a solo oversized shard).
+The leader also performs local scrub concurrently. Once all followers have completed a whole batch { start_shard_id, end_shard_id, last_blob_id }, the leader merges the results from the three replicas and then releases memory for all the blobs in this batch as it is compared. Peak memory is bounded by the largest batch's result set (≤ 39.3 MB for a solo oversized shard).
 
 If any follower fails to respond after 3 consecutive retries, the scrub task for that batch is aborted and reported as incomplete.
 
@@ -247,7 +217,7 @@ If the leader has lost blobs in shard S:
 ### Missing Shard Handling
 
 If shard S is missing on one or more replicas:
-- `shard_blob_count[S] = UINT64_MAX`, causing S to form its own batch.
+- `shard_blob_count[S] = UINT32_MAX`, causing S to form its own batch.
 - The follower's query range `[{S, 0}, {S, last_blob_id}]` covers the full possible extent of S.
 - Cross-replica comparison during merge will flag S as having missing blobs.
 - Unlike Option C, scrub of other healthy shards is **not blocked**; missing shards are treated as a worst-case solo batch and scrubbed independently.
@@ -259,19 +229,19 @@ The leader's next sub-request starts at the one exactly next of`{shard_id_m, blo
 ---
 
 ## Efficiency Analysis
-the proposed solution eliminates the impacts of sparse blob_ids and shard_ids. The number of RPCs is proportional to the actual blob count, not the ID span. so, this solution is very frendly to delete-intensive workloads.
+the proposed solution eliminates the impacts of sparse blob_ids and shard_ids. The number of RPCs is proportional to the actual blob count, not the ID span. so, this solution is very friendly to delete-intensive workloads.
 
 ---
 
 ## Trade-offs and Limitations
 
-1. **shard_blob_count is a snapshot, not a live count.** the upper limit of last_blob_id excludes those newly written blobs from the scrub, it is the snapshot at the moment scrub_lsn is committed.
+1. **shard_blob_count is a snapshot, not a live count.** the upper limit of `last_blob_id` excludes those newly written blobs from the scrub and `last_shard_id` excludes those newly created shard, it is the snapshot at the moment scrub_lsn is committed.
 
 2. **Missing shard increases RPC count.** A missing shard gets blob count of `MAX_BLOB_COUNT`, causing it to solo-batch and generate streaming sub-requests over its full possible range. This is intentional and conservative; a missing shard is a serious integrity concern that warrants thorough coverage.
 
 3. **Stateless follower between sub-requests.** The follower does not retain any state between sub-requests, the scrub result is only determined by the received requests from leader and the pre-set `MAX_BLOB_COUNT`.
 
-4. **Memory ceiling per batch.** A solo oversized batch (524,288 blobs × 3 replicas × 49 B) ≈ 77.1 MB of result data in the leader's memory simultaneously. This is a fixed ceiling and well within acceptable limits.
+4. **Memory ceiling per batch.** A solo oversized batch (524,288 blobs × 3 replicas × 25 B) ≈ 39.3 MB of result data in the leader's memory simultaneously. This is a fixed ceiling and well within acceptable limits.
 
 ---
 
@@ -284,9 +254,62 @@ the proposed solution eliminates the impacts of sparse blob_ids and shard_ids. T
 - Coverage is safe even when the leader has lost data — the max-across-replicas count drives the range.
 - Missing shards are covered conservatively without blocking scrub of healthy shards.
 - Per-RPC latency is bounded by the streaming batch(MAX_BLOB_COUNT_PER_RPC), independent of shard size.
-- Leader peak memory is bounded at ≈ 77.1 MB, regardless of PG size.
+- Leader peak memory is bounded at ≈ 39.3 MB, regardless of PG size.
 
 **Costs**
 
 - Implementation is coupled to the shard scrub phase; `shard_blob_count` must be available before blob scrub begins.
 - Streaming sub-response protocol adds implementation complexity compared to a single bulk response per range.
+
+
+## Alternatives Considered
+
+### Option A: Static blob_id Equal-Width Slicing (current implementation)
+
+Partition `[0, last_blob_id]` into fixed-width intervals of size N. Issue one RPC per interval. The current code uses N = HDD\_IOPS × (timeout / 2) = 200 × 5 = 1,000 blobs.
+
+**Implementation** (`scrub_manager.cpp:handle_pg_scrub_task`):
+```cpp
+const auto blob_scrub_range_size = HDD_IOPS * (SM_REQUEST_TIMEOUT.count() / 2);
+while (blob_start <= last_blob_id) {
+    uint64_t blob_end = std::min(blob_start + blob_scrub_range_size - 1, last_blob_id);
+    // issue RPC for [blob_start, blob_end]
+    blob_start = blob_end + 1;
+}
+```
+
+**Problems:**
+
+1. **No index locality.** The index is ordered by `{shard_id, blob_id}`. A range `[{0, start_blob_id}, {UINT64_MAX, end_blob_id}]` (as written in the current `local_scrub_blob`) crosses every shard boundary and forces a full index scan rather than a seek.
+
+2. **Empty-interval RTT explosion.** In delete-intensive workloads, `blob_id` may be very sparse (consecutive valid IDs separated by millions of gaps). RTT count = `max_blob_id / N`, which can be 10–100× the actual blob count `blob_count / N`. Each RTT touches zero blobs but still pays network latency.
+
+---
+
+### Option B: Follower-Driven Full Scan
+
+The leader sends `last_blob_id` once; each follower independently scans `[{0, 0}, {UINT64_MAX, last_blob_id}]`, streaming results every N blobs. The leader passively receives and aggregates.
+
+**Problems:**
+
+1. **No progress alignment.** Two followers are in different blob ranges at the same moment. The leader cannot release memory for any range until all replicas have completed it, which degenerates to buffering the full result set simultaneously.
+
+2. **Ambiguous empty vs. lost message.** If a follower's sub-response is dropped, the leader cannot distinguish "no blobs in that range" from "the message was lost." This makes fault recovery non-deterministic.
+
+3. **No flow control.** The leader cannot throttle follower throughput; one follower's unconsumed result buffer can exhaust node memory.
+
+4. **Difficult cancellation.** A leader switch mid-scrub cannot stop followers already executing a full-table range scan; they must finish before discarding results.
+
+---
+
+### Option C: Per-Shard Static RPC (one RPC per shard)
+
+Issue one scrub request per shard, scoped to `[{shard_id, 0}, {shard_id, last_blob_id}]`.
+
+**Problems:**
+
+1. **Prohibitive RPC count.** A PG can hold up to ~256K shards. One RPC per shard means up to 256K sequential RTTs, even for shards that contain a single blob.
+
+2. **Leader data dependency.** The leader's shard list is its own view. If the leader has lost a shard, that shard is not scrubbed at all. Coverage correctness breaks in exactly the failure scenario scrub is designed to detect.
+
+---
