@@ -98,7 +98,7 @@ table ScrubResultEntry {
   shard_id:        uint64;
   blob_id:      uint64;
   scrub_result: ScrubStatus;  // default NONE → elided for healthy entries (saves 1 B each)
-  hash:         uint64;       // CRC64; present only when DEEP_BLOB and scrub_result == NONE
+  hash:         uint64;       // CRC64; present only when scrub_result == NONE
 }
 
 /// Single response table for all three scrub types.
@@ -119,7 +119,7 @@ root_type ScrubResult;
 
 | `scrub_type` | `shard_id` | `blob_id` | `hash` |
 |---|---|---|---|
-| `META` | `shard_id` | `blob_count` | absent |
+| `META` | `shard_id` | `blob_count` | CRC64 (absent on error) |
 | `SHALLOW_BLOB` | `shard_id` | `blob_id` | absent |
 | `DEEP_BLOB` | `shard_id` | `blob_id` | CRC64 (absent on error) |
 
@@ -137,6 +137,52 @@ root_type ScrubResult;
 For blob scrub streaming, the leader issues the first request with `start_blob_id` absent (cursor starts at 0). After each follower response, the leader advances the cursor to `{last_returned_shard_id, last_returned_blob_id + 1}` and sets both `start_shard_id` and `start_blob_id` in the next request.
 
 ---
+
+## Rationale for the Chosen Design
+
+### 1. One request table, one response table
+
+Having a single `ScrubReq` and a single `ScrubResult` means the transport layer needs exactly two message handlers, one for each direction. The `scrub_type` field in `ScrubReq` is the sole dispatch point on the request side; on the response side dispatch goes through the `req_id` → request context lookup. The `ScrubType` enum contains exactly three values (`META`, `SHALLOW_BLOB`, `DEEP_BLOB`). `META` consolidates the functionality of separate PG-meta and shard scrub requests, simplifying the protocol without sacrificing coverage.
+
+### 2. Absent fields for type-specific range data are harmless, not ambiguous
+
+`ScrubReq` carries `start_shard_id`, `start_blob_id`, `end_shard_id`, and `last_blob_id`. For `META` scrub, `start_blob_id` and `last_blob_id` are inapplicable and are left absent (deserialise as 0). For the first request of a blob scrub batch, `start_blob_id` is also absent, which the follower correctly interprets as "start from blob 0 within `start_shard_id`". Because `scrub_type` and the request sequence together always tell the receiver which range fields are meaningful, the absent-field default of 0 is never mistaken for an intentional value. This is the intended use of FlatBuffers absent fields: communicate "not applicable" without burning a byte.
+
+### 3. `ScrubStatus.NONE = 0` provides free sparse encoding
+
+For blob and shard scrub results, the overwhelming common case is `scrub_result = NONE` (no error found). Because FlatBuffers elides scalar fields equal to their declared default, healthy entries do not transmit `scrub_result` at all. A shallow blob scan of a 1M-blob PG with zero errors produces a result list where no `scrub_result` field is ever written — saving 1 byte per entry = 1 MB of wire data.
+
+### 4. Generic shard_id/blob_id avoids multiple result entry types
+
+Two named entry structs (`MetaScrubResultEntry` and `BlobScrubResultEntry`) become one `ScrubResultEntry`. The semantic mapping (see table above) is documented once in the schema comments and once in the C++ dispatch code. When the leader receives a `ScrubResult`, it looks up the request context via `req_id` to obtain `scrub_type` and then interprets `shard_id`/`blob_id` accordingly.
+
+### 5. `uint64` hash instead of `[ubyte]`
+
+Using a fixed-width `uint64` rather than `[ubyte]` removes the 4-byte vector-length prefix overhead and avoids a heap allocation on deserialization. CRC64/NVME fits in 8 bytes and offers stronger collision resistance than CRC32 for scrub purposes. If the hashing algorithm changes in the future, the field width can be revisited in a single schema change without altering the shape of `ScrubResultEntry`.
+
+### 6. `req_id` for epoch deduplication; `issuer_uuid` for sender identity
+
+The two fields serve distinct purposes and cannot replace each other:
+
+- **`req_id: uint64`** — a randomly generated per-request identifier. The leader matches incoming `ScrubResult` messages to the outstanding request and discards any response whose `req_id` does not match, eliminating stale responses from a previous scrub epoch. It replaces the earlier variable-length `[ubyte]` UUID used solely for deduplication, at a fixed cost of 8 bytes with no heap allocation.
+- **`issuer_uuid: [ubyte:16]`** — the UUID of the sending node. Every node needs to know which peer sent a given message in order to attribute results to the correct replica, enforce membership checks, and detect impersonation. A fixed-size 16-byte array is used instead of the earlier `[ubyte]` to eliminate the 4-byte length prefix and ensure constant-time access.
+
+Both fields appear in `ScrubReq` (so the follower knows who the leader is) and in `ScrubResult` (so the leader knows which replica sent the result).
+
+### 7. `ScrubResult` echoes only `req_id` and `issuer_uuid`
+
+On the response side, the leader already holds every `ScrubReq` field in its outstanding-request context, keyed by `req_id`. Once the leader looks up the context to validate `req_id` against outstanding requests, `scrub_type` and all other fields are immediately available — echoing them back adds no information. The follower therefore echoes only `req_id` (stale-response detection) and `issuer_uuid` (sender identity). All other fields — `pg_id`, `scrub_type`, `scrub_lsn`, and all four range fields — are omitted, saving approximately 51 bytes per sub-response, which compounds across hundreds of sub-responses in the streaming blob scrub protocol.
+
+---
+
+## Consequences
+
+- **Wire efficiency**: Healthy scrub results transmit no `scrub_result` bytes (elided as default = 0). `ScrubResult` echoes only `req_id` (8 B) and `issuer_uuid` (16 B), omitting all other request fields — saving ~51 bytes per sub-response. Deep blob hashes are only serialized when the blob is verified successfully. `uint64` hash avoids the vector-length prefix overhead of `[ubyte]`.
+- **Transport simplicity**: One request handler, one response handler. On the request side, dispatch is a `switch` on `ScrubReq.scrub_type`. On the response side, the leader looks up the request context via `ScrubResult.req_id` and reads `scrub_type` from there.
+- **Schema evolution**: Adding a new field to `ScrubReq` is localised to one table. Adding a new `ScrubType` value requires only a new entry in the `shard_id`/`blob_id` semantics table and the corresponding C++ handler. The three-value enum (`META`, `SHALLOW_BLOB`, `DEEP_BLOB`) keeps the dispatch switch compact.
+- **shard_id/blob_id convention**: The implicit meaning of these fields per `ScrubType` must be maintained in code comments and enforced by code review, not by the schema itself. This is a documentation burden that the per-granularity approach (Option D) avoids.
+- **Absent-field risk**: Callers must not interpret absent range fields as "zero ID" without first checking `scrub_type`. This convention must be maintained in code, not enforced by the schema.
+
 
 ## Alternatives Considered
 
@@ -239,48 +285,3 @@ table BlobScrubResult { scrub_info: ScrubInfo; blob_scrub_results: [BlobScrubRes
 **FlatBuffers consideration:** The transport already carries `scrub_type` inside `ScrubReq`. Splitting the response into two types adds dispatch surface without adding information that isn't already available to the leader.
 
 ---
-
-## Rationale for the Chosen Design
-
-### 1. One request table, one response table
-
-Having a single `ScrubReq` and a single `ScrubResult` means the transport layer needs exactly two message handlers, one for each direction. The `scrub_type` field in `ScrubReq` is the sole dispatch point on the request side; on the response side dispatch goes through the `req_id` → request context lookup. The `ScrubType` enum contains exactly three values (`META`, `SHALLOW_BLOB`, `DEEP_BLOB`). `META` consolidates the functionality of separate PG-meta and shard scrub requests, simplifying the protocol without sacrificing coverage.
-
-### 2. Absent fields for type-specific range data are harmless, not ambiguous
-
-`ScrubReq` carries `start_shard_id`, `start_blob_id`, `end_shard_id`, and `last_blob_id`. For `META` scrub, `start_blob_id` and `last_blob_id` are inapplicable and are left absent (deserialise as 0). For the first request of a blob scrub batch, `start_blob_id` is also absent, which the follower correctly interprets as "start from blob 0 within `start_shard_id`". Because `scrub_type` and the request sequence together always tell the receiver which range fields are meaningful, the absent-field default of 0 is never mistaken for an intentional value. This is the intended use of FlatBuffers absent fields: communicate "not applicable" without burning a byte.
-
-### 3. `ScrubStatus.NONE = 0` provides free sparse encoding
-
-For blob and shard scrub results, the overwhelming common case is `scrub_result = NONE` (no error found). Because FlatBuffers elides scalar fields equal to their declared default, healthy entries do not transmit `scrub_result` at all. A shallow blob scan of a 1M-blob PG with zero errors produces a result list where no `scrub_result` field is ever written — saving 1 byte per entry = 1 MB of wire data.
-
-### 4. Generic shard_id/blob_id avoids multiple result entry types
-
-Two named entry structs (`MetaScrubResultEntry` and `BlobScrubResultEntry`) become one `ScrubResultEntry`. The semantic mapping (see table above) is documented once in the schema comments and once in the C++ dispatch code. When the leader receives a `ScrubResult`, it looks up the request context via `req_id` to obtain `scrub_type` and then interprets `shard_id`/`blob_id` accordingly.
-
-### 5. `uint64` hash instead of `[ubyte]`
-
-Using a fixed-width `uint64` rather than `[ubyte]` removes the 4-byte vector-length prefix overhead and avoids a heap allocation on deserialization. CRC64/NVME fits in 8 bytes and offers stronger collision resistance than CRC32 for scrub purposes. If the hashing algorithm changes in the future, the field width can be revisited in a single schema change without altering the shape of `ScrubResultEntry`.
-
-### 6. `req_id` for epoch deduplication; `issuer_uuid` for sender identity
-
-The two fields serve distinct purposes and cannot replace each other:
-
-- **`req_id: uint64`** — a randomly generated per-request identifier. The leader matches incoming `ScrubResult` messages to the outstanding request and discards any response whose `req_id` does not match, eliminating stale responses from a previous scrub epoch. It replaces the earlier variable-length `[ubyte]` UUID used solely for deduplication, at a fixed cost of 8 bytes with no heap allocation.
-- **`issuer_uuid: [ubyte:16]`** — the UUID of the sending node. Every node needs to know which peer sent a given message in order to attribute results to the correct replica, enforce membership checks, and detect impersonation. A fixed-size 16-byte array is used instead of the earlier `[ubyte]` to eliminate the 4-byte length prefix and ensure constant-time access.
-
-Both fields appear in `ScrubReq` (so the follower knows who the leader is) and in `ScrubResult` (so the leader knows which replica sent the result).
-
-### 7. `ScrubResult` echoes only `req_id` and `issuer_uuid`
-
-On the response side, the leader already holds every `ScrubReq` field in its outstanding-request context, keyed by `req_id`. Once the leader looks up the context to validate `req_id` against outstanding requests, `scrub_type` and all other fields are immediately available — echoing them back adds no information. The follower therefore echoes only `req_id` (stale-response detection) and `issuer_uuid` (sender identity). All other fields — `pg_id`, `scrub_type`, `scrub_lsn`, and all four range fields — are omitted, saving approximately 51 bytes per sub-response, which compounds across hundreds of sub-responses in the streaming blob scrub protocol.
-
----
-
-## Consequences
-
-- **Wire efficiency**: Healthy scrub results transmit no `scrub_result` bytes (elided as default = 0). `ScrubResult` echoes only `req_id` (8 B) and `issuer_uuid` (16 B), omitting all other request fields — saving ~51 bytes per sub-response. Deep blob hashes are only serialized when the blob is verified successfully. `uint64` hash avoids the vector-length prefix overhead of `[ubyte]`.
-- **Transport simplicity**: One request handler, one response handler. On the request side, dispatch is a `switch` on `ScrubReq.scrub_type`. On the response side, the leader looks up the request context via `ScrubResult.req_id` and reads `scrub_type` from there.
-- **Schema evolution**: Adding a new field to `ScrubReq` is localised to one table. Adding a new `ScrubType` value requires only a new entry in the `shard_id`/`blob_id` semantics table and the corresponding C++ handler. The three-value enum (`META`, `SHALLOW_BLOB`, `DEEP_BLOB`) keeps the dispatch switch compact.
-- **shard_id/blob_id convention**: The implicit meaning of these fields per `ScrubType` must be maintained in code comments and enforced by code review, not by the schema itself. This is a documentation burden that the per-granularity approach (Option D) avoids.
-- **Absent-field risk**: Callers must not interpret absent range fields as "zero ID" without first checking `scrub_type`. This convention must be maintained in code, not enforced by the schema.
