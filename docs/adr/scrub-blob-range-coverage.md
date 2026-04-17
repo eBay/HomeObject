@@ -56,7 +56,7 @@ This design combines data produced during the shard scrub phase with a dynamic b
 
 ### Step 1: META Scrub
 
-META scrub covers the entire shard range `[0, last_shard_id]`. Both `last_blob_id` and `last_shard_id` are read once at scrub start and used as the scan ceiling throughout. Raft guarantees a follower's committed log never exceeds the leader's, so no per-replica negotiation is needed.
+META scrub covers the entire shard range `[0, last_shard_id]`. Both `last_blob_id` and `last_shard_id` are read once at scrub start and used as the scan ceiling throughout. Raft guarantees a follower's committed log never exceeds the leader's, so no per-replica negotiation is needed. what`s more, we need to get last_shard_id and last_blob_id before we get the last_commit_lsn(scrub_lsn), so that we can make sure that for any replica, it can at least see last_shard_id and last_blob_id after scrub_lsn is committed.
 
 The leader sends a scrub request to all followers containing:
 
