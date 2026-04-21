@@ -20,7 +20,7 @@ struct BlobRoute {
     sisl::blob to_blob() const { return sisl::blob{uintptr_cast(const_cast< BlobRoute* >(this)), sizeof(*this)}; }
 };
 
-// used for gc to quickly identify all the blob in the move_to chunk
+// used for gc to quickly identify all the blobs in move_to_chunk
 struct BlobRouteByChunk {
     // homestore::chunk_num_t == uint16_t
     uint16_t chunk{0};
