@@ -46,12 +46,11 @@ class HomeObjectConan(ConanFile):
                     raise ConanInvalidConfiguration("Coverage/Sanitizer requires Testing!")
 
     def build_requirements(self):
-        self.test_requires("gtest/1.17.0")
+        self.test_requires("gtest/[^1.17]")
 
     def requirements(self):
-        self.requires("sisl/[^13.2.3]@oss/master", transitive_headers=True)
-        self.requires("homestore/[^7.5.2]@oss/master")
-        self.requires("iomgr/[^12.0]@oss/master")
+        self.requires("sisl/[^13.2]", transitive_headers=True)
+        self.requires("homestore/[^7.5.2]")
 
     def validate(self):
         if self.info.settings.compiler.cppstd:
