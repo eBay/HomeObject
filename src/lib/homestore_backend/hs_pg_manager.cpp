@@ -1214,6 +1214,12 @@ uint32_t HSHomeObject::get_pg_tombstone_blob_count(pg_id_t pg_id) const {
         return 0;
     }
 
+    auto pg_index_table = hs_pg->index_table_;
+    if (!pg_index_table) {
+        LOGE("index table is not found for pg={}, skip statistics refresh", pg_id);
+        return 0;
+    }
+
     uint32_t tombstone_blob_count{0};
 
     auto start_key =
@@ -1234,7 +1240,7 @@ uint32_t HSHomeObject::get_pg_tombstone_blob_count(pg_id_t pg_id) const {
 
     std::vector< std::pair< BlobRouteKey, BlobRouteValue > > valid_blob_indexes;
 
-    auto const status = hs_pg->index_table_->query(query_req, valid_blob_indexes);
+    auto const status = pg_index_table->query(query_req, valid_blob_indexes);
     if (status != homestore::btree_status_t::success && status != homestore::btree_status_t::has_more) {
         LOGERROR("Failed to query blobs in index table for pg={}", pg_id);
         return 0;
@@ -1249,6 +1255,11 @@ uint32_t HSHomeObject::get_pg_tombstone_blob_count(pg_id_t pg_id) const {
 void HSHomeObject::refresh_pg_statistics(pg_id_t pg_id) {
     auto hs_pg = const_cast< HS_PG* >(_get_hs_pg_unlocked(pg_id));
     RELEASE_ASSERT(hs_pg, "Failed to get pg={} for statistics refresh", pg_id);
+    auto pg_index_table = hs_pg->index_table_;
+    if (!pg_index_table) {
+        LOGW("index table is not found for pg={}, skip statistics refresh", pg_id);
+        return;
+    }
 
     // Step 1: Scan index table to count active and tombstone blobs in one pass
     uint64_t active_count = 0;
@@ -1276,7 +1287,7 @@ void HSHomeObject::refresh_pg_statistics(pg_id_t pg_id) {
         }};
 
     std::vector< std::pair< BlobRouteKey, BlobRouteValue > > dummy_out;
-    auto ret = hs_pg->index_table_->query(query_req, dummy_out);
+    auto ret = pg_index_table->query(query_req, dummy_out);
     RELEASE_ASSERT(ret == homestore::btree_status_t::success, "Failed to scan index table for pg={}, status={}", pg_id,
                    ret);
 
