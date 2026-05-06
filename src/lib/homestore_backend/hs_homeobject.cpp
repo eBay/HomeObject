@@ -21,6 +21,15 @@
 
 namespace homeobject {
 
+static homestore::HSDevType resolve_dev_type(homeobjectcfg::HSDevTypeOverride cfg,
+                                              homestore::HSDevType code_default) {
+    if (cfg == homeobjectcfg::HSDevTypeOverride::FAST) { return homestore::HSDevType::Fast; }
+    if (cfg == homeobjectcfg::HSDevTypeOverride::DATA) { return homestore::HSDevType::Data; }
+    return code_default;
+}
+
+static float resolve_size_pct(float cfg, float code_default) { return (cfg >= 0.0f) ? cfg : code_default; }
+
 // HSHomeObject's own SuperBlock. Currently this only contains the SvcId SM
 // receives so we can set HomeObject::_our_id upon recovery
 struct svc_info_superblk_t {
@@ -204,18 +213,30 @@ void HSHomeObject::init_homestore() {
             // Hybrid mode
             LOGD("Has both Data and Fast, running with Hybrid mode");
             HomeStore::instance()->format_and_start({
-                {HS_SERVICE::META, hs_format_params{.dev_type = HSDevType::Fast, .size_pct = 9.0, .num_chunks = 64}},
+                {HS_SERVICE::META,
+                 hs_format_params{
+                     .dev_type = resolve_dev_type(HS_BACKEND_DYNAMIC_CONFIG(meta_dev_type), HSDevType::Fast),
+                     .size_pct = resolve_size_pct(HS_BACKEND_DYNAMIC_CONFIG(meta_size_pct), 9.0f),
+                     .num_chunks = 64}},
                 {HS_SERVICE::LOG,
-                 hs_format_params{.dev_type = HSDevType::Fast, .size_pct = 45.0, .chunk_size = 32 * Mi}},
-                {HS_SERVICE::INDEX, hs_format_params{.dev_type = HSDevType::Fast, .size_pct = 45.0, .num_chunks = 128}},
+                 hs_format_params{
+                     .dev_type = resolve_dev_type(HS_BACKEND_DYNAMIC_CONFIG(log_dev_type), HSDevType::Fast),
+                     .size_pct = resolve_size_pct(HS_BACKEND_DYNAMIC_CONFIG(log_size_pct), 45.0f),
+                     .chunk_size = 32 * Mi}},
+                {HS_SERVICE::INDEX,
+                 hs_format_params{
+                     .dev_type = resolve_dev_type(HS_BACKEND_DYNAMIC_CONFIG(index_dev_type), HSDevType::Fast),
+                     .size_pct = resolve_size_pct(HS_BACKEND_DYNAMIC_CONFIG(index_size_pct), 45.0f),
+                     .num_chunks = 128}},
                 {HS_SERVICE::REPLICATION,
-                 hs_format_params{.dev_type = HSDevType::Data,
-                                  .size_pct = 99.0,
-                                  .num_chunks = 0,
-                                  .chunk_size = _hs_chunk_size,
-                                  .block_size = _data_block_size,
-                                  .alloc_type = blk_allocator_type_t::append,
-                                  .chunk_sel_type = chunk_selector_type_t::CUSTOM}},
+                 hs_format_params{
+                     .dev_type = resolve_dev_type(HS_BACKEND_DYNAMIC_CONFIG(replication_dev_type), HSDevType::Data),
+                     .size_pct = resolve_size_pct(HS_BACKEND_DYNAMIC_CONFIG(replication_size_pct), 99.0f),
+                     .num_chunks = 0,
+                     .chunk_size = _hs_chunk_size,
+                     .block_size = _data_block_size,
+                     .alloc_type = blk_allocator_type_t::append,
+                     .chunk_sel_type = chunk_selector_type_t::CUSTOM}},
             });
         } else {
             auto run_on_type = has_fast_dev ? homestore::HSDevType::Fast : homestore::HSDevType::Data;
@@ -223,17 +244,30 @@ void HSHomeObject::init_homestore() {
             HomeStore::instance()->format_and_start({
                 // FIXME:  this is to work around the issue in HS that varsize allocator doesn't work with small chunk
                 // size.
-                {HS_SERVICE::META, hs_format_params{.dev_type = run_on_type, .size_pct = 5.0, .num_chunks = 1}},
-                {HS_SERVICE::LOG, hs_format_params{.dev_type = run_on_type, .size_pct = 10.0, .chunk_size = 32 * Mi}},
-                {HS_SERVICE::INDEX, hs_format_params{.dev_type = run_on_type, .size_pct = 5.0, .num_chunks = 1}},
+                {HS_SERVICE::META,
+                 hs_format_params{
+                     .dev_type = resolve_dev_type(HS_BACKEND_DYNAMIC_CONFIG(meta_dev_type), run_on_type),
+                     .size_pct = resolve_size_pct(HS_BACKEND_DYNAMIC_CONFIG(meta_size_pct), 1.0f),
+                     .num_chunks = 1}},
+                {HS_SERVICE::LOG,
+                 hs_format_params{
+                     .dev_type = resolve_dev_type(HS_BACKEND_DYNAMIC_CONFIG(log_dev_type), run_on_type),
+                     .size_pct = resolve_size_pct(HS_BACKEND_DYNAMIC_CONFIG(log_size_pct), 10.0f),
+                     .chunk_size = 32 * Mi}},
+                {HS_SERVICE::INDEX,
+                 hs_format_params{
+                     .dev_type = resolve_dev_type(HS_BACKEND_DYNAMIC_CONFIG(index_dev_type), run_on_type),
+                     .size_pct = resolve_size_pct(HS_BACKEND_DYNAMIC_CONFIG(index_size_pct), 1.0f),
+                     .num_chunks = 1}},
                 {HS_SERVICE::REPLICATION,
-                 hs_format_params{.dev_type = run_on_type,
-                                  .size_pct = 79.0,
-                                  .num_chunks = 0,
-                                  .chunk_size = _hs_chunk_size,
-                                  .block_size = _data_block_size,
-                                  .alloc_type = blk_allocator_type_t::append,
-                                  .chunk_sel_type = chunk_selector_type_t::CUSTOM}},
+                 hs_format_params{
+                     .dev_type = resolve_dev_type(HS_BACKEND_DYNAMIC_CONFIG(replication_dev_type), run_on_type),
+                     .size_pct = resolve_size_pct(HS_BACKEND_DYNAMIC_CONFIG(replication_size_pct), 87.0f),
+                     .num_chunks = 0,
+                     .chunk_size = _hs_chunk_size,
+                     .block_size = _data_block_size,
+                     .alloc_type = blk_allocator_type_t::append,
+                     .chunk_sel_type = chunk_selector_type_t::CUSTOM}},
             });
         }
     } else {
