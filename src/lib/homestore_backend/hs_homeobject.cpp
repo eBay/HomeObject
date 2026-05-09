@@ -209,10 +209,10 @@ void HSHomeObject::init_homestore() {
         LOGW("We are starting for the first time on [{}], Formatting!!", to_string(_our_id));
         is_first_time_startup_ = true;
 
+        // Phase 1: Resolve vdev format parameters based on available device types and config overrides
+        std::map< uint32_t, hs_format_params > format_opts;
         if (has_data_dev && has_fast_dev) {
-            // Hybrid mode
-            LOGD("Has both Data and Fast, running with Hybrid mode");
-            HomeStore::instance()->format_and_start({
+            format_opts = {
                 {HS_SERVICE::META,
                  hs_format_params{
                      .dev_type = resolve_dev_type(HS_BACKEND_DYNAMIC_CONFIG(meta_dev_type), HSDevType::Fast),
@@ -237,13 +237,11 @@ void HSHomeObject::init_homestore() {
                      .block_size = _data_block_size,
                      .alloc_type = blk_allocator_type_t::append,
                      .chunk_sel_type = chunk_selector_type_t::CUSTOM}},
-            });
+            };
         } else {
-            auto run_on_type = has_fast_dev ? homestore::HSDevType::Fast : homestore::HSDevType::Data;
-            LOGD("Running with Single mode, all service on {}", run_on_type);
-            HomeStore::instance()->format_and_start({
-                // FIXME:  this is to work around the issue in HS that varsize allocator doesn't work with small chunk
-                // size.
+            auto const run_on_type = has_fast_dev ? homestore::HSDevType::Fast : homestore::HSDevType::Data;
+            format_opts = {
+                // FIXME: workaround for HS issue where varsize allocator doesn't work with small chunk size
                 {HS_SERVICE::META,
                  hs_format_params{
                      .dev_type = resolve_dev_type(HS_BACKEND_DYNAMIC_CONFIG(meta_dev_type), run_on_type),
@@ -257,19 +255,39 @@ void HSHomeObject::init_homestore() {
                 {HS_SERVICE::INDEX,
                  hs_format_params{
                      .dev_type = resolve_dev_type(HS_BACKEND_DYNAMIC_CONFIG(index_dev_type), run_on_type),
-                     .size_pct = resolve_size_pct(HS_BACKEND_DYNAMIC_CONFIG(index_size_pct), 1.0f),
+                     .size_pct = resolve_size_pct(HS_BACKEND_DYNAMIC_CONFIG(index_size_pct), 0.5f),
                      .num_chunks = 1}},
                 {HS_SERVICE::REPLICATION,
                  hs_format_params{
                      .dev_type = resolve_dev_type(HS_BACKEND_DYNAMIC_CONFIG(replication_dev_type), run_on_type),
-                     .size_pct = resolve_size_pct(HS_BACKEND_DYNAMIC_CONFIG(replication_size_pct), 87.0f),
+                     .size_pct = resolve_size_pct(HS_BACKEND_DYNAMIC_CONFIG(replication_size_pct), 88.0f),
                      .num_chunks = 0,
                      .chunk_size = _hs_chunk_size,
                      .block_size = _data_block_size,
                      .alloc_type = blk_allocator_type_t::append,
                      .chunk_sel_type = chunk_selector_type_t::CUSTOM}},
-            });
+            };
         }
+
+        // Phase 2: Validate device availability and log the resolved vdev configuration
+        auto svc_name = [](uint32_t svc) -> std::string_view {
+            switch (svc) {
+            case HS_SERVICE::META: return "META";
+            case HS_SERVICE::LOG: return "LOG";
+            case HS_SERVICE::INDEX: return "INDEX";
+            case HS_SERVICE::REPLICATION: return "REPLICATION";
+            default: return "UNKNOWN";
+            }
+        };
+        for (auto const& [svc, params] : format_opts) {
+            RELEASE_ASSERT(params.dev_type != HSDevType::Fast || has_fast_dev,
+                           "Service [{}] requires Fast device but none available!", svc_name(svc));
+            RELEASE_ASSERT(params.dev_type != HSDevType::Data || has_data_dev,
+                           "Service [{}] requires Data device but none available!", svc_name(svc));
+            LOGI("  vdev [{}]: dev_type={} size_pct={:.1f}%", svc_name(svc), params.dev_type, params.size_pct);
+        }
+
+        HomeStore::instance()->format_and_start(std::move(format_opts));
     } else {
         RELEASE_ASSERT(!_our_id.is_nil(), "No SvcId read after HomeStore recovery!");
         auto const new_id = app->discover_svcid(_our_id);

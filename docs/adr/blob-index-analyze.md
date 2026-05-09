@@ -15,8 +15,8 @@
 
 | Blob Size | Blob Count | Index Disk | Hard Memory | Cache Pool | Cache Coverage |
 |-----------|------------|------------|-------------|------------|----------------|
-| **8 KB**  | 2.56B      | 60.1 GB    | 177 MB      | 1.3 GB     | **2.16%** ⚠️  |
-| **256 KB**| 80M        | 1.88 GB    | 5.51 MB     | 1.3 GB     | **69%** ✓      |
+| **8 KB**  | 2.56B      | 60.1 GB    | 117 MB      | 1.3 GB     | **2.16%** ⚠️  |
+| **256 KB**| 80M        | 1.88 GB    | 3.67 MB     | 1.3 GB     | **69%** ✓      |
 
 
 ---
@@ -30,8 +30,8 @@
 
 | Blob Size | Blob Count | Index Disk | Hard Memory | Cache Pool | Cache Coverage |
 |-----------|------------|------------|-------------|------------|----------------|
-| **8 KB**  | 16.4B      | 385 GB     | 1.13 GB     | 1.3 GB     | **0.34%** ⚠️⚠️ |
-| **256 KB**| 512M       | 12.0 GB    | 35.3 MB     | 1.3 GB     | **10.8%** ✓    |
+| **8 KB**  | 16.4B      | 385 GB     | 770 MB      | 1.3 GB     | **0.34%** ⚠️⚠️ |
+| **256 KB**| 512M       | 12.0 GB    | 23.4 MB     | 1.3 GB     | **10.8%** ✓    |
 
 
 ---
@@ -42,13 +42,16 @@
 Now we use 45% of META drive (200GB*45% =90GB) on HDD SKUs. The number is generally correct as worst case we can consume up to 60GB.
 Shrinking it down from 90GB to 60GB saves 60MB memory which is negligible.
 #### [QLC SKU]
-5% of QLC size makes it into 5721.96 GB,  as a result it consumes 18GB memory for allocator.
-Changing it to 0.8% based on below calculation, as a result, Index size would be ~1TB with Hard Memory ~3GB.
+QLC node total data capacity: ~128 TB.
+5% of QLC size (114 TB × 5% = 5721.96 GB) consumes ~11 GB memory for allocator.
+Changing it to 0.5% based on below calculation, as a result, Index size would be ~500GB with Hard Memory ~1GB.
+Also, we probably should tune down the log pct from 10% to 0.5% (570GB) as well, but this tuning should be done via config
+to avoid failing the (vdev too small)
 
 ```
-Worst case assuming blob size is 8KB, the Index size should be 0.61% of DataSize
+Worst case assuming blob size is 8KB, the Index size should be ~0.3% of DataSize
 
-(DataSize/8K)*(4KB/167)*1.01 ==> DataSize *1.01/167 = DataSize * 0.61%.
+(DataSize/8K)*(4KB/167)*1.01 ==> DataSize * (4K/8K)/167 * 1.01 = DataSize * 0.5/167 * 1.01 ≈ DataSize * 0.3%.
 ```
 ### Configure mem_size for QLC nodes.
 
@@ -65,11 +68,12 @@ the performance gap is still subject to performance evaluation.
 2. Index disk space     ≈ (N / 167) × 4KB × 1.01
                           (1.01 factor accounts for internal nodes)
 
-3. Hard memory          = Index disk / 4096 × 12 bytes
+3. Hard memory          = Index disk / 4096 × 8 bytes
    (Allocator)            (Always resident, non-negotiable)
 
-4. Soft memory          = min(Index disk × 10%, io_mem_size × 65%)
-   (Working set)          (Capped by global memory budget)
+4. Soft memory          = min(io_mem_size × 65%, Index disk × 10%)
+   (Working set)          (Capped by global memory budget; "Index disk × 10%" in tables
+                           is a conservative working-set estimate, not the actual cap)
 
 5. Dirty buffer limit   = io_mem_size × 10%
    (Transient peak)       (Shared across all writes, not index-specific)
@@ -78,7 +82,7 @@ the performance gap is still subject to performance evaluation.
 **Memory Components:**
 - **Hard (Allocator):** Always resident in `folly::MPMCQueue`, holds ALL free blocks
     - Independent of `io_mem_size`, scales with index vdev size
-    - Formula: `(index_disk / 4096) × 12 bytes`
+    - Formula: `(index_disk / 4096) × 8 bytes` (4B `blk_num_t` + 4B `atomic<uint32_t>` sequence per slot)
 
 - **Soft (Working Set):** LRU-managed btree node cache
     - **Capped by:** `io_mem_size × cache_size_percent / 100` (default 65%)
@@ -200,8 +204,8 @@ For index vdev size S:
 - **Allocator overhead:** ~0.2% of S
     - Uses `FixedBlkAllocator` (4KB fixed block size)
     - Maintains all free blocks in memory via `folly::MPMCQueue`
-    - Each slot: 12 bytes (4B blk_num_t + 8B atomic sequence)
-    - For 10GB index: ~22 MB allocator memory
+    - Each slot: 8 bytes (4B `blk_num_t` + 4B `atomic<uint32_t>` sequence)
+    - For 10GB index: ~20 MB allocator memory
 
 **Total overhead per blob:** ~24-25 bytes (including tree structure overhead)
 
@@ -239,7 +243,7 @@ max_dirty_buffers = io_mem_size × dirty_buf_percent / 100
     - LRU evictor (created in homestore.cpp:280) enforces this limit
 
 2. **Allocator memory is separate:** Not counted in cache budget, always required
-    - Hard memory = 0.3% of index disk (12 bytes per 4KB block)
+    - Hard memory = ~0.2% of index disk (8 bytes per 4KB block)
 
 3. **Shared budget:** `io_mem_size` serves ALL HomeStore components (index, data, log)
     - Index cache competes with data cache for this budget
@@ -256,9 +260,9 @@ max_dirty_buffers = io_mem_size × dirty_buf_percent / 100
 
 | Data Size | Blob Count | Index Disk | Hard Memory (Allocator) | Soft Memory (Working Set)* |
 |-----------|------------|------------|-------------------------|----------------------------|
-| **1 TB**   | 4.0M      | 95.9 MB    | 282 KB                 | 10 MB (10% of index)       |
-| **20 TB**  | 80.0M     | 1.88 GB    | 5.51 MB                | 188 MB (10% of index)      |
-| **128 TB** | 512.0M    | 12.0 GB    | 35.3 MB                | 1.2 GB (10% of index)      |
+| **1 TB**   | 4.0M      | 95.9 MB    | 187 KB                 | 10 MB (10% of index)       |
+| **20 TB**  | 80.0M     | 1.88 GB    | 3.67 MB                | 188 MB (10% of index)      |
+| **128 TB** | 512.0M    | 12.0 GB    | 23.4 MB                | 1.2 GB (10% of index)      |
 
 \* *Actual = min(shown value, `io_mem_size × 65%`). Configure `io_mem_size` accordingly.*
 
@@ -276,9 +280,9 @@ Soft memory   = min(Index disk × 10%, io_mem_size × 65%)
 
 | Data Size | Blob Count | Index Disk | Hard Memory (Allocator) | Soft Memory (Working Set)* |
 |-----------|------------|------------|-------------------------|----------------------------|
-| **1 TB**   | 128.0M    | 3.01 GB    | 8.83 MB                | 0.3 GB (10% of index)      |
-| **20 TB**  | 2.56B     | 60.1 GB    | 177 MB                 | 6 GB (10% of index)        |
-| **128 TB** | 16.4B     | 385 GB     | 1.13 GB                | 38 GB (10% of index)       |
+| **1 TB**   | 128.0M    | 3.01 GB    | 5.88 MB                | 0.3 GB (10% of index)      |
+| **20 TB**  | 2.56B     | 60.1 GB    | 117 MB                 | 6 GB (10% of index)        |
+| **128 TB** | 16.4B     | 385 GB     | 770 MB                 | 38 GB (10% of index)       |
 
 \* *Actual = min(shown value, `io_mem_size × 65%`). Large deployments need substantial `io_mem_size`.*
 
