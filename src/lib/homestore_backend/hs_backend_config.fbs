@@ -5,6 +5,9 @@ namespace homeobjectcfg;
 attribute "hotswap";
 attribute "deprecated";
 
+// Per-service device type override for format_and_start.
+// AUTO (default) defers to the built-in hybrid/single mode logic.
+enum HSDevTypeOverride : uint8 { AUTO = 0, FAST = 1, DATA = 2 }
 
 table HSBackendSettings {
     // timer thread freq in us
@@ -49,6 +52,21 @@ table HSBackendSettings {
 
     // Check traffic ready before get, default true, set false for 1-replica workaround mode to allow read
     check_traffic_ready_before_get: bool = true;
+
+    // Per-service device type and size_pct overrides for format_and_start.
+    // dev_type defaults to AUTO (0 = defer to hybrid/single code logic).
+    // size_pct defaults to -1.0 (not-set); any value >= 0 overrides the built-in default.
+    meta_dev_type: HSDevTypeOverride = AUTO;
+    meta_size_pct: float = -1.0;
+
+    log_dev_type: HSDevTypeOverride = AUTO;
+    log_size_pct: float = -1.0;
+
+    index_dev_type: HSDevTypeOverride = AUTO;
+    index_size_pct: float = -1.0;
+
+    replication_dev_type: HSDevTypeOverride = AUTO;
+    replication_size_pct: float = -1.0;
 
 }
 
