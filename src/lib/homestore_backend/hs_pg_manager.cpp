@@ -1257,7 +1257,11 @@ void HSHomeObject::refresh_pg_statistics(pg_id_t pg_id) {
     RELEASE_ASSERT(hs_pg, "Failed to get pg={} for statistics refresh", pg_id);
     auto pg_index_table = hs_pg->index_table_;
     if (!pg_index_table) {
-        LOGW("index table is not found for pg={}, skip statistics refresh", pg_id);
+        if (hs_pg->pg_sb_->state == PGState::DESTROYED) {
+            LOGI("pg={} is destroyed, skip statistics refresh", pg_id);
+        } else {
+            RELEASE_ASSERT(false, "index table is not found for pg={} and not in PGState::DESTROYED state", pg_id);
+        }
         return;
     }
 
