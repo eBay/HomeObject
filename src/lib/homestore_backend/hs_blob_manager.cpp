@@ -88,7 +88,7 @@ BlobManager::AsyncResult< blob_id_t > HSHomeObject::_put_blob(ShardInfo const& s
         return folly::makeUnexpected(BlobErrorCode::SHUTTING_DOWN);
     }
     incr_pending_request_num();
-        // check user key size
+    // check user key size
     if (blob.user_key.size() > BlobHeader::max_user_key_length) {
         BLOGE(tid, shard.id, 0, "input user key length > max_user_key_length {}", blob.user_key.size(),
               BlobHeader::max_user_key_length);
@@ -167,8 +167,7 @@ BlobManager::AsyncResult< blob_id_t > HSHomeObject::_put_blob(ShardInfo const& s
 
     // Set offset of actual data after the blob header and user key (rounded off)
     req->blob_header()->data_offset = req->blob_header_buf().size();
-    RELEASE_ASSERT(req->blob_header()->data_offset == _data_block_size,
-                       "blob header should equals _data_block_size");
+    RELEASE_ASSERT(req->blob_header()->data_offset == _data_block_size, "blob header should equals _data_block_size");
     // In case blob body is not aligned, create a new aligned buffer and copy the blob body.
     if (((r_cast< uintptr_t >(blob.body.cbytes()) % io_align) != 0) || ((blob_size % io_align) != 0)) {
         // If address or size is not aligned, create a separate aligned buffer and do expensive memcpy.
@@ -367,9 +366,7 @@ BlobManager::AsyncResult< Blob > HSHomeObject::_get_blob_data(const shared< home
             }
 
             auto verify_result = do_verify_blob(read_buf.cbytes(), shard_id, 0 /* no blob_id check */);
-            if (!verify_result.hasValue()) {
-                return folly::makeUnexpected(verify_result.error());
-            }
+            if (!verify_result.hasValue()) { return folly::makeUnexpected(verify_result.error()); }
             std::string user_key = std::move(verify_result.value());
 
             BlobHeader const* header = r_cast< BlobHeader const* >(read_buf.cbytes());
@@ -498,8 +495,14 @@ HSHomeObject::blob_put_get_blk_alloc_hints(sisl::blob const& header, cintrusive<
           hs_shard->sb_->p_chunk_id, get_reserved_blks());
 
     if (msg_header->blob_id != 0) {
+        auto pg_index_table = hs_pg->index_table_;
+        if (!pg_index_table) {
+            LOGW("index table is not found for pg={}, skip statistics refresh", msg_header->pg_id);
+            return folly::makeUnexpected(homestore::ReplServiceError::RESULT_NOT_EXIST_YET);
+        }
+
         // check if the blob already exists, if yes, return the blk id
-        auto r = get_blob_from_index_table(hs_pg->index_table_, msg_header->shard_id, msg_header->blob_id);
+        auto r = get_blob_from_index_table(pg_index_table, msg_header->shard_id, msg_header->blob_id);
         if (r.hasValue()) {
             BLOGT(tid, msg_header->shard_id, msg_header->blob_id,
                   "Blob has already been persisted, blk_num={}, blk_count={}", r.value().blk_num(),
