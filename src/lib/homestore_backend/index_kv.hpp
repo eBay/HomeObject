@@ -16,7 +16,7 @@ private:
 public:
     BlobRouteKey() = default;
     BlobRouteKey(const BlobRoute key) : key_(key) {}
-    BlobRouteKey(const BlobRouteKey& other) : BlobRouteKey(other.serialize(), true) {}
+    BlobRouteKey(const BlobRouteKey& other) : homestore::BtreeKey(), key_(other.key_) {}
     BlobRouteKey(const homestore::BtreeKey& other) : BlobRouteKey(other.serialize(), true) {}
     BlobRouteKey(const sisl::blob& b, bool copy) :
             homestore::BtreeKey(), key_{*(r_cast< const BlobRoute* >(b.cbytes()))} {}
@@ -58,7 +58,7 @@ private:
 public:
     BlobRouteByChunkKey() = default;
     BlobRouteByChunkKey(const BlobRouteByChunk key) : key_(key) {}
-    BlobRouteByChunkKey(const BlobRouteByChunkKey& other) : BlobRouteByChunkKey(other.serialize(), true) {}
+    BlobRouteByChunkKey(const BlobRouteByChunkKey& other) : homestore::BtreeKey(), key_(other.key_) {}
     BlobRouteByChunkKey(const homestore::BtreeKey& other) : BlobRouteByChunkKey(other.serialize(), true) {}
     BlobRouteByChunkKey(const sisl::blob& b, bool copy) :
             homestore::BtreeKey(), key_{*(r_cast< const BlobRouteByChunk* >(b.cbytes()))} {}
@@ -99,7 +99,7 @@ class BlobRouteValue : public homestore::BtreeValue {
 public:
     BlobRouteValue() = default;
     BlobRouteValue(const homestore::MultiBlkId& pbas) : pbas_(pbas) {}
-    BlobRouteValue(const BlobRouteValue& other) : homestore::BtreeValue() { pbas_ = other.pbas_; };
+    BlobRouteValue(const BlobRouteValue& other) : homestore::BtreeValue(), pbas_(other.pbas_) {};
     BlobRouteValue(const sisl::blob& b, bool copy) : homestore::BtreeValue() { deserialize(b, copy); }
     BlobRouteValue(const homestore::BtreeValue& other) : BlobRouteValue(other.serialize(), true) {}
     virtual ~BlobRouteValue() = default;
