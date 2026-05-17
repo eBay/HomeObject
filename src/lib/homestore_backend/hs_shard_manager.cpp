@@ -63,15 +63,15 @@ uint64_t ShardManager::max_shard_size() { return Gi; }
 
 uint64_t ShardManager::max_shard_num_in_pg() { return ((uint64_t)0x01) << shard_width; }
 
-shard_id_t HSHomeObject::generate_new_shard_id(pg_id_t pgid) {
+shard_id_t HSHomeObject::generate_new_shard_id(pg_id_t pg_id) {
     std::scoped_lock lock_guard(_pg_lock);
-    auto hs_pg = const_cast< HS_PG* >(_get_hs_pg_unlocked(pgid));
+    auto hs_pg = const_cast< HS_PG* >(_get_hs_pg_unlocked(pg_id));
     RELEASE_ASSERT(hs_pg, "Missing pg info");
 
     auto new_sequence_num = ++hs_pg->shard_sequence_num_;
     RELEASE_ASSERT(new_sequence_num < ShardManager::max_shard_num_in_pg(),
                    "new shard id must be less than ShardManager::max_shard_num_in_pg()");
-    return make_new_shard_id(pgid, new_sequence_num);
+    return make_new_shard_id(pg_id, new_sequence_num);
 }
 
 uint64_t HSHomeObject::get_sequence_num_from_shard_id(uint64_t shard_id) {
@@ -702,6 +702,14 @@ void HSHomeObject::write_migrated_shard_metablks() {
         shards_to_migrate_.clear();
         LOGI("Completed migrating all shard superblocks from v1 to v2");
     }
+}
+
+shard_id_t HSHomeObject::get_last_shard_id_in_pg(pg_id_t pg_id) const {
+    std::scoped_lock lock_guard(_pg_lock, _shard_lock);
+    auto hs_pg = const_cast< HS_PG* >(_get_hs_pg_unlocked(pg_id));
+    RELEASE_ASSERT(hs_pg, "Missing pg info, pg={}", pg_id);
+    auto& shards = hs_pg->shards_;
+    return shards.empty() ? 0 : shards.back()->info.id;
 }
 
 void HSHomeObject::add_new_shard_to_map(std::unique_ptr< HS_Shard > shard) {

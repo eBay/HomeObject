@@ -293,9 +293,10 @@ void ReplicationStateMachine::on_destroy(const homestore::group_id_t& group_id) 
         LOGW("do not have pg mapped by group_id={}", boost::uuids::to_string(group_id));
         return;
     }
-    home_object_->pg_destroy(PG_ID.value());
-    LOGI("replica destroyed, cleared pg={} resources with group_id={}", PG_ID.value(),
-         boost::uuids::to_string(group_id));
+
+    const auto pg_id = PG_ID.value();
+    home_object_->pg_destroy(pg_id);
+    LOGI("replica destroyed, cleared pg={} resources with group_id={}", pg_id, boost::uuids::to_string(group_id));
 }
 
 void ReplicationStateMachine::on_remove_member(const homestore::replica_id_t& member, trace_id_t tid) {
@@ -1047,6 +1048,34 @@ void ReplicationStateMachine::on_log_replay_done(const homestore::group_id_t& gr
     // Refresh PG statistics after log replay
     LOGI("Starting statistics refresh for pg={}", pg_id);
     home_object_->refresh_pg_statistics(pg_id);
+}
+
+void ReplicationStateMachine::on_become_leader(const homestore::group_id_t& group_id) {
+    auto pg_id_opt = home_object_->get_pg_id_with_group_id(group_id);
+    if (!pg_id_opt.has_value()) {
+        LOGE("become leader but can not find any pg for group={}!", group_id);
+        return;
+    }
+    const auto pg_id = pg_id_opt.value();
+    RELEASE_ASSERT(home_object_->pg_exists(pg_id), "pg={} should exist, but not! fatal error!", pg_id);
+    // TODO:: add whatever acitons needed to be take.
+}
+
+void ReplicationStateMachine::on_become_follower(const homestore::group_id_t& group_id) {
+    auto pg_id_opt = home_object_->get_pg_id_with_group_id(group_id);
+    if (!pg_id_opt.has_value()) {
+        LOGE("become follower but can not find any pg for group={}!", group_id);
+        return;
+    }
+    const auto pg_id = pg_id_opt.value();
+    RELEASE_ASSERT(home_object_->pg_exists(pg_id), "pg={} should exist, but not! fatal error!", pg_id);
+
+    LOGI("become follower of group {}, cancel scrub task for pg={}", group_id, pg_id);
+    // TODO:: add whatever acitons needed to be take.
+
+    // cancel scrub task if I am not leader again.
+    auto& scrub_mgr = home_object_->scrub_manager();
+    if (scrub_mgr) scrub_mgr->cancel_scrub_task(pg_id);
 }
 
 } // namespace homeobject
