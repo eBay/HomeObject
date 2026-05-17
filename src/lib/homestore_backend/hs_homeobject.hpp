@@ -14,10 +14,16 @@
 #include "homeobject/common.hpp"
 #include "index_kv.hpp"
 #include "gc_manager.hpp"
+#include "scrub_manager.hpp"
 #include "hs_backend_config.hpp"
 #include "generated/resync_pg_data_generated.h"
 #include "generated/resync_shard_data_generated.h"
 #include "generated/resync_blob_data_generated.h"
+
+// scrubber fbs headers.
+#include "generated/scrub_common_generated.h"
+#include "generated/scrub_req_generated.h"
+#include "generated/scrub_result_generated.h"
 
 namespace homestore {
 struct meta_blk;
@@ -364,7 +370,10 @@ public:
         shared< homestore::ReplDev > repl_dev_;
         std::shared_ptr< BlobIndexTable > index_table_;
         PGMetrics metrics_;
+        HSHomeObject& home_obj_;
         mutable pg_state pg_state_{0};
+        mutable std::atomic_bool in_scrubbing{false};
+        mutable std::atomic_uint64_t last_committed_blob_id{0};
 
         // Snapshot receiver progress info, used as a checkpoint for recovery
         // Placed within HS_PG since HomeObject is unable to locate the ReplicationStateMachine
@@ -372,8 +381,8 @@ public:
         mutable homestore::superblk< snapshot_rcvr_shard_list_superblk > snp_rcvr_shard_list_sb_;
 
         HS_PG(PGInfo info, shared< homestore::ReplDev > rdev, shared< BlobIndexTable > index_table,
-              std::shared_ptr< const std::vector< homestore::chunk_num_t > > pg_chunk_ids);
-        HS_PG(homestore::superblk< pg_info_superblk >&& sb, shared< homestore::ReplDev > rdev);
+              std::shared_ptr< const std::vector< homestore::chunk_num_t > > pg_chunk_ids, HSHomeObject& home_obj);
+        HS_PG(homestore::superblk< pg_info_superblk >&& sb, shared< homestore::ReplDev > rdev, HSHomeObject& home_obj);
         ~HS_PG() override = default;
 
         static PGInfo pg_info_from_sb(homestore::superblk< pg_info_superblk > const& sb);
@@ -397,6 +406,13 @@ public:
         uint32_t get_snp_progress() const;
 
         /**
+         * Returns the blob_id of the last committed put_blob.
+         */
+        blob_id_t get_last_committed_blob_id() const;
+
+        pg_id_t pg_id() const { return pg_sb_->id; }
+
+        /**
          * Returns all replication info of all peers.
          */
         void get_peer_info(std::vector< peer_info >& members) const;
@@ -416,6 +432,19 @@ public:
          * Update membership in pg's superblock.
          */
         void update_membership(const MemberSet& members);
+
+        /*
+         * RPC handlers for scrub:
+         * 1. on_scrub_req_received: receive the scrub req from leader
+         * 2. on_scrub_result_received: receive the scrub result from followers
+         */
+        void on_scrub_req_received(boost::intrusive_ptr< sisl::GenericRpcData >& rpc_data);
+        void on_scrub_result_received(boost::intrusive_ptr< sisl::GenericRpcData >& rpc_data);
+
+        /**
+         * Register data RPC handlers for this PG
+         */
+        void register_data_rpc_handlers();
     };
 
     struct HS_Shard : public Shard {
@@ -536,6 +565,11 @@ public:
 
     inline const static homestore::MultiBlkId tombstone_pbas{0, 0, 0};
     inline const static std::string delete_marker_blob_data{"HOMEOBJECT_BLOB_DELETE_MARKER"};
+
+    // ask followers to scrub
+    inline const static std::string PUSH_SCRUB_REQ{"PUSH_SCRUB_REQ"};
+    // return scrub result to leader
+    inline const static std::string PUSH_SCRUB_RESULT{"PUSH_SCRUB_RESULT"};
 
     class PGBlobIterator {
     public:
@@ -732,6 +766,7 @@ private:
     mutable std::shared_mutex snp_sbs_lock_;
     shared< HeapChunkSelector > chunk_selector_;
     shared< GCManager > gc_mgr_;
+    shared< ScrubManager > scrub_mgr_;
     unique< HttpManager > http_mgr_;
 
     static constexpr size_t max_zpad_bufs = _data_block_size / io_align;
@@ -986,6 +1021,7 @@ public:
 
     cshared< HeapChunkSelector > chunk_selector() const { return chunk_selector_; }
     cshared< GCManager > gc_manager() const { return gc_mgr_; }
+    cshared< ScrubManager > scrub_manager() const { return scrub_mgr_; }
 
     /**
      * @brief Reconciles the leaders for all PGs or a specific PG identified by pg_id.
@@ -1057,6 +1093,7 @@ public:
 
     // Refresh PG statistics (called after log replay)
     void refresh_pg_statistics(pg_id_t pg_id);
+    shard_id_t get_last_shard_id_in_pg(pg_id_t pg_id) const;
 
 private:
     BlobManager::Result< std::string > do_verify_blob(const void* blob, shard_id_t expected_shard_id,

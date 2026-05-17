@@ -247,6 +247,13 @@ bool HSHomeObject::local_add_blob_info(pg_id_t const pg_id, BlobInfo const& blob
     } else {
         BLOGT(tid, blob_info.shard_id, blob_info.blob_id, "blob already exists in index table, skip it.");
     }
+
+    hs_pg->last_committed_blob_id.store(blob_info.blob_id);
+
+    // local_add_blob_info will also be called if br happens, in this case, last_committed_blob_id will be finally
+    // updated to the correct value after br is done, so we don't need to worry about the case where
+    // last_committed_blob_id is updated to a smaller value than the current last_committed_blob_id
+
     return true;
 }
 

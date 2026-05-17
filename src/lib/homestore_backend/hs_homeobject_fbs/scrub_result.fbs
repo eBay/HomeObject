@@ -1,0 +1,11 @@
+include "scrub_common.fbs";
+
+namespace homeobject;
+
+table ScrubResult {
+  req_id:        uint64;
+  issuer_uuid:   [ubyte];
+  scrub_results: [ScrubResultEntry];
+}
+
+root_type ScrubResult;
