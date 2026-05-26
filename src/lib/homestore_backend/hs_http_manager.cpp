@@ -289,7 +289,9 @@ void HttpManager::dump_shard(const Pistache::Rest::Request& request, Pistache::H
     for (auto const& blob : r.value()) {
         nlohmann::json blob_json;
         blob_json["blob_id"] = blob.blob_id;
+        blob_json["blk_num"] = blob.pbas.blk_num();
         blob_json["blk_count"] = blob.pbas.blk_count();
+        blob_json["chunk_num"] = blob.pbas.chunk_num();
         j["blobs"].push_back(blob_json);
     }
     response.send(Pistache::Http::Code::Ok, j.dump());
