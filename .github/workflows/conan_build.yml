@@ -8,7 +8,7 @@ on:
   pull_request:
     branches:
       - main
-      - v4_patch
+      - dev/v4_patch
 
 jobs:
   Build:

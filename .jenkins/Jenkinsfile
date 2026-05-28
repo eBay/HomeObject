@@ -4,7 +4,7 @@ pipeline {
     environment {
         ARTIFACTORY_PASS = credentials('ARTIFACTORY_PASS')
         CONAN_USER = 'oss'
-        TARGET_BRANCH = 'v4_patch'
+        TARGET_BRANCH = 'dev/v4_patch'
         STABLE_BRANCH = 'stable/v*'
         failed_pkg = ''
     }
