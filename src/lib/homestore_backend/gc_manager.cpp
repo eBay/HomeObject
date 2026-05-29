@@ -25,14 +25,14 @@ SISL_LOGGING_DECL(gcmgr)
 GCManager::GCManager(HSHomeObject* homeobject) :
         m_chunk_selector{homeobject->chunk_selector()}, m_hs_home_object{homeobject} {
     homestore::meta_service().register_handler(
-        _gc_actor_meta_name,
+        gc_actor_meta_name,
         [this](homestore::meta_blk* mblk, sisl::byte_view buf, size_t size) {
             on_gc_actor_meta_blk_found(std::move(buf), voidptr_cast(mblk));
         },
         nullptr, true);
 
     homestore::meta_service().register_handler(
-        _gc_reserved_chunk_meta_name,
+        gc_reserved_chunk_meta_name,
         [this](homestore::meta_blk* mblk, sisl::byte_view buf, size_t size) {
             on_reserved_chunk_meta_blk_found(std::move(buf), voidptr_cast(mblk));
         },
@@ -44,7 +44,7 @@ GCManager::GCManager(HSHomeObject* homeobject) :
         true);
 
     homestore::meta_service().register_handler(
-        _gc_task_meta_name,
+        gc_task_meta_name,
         [this](homestore::meta_blk* mblk, sisl::byte_view buf, size_t size) {
             on_gc_task_meta_blk_found(std::move(buf), voidptr_cast(mblk));
         },
@@ -64,7 +64,7 @@ void GCManager::on_gc_task_meta_blk_found(sisl::byte_view const& buf, void* meta
     // here, we are under the protection of the lock of metaservice. however, we will also try to update pg and shard
     // metablk and then destroy the gc_task_sb, which will also try to acquire the lock of metaservice, as a result, a
     // dead lock will happen. so here we will handle all the gc tasks after read all the metablks
-    m_recovered_gc_tasks.emplace_back(_gc_task_meta_name);
+    m_recovered_gc_tasks.emplace_back(gc_task_meta_name);
     m_recovered_gc_tasks.back().load(buf, meta_cookie);
 }
 
@@ -89,7 +89,7 @@ void GCManager::handle_all_recovered_gc_tasks() {
 }
 
 void GCManager::on_gc_actor_meta_blk_found(sisl::byte_view const& buf, void* meta_cookie) {
-    m_gc_actor_sbs.emplace_back(_gc_actor_meta_name);
+    m_gc_actor_sbs.emplace_back(gc_actor_meta_name);
     auto& gc_actor_sb = m_gc_actor_sbs.back();
     gc_actor_sb.load(buf, meta_cookie);
     auto pdev_id = gc_actor_sb->pdev_id;
@@ -100,7 +100,7 @@ void GCManager::on_gc_actor_meta_blk_found(sisl::byte_view const& buf, void* met
 }
 
 void GCManager::on_reserved_chunk_meta_blk_found(sisl::byte_view const& buf, void* meta_cookie) {
-    homestore::superblk< gc_reserved_chunk_superblk > reserved_chunk_sb(_gc_reserved_chunk_meta_name);
+    homestore::superblk< gc_reserved_chunk_superblk > reserved_chunk_sb(gc_reserved_chunk_meta_name);
     auto chunk_id = reserved_chunk_sb.load(buf, meta_cookie)->chunk_id;
     auto EXVchunk = m_chunk_selector->get_extend_vchunk(chunk_id);
     if (EXVchunk == nullptr) {
@@ -446,6 +446,7 @@ void GCManager::pdev_gc_actor::handle_recovered_gc_task(
 
     const chunk_id_t move_from_chunk = gc_task_sb->move_from_chunk;
     const chunk_id_t move_to_chunk = gc_task_sb->move_to_chunk;
+    const chunk_id_t vchunk_id = gc_task_sb->vchunk_id;
     const uint8_t priority = gc_task_sb->priority;
 
     LOGDEBUGMOD(gcmgr, "start handling recovered gc task: move_from_chunk_id={}, move_to_chunk_id={}, priority={}",
@@ -482,7 +483,7 @@ void GCManager::pdev_gc_actor::handle_recovered_gc_task(
 
     const auto pg_id = gc_task_sb->pg_id;
     move_from_vchunk->m_pg_id = pg_id;
-    move_from_vchunk->m_v_chunk_id = gc_task_sb->vchunk_id;
+    move_from_vchunk->m_v_chunk_id = vchunk_id;
 
     move_to_vchunk->m_pg_id = std::nullopt;
     move_to_vchunk->m_v_chunk_id = std::nullopt;
@@ -502,6 +503,10 @@ void GCManager::pdev_gc_actor::handle_recovered_gc_task(
                        move_from_chunk, move_to_chunk, priority, pg_id);
     }
 
+    // we have no gc_task_guard for recovered gc task, so we need to do this manually to make sure the gc task can be
+    // marked as completed and the pg can be marked as available for new gc task
+    on_gc_task_completed(priority, pg_id, move_from_chunk, move_to_chunk, vchunk_id, true, 0);
+
     GCLOGD(RECOVERD_GC_TASK_ID, pg_id, NO_SHARD_ID,
            "finish handling recovered gc task: move_from_chunk_id={}, move_to_chunk_id={}, priority={}",
            move_from_chunk, move_to_chunk, priority);
@@ -520,7 +525,7 @@ bool GCManager::pdev_gc_actor::get_blobs_to_replace(
 
     auto ret = m_index_table->query(query_req, valid_blob_indexes);
     if (ret != homestore::btree_status_t::success) {
-        // "ret != homestore::btree_status_t::has_more" is not expetced here, since we are querying all the pbas in one
+        // "ret != homestore::btree_status_t::has_more" is not expected here, since we are querying all the pbas in one
         // time.
         GCLOGE(task_id, pg_id, NO_SHARD_ID,
                "Failed to query blobs in gc index table for move_to_chunk={}, index ret={}", move_to_chunk, ret);
@@ -577,13 +582,27 @@ bool GCManager::pdev_gc_actor::replace_blob_index(
                 }
 
                 if (existing_pbas.chunk_num() != move_from_chunk) {
-                    GCLOGW(
-                        task_id, pg_id, shard,
-                        "existing pbas chunk={} should be equal to move_from_chunk={}, blob_id={}, move_to_chunk={}, "
-                        "existing_pbas={}, new_pbas={}, this case might happen when crash recovery.",
-                        existing_pbas.chunk_num(), move_from_chunk, blob, move_to_chunk, existing_pbas.to_string(),
-                        new_pbas.to_string());
-                    return homestore::put_filter_decision::keep;
+                    // task_id 0 is used dedicatedly for recovered gc task
+                    if (!task_id && existing_pbas == new_pbas) {
+                        // in recovery
+                        GCLOGD(task_id, pg_id, shard,
+                               "An already upated blob index found during recovery, which is expected. blob_id={}, "
+                               "move_from_chunk={}, move_to_chunk={}, existing_pbas={}",
+                               blob, move_from_chunk, move_to_chunk, existing_pbas.to_string());
+                        return homestore::put_filter_decision::keep;
+                    }
+
+                    // if we reach here, all the blobs are successfully verified and copied to move_to_chunk. so, even
+                    // if there is a divergence before data copy for this blob, we can still replace the blob index with
+                    // the new pba where the correct data is now stored.
+
+                    // note that, after we fix the "create_shard and gc concurrency" and "put_blob to sealed_shard"
+                    // issues, this case is not expected to happen.
+                    GCLOGW(task_id, pg_id, shard,
+                           "Divergence!!! existing pbas chunk={} should be equal to move_from_chunk={}, blob_id={}, "
+                           "move_to_chunk={}, existing_pbas={}, new_pbas={}",
+                           existing_pbas.chunk_num(), move_from_chunk, blob, move_to_chunk, existing_pbas.to_string(),
+                           new_pbas.to_string());
                 }
 
                 GCLOGD(task_id, pg_id, shard,
@@ -778,6 +797,21 @@ bool GCManager::pdev_gc_actor::copy_valid_data(
                    move_from_chunk);
         }
 
+        // check if all the pbas in the valid_blob_indexes are in move_from_chunk, if not, it means the
+        // shard is being modified during gc, we can not guarantee the data consistency, so we fail this gc
+        // task and let it be retried later.
+        for (const auto& [blob, v] : valid_blob_indexes) {
+            auto pba = v.pbas();
+            if (pba.chunk_num() != move_from_chunk) {
+                GCLOGW(task_id, pg_id, shard_id,
+                       "blob_id={} is expected to be in move_from_chunk={}, but its pba={} is not, "
+                       "this might be caused by concurrent modification during gc, fail this gc task and "
+                       "let it be retried later, move_to_chunk={}",
+                       blob.key().blob, move_from_chunk, pba.to_string(), move_to_chunk);
+                return false;
+            }
+        }
+
         // prepare a shard header for this shard in move_to_chunk
         sisl::sg_list header_sgs = generate_shard_super_blk_sg_list(shard_id);
 
@@ -966,6 +1000,10 @@ bool GCManager::pdev_gc_actor::copy_valid_data(
                             }
 
                             // write shard footer, which occupies one blk
+
+                            // in fact , we have a dangling reference of out_blkids here, but it does not matter since
+                            // we do not use it after this and the async_alloc_write will complete soon and the memory
+                            // of out_blkids will be released after that.
                             homestore::MultiBlkId out_blkids;
                             COUNTER_INCREMENT(metrics_, gc_write_blk_count, 1);
                             return data_service.async_alloc_write(footer_sgs, hints, out_blkids);
@@ -976,13 +1014,14 @@ bool GCManager::pdev_gc_actor::copy_valid_data(
 
                             if (err) {
                                 // we will come here if:
-                                //  1 any blob copy fails, then err is operation_canceled
+                                //  1 any blob copy fails, then err is operation_cancelled
                                 //  2 write footer fails， then err is the error code of write footer
-                                GCLOGE(task_id, pg_id, shard_id,
-                                       "Failed to copy some blos or failed to write shard footer for move_to_chunk={}, "
-                                       "err={}, error_category={}, error_message={}, pls check the log for more "
-                                       "detailed info",
-                                       move_to_chunk, err.value(), err.category().name(), err.message());
+                                GCLOGE(
+                                    task_id, pg_id, shard_id,
+                                    "Failed to copy some blobs or failed to write shard footer for move_to_chunk={}, "
+                                    "err={}, error_category={}, error_message={}, pls check the log for more "
+                                    "detailed info",
+                                    move_to_chunk, err.value(), err.category().name(), err.message());
                                 return false;
                             }
                             return true;
@@ -1117,7 +1156,7 @@ bool GCManager::pdev_gc_actor::purge_reserved_chunk(chunk_id_t chunk, const uint
     return true;
 }
 
-bool GCManager::pdev_gc_actor::compare_blob_indexes(
+bool GCManager::pdev_gc_actor::check_blob_consistency(
     folly::ConcurrentHashMap< BlobRouteByChunk, BlobRouteValue > const& copied_blobs,
     std::vector< std::pair< BlobRouteByChunkKey, BlobRouteValue > > const& valid_blob_indexes, const uint64_t task_id,
     const pg_id_t pg_id) {
@@ -1173,30 +1212,41 @@ bool GCManager::pdev_gc_actor::compare_blob_indexes(
             GCLOGW(task_id, pg_id, shard_id, "valid blob: move_to_chunk={}, blob_id={}, pba={}", k.key().chunk,
                    k.key().blob, v.pbas().to_string());
         }
-        RELEASE_ASSERT(false, "copied blobs are not the same as the valid blobs got from gc index table");
+
+        GCLOGW(task_id, pg_id, NO_SHARD_ID, "copied blobs are not the same as the valid blobs got from gc index table");
     }
+
     return ret;
 }
 
-void GCManager::pdev_gc_actor::handle_error_before_persisting_gc_metablk(chunk_id_t move_from_chunk,
-                                                                         chunk_id_t move_to_chunk,
-                                                                         folly::Promise< bool > task,
-                                                                         const uint64_t task_id, uint8_t priority,
-                                                                         const pg_id_t& pg_id) {
-    GCLOGE(task_id, pg_id, NO_SHARD_ID,
-           "move_from_chunk={} to move_to_chunk={} with priority={} failed before persisting gc metablk",
-           move_from_chunk, move_to_chunk, priority);
-
+void GCManager::pdev_gc_actor::on_gc_task_completed(uint8_t priority, pg_id_t pg_id, chunk_id_t move_from_chunk,
+                                                    chunk_id_t move_to_chunk, uint64_t vchunk_id, bool success,
+                                                    const uint64_t task_id) {
     const auto final_state =
         priority == static_cast< uint8_t >(task_priority::normal) ? ChunkState::AVAILABLE : ChunkState::INUSE;
-    m_chunk_selector->mark_chunk_out_of_gc_state(move_from_chunk, final_state, task_id);
-    task.setValue(false);
-    m_reserved_chunk_queue.blockingWrite(move_to_chunk);
-    durable_entities_update([this, priority](auto& de) {
-        priority == static_cast< uint8_t >(task_priority::normal) ? de.failed_gc_task_count.fetch_add(1)
-                                                                  : de.failed_egc_task_count.fetch_add(1);
-    });
-    m_hs_home_object->gc_manager()->decr_pg_pending_gc_task(pg_id);
+
+    if (success) {
+        m_chunk_selector->update_vchunk_info_after_gc(move_from_chunk, move_to_chunk, final_state, pg_id, vchunk_id,
+                                                      task_id);
+        m_reserved_chunk_queue.blockingWrite(move_from_chunk);
+        durable_entities_update([this, priority](auto& de) {
+            priority == static_cast< uint8_t >(task_priority::normal) ? de.success_gc_task_count.fetch_add(1)
+                                                                      : de.success_egc_task_count.fetch_add(1);
+        });
+        GCLOGD(task_id, pg_id, NO_SHARD_ID,
+               "vchunk_id={} has been updated from move_from_chunk={} to move_to_chunk={}, final state is "
+               "updated to {}, task with priority={} is completed!",
+               vchunk_id, move_from_chunk, move_to_chunk, final_state, priority);
+    } else {
+        m_chunk_selector->mark_chunk_out_of_gc_state(move_from_chunk, final_state, task_id);
+        m_reserved_chunk_queue.blockingWrite(move_to_chunk);
+        durable_entities_update([this, priority](auto& de) {
+            priority == static_cast< uint8_t >(task_priority::normal) ? de.failed_gc_task_count.fetch_add(1)
+                                                                      : de.failed_egc_task_count.fetch_add(1);
+        });
+        GCLOGE(task_id, pg_id, NO_SHARD_ID, "move_from_chunk={} to move_to_chunk={} with priority={} failed!",
+               move_from_chunk, move_to_chunk, priority);
+    }
 }
 
 void GCManager::pdev_gc_actor::process_gc_task(chunk_id_t move_from_chunk, uint8_t priority,
@@ -1229,10 +1279,10 @@ void GCManager::pdev_gc_actor::process_gc_task(chunk_id_t move_from_chunk, uint8
            "task for move_from_chunk={} to move_to_chunk={} with priority={} start copying data", move_from_chunk,
            move_to_chunk, priority);
 
+    gc_task_guard guard{priority, pg_id, move_from_chunk, move_to_chunk, vchunk_id, task_id, task, this};
+
     if (!purge_reserved_chunk(move_to_chunk, task_id, pg_id)) {
         GCLOGW(task_id, pg_id, NO_SHARD_ID, "can not purge move_to_chunk={}", move_to_chunk);
-        handle_error_before_persisting_gc_metablk(move_from_chunk, move_to_chunk, std::move(task), task_id, priority,
-                                                  pg_id);
         return;
     }
 
@@ -1241,8 +1291,6 @@ void GCManager::pdev_gc_actor::process_gc_task(chunk_id_t move_from_chunk, uint8
         GCLOGW(task_id, pg_id, NO_SHARD_ID,
                "failed to copy data from move_from_chunk={} to move_to_chunk={} with priority={}", move_from_chunk,
                move_to_chunk, priority);
-        handle_error_before_persisting_gc_metablk(move_from_chunk, move_to_chunk, std::move(task), task_id, priority,
-                                                  pg_id);
         return;
     }
 
@@ -1250,28 +1298,26 @@ void GCManager::pdev_gc_actor::process_gc_task(chunk_id_t move_from_chunk, uint8
     if (!get_blobs_to_replace(move_to_chunk, valid_blob_indexes, task_id, pg_id)) {
         GCLOGW(task_id, pg_id, NO_SHARD_ID, "failed to get valid blob indexes from gc index table for move_to_chunk={}",
                move_to_chunk);
-        handle_error_before_persisting_gc_metablk(move_from_chunk, move_to_chunk, std::move(task), task_id, priority,
-                                                  pg_id);
         return;
     }
 
-    if (!compare_blob_indexes(copied_blobs, valid_blob_indexes, task_id, pg_id)) {
+    if (!check_blob_consistency(copied_blobs, valid_blob_indexes, task_id, pg_id)) {
         GCLOGW(task_id, pg_id, NO_SHARD_ID,
                "copied blobs are not the same as the valid blobs got from gc index table for move_to_chunk={}",
                move_to_chunk);
-        handle_error_before_persisting_gc_metablk(move_from_chunk, move_to_chunk, std::move(task), task_id, priority,
-                                                  pg_id);
         return;
     }
 
     // trigger cp to make sure the offset the the append blk allocator and the wbcache of gc index table are both
     // flushed.
-    auto fut = homestore::hs()->cp_mgr().trigger_cp_flush(true /* force */);
-    RELEASE_ASSERT(std::move(fut).get(), "expect gc index table and blk allocator to be flushed but failed!");
+    if (!homestore::hs()->cp_mgr().trigger_cp_flush(true /* force */).get()) {
+        GCLOGW(task_id, pg_id, NO_SHARD_ID, "expect gc index table and blk allocator to be flushed but failed!");
+        return;
+    }
 
     // after data copy, we persist the gc task meta blk. now, we can make sure all the valid blobs are successfully
-    // copyed and new blob indexes have be written to gc index table before gc task superblk is persisted.
-    homestore::superblk< GCManager::gc_task_superblk > gc_task_sb{GCManager::_gc_task_meta_name};
+    // copied and new blob indexes have been written to gc index table before gc task superblk is persisted.
+    homestore::superblk< GCManager::gc_task_superblk > gc_task_sb{GCManager::gc_task_meta_name};
     gc_task_sb.create(sizeof(GCManager::gc_task_superblk));
     gc_task_sb->move_from_chunk = move_from_chunk;
     gc_task_sb->move_to_chunk = move_to_chunk;
@@ -1292,23 +1338,13 @@ void GCManager::pdev_gc_actor::process_gc_task(chunk_id_t move_from_chunk, uint8
                        move_from_chunk, move_to_chunk, priority);
     }
 
-    durable_entities_update([this, priority](auto& de) {
-        priority == static_cast< uint8_t >(task_priority::normal) ? de.success_gc_task_count.fetch_add(1)
-                                                                  : de.success_egc_task_count.fetch_add(1);
-    });
-
     if (priority == static_cast< uint8_t >(task_priority::normal)) {
         HISTOGRAM_OBSERVE(metrics(), gc_time_duration_s_gc, get_elapsed_time_sec(start_time));
     } else {
         HISTOGRAM_OBSERVE(metrics(), gc_time_duration_s_egc, get_elapsed_time_sec(start_time));
     }
 
-    task.setValue(true);
-    m_reserved_chunk_queue.blockingWrite(move_from_chunk);
-    m_hs_home_object->gc_manager()->decr_pg_pending_gc_task(pg_id);
-    GCLOGI(task_id, pg_id, NO_SHARD_ID,
-           "task for move_from_chunk={} to move_to_chunk={} with priority={} is completed!", move_from_chunk,
-           move_to_chunk, priority);
+    guard.success = true;
 }
 
 bool GCManager::pdev_gc_actor::process_after_gc_metablk_persisted(
@@ -1319,7 +1355,6 @@ bool GCManager::pdev_gc_actor::process_after_gc_metablk_persisted(
     const chunk_id_t move_to_chunk = gc_task_sb->move_to_chunk;
     const uint8_t priority = gc_task_sb->priority;
     const auto pg_id = gc_task_sb->pg_id;
-    const auto vchunk_id = gc_task_sb->vchunk_id;
 
     if (!replace_blob_index(move_from_chunk, move_to_chunk, valid_blob_indexes, task_id)) {
         // if we fail to replace blob index, the worst case is some of the valid blobs index is update, but others not.
@@ -1369,16 +1404,7 @@ bool GCManager::pdev_gc_actor::process_after_gc_metablk_persisted(
             : de.total_reclaimed_blk_count_by_egc.fetch_add(reclaimed_blk_count);
     });
 
-    const auto final_state =
-        priority == static_cast< uint8_t >(task_priority::normal) ? ChunkState::AVAILABLE : ChunkState::INUSE;
-
-    m_chunk_selector->update_vchunk_info_after_gc(move_from_chunk, move_to_chunk, final_state, pg_id, vchunk_id,
-                                                  task_id);
-    GCLOGD(
-        task_id, pg_id, NO_SHARD_ID,
-        "vchunk_id={} has been update from move_from_chunk={} to move_to_chunk={}, {} blks are reclaimed, final state "
-        "is updated to {}",
-        vchunk_id, move_from_chunk, move_to_chunk, reclaimed_blk_count, final_state);
+    GCLOGD(task_id, pg_id, NO_SHARD_ID, "{} blks are reclaimed in this gc task!", reclaimed_blk_count);
 
     const auto total_blks_in_chunk = m_chunk_selector->get_extend_vchunk(move_from_chunk)->get_total_blks();
 
@@ -1396,6 +1422,12 @@ bool GCManager::pdev_gc_actor::process_after_gc_metablk_persisted(
 GCManager::pdev_gc_actor::~pdev_gc_actor() {
     stop();
     LOGINFOMOD(gcmgr, "gc actor for pdev_id={} is destroyed", m_pdev_id);
+}
+
+GCManager::pdev_gc_actor::gc_task_guard::~gc_task_guard() {
+    m_gc_actor->on_gc_task_completed(priority, pg_id, move_from_chunk, move_to_chunk, vchunk_id, success, task_id);
+    task.setValue(success);
+    m_gc_actor->m_hs_home_object->gc_manager()->decr_pg_pending_gc_task(pg_id);
 }
 
 /* RateLimiter */
