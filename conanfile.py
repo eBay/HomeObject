@@ -122,7 +122,7 @@ class HomeObjectConan(ConanFile):
              keep_path=True)
 
     def package_info(self):
-        self.cpp_info.components["homestore"].requires = ["homestore::homestore", "iomgr::iomgr", "sisl::sisl"]
+        self.cpp_info.components["homestore"].requires = ["homestore::homestore", "iomgr::iomgr", "sisl::sisl", "nuraft_mesg::nuraft_mesg"]
         self.cpp_info.components["memory"].requires = ["sisl::sisl"]
         self.cpp_info.components["homeobject"].requires = ["homestore"]
 
