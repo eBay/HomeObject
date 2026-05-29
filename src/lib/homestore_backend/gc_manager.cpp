@@ -582,17 +582,23 @@ bool GCManager::pdev_gc_actor::replace_blob_index(
                 }
 
                 if (existing_pbas.chunk_num() != move_from_chunk) {
-                    if (!task_id) {
+                    // task_id 0 is used dedicatedly for recovered gc task
+                    if (!task_id && existing_pbas == new_pbas) {
                         // in recovery
-                        RELEASE_ASSERT(existing_pbas.chunk_num() == move_to_chunk,
-                                       "existing pbas chunk={} should be equal to move_to_chunk={}, blob_id={}, "
-                                       "move_from_chunk={}, existing_pbas={}, new_pbas={}",
-                                       existing_pbas.chunk_num(), move_to_chunk, blob, move_from_chunk,
-                                       existing_pbas.to_string(), new_pbas.to_string());
+                        GCLOGD(task_id, pg_id, shard,
+                               "An already upated blob index found during recovery, which is expected. blob_id={}, "
+                               "move_from_chunk={}, move_to_chunk={}, existing_pbas={}",
+                               blob, move_from_chunk, move_to_chunk, existing_pbas.to_string());
                         return homestore::put_filter_decision::keep;
                     }
 
-                    GCLOGD(task_id, pg_id, shard,
+                    // if we reach here, all the blobs are successfully verified and copied to move_to_chunk. so, even
+                    // if there is a divergence before data copy for this blob, we can still replace the blob index with
+                    // the new pba where the correct data is now stored.
+
+                    // note that, after we fix the "create_shard and gc concurrency" and "put_blob to sealed_shard"
+                    // issues, this case is not expected to happen.
+                    GCLOGW(task_id, pg_id, shard,
                            "Divergence!!! existing pbas chunk={} should be equal to move_from_chunk={}, blob_id={}, "
                            "move_to_chunk={}, existing_pbas={}, new_pbas={}",
                            existing_pbas.chunk_num(), move_from_chunk, blob, move_to_chunk, existing_pbas.to_string(),
