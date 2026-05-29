@@ -21,8 +21,7 @@
 
 namespace homeobject {
 
-static homestore::HSDevType resolve_dev_type(homeobjectcfg::HSDevTypeOverride cfg,
-                                              homestore::HSDevType code_default) {
+static homestore::HSDevType resolve_dev_type(homeobjectcfg::HSDevTypeOverride cfg, homestore::HSDevType code_default) {
     if (cfg == homeobjectcfg::HSDevTypeOverride::FAST) { return homestore::HSDevType::Fast; }
     if (cfg == homeobjectcfg::HSDevTypeOverride::DATA) { return homestore::HSDevType::Data; }
     return code_default;
@@ -214,20 +213,20 @@ void HSHomeObject::init_homestore() {
         if (has_data_dev && has_fast_dev) {
             format_opts = {
                 {HS_SERVICE::META,
-                 hs_format_params{
-                     .dev_type = resolve_dev_type(HS_BACKEND_DYNAMIC_CONFIG(meta_dev_type), HSDevType::Fast),
-                     .size_pct = resolve_size_pct(HS_BACKEND_DYNAMIC_CONFIG(meta_size_pct), 9.0f),
-                     .num_chunks = 64}},
+                 hs_format_params{.dev_type =
+                                      resolve_dev_type(HS_BACKEND_DYNAMIC_CONFIG(meta_dev_type), HSDevType::Fast),
+                                  .size_pct = resolve_size_pct(HS_BACKEND_DYNAMIC_CONFIG(meta_size_pct), 9.0f),
+                                  .num_chunks = 64}},
                 {HS_SERVICE::LOG,
-                 hs_format_params{
-                     .dev_type = resolve_dev_type(HS_BACKEND_DYNAMIC_CONFIG(log_dev_type), HSDevType::Fast),
-                     .size_pct = resolve_size_pct(HS_BACKEND_DYNAMIC_CONFIG(log_size_pct), 45.0f),
-                     .chunk_size = 32 * Mi}},
+                 hs_format_params{.dev_type =
+                                      resolve_dev_type(HS_BACKEND_DYNAMIC_CONFIG(log_dev_type), HSDevType::Fast),
+                                  .size_pct = resolve_size_pct(HS_BACKEND_DYNAMIC_CONFIG(log_size_pct), 45.0f),
+                                  .chunk_size = 32 * Mi}},
                 {HS_SERVICE::INDEX,
-                 hs_format_params{
-                     .dev_type = resolve_dev_type(HS_BACKEND_DYNAMIC_CONFIG(index_dev_type), HSDevType::Fast),
-                     .size_pct = resolve_size_pct(HS_BACKEND_DYNAMIC_CONFIG(index_size_pct), 45.0f),
-                     .num_chunks = 128}},
+                 hs_format_params{.dev_type =
+                                      resolve_dev_type(HS_BACKEND_DYNAMIC_CONFIG(index_dev_type), HSDevType::Fast),
+                                  .size_pct = resolve_size_pct(HS_BACKEND_DYNAMIC_CONFIG(index_size_pct), 45.0f),
+                                  .num_chunks = 128}},
                 {HS_SERVICE::REPLICATION,
                  hs_format_params{
                      .dev_type = resolve_dev_type(HS_BACKEND_DYNAMIC_CONFIG(replication_dev_type), HSDevType::Data),
@@ -243,40 +242,42 @@ void HSHomeObject::init_homestore() {
             format_opts = {
                 // FIXME: workaround for HS issue where varsize allocator doesn't work with small chunk size
                 {HS_SERVICE::META,
-                 hs_format_params{
-                     .dev_type = resolve_dev_type(HS_BACKEND_DYNAMIC_CONFIG(meta_dev_type), run_on_type),
-                     .size_pct = resolve_size_pct(HS_BACKEND_DYNAMIC_CONFIG(meta_size_pct), 1.0f),
-                     .num_chunks = 1}},
+                 hs_format_params{.dev_type = resolve_dev_type(HS_BACKEND_DYNAMIC_CONFIG(meta_dev_type), run_on_type),
+                                  .size_pct = resolve_size_pct(HS_BACKEND_DYNAMIC_CONFIG(meta_size_pct), 1.0f),
+                                  .num_chunks = 1}},
                 {HS_SERVICE::LOG,
-                 hs_format_params{
-                     .dev_type = resolve_dev_type(HS_BACKEND_DYNAMIC_CONFIG(log_dev_type), run_on_type),
-                     .size_pct = resolve_size_pct(HS_BACKEND_DYNAMIC_CONFIG(log_size_pct), 10.0f),
-                     .chunk_size = 32 * Mi}},
+                 hs_format_params{.dev_type = resolve_dev_type(HS_BACKEND_DYNAMIC_CONFIG(log_dev_type), run_on_type),
+                                  .size_pct = resolve_size_pct(HS_BACKEND_DYNAMIC_CONFIG(log_size_pct), 10.0f),
+                                  .chunk_size = 32 * Mi}},
                 {HS_SERVICE::INDEX,
-                 hs_format_params{
-                     .dev_type = resolve_dev_type(HS_BACKEND_DYNAMIC_CONFIG(index_dev_type), run_on_type),
-                     .size_pct = resolve_size_pct(HS_BACKEND_DYNAMIC_CONFIG(index_size_pct), 0.5f),
-                     .num_chunks = 1}},
+                 hs_format_params{.dev_type = resolve_dev_type(HS_BACKEND_DYNAMIC_CONFIG(index_dev_type), run_on_type),
+                                  .size_pct = resolve_size_pct(HS_BACKEND_DYNAMIC_CONFIG(index_size_pct), 0.5f),
+                                  .num_chunks = 1}},
                 {HS_SERVICE::REPLICATION,
-                 hs_format_params{
-                     .dev_type = resolve_dev_type(HS_BACKEND_DYNAMIC_CONFIG(replication_dev_type), run_on_type),
-                     .size_pct = resolve_size_pct(HS_BACKEND_DYNAMIC_CONFIG(replication_size_pct), 88.0f),
-                     .num_chunks = 0,
-                     .chunk_size = _hs_chunk_size,
-                     .block_size = _data_block_size,
-                     .alloc_type = blk_allocator_type_t::append,
-                     .chunk_sel_type = chunk_selector_type_t::CUSTOM}},
+                 hs_format_params{.dev_type =
+                                      resolve_dev_type(HS_BACKEND_DYNAMIC_CONFIG(replication_dev_type), run_on_type),
+                                  .size_pct = resolve_size_pct(HS_BACKEND_DYNAMIC_CONFIG(replication_size_pct), 88.0f),
+                                  .num_chunks = 0,
+                                  .chunk_size = _hs_chunk_size,
+                                  .block_size = _data_block_size,
+                                  .alloc_type = blk_allocator_type_t::append,
+                                  .chunk_sel_type = chunk_selector_type_t::CUSTOM}},
             };
         }
 
         // Phase 2: Validate device availability and log the resolved vdev configuration
         auto svc_name = [](uint32_t svc) -> std::string_view {
             switch (svc) {
-            case HS_SERVICE::META: return "META";
-            case HS_SERVICE::LOG: return "LOG";
-            case HS_SERVICE::INDEX: return "INDEX";
-            case HS_SERVICE::REPLICATION: return "REPLICATION";
-            default: return "UNKNOWN";
+            case HS_SERVICE::META:
+                return "META";
+            case HS_SERVICE::LOG:
+                return "LOG";
+            case HS_SERVICE::INDEX:
+                return "INDEX";
+            case HS_SERVICE::REPLICATION:
+                return "REPLICATION";
+            default:
+                return "UNKNOWN";
             }
         };
         for (auto const& [svc, params] : format_opts) {
@@ -378,7 +379,7 @@ void HSHomeObject::on_replica_restart() {
                 gc_index_table_map.emplace(boost::uuids::to_string(uuid), gc_index_table);
 
                 // 2 create gc actor superblk for each pdev, which contains the pdev_id and index table uuid.
-                homestore::superblk< GCManager::gc_actor_superblk > gc_actor_sb{GCManager::_gc_actor_meta_name};
+                homestore::superblk< GCManager::gc_actor_superblk > gc_actor_sb{GCManager::gc_actor_meta_name};
                 gc_actor_sb.create(sizeof(GCManager::gc_actor_superblk));
                 gc_actor_sb->pdev_id = pdev_id;
                 gc_actor_sb->index_table_uuid = uuid;
@@ -392,7 +393,7 @@ void HSHomeObject::on_replica_restart() {
                 for (size_t i = 0; i < reserved_chunk_num_per_pdev; ++i) {
                     auto chunk = chunks[i];
                     homestore::superblk< GCManager::gc_reserved_chunk_superblk > reserved_chunk_sb{
-                        GCManager::_gc_reserved_chunk_meta_name};
+                        GCManager::gc_reserved_chunk_meta_name};
                     reserved_chunk_sb.create(sizeof(GCManager::gc_reserved_chunk_superblk));
                     reserved_chunk_sb->chunk_id = chunk;
                     reserved_chunk_sb.write();
@@ -408,9 +409,9 @@ void HSHomeObject::on_replica_restart() {
 
         // when initializing, there is not gc task. we need to recover reserved chunks here, so that the reserved chunks
         // will not be put into pdev heap when built
-        homestore::meta_service().read_sub_sb(GCManager::_gc_actor_meta_name);
-        homestore::meta_service().read_sub_sb(GCManager::_gc_reserved_chunk_meta_name);
-        homestore::meta_service().read_sub_sb(GCManager::_gc_task_meta_name);
+        homestore::meta_service().read_sub_sb(GCManager::gc_actor_meta_name);
+        homestore::meta_service().read_sub_sb(GCManager::gc_reserved_chunk_meta_name);
+        homestore::meta_service().read_sub_sb(GCManager::gc_task_meta_name);
 
         // At this point, log replay has not started yet. We must process all recovered GC tasks before replay begins.
         // After log replay completes, ReplicationStateMachine::on_log_replay_done() calls select_specific_chunk() for

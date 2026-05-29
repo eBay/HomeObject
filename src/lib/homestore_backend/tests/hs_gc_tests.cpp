@@ -772,3 +772,89 @@ void HomeObjectFixture::EmergentGC(bool with_crash_recovery) {
 
     // TODO:: add more check after we have delete shard implementation
 }
+
+TEST_F(HomeObjectFixture, GCTaskPbaChunkCheck) {
+    const pg_id_t pg_id = 1;
+    const auto num_blobs = 10;
+
+    create_pg(pg_id);
+
+    std::map< pg_id_t, blob_id_t > pg_blob_id;
+    pg_blob_id[pg_id] = 0;
+
+    std::map< pg_id_t, std::vector< shard_id_t > > pg_shard_id_vec;
+    auto shard = create_shard(pg_id, 64 * Mi, "shard meta");
+    pg_shard_id_vec[pg_id].push_back(shard.id);
+    put_blobs(pg_shard_id_vec, num_blobs, pg_blob_id);
+
+    auto chunk_selector = _obj_inst->chunk_selector();
+    auto hs_pg = _obj_inst->get_hs_pg(pg_id);
+    ASSERT_TRUE(hs_pg != nullptr);
+    auto gc_mgr = _obj_inst->gc_manager();
+
+    auto chunk_opt = _obj_inst->get_shard_p_chunk_id(shard.id);
+    EXPECT_TRUE(chunk_opt.has_value());
+
+    auto get_current_chunk = [&]() -> chunk_id_t {
+        auto chunk_opt = _obj_inst->get_shard_p_chunk_id(shard.id);
+        EXPECT_TRUE(chunk_opt.has_value());
+        return chunk_opt.value();
+    };
+
+    chunk_id_t cur_chunk = get_current_chunk();
+
+    // Case 1: gc succeeds when all blob pbas match move_from_chunk.
+    ASSERT_TRUE(gc_mgr->submit_gc_task(task_priority::emergent, cur_chunk).get())
+        << "emergent gc should succeed when all blob pbas match move_from_chunk";
+
+    cur_chunk = get_current_chunk();
+
+    // Case 2: gc fails when a blob's pba chunk_id does not match move_from_chunk.
+    // Blob 0's correct pba (captured in existing_value) is needed for Case 3.
+    BlobRouteValue existing_value;
+
+    BlobRouteKey index_key{BlobRoute{shard.id, 0 /* blob_id */}};
+    BlobRouteValue wrong_value{homestore::MultiBlkId{0, 1, std::numeric_limits< chunk_id_t >::max()}};
+    homestore::BtreeSinglePutRequest inject_req{&index_key, &wrong_value, homestore::btree_put_type::UPDATE,
+                                                &existing_value};
+    ASSERT_EQ(hs_pg->index_table_->put(inject_req), homestore::btree_status_t::success)
+        << "failed to inject wrong pba into pg index table";
+
+    ASSERT_FALSE(gc_mgr->submit_gc_task(task_priority::emergent, cur_chunk).get())
+        << "emergent gc should fail when a blob's pba chunk_id does not match move_from_chunk";
+
+    // Case 3: gc succeeds again after restoring the correct pba.
+    homestore::BtreeSinglePutRequest restore_req{&index_key, &existing_value, homestore::btree_put_type::UPDATE,
+                                                 nullptr};
+    ASSERT_EQ(hs_pg->index_table_->put(restore_req), homestore::btree_status_t::success)
+        << "failed to restore correct pba into pg index table";
+
+    ASSERT_TRUE(gc_mgr->submit_gc_task(task_priority::emergent, cur_chunk).get())
+        << "emergent gc should succeed after restoring correct blob pba";
+
+    seal_shard(shard.id);
+
+    // deleted blob so that the gc task will be really scheduled for normal gc.
+    del_blob(pg_id, shard.id, 1);
+
+    // the same check for normal gc task.
+    ASSERT_TRUE(gc_mgr->submit_gc_task(task_priority::normal, cur_chunk).get())
+        << "normal gc should succeed when all blob pbas match move_from_chunk";
+    cur_chunk = get_current_chunk();
+
+    ASSERT_EQ(hs_pg->index_table_->put(inject_req), homestore::btree_status_t::success)
+        << "failed to inject wrong pba into pg index table";
+
+    del_blob(pg_id, shard.id, 2);
+
+    ASSERT_FALSE(gc_mgr->submit_gc_task(task_priority::normal, cur_chunk).get())
+        << "normal gc should fail when a blob's pba chunk_id does not match move_from_chunk";
+
+    homestore::BtreeSinglePutRequest new_restore_req{&index_key, &existing_value, homestore::btree_put_type::UPDATE,
+                                                     nullptr};
+    ASSERT_EQ(hs_pg->index_table_->put(new_restore_req), homestore::btree_status_t::success)
+        << "failed to restore correct pba into pg index table";
+
+    ASSERT_TRUE(gc_mgr->submit_gc_task(task_priority::normal, cur_chunk).get())
+        << "normal gc should succeed after restoring correct blob pba";
+}

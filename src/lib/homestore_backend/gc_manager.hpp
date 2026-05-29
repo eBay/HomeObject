@@ -46,9 +46,9 @@ public:
     GCManager& operator=(GCManager&&) = delete;
 
 public:
-    inline static auto const _gc_actor_meta_name = std::string("GCActor");
-    inline static auto const _gc_task_meta_name = std::string("GCTask");
-    inline static auto const _gc_reserved_chunk_meta_name = std::string("GCReservedChunk");
+    inline static auto const gc_actor_meta_name = std::string("GCActor");
+    inline static auto const gc_task_meta_name = std::string("GCTask");
+    inline static auto const gc_reserved_chunk_meta_name = std::string("GCReservedChunk");
     inline static atomic_uint64_t _gc_task_id{1}; // 0 is used for crash recovery
 
 #pragma pack(1)
@@ -61,7 +61,7 @@ public:
         uint64_t failed_egc_task_count{0ull};
         uint64_t total_reclaimed_blk_count_by_gc{0ull};
         uint64_t total_reclaimed_blk_count_by_egc{0ull};
-        static std::string name() { return _gc_actor_meta_name; }
+        static std::string name() { return gc_actor_meta_name; }
     };
 
     struct gc_task_superblk {
@@ -70,12 +70,12 @@ public:
         chunk_id_t vchunk_id;
         pg_id_t pg_id;
         uint8_t priority;
-        static std::string name() { return _gc_task_meta_name; }
+        static std::string name() { return gc_task_meta_name; }
     };
 
     struct gc_reserved_chunk_superblk {
         chunk_id_t chunk_id;
-        static std::string name() { return _gc_reserved_chunk_meta_name; }
+        static std::string name() { return gc_reserved_chunk_meta_name; }
     };
 #pragma pack()
 
@@ -204,6 +204,41 @@ public:
         DurableEntities const& durable_entities() const { return durable_entities_; }
 
     public:
+        struct gc_task_guard {
+        public:
+            gc_task_guard(uint8_t priority, pg_id_t pg_id, chunk_id_t move_from_chunk, chunk_id_t move_to_chunk,
+                          chunk_id_t vchunk_id, uint64_t task_id, folly::Promise< bool >& task,
+                          pdev_gc_actor* gc_actor) :
+                    priority(priority),
+                    pg_id(pg_id),
+                    move_from_chunk(move_from_chunk),
+                    move_to_chunk(move_to_chunk),
+                    vchunk_id(vchunk_id),
+                    task_id(task_id),
+                    task(task),
+                    m_gc_actor(gc_actor) {}
+
+            ~gc_task_guard();
+
+            // Disallow copy and move
+            gc_task_guard(const gc_task_guard&) = delete;
+            gc_task_guard(gc_task_guard&&) = delete;
+            gc_task_guard& operator=(const gc_task_guard&) = delete;
+            gc_task_guard& operator=(gc_task_guard&&) = delete;
+
+        public:
+            uint8_t priority;
+            bool success{false};
+            pg_id_t pg_id;
+            chunk_id_t move_from_chunk;
+            chunk_id_t move_to_chunk;
+            chunk_id_t vchunk_id;
+            uint64_t task_id;
+            folly::Promise< bool >& task;
+            pdev_gc_actor* m_gc_actor;
+        };
+
+    public:
         void add_reserved_chunk(homestore::superblk< GCManager::gc_reserved_chunk_superblk > reserved_chunk_sb);
         folly::SemiFuture< bool > add_gc_task(uint8_t priority, chunk_id_t move_from_chunk);
         void handle_recovered_gc_task(homestore::superblk< GCManager::gc_task_superblk >& gc_task_sb);
@@ -246,14 +281,13 @@ public:
             const std::vector< std::pair< BlobRouteByChunkKey, BlobRouteValue > >& valid_blob_indexes,
             const uint64_t task_id);
 
-        void handle_error_before_persisting_gc_metablk(chunk_id_t move_from_chunk, chunk_id_t move_to_chunk,
-                                                       folly::Promise< bool > task, const uint64_t task_id,
-                                                       uint8_t priority, const pg_id_t& pg_id);
+        bool check_blob_consistency(
+            folly::ConcurrentHashMap< BlobRouteByChunk, BlobRouteValue > const& copied_blobs,
+            std::vector< std::pair< BlobRouteByChunkKey, BlobRouteValue > > const& valid_blob_indexes,
+            const uint64_t task_id, const pg_id_t pg_id);
 
-        bool
-        compare_blob_indexes(folly::ConcurrentHashMap< BlobRouteByChunk, BlobRouteValue > const& copied_blobs,
-                             std::vector< std::pair< BlobRouteByChunkKey, BlobRouteValue > > const& valid_blob_indexes,
-                             const uint64_t task_id, const pg_id_t pg_id);
+        void on_gc_task_completed(uint8_t priority, pg_id_t pg_id, chunk_id_t move_from_chunk, chunk_id_t move_to_chunk,
+                                  uint64_t vchunk_id, bool success, const uint64_t task_id);
 
         pdev_gc_metrics& metrics() { return metrics_; }
 
@@ -262,6 +296,7 @@ public:
         sisl::sg_list generate_shard_super_blk_sg_list(shard_id_t shard_id);
 
     private:
+        friend class gc_task_guard;
         uint32_t m_pdev_id;
         std::shared_ptr< HeapChunkSelector > m_chunk_selector;
         folly::MPMCQueue< chunk_id_t > m_reserved_chunk_queue;
