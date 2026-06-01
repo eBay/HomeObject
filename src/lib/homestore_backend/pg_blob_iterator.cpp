@@ -252,7 +252,7 @@ HSHomeObject::PGBlobIterator::load_blob_data_with_blkid(shard_id_t shard_id, blo
                 return folly::makeUnexpected(BlobError(BlobErrorCode::READ_FAILED));
             }
 
-            if (home_obj_.verify_blob(read_buf.cbytes(), shard_id, 0 /* no blob_id check */)) {
+            if (home_obj_.verify_blob(read_buf.cbytes(), shard_id, blob_id)) {
                 LOGD("Blob get success: shardID=0x{:x}, pg={}, shard=0x{:x}, blob_id={}", shard_id,
                      (shard_id >> homeobject::shard_width), (shard_id & homeobject::shard_mask), blob_id);
                 return blob_read_result(blob_id, std::move(read_buf), ResyncBlobState::NORMAL);

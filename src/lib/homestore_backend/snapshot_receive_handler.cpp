@@ -223,7 +223,7 @@ int HSHomeObject::SnapshotReceiveHandler::process_blobs_snapshot_data(ResyncBlob
         // Check integrity of normal blobs
         if (blob->state() != static_cast< uint8_t >(ResyncBlobState::CORRUPTED)) {
             // Verify full blob (includes validation, shard_id check, and hash verification)
-            if (!home_obj_.verify_blob(blob_data, ctx_->shard_cursor, 0 /* no blob_id check */)) {
+            if (!home_obj_.verify_blob(blob_data, ctx_->shard_cursor, blob->blob_id())) {
                 LOGE("Blob verification failed for blob_id={}", blob->blob_id());
                 std::unique_lock< std::shared_mutex > lock(ctx_->progress_lock);
                 ctx_->progress.error_count++;
