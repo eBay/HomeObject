@@ -564,6 +564,8 @@ public:
         PG* get_pg_metadata() const;
         objId expected_next_obj_id() const;
         BlobManager::AsyncResult< blob_read_result > load_blob_data(const BlobInfo& blob_info);
+        BlobManager::AsyncResult< blob_read_result > load_blob_data_with_blkid(shard_id_t shard_id, blob_id_t blob_id,
+                                                                               homestore::MultiBlkId blkid);
         bool prefetch_blobs_snapshot_data();
         void pack_resync_message(sisl::io_blob_safe& dest_blob, SyncMessageType type);
 

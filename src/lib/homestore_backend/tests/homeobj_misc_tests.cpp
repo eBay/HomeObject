@@ -194,6 +194,127 @@ TEST_F(HomeObjectFixture, PGBlobIterator) {
     ASSERT_TRUE(pg_iter->update_cursor(objId(LAST_OBJ_ID)));
 }
 
+// Simulates a GC race where blob blkID changes between generate_shard_blob_list and load_blob_data.
+// Injects a cross-shard pbas into cur_blob_list_ so verify_blob fails (shard_id mismatch in blob header).
+// The retry inside load_blob_data_with_blkid re-reads the index, finds the updated pbas, and re-reads
+// the blob successfully. create_blobs_snapshot_data should return true with the blob marked NORMAL.
+TEST_F(HomeObjectFixture, PGBlobIteratorGCMoveDetection) {
+    constexpr pg_id_t pg_id{1};
+    create_pg(pg_id);
+    auto shard_1_info = create_shard(pg_id, 64 * Mi, "shard1");
+    auto shard_2_info = create_shard(pg_id, 64 * Mi, "shard2");
+    auto shard_1_id = shard_1_info.id;
+    auto shard_2_id = shard_2_info.id;
+
+    // blob_0 -> shard_1, blob_1 -> shard_2
+    std::map< pg_id_t, std::vector< shard_id_t > > pg_shard_map{{pg_id, {shard_1_id, shard_2_id}}};
+    std::map< pg_id_t, blob_id_t > pg_blob_id{{pg_id, 0}};
+    put_blobs(pg_shard_map, 1 /* num_blobs_per_shard */, pg_blob_id);
+
+    auto pg = _obj_inst->get_hs_pg(pg_id);
+    ASSERT_TRUE(pg != nullptr);
+
+    auto snp_lsn = pg->shards_.back()->info.lsn;
+    auto pg_iter = std::make_shared< HSHomeObject::PGBlobIterator >(*_obj_inst, pg->pg_info_.replica_set_uuid, snp_lsn);
+    ASSERT_EQ(pg_iter->shard_list_.size(), 2u);
+    pg_iter->max_batch_size_ = 1 * Mi;
+
+    auto shard_1_seq_num = HSHomeObject::get_sequence_num_from_shard_id(shard_1_id);
+    ASSERT_TRUE(pg_iter->update_cursor(objId(shard_1_seq_num, 0)));
+    ASSERT_TRUE(pg_iter->generate_shard_blob_list());
+    ASSERT_EQ(pg_iter->cur_blob_list_.size(), 1u);
+
+    // Save the correct pbas for blob_0 in shard_1
+    auto correct_pbas = pg_iter->cur_blob_list_[0].pbas;
+
+    // Get shard_2's blob_1 pbas — its blob header has shard_2_id, so verify_blob against shard_1_id will fail.
+    auto index_table = _obj_inst->get_index_table(pg_id);
+    auto shard_2_blob_pbas = _obj_inst->get_blob_from_index_table(index_table, shard_2_id, 1 /* blob_id */);
+    ASSERT_TRUE(shard_2_blob_pbas.hasValue());
+    ASSERT_NE(shard_2_blob_pbas.value(), correct_pbas);
+
+    // Inject stale pbas (simulating GC moved blob_0 to a new location already reflected in the
+    // index table, but cur_blob_list_ still holds the old blkID).
+    // The index still points to correct_pbas, so load_blob_data_with_blkid will:
+    //   1. Read from shard_2_blob_pbas → verify_blob fails (shard_id mismatch)
+    //   2. Re-read index → finds correct_pbas != shard_2_blob_pbas → retry
+    //   3. Read from correct_pbas → verify_blob passes → NORMAL
+    pg_iter->cur_blob_list_[0].pbas = shard_2_blob_pbas.value();
+
+    sisl::io_blob_safe shard_meta_blob;
+    ASSERT_TRUE(pg_iter->create_shard_snapshot_data(shard_meta_blob));
+
+    objId batch_1_oid(shard_1_seq_num, 1);
+    ASSERT_TRUE(pg_iter->update_cursor(batch_1_oid));
+
+    sisl::io_blob_safe data_blob;
+    ASSERT_TRUE(pg_iter->create_blobs_snapshot_data(data_blob));
+
+    auto* msg_hdr = r_cast< SyncMessageHeader* >(data_blob.bytes());
+    ASSERT_EQ(msg_hdr->msg_type, SyncMessageType::SHARD_BATCH);
+    auto blob_msg = GetSizePrefixedResyncBlobDataBatch(data_blob.cbytes() + sizeof(SyncMessageHeader));
+    ASSERT_EQ(blob_msg->blob_list()->size(), 1u);
+    EXPECT_EQ(blob_msg->blob_list()->Get(0)->blob_id(), 0u);
+    EXPECT_EQ(blob_msg->blob_list()->Get(0)->state(), static_cast< uint8_t >(ResyncBlobState::NORMAL));
+    EXPECT_TRUE(blob_msg->is_last_batch());
+
+    pg_iter->stop();
+}
+
+// Simulates the race where a blob is tombstoned (deleted) after generate_shard_blob_list captured its pbas.
+// verify_blob fails on the stale read; the index lookup returns UNKNOWN_BLOB (tombstone) so !current_pbas
+// is true — treated as unchanged — and the blob is returned as CORRUPTED.
+TEST_F(HomeObjectFixture, PGBlobIteratorGCTombstoneDetection) {
+    constexpr pg_id_t pg_id{1};
+    create_pg(pg_id);
+    auto shard_1_info = create_shard(pg_id, 64 * Mi, "shard1");
+    auto shard_2_info = create_shard(pg_id, 64 * Mi, "shard2");
+    auto shard_1_id = shard_1_info.id;
+    auto shard_2_id = shard_2_info.id;
+
+    // blob_0 -> shard_1, blob_1 -> shard_2
+    std::map< pg_id_t, std::vector< shard_id_t > > pg_shard_map{{pg_id, {shard_1_id, shard_2_id}}};
+    std::map< pg_id_t, blob_id_t > pg_blob_id{{pg_id, 0}};
+    put_blobs(pg_shard_map, 1 /* num_blobs_per_shard */, pg_blob_id);
+
+    auto pg = _obj_inst->get_hs_pg(pg_id);
+    ASSERT_TRUE(pg != nullptr);
+
+    auto snp_lsn = pg->shards_.back()->info.lsn;
+    auto pg_iter = std::make_shared< HSHomeObject::PGBlobIterator >(*_obj_inst, pg->pg_info_.replica_set_uuid, snp_lsn);
+    pg_iter->max_batch_size_ = 1 * Mi;
+
+    auto shard_1_seq_num = HSHomeObject::get_sequence_num_from_shard_id(shard_1_id);
+    ASSERT_TRUE(pg_iter->update_cursor(objId(shard_1_seq_num, 0)));
+    ASSERT_TRUE(pg_iter->generate_shard_blob_list());
+    ASSERT_EQ(pg_iter->cur_blob_list_.size(), 1u);
+
+    // Get shard_2's blob_1 pbas to inject as a stale blkid for blob_0 in shard_1.
+    auto index_table = _obj_inst->get_index_table(pg_id);
+    auto shard_2_blob_pbas = _obj_inst->get_blob_from_index_table(index_table, shard_2_id, 1 /* blob_id */);
+    ASSERT_TRUE(shard_2_blob_pbas.hasValue());
+
+    // Inject stale pbas and tombstone blob_0 so the index lookup returns UNKNOWN_BLOB.
+    // Flow: read from shard_2's location → verify_blob fails (shard_id mismatch) →
+    //       re-read index for (shard_1_id, blob_0) → UNKNOWN_BLOB (tombstoned) →
+    //       !current_pbas is true → return CORRUPTED.
+    pg_iter->cur_blob_list_[0].pbas = shard_2_blob_pbas.value();
+    del_blob(pg_id, shard_1_id, 0 /* blob_id */);
+
+    sisl::io_blob_safe shard_meta_blob;
+    ASSERT_TRUE(pg_iter->create_shard_snapshot_data(shard_meta_blob));
+
+    objId batch_1_oid(shard_1_seq_num, 1);
+    ASSERT_TRUE(pg_iter->update_cursor(batch_1_oid));
+
+    // READ_FAILED is returned so the snapshot restarts; generate_shard_blob_list will then pick up
+    // tombstone_pbas for blob_0 and skip it cleanly on the next attempt.
+    sisl::io_blob_safe data_blob;
+    ASSERT_FALSE(pg_iter->create_blobs_snapshot_data(data_blob));
+
+    pg_iter->stop();
+}
+
 TEST_F(HomeObjectFixture, SnapshotReceiveHandler) {
     constexpr uint64_t snp_lsn = 1;
     constexpr uint64_t num_shards_per_pg = 3;

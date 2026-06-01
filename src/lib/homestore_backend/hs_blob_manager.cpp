@@ -365,7 +365,7 @@ BlobManager::AsyncResult< Blob > HSHomeObject::_get_blob_data(const shared< home
                 return folly::makeUnexpected(BlobError(BlobErrorCode::READ_FAILED));
             }
 
-            auto verify_result = do_verify_blob(read_buf.cbytes(), shard_id, 0 /* no blob_id check */);
+            auto verify_result = do_verify_blob(read_buf.cbytes(), shard_id, blob_id);
             if (!verify_result.hasValue()) { return folly::makeUnexpected(verify_result.error()); }
             std::string user_key = std::move(verify_result.value());
 

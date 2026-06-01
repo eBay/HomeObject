@@ -227,10 +227,13 @@ bool HSHomeObject::PGBlobIterator::create_shard_snapshot_data(sisl::io_blob_safe
 
 typedef HSHomeObject::PGBlobIterator::blob_read_result blob_read_result;
 BlobManager::AsyncResult< blob_read_result > HSHomeObject::PGBlobIterator::load_blob_data(const BlobInfo& blob_info) {
-    auto shard_id = blob_info.shard_id;
-    auto blob_id = blob_info.blob_id;
-    auto blkid = blob_info.pbas;
-    auto const total_size = blob_info.pbas.blk_count() * repl_dev_->get_blk_size();
+    return load_blob_data_with_blkid(blob_info.shard_id, blob_info.blob_id, blob_info.pbas);
+}
+
+BlobManager::AsyncResult< blob_read_result >
+HSHomeObject::PGBlobIterator::load_blob_data_with_blkid(shard_id_t shard_id, blob_id_t blob_id,
+                                                        homestore::MultiBlkId blkid) {
+    auto const total_size = blkid.blk_count() * repl_dev_->get_blk_size();
     sisl::io_blob_safe read_buf{total_size, io_align};
 
     sisl::sg_list sgs;
@@ -240,7 +243,7 @@ BlobManager::AsyncResult< blob_read_result > HSHomeObject::PGBlobIterator::load_
     LOGD("Blob get request: shardID=0x{:x}, pg={}, shard=0x{:x}, blob_id={}, blkid={}", shard_id,
          (shard_id >> homeobject::shard_width), (shard_id & homeobject::shard_mask), blob_id, blkid.to_string());
     return repl_dev_->async_read(blkid, sgs, total_size)
-        .thenValue([this, blob_id, shard_id, read_buf = std::move(read_buf)](
+        .thenValue([this, blob_id, shard_id, blkid, read_buf = std::move(read_buf)](
                        auto&& result) mutable -> BlobManager::AsyncResult< blob_read_result > {
             if (result) {
                 LOGE("Failed to get blob, shardID=0x{:x}, pg={}, shard=0x{:x}, blob_id={}, err={}", shard_id,
@@ -249,16 +252,39 @@ BlobManager::AsyncResult< blob_read_result > HSHomeObject::PGBlobIterator::load_
                 return folly::makeUnexpected(BlobError(BlobErrorCode::READ_FAILED));
             }
 
-            if (!home_obj_.verify_blob(read_buf.cbytes(), shard_id, 0 /* no blob_id check */)) {
-                // The metrics for corrupted blob is handled on the follower side.
+            if (home_obj_.verify_blob(read_buf.cbytes(), shard_id, blob_id)) {
+                LOGD("Blob get success: shardID=0x{:x}, pg={}, shard=0x{:x}, blob_id={}", shard_id,
+                     (shard_id >> homeobject::shard_width), (shard_id & homeobject::shard_mask), blob_id);
+                return blob_read_result(blob_id, std::move(read_buf), ResyncBlobState::NORMAL);
+            }
+
+            // verify_blob failed — check if GC moved the blob to a new blkid since cur_blob_list_ was captured.
+            auto index_table = home_obj_.get_index_table(pg_id);
+            if (!index_table) {
+                LOGE("PG not found when checking index for GC race, pg={}, blob={}", pg_id, blob_id);
+                return folly::makeUnexpected(BlobError(BlobErrorCode::READ_FAILED));
+            }
+            auto current_pbas = home_obj_.get_blob_from_index_table(index_table, shard_id, blob_id);
+            if (!current_pbas) {
+                // Blob was deleted concurrently after generate_shard_blob_list captured its pbas.
+                // Do not send stale bytes as CORRUPTED — signal READ_FAILED so the snapshot restarts
+                // and generate_shard_blob_list picks up tombstone_pbas, skipping the blob cleanly.
+                LOGI("Blob deleted during GC race, shard=0x{:x}, blob={}, triggering snapshot restart", shard_id,
+                     blob_id);
+                return folly::makeUnexpected(BlobError(BlobErrorCode::READ_FAILED));
+            }
+            if (current_pbas.value() == blkid) {
+                // blkid unchanged — genuinely corrupted data at this location.
+                // Metrics for corrupted blobs are handled on the follower side.
                 LOGE("Blob verification failed, shardID=0x{:x}, pg={}, shard=0x{:x}, blob_id={}", shard_id,
                      (shard_id >> homeobject::shard_width), (shard_id & homeobject::shard_mask), blob_id);
                 return blob_read_result(blob_id, std::move(read_buf), ResyncBlobState::CORRUPTED);
             }
 
-            LOGD("Blob get success: shardID=0x{:x}, pg={}, shard=0x{:x}, blob_id={}", shard_id,
-                 (shard_id >> homeobject::shard_width), (shard_id & homeobject::shard_mask), blob_id);
-            return blob_read_result(blob_id, std::move(read_buf), ResyncBlobState::NORMAL);
+            // GC moved the blob — retry with the updated blkid. Folly flattens the returned future.
+            LOGI("GC moved blob detected during snapshot: shard=0x{:x}, blob={}, old_blkid={}, new_blkid={}", shard_id,
+                 blob_id, blkid.to_string(), current_pbas.value().to_string());
+            return load_blob_data_with_blkid(shard_id, blob_id, current_pbas.value());
         });
 }
 
