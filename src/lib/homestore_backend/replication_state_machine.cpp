@@ -23,6 +23,23 @@ void ReplicationStateMachine::on_commit(int64_t lsn, const sisl::blob& header, c
     const ReplicationMessageHeader* msg_header = r_cast< const ReplicationMessageHeader* >(header.cbytes());
     RELEASE_ASSERT_EQ(pbas.size(), 1, "Invalid blklist size");
 
+    // on_log_replay_done and baseline resync may cleanup resources for a destroyed pg. If this repl group later joins
+    // raft or commit stale log, skip applying them to avoid touching freed pg resources. all the logs will be truncated
+    // after BR is completed, so there is no need to worry about the stale commit after BR.
+    if (msg_header->msg_type != ReplicationMessageType::CREATE_PG_MSG) {
+        const auto pg_id = msg_header->pg_id;
+        if (!home_object_->pg_exists(pg_id)) {
+            LOGW("skip stale commit lsn={} msg_type={} for non-existent pg={}", lsn, msg_header->msg_type, pg_id);
+            return;
+        }
+
+        const auto hs_pg = home_object_->_get_hs_pg_unlocked(pg_id);
+        if ((hs_pg != nullptr) && (hs_pg->pg_sb_->state == PGState::DESTROYED)) {
+            LOGW("skip stale commit lsn={} msg_type={} for destroyed pg={}", lsn, msg_header->msg_type, pg_id);
+            return;
+        }
+    }
+
     LOGT("applying raft log commit with lsn={}, msg type={}", lsn, msg_header->msg_type);
     switch (msg_header->msg_type) {
     case ReplicationMessageType::CREATE_PG_MSG: {
@@ -498,6 +515,12 @@ void ReplicationStateMachine::write_snapshot_obj(std::shared_ptr< homestore::sna
         // If PG already exists, clean the stale pg resources. Let's resync on a pristine base
         if (home_object_->pg_exists(pg_data->pg_id())) {
             LOGI("pg already exists, clean pg resources before snapshot, pg={} {}", pg_data->pg_id(), log_suffix);
+
+            // we only reset this if destroying pg happens in BR case. for other cases (on_destroy and _exit_pg),
+            // since this replica will leave the PG and no later logs will be received, no need to reset this.
+            reset_no_space_left_error_info();
+            repl_dev()->reset_latch_lsn();
+
             // Need to pause state machine before destroying the PG, if fail, let raft retry.
             if (!home_object_->pg_destroy(pg_data->pg_id(), true /* pause state machine */)) {
                 LOGE("failed to destroy existing pg, let raft retry, pg={} {}", pg_data->pg_id(), log_suffix);
@@ -1030,7 +1053,15 @@ void ReplicationStateMachine::on_log_replay_done(const homestore::group_id_t& gr
     const auto pg_id = pg_id_opt.value();
     RELEASE_ASSERT(home_object_->pg_exists(pg_id), "pg={} should exist, but not! fatal error!", pg_id);
 
-    const auto& shards_in_pg = (const_cast< HSHomeObject::HS_PG* >(home_object_->_get_hs_pg_unlocked(pg_id)))->shards_;
+    const auto hs_pg = (const_cast< HSHomeObject::HS_PG* >(home_object_->_get_hs_pg_unlocked(pg_id)));
+    RELEASE_ASSERT(hs_pg, "Failed to get pg={} when log replay done", pg_id);
+    if (hs_pg->pg_sb_->state == PGState::DESTROYED) {
+        // cleaned up the pg resources , which should be cleaned up before restarted but failed.
+        home_object_->destroy_pg_resource(pg_id);
+        return;
+    }
+
+    const auto& shards_in_pg = hs_pg->shards_;
     auto chunk_selector = home_object_->chunk_selector();
 
     for (const auto& shard_iter : shards_in_pg) {

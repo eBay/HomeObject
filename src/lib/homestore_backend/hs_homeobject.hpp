@@ -881,6 +881,8 @@ public:
      */
     bool pg_destroy(pg_id_t pg_id, bool need_to_pause_pg_state_machine = false);
 
+    void destroy_pg_resource(pg_id_t pg_id);
+
     bool pause_pg_state_machine(pg_id_t pg_id);
 
     bool resume_pg_state_machine(pg_id_t pg_id);
@@ -977,7 +979,7 @@ public:
      * @param pg_id The ID of the PG whose shards are to be destroyed.
      * @return True if the chunks in the PG can be garbage collected, false otherwise.
      */
-    bool can_chunks_in_pg_be_gc(pg_id_t pg_id) const;
+    bool is_pg_alive(pg_id_t pg_id) const;
 
     bool pg_exists(pg_id_t pg_id) const;
 

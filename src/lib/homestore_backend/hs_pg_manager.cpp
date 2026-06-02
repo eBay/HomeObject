@@ -688,6 +688,19 @@ std::optional< pg_id_t > HSHomeObject::get_pg_id_with_group_id(group_id_t group_
 
 void HSHomeObject::_destroy_pg(pg_id_t pg_id) { pg_destroy(pg_id); }
 
+void HSHomeObject::destroy_pg_resource(pg_id_t pg_id) {
+    destroy_shards(pg_id);
+    destroy_hs_resources(pg_id);
+    destroy_pg_index_table(pg_id);
+    destroy_pg_superblk(pg_id);
+
+    // return pg chunks to dev heap
+    // which must be done after destroying pg super blk to avoid multiple pg use same chunks
+    bool res = chunk_selector_->return_pg_chunks_to_dev_heap(pg_id);
+    RELEASE_ASSERT(res, "Failed to return pg={} chunks to dev_heap", pg_id);
+    LOGI("resource of pg={} is destroyed", pg_id);
+}
+
 bool HSHomeObject::pg_destroy(pg_id_t pg_id, bool need_to_pause_pg_state_machine) {
     if (need_to_pause_pg_state_machine && !pause_pg_state_machine(pg_id)) {
         LOGI("Failed to pause pg state machine, pg_id={}", pg_id);
@@ -699,18 +712,7 @@ bool HSHomeObject::pg_destroy(pg_id_t pg_id, bool need_to_pause_pg_state_machine
     // we have the assumption that after pg is marked as destroyed, it will not be marked as alive again.
     // TODO:: if this assumption is broken, we need to handle it.
     gc_mgr_->drain_pg_pending_gc_task(pg_id);
-
-    destroy_shards(pg_id);
-    destroy_hs_resources(pg_id);
-    destroy_pg_index_table(pg_id);
-    destroy_pg_superblk(pg_id);
-
-    // return pg chunks to dev heap
-    // which must be done after destroying pg super blk to avoid multiple pg use same chunks
-    bool res = chunk_selector_->return_pg_chunks_to_dev_heap(pg_id);
-    RELEASE_ASSERT(res, "Failed to return pg={} chunks to dev_heap", pg_id);
-
-    LOGI("pg={} is destroyed", pg_id);
+    destroy_pg_resource(pg_id);
     return true;
 }
 
@@ -800,7 +802,7 @@ void HSHomeObject::mark_pg_destroyed(pg_id_t pg_id) {
     LOGD("pg={} is marked as destroyed", pg_id);
 }
 
-bool HSHomeObject::can_chunks_in_pg_be_gc(pg_id_t pg_id) const {
+bool HSHomeObject::is_pg_alive(pg_id_t pg_id) const {
     auto lg = std::scoped_lock(_pg_lock);
     auto hs_pg = const_cast< HS_PG* >(_get_hs_pg_unlocked(pg_id));
     if (hs_pg == nullptr) {
