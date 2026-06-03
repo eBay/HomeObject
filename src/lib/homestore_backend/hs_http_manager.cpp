@@ -202,7 +202,7 @@ void HttpManager::get_shard(const Pistache::Rest::Request& request, Pistache::Ht
         response.send(Pistache::Http::Code::Bad_Request, "shard_id is required");
         return;
     }
-    uint64_t shard_id = std::stoul(shard_str.value());
+    uint64_t shard_id = std::stoull(shard_str.value(), nullptr, 0);
     nlohmann::json j;
     j["shard_id"] = shard_id;
     auto chk = ho_.get_shard_v_chunk_id(shard_id);
@@ -272,7 +272,7 @@ void HttpManager::dump_shard(const Pistache::Rest::Request& request, Pistache::H
         response.send(Pistache::Http::Code::Bad_Request, "shard_id is required");
         return;
     }
-    uint64_t shard_id = std::stoul(shard_str.value());
+    uint64_t shard_id = std::stoull(shard_str.value(), nullptr, 0);
     nlohmann::json j;
     j["shard_id"] = shard_id;
     auto chk = ho_.get_shard_v_chunk_id(shard_id);
