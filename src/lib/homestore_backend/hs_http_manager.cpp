@@ -214,6 +214,9 @@ void HttpManager::get_shard(const Pistache::Rest::Request& request, Pistache::Ht
     j["v_chunk_id"] = chk.value();
     j["p_chunk_id"] = pchk.value();
     pg_id_t pg_id = ho_.get_pg_id_from_shard_id(shard_id);
+    if (auto vchunk = ho_.chunk_selector()->get_pg_vchunk(pg_id, chk.value()); vchunk) {
+        j["v_chunk_state"] = enum_name(vchunk->m_state);
+    }
     auto hs_pg = ho_.get_hs_pg(pg_id);
     if (!hs_pg) {
         response.send(Pistache::Http::Code::Internal_Server_Error, "pg not found");
@@ -253,6 +256,11 @@ void HttpManager::dump_chunk(const Pistache::Rest::Request& request, Pistache::H
     uint16_t v_chunk_id = std::stoul(chunk_str.value());
     nlohmann::json j;
     j["v_chunk_id"] = v_chunk_id;
+
+    if (auto vchunk = ho_.chunk_selector()->get_pg_vchunk(pg_id, v_chunk_id); vchunk) {
+        j["v_chunk_state"] = enum_name(vchunk->m_state);
+    }
+
     auto shards = hs_pg->get_chunk_shards(v_chunk_id);
     for (auto const& s : shards) {
         nlohmann::json shard_json;
@@ -281,6 +289,12 @@ void HttpManager::dump_shard(const Pistache::Rest::Request& request, Pistache::H
         return;
     }
     j["v_chunk_id"] = chk.value();
+
+    pg_id_t pg_id = ho_.get_pg_id_from_shard_id(shard_id);
+    if (auto vchunk = ho_.chunk_selector()->get_pg_vchunk(pg_id, chk.value()); vchunk) {
+        j["v_chunk_state"] = enum_name(vchunk->m_state);
+    }
+
     auto r = ho_.get_shard_blobs(shard_id);
     if (!r) {
         response.send(Pistache::Http::Code::Internal_Server_Error, "failed to get shard blobs");
