@@ -597,8 +597,9 @@ void HSHomeObject::reconcile_pg_leader(int32_t pg_id) {
     }
 }
 
-void HSHomeObject::yield_pg_leadership_to_follower(int32_t pg_id) {
+void HSHomeObject::yield_pg_leadership_to_follower(int32_t pg_id, std::optional< peer_id_t > candidate) {
     if (pg_id == -1) {
+        // candidate is only meaningful for a specific PG, ignore it when iterating all PGs
         LOGI("PG id not set, start yield leaders for all PGs");
         std::shared_lock lock_guard(_pg_lock);
         std::vector< std::future< void > > futures;
@@ -616,7 +617,7 @@ void HSHomeObject::yield_pg_leadership_to_follower(int32_t pg_id) {
         LOGI("Yielding leader for PG {}", pg_id);
         auto hs_pg = get_hs_pg(pg_id);
         if (hs_pg) {
-            hs_pg->yield_leadership_to_follower();
+            hs_pg->yield_leadership_to_follower(candidate);
         } else {
             LOGE("PG {} not found", pg_id);
         }

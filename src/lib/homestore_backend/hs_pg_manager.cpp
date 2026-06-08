@@ -1054,13 +1054,22 @@ void HSHomeObject::HS_PG::get_peer_info(std::vector< peer_info >& members) const
 
 void HSHomeObject::HS_PG::reconcile_leader() const { repl_dev_->reconcile_leader(); }
 
-void HSHomeObject::HS_PG::yield_leadership_to_follower() const {
+void HSHomeObject::HS_PG::yield_leadership_to_follower(std::optional< peer_id_t > candidate) const {
     if (!repl_dev_->is_leader()) {
         LOGDEBUG("Not a leader, no need to yield leadership");
         return;
     }
 
     auto leader_id = repl_dev_->get_leader_id();
+
+    if (candidate.has_value()) {
+        LOGI("Trying to yield leadership from {} to specified candidate {}", boost::uuids::to_string(leader_id),
+             boost::uuids::to_string(candidate.value()));
+        repl_dev_->yield_leadership(false /*immediate_yield*/, candidate.value());
+        return;
+    }
+
+    // No candidate specified: pick the follower with the highest priority.
     auto candidate_leader_id = leader_id;
     int32_t highest_prority = 0;
     auto const replication_status = repl_dev_->get_replication_status();
