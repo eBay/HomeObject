@@ -10,7 +10,7 @@ required_conan_version = ">=1.60.0"
 
 class HomeObjectConan(ConanFile):
     name = "homeobject"
-    version = "4.1.4"
+    version = "4.1.5"
 
     homepage = "https://github.com/eBay/HomeObject"
     description = "Blob Store built on HomeStore"
@@ -122,7 +122,8 @@ class HomeObjectConan(ConanFile):
              keep_path=True)
 
     def package_info(self):
-        self.cpp_info.components["homestore"].requires = ["homestore::homestore", "iomgr::iomgr", "sisl::sisl", "nuraft_mesg::nuraft_mesg"]
+        self.cpp_info.components["homestore"].requires = ["homestore::homestore", "iomgr::iomgr", "sisl::sisl",
+                                                          "nuraft_mesg::nuraft_mesg"]
         self.cpp_info.components["memory"].requires = ["sisl::sisl"]
         self.cpp_info.components["homeobject"].requires = ["homestore"]
 
