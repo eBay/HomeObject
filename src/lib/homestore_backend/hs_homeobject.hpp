@@ -403,7 +403,7 @@ public:
 
         void reconcile_leader() const;
 
-        void yield_leadership_to_follower() const;
+        void yield_leadership_to_follower(std::optional< peer_id_t > candidate = std::nullopt) const;
 
         void trigger_snapshot_creation(int64_t compact_lsn, bool wait_for_commit) const;
 
@@ -1001,7 +1001,7 @@ public:
     /**
      * @brief yield leadership to follower with newest progress, only used for test
      */
-    void yield_pg_leadership_to_follower(int32_t pg_id = 1);
+    void yield_pg_leadership_to_follower(int32_t pg_id = 1, std::optional< peer_id_t > candidate = std::nullopt);
 
     /**
      * @brief Manually trigger a snapshot creation.

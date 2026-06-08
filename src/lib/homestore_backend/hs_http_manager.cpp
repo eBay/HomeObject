@@ -112,8 +112,42 @@ void HttpManager::yield_leadership_to_follower(const Pistache::Rest::Request& re
                                                Pistache::Http::ResponseWriter response) {
     const auto pg_id_param = request.query().get("pg_id");
     int32_t pg_id = std::stoi(pg_id_param.value_or("-1"));
-    LOGINFO("Received yield leadership request for pg_id {} to follower", pg_id);
-    ho_.yield_pg_leadership_to_follower(pg_id);
+
+    const auto candidate_param = request.query().get("candidate");
+    if (candidate_param && candidate_param->empty()) {
+        response.send(Pistache::Http::Code::Bad_Request, "candidate must not be empty");
+        return;
+    }
+    if (candidate_param && pg_id < 0) {
+        response.send(Pistache::Http::Code::Bad_Request, "candidate requires pg_id to be specified");
+        return;
+    }
+
+    std::optional< peer_id_t > candidate;
+    auto candidate_str = candidate_param.value_or("auto");
+    if (candidate_param) {
+        LOGINFO("Checking candidate {} for pg_id {}", candidate_str, pg_id);
+        try {
+            candidate = boost::uuids::string_generator()(candidate_str);
+        } catch (const std::exception&) {
+            response.send(Pistache::Http::Code::Bad_Request, "Invalid candidate UUID format");
+            return;
+        }
+        auto hs_pg = ho_.get_hs_pg(static_cast< uint16_t >(pg_id));
+        if (!hs_pg) {
+            response.send(Pistache::Http::Code::Not_Found, "pg not found");
+            return;
+        }
+        auto const& members = hs_pg->pg_info_.members;
+        if (!std::any_of(members.begin(), members.end(), [&](const auto& m) { return m.id == *candidate; })) {
+            response.send(Pistache::Http::Code::Bad_Request,
+                          fmt::format("candidate {} is not a member of pg {}", candidate_str, pg_id));
+            return;
+        }
+    }
+
+    LOGINFO("Received yield leadership request for pg_id {} to follower, candidate={}", pg_id, candidate_str);
+    ho_.yield_pg_leadership_to_follower(pg_id, candidate);
     response.send(Pistache::Http::Code::Ok, "Yield leadership request submitted");
 }
 
@@ -227,9 +261,12 @@ void HttpManager::get_shard(const Pistache::Rest::Request& request, Pistache::Ht
         response.send(Pistache::Http::Code::Internal_Server_Error, "failed to get shard");
         return;
     }
-    j["created_time"] = r.value().created_time;
-    j["state"] = r.value().state;
-    j["lsn"] = r.value().lsn;
+    const auto& shard_info = r.value();
+    j["created_time"] = shard_info.created_time;
+    j["last_modified_time"] = shard_info.last_modified_time;
+    j["state"] = shard_info.state;
+    j["lsn"] = shard_info.lsn;
+    j["meta"] = std::string(reinterpret_cast< const char* >(shard_info.meta));
     auto blobs = ho_.get_shard_blobs(shard_id);
     if (!blobs) {
         response.send(Pistache::Http::Code::Internal_Server_Error, "failed to get shard blobs");
@@ -266,8 +303,10 @@ void HttpManager::dump_chunk(const Pistache::Rest::Request& request, Pistache::H
         nlohmann::json shard_json;
         shard_json["shard_id"] = s.info.id;
         shard_json["created_time"] = s.info.created_time;
+        shard_json["last_modified_time"] = s.info.last_modified_time;
         shard_json["state"] = s.info.state;
         shard_json["lsn"] = s.info.lsn;
+        shard_json["meta"] = std::string(reinterpret_cast< const char* >(s.info.meta));
         j["shards"].push_back(shard_json);
     }
     j["total_shard_count"] = shards.size();
@@ -294,6 +333,18 @@ void HttpManager::dump_shard(const Pistache::Rest::Request& request, Pistache::H
     if (auto vchunk = ho_.chunk_selector()->get_pg_vchunk(pg_id, chk.value()); vchunk) {
         j["v_chunk_state"] = enum_name(vchunk->m_state);
     }
+
+    auto s = ho_.shard_manager()->get_shard(shard_id).get();
+    if (!s) {
+        response.send(Pistache::Http::Code::Internal_Server_Error, "failed to get shard");
+        return;
+    }
+    const auto& shard_info = s.value();
+    j["created_time"] = shard_info.created_time;
+    j["last_modified_time"] = shard_info.last_modified_time;
+    j["state"] = shard_info.state;
+    j["lsn"] = shard_info.lsn;
+    j["meta"] = std::string(reinterpret_cast< const char* >(shard_info.meta));
 
     auto r = ho_.get_shard_blobs(shard_id);
     if (!r) {
