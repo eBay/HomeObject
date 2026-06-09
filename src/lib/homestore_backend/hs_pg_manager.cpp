@@ -965,8 +965,7 @@ void HSHomeObject::on_pg_meta_blk_found(sisl::byte_view const& buf, void* meta_c
         hs_pg->index_table_ = it->second.index_table;
         it->second.pg_id = pg_id;
     } else {
-        RELEASE_ASSERT(hs_pg->pg_sb_->state == PGState::DESTROYED, "IndexTable should be recovered before PG");
-        hs_pg->index_table_ = nullptr;
+        RELEASE_ASSERT(hs_pg->pg_sb_->state == PGState::DESTROYED, "IndexTable should be recovered for alive PG");
         LOGI("Index table not found for destroyed pg={}, index_table_uuid={}", pg_id, uuid_str);
     }
 
