@@ -688,18 +688,7 @@ std::optional< pg_id_t > HSHomeObject::get_pg_id_with_group_id(group_id_t group_
 
 void HSHomeObject::_destroy_pg(pg_id_t pg_id) { pg_destroy(pg_id); }
 
-bool HSHomeObject::pg_destroy(pg_id_t pg_id, bool need_to_pause_pg_state_machine) {
-    if (need_to_pause_pg_state_machine && !pause_pg_state_machine(pg_id)) {
-        LOGI("Failed to pause pg state machine, pg_id={}", pg_id);
-        return false;
-    }
-    LOGI("Destroying pg={}", pg_id);
-    mark_pg_destroyed(pg_id);
-
-    // we have the assumption that after pg is marked as destroyed, it will not be marked as alive again.
-    // TODO:: if this assumption is broken, we need to handle it.
-    gc_mgr_->drain_pg_pending_gc_task(pg_id);
-
+void HSHomeObject::destroy_pg_resource(pg_id_t pg_id) {
     destroy_shards(pg_id);
     destroy_hs_resources(pg_id);
     destroy_pg_index_table(pg_id);
@@ -709,8 +698,35 @@ bool HSHomeObject::pg_destroy(pg_id_t pg_id, bool need_to_pause_pg_state_machine
     // which must be done after destroying pg super blk to avoid multiple pg use same chunks
     bool res = chunk_selector_->return_pg_chunks_to_dev_heap(pg_id);
     RELEASE_ASSERT(res, "Failed to return pg={} chunks to dev_heap", pg_id);
+    LOGI("resource of pg={} is destroyed", pg_id);
+}
 
-    LOGI("pg={} is destroyed", pg_id);
+bool HSHomeObject::pg_destroy(pg_id_t pg_id) {
+    auto hs_pg = const_cast< HS_PG* >(get_hs_pg(pg_id));
+    RELEASE_ASSERT(hs_pg, "pg={} is null", pg_id);
+    auto repl_dev = hs_pg ? hs_pg->repl_dev_ : nullptr;
+    RELEASE_ASSERT(repl_dev, "repl_dev for pg={} is null", pg_id);
+
+    // when reaching here, we will not receive any new log, both for BR or leave_group case. we wait for all logs to be
+    // committed and trigger a cp, so that when restart, no log will be replayed since cp_lsn is equal to
+    // last_append_lsn.
+    while (true) {
+        if (repl_dev->get_last_commit_lsn() == repl_dev->get_last_append_lsn()) { break; }
+        LOGI("Waiting for pg={} to be idle before destroying, last_append_lsn={}, last_commit_lsn={}", pg_id,
+             repl_dev->get_last_append_lsn(), repl_dev->get_last_commit_lsn());
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+    }
+
+    RELEASE_ASSERT(homestore::hs()->cp_mgr().trigger_cp_flush(true).get(),
+                   "Failed to trigger checkpoint flush before destroying pg={}", pg_id);
+
+    LOGI("Destroying pg={}", pg_id);
+    mark_pg_destroyed(pg_id);
+
+    // we have the assumption that after pg is marked as destroyed, it will not be marked as alive again.
+    // TODO:: if this assumption is broken, we need to handle it.
+    gc_mgr_->drain_pg_pending_gc_task(pg_id);
+    destroy_pg_resource(pg_id);
     return true;
 }
 
@@ -800,7 +816,7 @@ void HSHomeObject::mark_pg_destroyed(pg_id_t pg_id) {
     LOGD("pg={} is marked as destroyed", pg_id);
 }
 
-bool HSHomeObject::can_chunks_in_pg_be_gc(pg_id_t pg_id) const {
+bool HSHomeObject::is_pg_alive(pg_id_t pg_id) const {
     auto lg = std::scoped_lock(_pg_lock);
     auto hs_pg = const_cast< HS_PG* >(_get_hs_pg_unlocked(pg_id));
     if (hs_pg == nullptr) {

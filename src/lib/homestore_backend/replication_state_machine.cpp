@@ -449,6 +449,10 @@ void ReplicationStateMachine::write_snapshot_obj(std::shared_ptr< homestore::sna
         set_snapshot_context(context); // Update the snapshot context in case apply_snapshot is not called
         auto hs_pg = home_object_->get_hs_pg(m_snp_rcv_handler->get_context_pg_id());
         hs_pg->pg_state_.clear_state(PGStateMask::BASELINE_RESYNC);
+        // we only reset this if destroying pg happens in BR case. for other cases (on_destroy and _exit_pg),
+        // since this replica will leave the PG and no later logs will be received, no need to reset this.
+        reset_no_space_left_error_info();
+        repl_dev()->reset_latch_lsn();
         return;
     }
 
@@ -499,7 +503,7 @@ void ReplicationStateMachine::write_snapshot_obj(std::shared_ptr< homestore::sna
         if (home_object_->pg_exists(pg_data->pg_id())) {
             LOGI("pg already exists, clean pg resources before snapshot, pg={} {}", pg_data->pg_id(), log_suffix);
             // Need to pause state machine before destroying the PG, if fail, let raft retry.
-            if (!home_object_->pg_destroy(pg_data->pg_id(), true /* pause state machine */)) {
+            if (!home_object_->pg_destroy(pg_data->pg_id())) {
                 LOGE("failed to destroy existing pg, let raft retry, pg={} {}", pg_data->pg_id(), log_suffix);
                 return;
             }
@@ -1030,7 +1034,15 @@ void ReplicationStateMachine::on_log_replay_done(const homestore::group_id_t& gr
     const auto pg_id = pg_id_opt.value();
     RELEASE_ASSERT(home_object_->pg_exists(pg_id), "pg={} should exist, but not! fatal error!", pg_id);
 
-    const auto& shards_in_pg = (const_cast< HSHomeObject::HS_PG* >(home_object_->_get_hs_pg_unlocked(pg_id)))->shards_;
+    const auto hs_pg = (const_cast< HSHomeObject::HS_PG* >(home_object_->get_hs_pg(pg_id)));
+    RELEASE_ASSERT(hs_pg, "Failed to get pg={} when log replay done", pg_id);
+    if (hs_pg->pg_sb_->state == PGState::DESTROYED) {
+        // pg resources were not cleaned up on the previous restart, clean them up now.
+        home_object_->destroy_pg_resource(pg_id);
+        return;
+    }
+
+    const auto& shards_in_pg = hs_pg->shards_;
     auto chunk_selector = home_object_->chunk_selector();
 
     for (const auto& shard_iter : shards_in_pg) {

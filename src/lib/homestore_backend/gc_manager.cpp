@@ -365,7 +365,7 @@ folly::SemiFuture< bool > GCManager::pdev_gc_actor::add_gc_task(uint8_t priority
     const auto pg_id = EXvchunk->m_pg_id.value();
     m_hs_home_object->gc_manager()->incr_pg_pending_gc_task(pg_id);
 
-    if (!m_hs_home_object->can_chunks_in_pg_be_gc(pg_id)) {
+    if (!m_hs_home_object->is_pg_alive(pg_id)) {
         LOGDEBUGMOD(gcmgr, "chunk_id={} belongs to pg {}, which is not eligible for gc at this moment!",
                     move_from_chunk, pg_id)
         m_hs_home_object->gc_manager()->decr_pg_pending_gc_task(pg_id);
@@ -504,7 +504,7 @@ void GCManager::pdev_gc_actor::handle_recovered_gc_task(
     }
 
     // we have no gc_task_guard for recovered gc task, so we need to do this manually to make sure the gc task can be
-    // marked as completed and the pg can be marked as available for new gc task
+    // marked as completed
     on_gc_task_completed(priority, pg_id, move_from_chunk, move_to_chunk, vchunk_id, true, 0);
 
     GCLOGD(RECOVERD_GC_TASK_ID, pg_id, NO_SHARD_ID,
@@ -797,9 +797,8 @@ bool GCManager::pdev_gc_actor::copy_valid_data(
                    move_from_chunk);
         }
 
-        // check if all the pbas in the valid_blob_indexes are in move_from_chunk, if not, it means the
-        // shard is being modified during gc, we can not guarantee the data consistency, so we fail this gc
-        // task and let it be retried later.
+        // check if all the pbas in the valid_blob_indexes are in move_from_chunk, if not, we cancel this task and retry
+        // later.
         for (const auto& [blob, v] : valid_blob_indexes) {
             auto pba = v.pbas();
             if (pba.chunk_num() != move_from_chunk) {
@@ -1100,7 +1099,7 @@ bool GCManager::pdev_gc_actor::purge_reserved_chunk(chunk_id_t chunk, const uint
     RELEASE_ASSERT(!vchunk->m_pg_id.has_value(),
                    "chunk_id={} is expected to be a reserved chunk, and not belong to a pg", chunk);
     RELEASE_ASSERT(vchunk->m_state == ChunkState::GC,
-                   "chunk_id={} is a reserved chunk, expected to have a GC state, but actuall state is {} ", chunk,
+                   "chunk_id={} is a reserved chunk, expected to have a GC state, but the actual state is {} ", chunk,
                    vchunk->m_state);
 
     // Clear all rreqs on the reserved chunk BEFORE reset() resets its allocator.
