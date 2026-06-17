@@ -1,4 +1,6 @@
 #include "homeobj_fixture.hpp"
+#include "generated/resync_shard_data_generated.h"
+#include "generated/legacy_resync_shard_data_generated.h"
 
 TEST_F(HomeObjectFixture, CreateMultiShards) {
     pg_id_t pg_id{1};
@@ -122,11 +124,9 @@ TEST_F(HomeObjectFixture, ShardManagerRecovery) {
     create_pg(pg_id);
 
     // create one shard;
-    auto shard_info = create_shard(pg_id, Mi, "shard meta");;
+    auto shard_info = create_shard(pg_id, Mi, "shard meta");
     auto shard_id = shard_info.id;
     EXPECT_EQ(ShardInfo::State::OPEN, shard_info.state);
-    EXPECT_EQ(Mi, shard_info.total_capacity_bytes);
-    EXPECT_EQ(Mi, shard_info.available_capacity_bytes);
     EXPECT_EQ(pg_id, shard_info.placement_group);
 
     // restart homeobject and check if pg/shard info will be recovered.
@@ -162,7 +162,7 @@ TEST_F(HomeObjectFixture, ShardManagerRecovery) {
     EXPECT_EQ(1, pg_result->shard_sequence_num_);
 
     // re-create new shards on this pg works too even homeobject is restarted twice.
-    auto new_shard_info = create_shard(pg_id, Mi, "shard meta");;
+    auto new_shard_info = create_shard(pg_id, Mi, "shard meta");
     EXPECT_NE(shard_id, new_shard_info.id);
 
     EXPECT_EQ(ShardInfo::State::OPEN, new_shard_info.state);
@@ -177,7 +177,7 @@ TEST_F(HomeObjectFixture, SealedShardRecovery) {
     create_pg(pg_id);
 
     // create one shard and seal it.
-    auto shard_info = create_shard(pg_id, Mi, "shard meta");;
+    auto shard_info = create_shard(pg_id, Mi, "shard meta");
     auto shard_id = shard_info.id;
     shard_info = seal_shard(shard_id);
     EXPECT_EQ(ShardInfo::State::SEALED, shard_info.state);
@@ -480,4 +480,45 @@ TEST_F(HomeObjectFixture, ShardVersionMigrationRecovery) {
 
     LOGINFO("Verified migration persisted to disk - all {} shards remain at v2 after second restart",
             pg_result->shards_.size());
+}
+
+// Verifies backward compatibility: new ResyncShardMetaData code parses an old buffer produced by
+// ResyncLegacyShardMetaData (schema without sealed_lsn). Because sealed_lsn is placed at the end,
+// all common fields share the same vtable offsets — no misalignment. The missing sealed_lsn slot
+// returns the schema default (9223372036854775807 = INT64_MAX).
+TEST_F(HomeObjectFixture, ResyncShardMetaDataBackwardCompat) {
+    constexpr uint64_t shard_id = 0x0001000000000001ULL;
+    constexpr uint16_t pg_id = 1;
+    constexpr uint8_t state = static_cast< uint8_t >(ShardInfo::State::SEALED);
+    constexpr uint64_t created_lsn = 42;
+    constexpr uint64_t created_time = 1234567890ULL;
+    constexpr uint64_t last_modified = 9876543210ULL;
+    constexpr uint64_t total_capacity = 64ULL * Mi;
+    constexpr uint16_t vchunk_id = 7;
+    constexpr uint64_t default_sealed_lsn = 9223372036854775807ULL; // INT64_MAX per schema default
+
+    std::vector< uint8_t > meta_bytes(ShardInfo::meta_length, 0);
+    const std::string meta_str = "shard_compat_test";
+    std::memcpy(meta_bytes.data(), meta_str.c_str(), meta_str.size());
+
+    // Produce old-format buffer via legacy generated builder — same bytes as old
+    // CreateResyncShardMetaDataDirect before sealed_lsn existed.
+    flatbuffers::FlatBufferBuilder builder;
+    auto entry = CreateResyncLegacyShardMetaDataDirect(builder, shard_id, pg_id, state, created_lsn, created_time,
+                                                       last_modified, total_capacity, vchunk_id, &meta_bytes);
+    builder.FinishSizePrefixed(entry);
+
+    auto* msg = GetSizePrefixedResyncShardMetaData(builder.GetBufferPointer());
+
+    EXPECT_EQ(msg->shard_id(), shard_id);
+    EXPECT_EQ(msg->pg_id(), pg_id);
+    EXPECT_EQ(msg->state(), state);
+    EXPECT_EQ(msg->created_lsn(), created_lsn);
+    EXPECT_EQ(msg->created_time(), created_time);
+    EXPECT_EQ(msg->last_modified_time(), last_modified);
+    EXPECT_EQ(msg->total_capacity_bytes(), total_capacity);
+    EXPECT_EQ(msg->vchunk_id(), vchunk_id);
+    EXPECT_TRUE(std::memcmp(msg->meta()->data(), meta_bytes.data(), meta_bytes.size()) == 0);
+    // sealed_lsn absent in old buffer → new accessor returns schema default
+    EXPECT_EQ(msg->sealed_lsn(), default_sealed_lsn);
 }

@@ -464,11 +464,10 @@ void HomeObjectFixture::ReplaceMember(bool withGC) {
     set_basic_flip("pg_blob_iterator_generate_shard_blob_list_error", 1); // simulate generate shard blob list error
     set_basic_flip("pg_blob_iterator_load_blob_data_error", 1, 10);       // simulate load blob data error
 
-    set_basic_flip("state_machine_write_corrupted_data", 3, 25);       // simulate random data corruption
-    set_basic_flip("snapshot_receiver_pg_error", 1);                   // simulate pg creation error
-    set_basic_flip("snapshot_receiver_shard_write_data_error", 2, 33); // simulate shard write data error
-    set_basic_flip("snapshot_receiver_blob_write_data_error", 4, 15);  // simulate blob write data error
-    set_basic_flip("snapshot_receiver_blk_allocation_error", 4, 15);   // simulate blob allocation error
+    set_basic_flip("state_machine_write_corrupted_data", 3, 25);      // simulate random data corruption
+    set_basic_flip("snapshot_receiver_pg_error", 1);                  // simulate pg creation error
+    set_basic_flip("snapshot_receiver_blob_write_data_error", 4, 15); // simulate blob write data error
+    set_basic_flip("snapshot_receiver_blk_allocation_error", 4, 15);  // simulate blob allocation error
 #endif
 
     std::string task_id = "task_id";

@@ -5,9 +5,11 @@ on:
   push:
     branches:
       - stable/v4.x
+      - dev/refactor_create_seal_shard
   pull_request:
     branches:
       - stable/v4.x
+      - dev/refactor_create_seal_shard
 
 jobs:
   Build:

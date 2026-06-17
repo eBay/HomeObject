@@ -45,6 +45,7 @@ settings_gen_cpp(
     hs_backend_config.fbs
     resync_pg_data.fbs
     resync_shard_data.fbs
+    legacy_resync_shard_data.fbs
     resync_blob_data.fbs
   )
 
@@ -163,5 +164,16 @@ target_link_libraries(homestore_test_gc PUBLIC homeobject_homestore ${COMMON_TES
 add_test(NAME HomestoreTestGC COMMAND homestore_test_gc -csv error --executor immediate --config_path ./
         --override_config hs_backend_config.enable_gc=true
         --override_config hs_backend_config.gc_enable_read_verify=true
-        --override_config hs_backend_config.gc_garbage_rate_threshold=0 
-        --override_config hs_backend_config.gc_scan_interval_sec=5)
+        --override_config hs_backend_config.gc_garbage_rate_threshold=0
+        --override_config hs_backend_config.gc_scan_interval_sec=5
+        --gtest_filter=-HomeObjectFixture.StalePChunkRouteAfterGC:-HomeObjectFixture.StaleBlobRouteAfterSealAndGC)
+
+# Shard-race repro tests: require chunks_per_pg=1 (forces vchunk reuse after seal) and gc_garbage_rate_threshold=0.
+# Run together since they share the same config requirements.
+add_test(NAME HomestoreTestGC_ShardRaceTests
+        COMMAND homestore_test_gc -csv error --executor immediate --config_path ./
+        --chunks_per_pg 1
+        --override_config hs_backend_config.enable_gc=true
+        --override_config hs_backend_config.gc_garbage_rate_threshold=0
+        --override_config hs_backend_config.gc_scan_interval_sec=5
+        --gtest_filter=HomeObjectFixture.StalePChunkRouteAfterGC:HomeObjectFixture.StaleBlobRouteAfterSealAndGC)
