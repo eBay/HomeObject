@@ -169,7 +169,7 @@ ShardManager::AsyncResult< ShardInfo > HSHomeObject::_create_shard(pg_id_t pg_ow
     const auto exVchunk = chunk_selector()->pick_most_available_blk_chunk(new_shard_id, pg_owner);
 
     if (exVchunk == nullptr) {
-        SLOGW(tid, new_shard_id, "no availble chunk left to create shard for pg={}", pg_owner);
+        SLOGW(tid, new_shard_id, "no available chunk left to create shard for pg={}", pg_owner);
         decr_pending_request_num();
         return folly::makeUnexpected(ShardError(ShardErrorCode::NO_SPACE_LEFT));
     }
@@ -421,6 +421,7 @@ void HSHomeObject::on_shard_message_rollback(int64_t lsn, sisl::blob const& head
     switch (msg_header->msg_type) {
     case ReplicationMessageType::CREATE_SHARD_MSG: {
         SLOGD(tid, msg_header->shard_id, "rollback create shard message, type={}, lsn= {}", msg_header->msg_type, lsn);
+        if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(ShardError(ShardErrorCode::RETRY_REQUEST))); }
         break;
     }
     case ReplicationMessageType::SEAL_SHARD_MSG: {
