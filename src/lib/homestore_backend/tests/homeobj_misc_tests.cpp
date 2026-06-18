@@ -141,6 +141,7 @@ TEST_F(HomeObjectFixture, PGBlobIterator) {
         ASSERT_EQ(shard_msg->pg_id(), pg->pg_info_.id);
         ASSERT_EQ(shard_msg->state(), static_cast< uint8_t >(shard->info.state));
         ASSERT_EQ(shard_msg->created_lsn(), shard->info.lsn);
+        ASSERT_EQ(shard_msg->sealed_lsn(), shard->info.sealed_lsn);
         ASSERT_EQ(shard_msg->created_time(), shard->info.created_time);
         ASSERT_EQ(shard_msg->last_modified_time(), shard->info.last_modified_time);
         ASSERT_EQ(shard_msg->total_capacity_bytes(), shard->info.total_capacity_bytes);
@@ -387,14 +388,17 @@ TEST_F(HomeObjectFixture, SnapshotReceiveHandler) {
         shard.total_capacity_bytes = 1024 * Mi;
         shard.lsn = snp_lsn;
         auto meta_str = "shard meta:" + std::to_string(i);
-        std::memcpy(shard.meta, meta_str.c_str(),meta_str.length());
+        std::memcpy(shard.meta, meta_str.c_str(), meta_str.length());
         shard.meta[meta_str.size()] = '\0';
 
-        auto v_chunk_id = _obj_inst->chunk_selector()->get_most_available_blk_chunk(shard.id, pg_id);
-
-        auto shard_entry = CreateResyncShardMetaData(builder, shard.id, pg_id, static_cast< uint8_t >(shard.state),
-                                                     shard.lsn, shard.created_time, shard.last_modified_time,
-                                                     shard.total_capacity_bytes, v_chunk_id.value());
+        auto exVchunk = _obj_inst->chunk_selector()->pick_most_available_blk_chunk(shard.id, pg_id);
+        RELEASE_ASSERT(exVchunk != nullptr, "chunk selection failed with v_chunk_id={} in pg={}", shard.id, pg_id);
+        RELEASE_ASSERT(exVchunk->m_v_chunk_id.has_value(), "v_chunk_id should have value for selected chunk for pg={}",
+                       pg_id);
+        auto shard_entry =
+            CreateResyncShardMetaData(builder, shard.id, pg_id, static_cast< uint8_t >(shard.state), shard.lsn,
+                                      shard.created_time, shard.last_modified_time, shard.total_capacity_bytes,
+                                      exVchunk->m_v_chunk_id.value(), 0 /* meta */, shard.sealed_lsn);
         builder.Finish(shard_entry);
         auto shard_meta = GetResyncShardMetaData(builder.GetBufferPointer());
         auto status = handler->process_shard_snapshot_data(*shard_meta);
@@ -413,6 +417,7 @@ TEST_F(HomeObjectFixture, SnapshotReceiveHandler) {
         ASSERT_EQ(shard_res.last_modified_time, shard.last_modified_time);
         ASSERT_EQ(shard_res.total_capacity_bytes, shard.total_capacity_bytes);
         ASSERT_EQ(shard_res.lsn, shard.lsn);
+        ASSERT_EQ(shard_res.sealed_lsn, shard.sealed_lsn);
 
         // Step 2-2: Test write blob batch data
         // Generate ResyncBlobDataBatch message
@@ -431,7 +436,8 @@ TEST_F(HomeObjectFixture, SnapshotReceiveHandler) {
 
                 // Construct raw blob buffer
                 auto blob = build_blob(cur_blob_id);
-                const auto aligned_hdr_size = sisl::round_up(sizeof(HSHomeObject::BlobHeader), _obj_inst->_data_block_size);
+                const auto aligned_hdr_size =
+                    sisl::round_up(sizeof(HSHomeObject::BlobHeader), _obj_inst->_data_block_size);
                 sisl::io_blob_safe blob_raw(aligned_hdr_size + blob.body.size(), io_align);
                 HSHomeObject::BlobHeader hdr;
                 hdr.type = HSHomeObject::DataHeader::data_type_t::BLOB_INFO;
@@ -506,7 +512,7 @@ TEST_F(HomeObjectFixture, SnapshotReceiveHandler) {
         if (shard.state == ShardInfo::State::SEALED) {
             auto v = _obj_inst->get_shard_v_chunk_id(shard.id);
             ASSERT_TRUE(v.has_value());
-            ASSERT_EQ(v.value(), v_chunk_id.value());
+            ASSERT_EQ(v.value(), exVchunk->m_v_chunk_id.value());
             ASSERT_TRUE(_obj_inst->chunk_selector()->is_chunk_available(pg_id, v.value()));
         }
     }

@@ -6,11 +6,11 @@ namespace homeobject {
 
 uint64_t ShardManager::max_shard_size() { return Gi; }
 
-ShardManager::AsyncResult< ShardInfo > MemoryHomeObject::_create_shard(pg_id_t pg_owner, uint64_t size_bytes, std::string meta,
-                                                                       trace_id_t tid) {
+ShardManager::AsyncResult< ShardInfo > MemoryHomeObject::_create_shard(pg_id_t pg_owner, uint64_t size_bytes,
+                                                                       std::string meta, trace_id_t tid) {
     (void)tid;
     auto const now = get_current_timestamp();
-    auto info = ShardInfo(0ull, pg_owner, ShardInfo::State::OPEN, 0, now, now, size_bytes, size_bytes);
+    auto info = ShardInfo(0ull, pg_owner, ShardInfo::State::OPEN, 0, INT64_MAX, now, now, size_bytes, size_bytes);
     {
         auto lg = std::scoped_lock(_pg_lock, _shard_lock);
         auto pg_it = _pg_map.find(pg_owner);

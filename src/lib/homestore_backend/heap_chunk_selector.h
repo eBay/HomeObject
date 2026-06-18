@@ -75,7 +75,7 @@ public:
 
     // this function will be used by create shard or recovery flow to mark one specific chunk to be busy, caller should
     // be responsible to use release_chunk() interface to release it when no longer to use the chunk anymore.
-    csharedChunk select_specific_chunk(const pg_id_t pg_id, const chunk_num_t v_chunk_id);
+    homestore::cshared< ExtendedVChunk > select_specific_chunk(const pg_id_t pg_id, const chunk_num_t v_chunk_id);
 
     /**
      * try to mark a chunk as gc state, so that it will not be selected by any creating shard.
@@ -124,9 +124,9 @@ public:
      *
      * @param ctx  only for logging.
      * @param pg_id The ID of the pg.
-     * @return An optional chunk_num_t value representing v_chunk_id, or std::nullopt if no space left.
+     * @return The most available ExtendedVChunk for the pg, or nullptr if no chunk is available.
      */
-    std::optional< chunk_num_t > get_most_available_blk_chunk(uint64_t ctx, pg_id_t pg_id);
+    homestore::cshared< ExtendedVChunk > pick_most_available_blk_chunk(uint64_t ctx, pg_id_t pg_id);
 
     // this should be called on each pg meta blk found
     bool recover_pg_chunks(pg_id_t pg_id, std::vector< chunk_num_t >&& p_chunk_ids);

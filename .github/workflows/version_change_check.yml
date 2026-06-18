@@ -5,7 +5,7 @@ on:
     types: [opened, edited, synchronize]
     branches:
       - stable/v4.x
-
+      - dev/refactor_create_seal_shard
 jobs:
   check-file:
     runs-on: ubuntu-latest

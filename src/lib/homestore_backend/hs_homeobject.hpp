@@ -766,8 +766,7 @@ private:
 
     static ShardInfo deserialize_shard_info(const char* shard_info_str, size_t size);
     static std::string serialize_shard_info(const ShardInfo& info);
-    void local_create_shard(ShardInfo shard_info, homestore::chunk_num_t v_chunk_id, homestore::chunk_num_t p_chunk_id,
-                            homestore::blk_count_t blk_count, trace_id_t tid = 0);
+    void local_create_shard(ShardInfo shard_info, homestore::chunk_num_t v_chunk_id, trace_id_t tid = 0);
     void add_new_shard_to_map(std::unique_ptr< HS_Shard > shard);
     void update_shard_in_map(const ShardInfo& shard_info);
 
@@ -901,8 +900,8 @@ public:
      * @param repl_dev The replication device.
      * @param hs_ctx The replication request context.
      */
-    void on_shard_message_commit(int64_t lsn, sisl::blob const& header, homestore::MultiBlkId const& blkids,
-                                 shared< homestore::ReplDev > repl_dev, cintrusive< homestore::repl_req_ctx >& hs_ctx);
+    void on_shard_message_commit(int64_t lsn, sisl::blob const& header, shared< homestore::ReplDev > repl_dev,
+                                 cintrusive< homestore::repl_req_ctx >& hs_ctx);
 
     bool on_shard_message_pre_commit(int64_t lsn, sisl::blob const& header, sisl::blob const& key,
                                      cintrusive< homestore::repl_req_ctx >& hs_ctx);
@@ -948,16 +947,6 @@ public:
      *
      */
     void on_replica_restart();
-
-    /**
-     * @brief Extracts the physical chunk ID for create shard from the message.
-     *
-     * @param header The message header that includes the shard_info_superblk, which contains the data necessary for
-     * extracting and mapping the chunk ID.
-     * @return An optional virtual chunk id if the extraction and mapping process is successful, otherwise an empty
-     * optional.
-     */
-    std::optional< homestore::chunk_num_t > resolve_v_chunk_id_from_msg(sisl::blob const& header);
 
     /**
      * @brief Releases a chunk based on the information provided in a CREATE_SHARD message.
