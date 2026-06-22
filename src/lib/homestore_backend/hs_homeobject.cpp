@@ -429,6 +429,12 @@ void HSHomeObject::on_replica_restart() {
         // and log replay can complete successfully.
 
         gc_mgr_->handle_all_recovered_gc_tasks();
+
+        // redo destory pg to reclaim pg resource for destroyed stale pgs.
+        for (const auto pg_id : destoryed_stale_pgs_) {
+            LOGI("Redo destroy pg for stale destroyed pg {}", pg_id);
+            destroy_pg_resource(pg_id);
+        }
     });
 }
 

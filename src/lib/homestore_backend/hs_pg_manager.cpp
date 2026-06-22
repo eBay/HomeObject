@@ -688,18 +688,7 @@ std::optional< pg_id_t > HSHomeObject::get_pg_id_with_group_id(group_id_t group_
 
 void HSHomeObject::_destroy_pg(pg_id_t pg_id) { pg_destroy(pg_id); }
 
-bool HSHomeObject::pg_destroy(pg_id_t pg_id, bool need_to_pause_pg_state_machine) {
-    if (need_to_pause_pg_state_machine && !pause_pg_state_machine(pg_id)) {
-        LOGI("Failed to pause pg state machine, pg_id={}", pg_id);
-        return false;
-    }
-    LOGI("Destroying pg={}", pg_id);
-    mark_pg_destroyed(pg_id);
-
-    // we have the assumption that after pg is marked as destroyed, it will not be marked as alive again.
-    // TODO:: if this assumption is broken, we need to handle it.
-    gc_mgr_->drain_pg_pending_gc_task(pg_id);
-
+void HSHomeObject::destroy_pg_resource(pg_id_t pg_id) {
     destroy_shards(pg_id);
     destroy_hs_resources(pg_id);
     destroy_pg_index_table(pg_id);
@@ -709,8 +698,31 @@ bool HSHomeObject::pg_destroy(pg_id_t pg_id, bool need_to_pause_pg_state_machine
     // which must be done after destroying pg super blk to avoid multiple pg use same chunks
     bool res = chunk_selector_->return_pg_chunks_to_dev_heap(pg_id);
     RELEASE_ASSERT(res, "Failed to return pg={} chunks to dev_heap", pg_id);
+    LOGI("resource of pg={} is destroyed", pg_id);
+}
 
-    LOGI("pg={} is destroyed", pg_id);
+bool HSHomeObject::pg_destroy(pg_id_t pg_id, bool need_to_pause_pg_state_machine) {
+    // Baseline resync concern: if pg_destroy partially completes before a crash (e.g., the index
+    // table is destroyed but the PG superblk is not), log replay on recovery might attempt to write
+    // to the destroyed index table and fail.
+    //
+    // This is not an issue. Before pg_destroy is triggered during baseline resync,
+    // m_rd_sb->last_snapshot_lsn is persisted to snapshot.get_last_log_idx(). Any log at or
+    // before that LSN is skipped on recovery and never replayed.
+    //
+    // See raft_repl_dev::need_skip_processing for details.
+    if (need_to_pause_pg_state_machine && !pause_pg_state_machine(pg_id)) {
+        LOGI("Failed to pause pg state machine, pg_id={}", pg_id);
+        return false;
+    }
+
+    LOGI("Destroying pg={}", pg_id);
+    mark_pg_destroyed(pg_id);
+
+    // we have the assumption that after pg is marked as destroyed, it will not be marked as alive again.
+    // TODO:: if this assumption is broken, we need to handle it.
+    gc_mgr_->drain_pg_pending_gc_task(pg_id);
+    destroy_pg_resource(pg_id);
     return true;
 }
 
@@ -724,29 +736,8 @@ PGManager::NullResult HSHomeObject::_exit_pg(uuid_t group_id, peer_id_t peer_id,
         LOGI("group_id is nil, nothing to exit, trace_id={}", tid);
         return folly::makeUnexpected(PGError::INVALID_ARG);
     }
-    pg_id_t pg_id{0};
-    {
-        auto lg = std::shared_lock(_pg_lock);
-        auto iter = std::find_if(_pg_map.begin(), _pg_map.end(), [group_id](const auto& entry) {
-            return pg_repl_dev(*entry.second).group_id() == group_id;
-        });
-        if (iter != _pg_map.end()) {
-            pg_id = iter->first;
-        } else {
-            // There is a known case during adding member: the new member may think itself already in group but actually
-            // not, so the pg is not created yet.
-            LOGI("no pg found, group_id={}, trace_id={}", group_id, tid);
-        }
-    }
-    if (pg_id != 0 && !pg_destroy(pg_id)) {
-        // don't need to pause state machine here, this api is called during member leaving or the member is not in the
-        // cluster actually.
-        LOGE("failed to destroy pg={}, group_id={}, trace_id={}", pg_id, group_id, tid);
-        return folly::makeUnexpected(PGError::UNKNOWN);
-    }
-    LOGI("pg is cleaned, going to destroy repl_dev, group_id={}, trace_id={}", group_id, tid);
-    // TODO pass peer_id into destroy_repl_dev for peer validation
-    // destroy_repl_dev will leave raft group
+
+    // mark pg as destoryed and then permanent_destroy will call destory_pg to reclaim pg resource.
     auto ret = hs_repl_service().destroy_repl_dev(group_id);
     if (ret == ReplServiceError::SERVER_NOT_FOUND) {
         LOGW("repl dev not found, ignore, group_id={}, trace_id={}", group_id, tid);
@@ -756,6 +747,7 @@ PGManager::NullResult HSHomeObject::_exit_pg(uuid_t group_id, peer_id_t peer_id,
         LOGE("Failed to destroy repl dev for group_id={}, error={}, trace_id={}", group_id, ret, tid);
         return folly::makeUnexpected(toPgError(ret));
     }
+
     return folly::Unit();
 }
 
@@ -800,7 +792,7 @@ void HSHomeObject::mark_pg_destroyed(pg_id_t pg_id) {
     LOGD("pg={} is marked as destroyed", pg_id);
 }
 
-bool HSHomeObject::can_chunks_in_pg_be_gc(pg_id_t pg_id) const {
+bool HSHomeObject::is_pg_alive(pg_id_t pg_id) const {
     auto lg = std::scoped_lock(_pg_lock);
     auto hs_pg = const_cast< HS_PG* >(_get_hs_pg_unlocked(pg_id));
     if (hs_pg == nullptr) {
@@ -859,7 +851,11 @@ void HSHomeObject::destroy_pg_superblk(pg_id_t pg_id) {
         }
 
         hs_pg->pg_sb_.destroy();
-        destroy_snapshot_sb(hs_pg->repl_dev_->group_id());
+
+        // FIXME:: if repl_dev does not exist, how to get group_id to destory snapshot sb? we should store group_id in
+        // pg superblk to avoid this issue.
+        if (hs_pg->repl_dev_) { destroy_snapshot_sb(hs_pg->repl_dev_->group_id()); }
+
         hs_pg->snp_rcvr_info_sb_.destroy();
         hs_pg->snp_rcvr_shard_list_sb_.destroy();
 
@@ -871,9 +867,12 @@ void HSHomeObject::destroy_pg_superblk(pg_id_t pg_id) {
 }
 
 void HSHomeObject::add_pg_to_map(unique< HS_PG > hs_pg) {
-    RELEASE_ASSERT(hs_pg->pg_info_.replica_set_uuid == hs_pg->repl_dev_->group_id(),
-                   "PGInfo replica set uuid mismatch with ReplDev instance for {}",
-                   boost::uuids::to_string(hs_pg->pg_info_.replica_set_uuid));
+    if (hs_pg->repl_dev_) {
+        RELEASE_ASSERT(hs_pg->pg_info_.replica_set_uuid == hs_pg->repl_dev_->group_id(),
+                       "PGInfo replica set uuid mismatch with ReplDev instance for {}",
+                       boost::uuids::to_string(hs_pg->pg_info_.replica_set_uuid));
+    }
+
     auto lg = std::scoped_lock(_pg_lock);
     auto id = hs_pg->pg_info_.id;
     auto [it1, _] = _pg_map.try_emplace(id, std::move(hs_pg));
@@ -923,19 +922,39 @@ void HSHomeObject::on_pg_meta_blk_found(sisl::byte_view const& buf, void* meta_c
     LOGI("on_pg_meta_blk_found is called")
     homestore::superblk< pg_info_superblk > pg_sb(_pg_meta_name);
     pg_sb.load(buf, meta_cookie);
+    const auto pg_id = pg_sb->id;
+    shared< homestore::ReplDev > rdev;
 
     auto v = hs_repl_service().get_repl_dev(pg_sb->replica_set_uuid);
     if (v.hasError()) {
-        // TODO: We need to raise an alert here, since without pg repl_dev all operations on that pg will fail
-        LOGE("open_repl_dev for group_id={} has failed, pg={}", boost::uuids::to_string(pg_sb->replica_set_uuid),
-             pg_sb->id);
-        return;
+        // We have a pg_super_blk but cannot find the corresponding repl_dev. This happens when repl_dev
+        // is marked as destroyed (m_rd_sb->destroy_pending = 0x1) in raft_repl_dev::leave(), but a crash
+        // occurs before pg_destroy is called.
+        //
+        // repl_dev is marked as destroyed in three cases:
+        //
+        // 1. Forced member exit: exit_pg calls destroy_repl_dev, then raft_repl_dev::leave() and
+        //    pg_destroy directly.
+        //
+        // 2. raft_repl_dev::destroy_group: proposes a HS_CTRL_DESTROY journal log; on commit,
+        //    raft_repl_dev::leave() is called, then RaftReplDev::permanent_destroy, which calls
+        //    on_destroy → pg_destroy to clean up the pg resource and superblk.
+        //
+        // 3. Member removal: the leader calls repl_dev::remove_member; the removed member receives
+        //    nuraft::cb_func::RemovedFromCluster, which triggers repl_dev::leave(), then
+        //    on_destroy and pg_destroy via RaftReplDev::permanent_destroy.
+        //
+        // When a destroyed repl_dev is recovered, it is skipped (see RaftReplService::load_repl_dev()),
+        // so no log replay occurs. We must therefore destroy the pg resource when no repl_dev is found.
+        destoryed_stale_pgs_.emplace_back(pg_id);
+    } else {
+        rdev = std::move(v.value());
     }
-    auto pg_id = pg_sb->id;
+
     std::vector< chunk_num_t > p_chunk_ids(pg_sb->get_chunk_ids(), pg_sb->get_chunk_ids() + pg_sb->num_chunks);
     bool set_pg_chunks_res = chunk_selector_->recover_pg_chunks(pg_id, std::move(p_chunk_ids));
     auto uuid_str = boost::uuids::to_string(pg_sb->index_table_uuid);
-    auto hs_pg = std::make_unique< HS_PG >(std::move(pg_sb), std::move(v.value()));
+    auto hs_pg = std::make_unique< HS_PG >(std::move(pg_sb), rdev);
     if (!set_pg_chunks_res) {
         hs_pg->pg_state_.set_state(PGStateMask::DISK_DOWN);
         hs_pg->repl_dev_->set_stage(homestore::repl_dev_stage_t::UNREADY);
@@ -949,8 +968,6 @@ void HSHomeObject::on_pg_meta_blk_found(sisl::byte_view const& buf, void* meta_c
         hs_pg->index_table_ = it->second.index_table;
         it->second.pg_id = pg_id;
     } else {
-        RELEASE_ASSERT(hs_pg->pg_sb_->state == PGState::DESTROYED, "IndexTable should be recovered before PG");
-        hs_pg->index_table_ = nullptr;
         LOGI("Index table not found for destroyed pg={}, index_table_uuid={}", pg_id, uuid_str);
     }
 
@@ -1262,17 +1279,11 @@ uint32_t HSHomeObject::get_pg_tombstone_blob_count(pg_id_t pg_id) const {
 }
 
 void HSHomeObject::refresh_pg_statistics(pg_id_t pg_id) {
+    RELEASE_ASSERT(is_pg_alive(pg_id), "pg={} should be alive", pg_id);
     auto hs_pg = const_cast< HS_PG* >(_get_hs_pg_unlocked(pg_id));
     RELEASE_ASSERT(hs_pg, "Failed to get pg={} for statistics refresh", pg_id);
     auto pg_index_table = hs_pg->index_table_;
-    if (!pg_index_table) {
-        if (hs_pg->pg_sb_->state == PGState::DESTROYED) {
-            LOGI("pg={} is destroyed, skip statistics refresh", pg_id);
-        } else {
-            RELEASE_ASSERT(false, "index table is not found for pg={} and not in PGState::DESTROYED state", pg_id);
-        }
-        return;
-    }
+    RELEASE_ASSERT(pg_index_table, "pg is alive, index table should be found for pg={}", pg_id);
 
     // Step 1: Scan index table to count active and tombstone blobs in one pass
     uint64_t active_count = 0;
