@@ -106,9 +106,9 @@ private:
     std::vector< shard_id_t > shards_to_migrate_;
 
 public:
-    // Old version shard_info_superblk (v0.01) - for backward compatibility testing and migration
-    // v1 ShardInfo did not have the meta field
-    struct v1_ShardInfo {
+    // Old version shard_info_superblk (v0.02) - for backward compatibility testing and migration
+    // v2 ShardInfo — did not have the sealed_lsn
+    struct v2_ShardInfo {
         shard_id_t id;
         pg_id_t placement_group;
         ShardInfo::State state;
@@ -118,7 +118,7 @@ public:
         uint64_t available_capacity_bytes;
         uint64_t total_capacity_bytes;
         std::optional< peer_id_t > current_leader{std::nullopt};
-        // Note: meta field was added in v2
+        uint8_t meta[ShardInfo::meta_length]{};
     };
 
 #pragma pack(1)
@@ -207,20 +207,21 @@ public:
     };
 
     struct shard_info_superblk : DataHeader {
-        // This version is a common version of DataHeader, each derived struct can have its own version.
-        static constexpr uint8_t shard_sb_version = 0x02;
+        // v2: added meta, v3: added sealed_lsn & changed the order of info to be the end
+        static constexpr uint8_t shard_sb_version = 0x03;
 
         uint8_t sb_version{shard_sb_version};
-        ShardInfo info;
         homestore::chunk_num_t p_chunk_id{0};
         homestore::chunk_num_t v_chunk_id{0};
-
+        ShardInfo info;
         // backward compatibility
         bool valid() const { return DataHeader::valid() && sb_version <= shard_sb_version; }
     };
 
-    struct v1_shard_info_superblk : DataHeader {
-        v1_ShardInfo info;
+    // v2 superblk: sb_version=0x02, v2_ShardInfo (no sealed_lsn), chunk IDs after info
+    struct v2_shard_info_superblk : DataHeader {
+        uint8_t sb_version{0x02};
+        v2_ShardInfo info;
         homestore::chunk_num_t p_chunk_id{0};
         homestore::chunk_num_t v_chunk_id{0};
     };
@@ -947,18 +948,6 @@ public:
      *
      */
     void on_replica_restart();
-
-    /**
-     * @brief Releases a chunk based on the information provided in a CREATE_SHARD message.
-     *
-     * This function is invoked during log rollback or when the proposer encounters an error.
-     * Its primary purpose is to ensure that the state of pg_chunks is reverted to the correct state.
-     *
-     * @param header The message header that includes the shard_info_superblk, which contains the data necessary for
-     * extracting and mapping the chunk ID.
-     * @return Returns true if the chunk was successfully released, false otherwise.
-     */
-    bool release_chunk_based_on_create_shard_message(sisl::blob const& header);
 
     /**
      * @brief check whether the chunks in a given pg can be gc.
