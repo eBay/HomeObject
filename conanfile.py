@@ -10,7 +10,7 @@ required_conan_version = ">=1.60.0"
 
 class HomeObjectConan(ConanFile):
     name = "homeobject"
-    version = "4.1.18"
+    version = "4.1.19"
 
     homepage = "https://github.com/eBay/HomeObject"
     description = "Blob Store built on HomeStore"
@@ -26,6 +26,7 @@ class HomeObjectConan(ConanFile):
         "coverage": ['True', 'False'],
         "sanitize": ['True', 'False'],
     }
+    
     default_options = {
         'shared': False,
         'fPIC': True,

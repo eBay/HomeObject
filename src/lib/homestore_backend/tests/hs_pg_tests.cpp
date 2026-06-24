@@ -518,3 +518,48 @@ TEST_F(HomeObjectFixture, PGRefreshStatisticsTest) {
         << "Tombstone blob count should be preserved after restart";
     EXPECT_EQ(pg_stats_restart.used_bytes, used_bytes_after) << "Used bytes should be preserved after restart";
 }
+
+TEST_F(HomeObjectFixture, IsPgAliveTest) {
+    LOGINFO("HomeObject replica={} setup completed", g_helper->replica_num());
+    g_helper->sync();
+
+    pg_id_t pg_id{1};
+    create_pg(pg_id);
+
+    // alive pg should return true
+    EXPECT_TRUE(_obj_inst->is_pg_alive(pg_id));
+
+    // non-existent pg should return false
+    EXPECT_FALSE(_obj_inst->is_pg_alive(99));
+
+    _obj_inst->mark_pg_destroyed(pg_id);
+    EXPECT_FALSE(_obj_inst->is_pg_alive(pg_id));
+}
+
+TEST_F(HomeObjectFixture, DestroyPgResourceCleansUpTest) {
+    LOGINFO("HomeObject replica={} setup completed", g_helper->replica_num());
+    g_helper->sync();
+
+    pg_id_t pg_id{1};
+    create_pg(pg_id);
+
+    auto shard_info = create_shard(pg_id, 64 * Mi, "shard meta");
+    auto shard_id = shard_info.id;
+
+    // Record the index table uuid and group_id before destroying
+    auto hs_pg = _obj_inst->get_hs_pg(pg_id);
+    ASSERT_NE(hs_pg, nullptr);
+    auto index_table_uuid_str = boost::uuids::to_string(hs_pg->pg_sb_->index_table_uuid);
+    auto group_id = get_group_id(pg_id);
+
+    g_helper->sync();
+
+    // Each replica destroys its local repl_dev. This marks destroy_pending=1 on the repl_dev
+    // superblk
+    auto ret = HSHomeObject::hs_repl_service().destroy_repl_dev(group_id);
+    ASSERT_TRUE(ret == homestore::ReplServiceError::OK || ret == homestore::ReplServiceError::SERVER_NOT_FOUND);
+
+    // for a destroyed repl_dev, the related pg resource should be reclaimed.
+    restart();
+    verify_pg_destroy(pg_id, index_table_uuid_str, {shard_id});
+}

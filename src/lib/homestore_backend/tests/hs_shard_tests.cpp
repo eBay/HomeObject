@@ -122,7 +122,7 @@ TEST_F(HomeObjectFixture, ShardManagerRecovery) {
     create_pg(pg_id);
 
     // create one shard;
-    auto shard_info = create_shard(pg_id, Mi, "shard meta");;
+    auto shard_info = create_shard(pg_id, Mi, "shard meta");
     auto shard_id = shard_info.id;
     EXPECT_EQ(ShardInfo::State::OPEN, shard_info.state);
     EXPECT_EQ(Mi, shard_info.total_capacity_bytes);
@@ -162,7 +162,7 @@ TEST_F(HomeObjectFixture, ShardManagerRecovery) {
     EXPECT_EQ(1, pg_result->shard_sequence_num_);
 
     // re-create new shards on this pg works too even homeobject is restarted twice.
-    auto new_shard_info = create_shard(pg_id, Mi, "shard meta");;
+    auto new_shard_info = create_shard(pg_id, Mi, "shard meta");
     EXPECT_NE(shard_id, new_shard_info.id);
 
     EXPECT_EQ(ShardInfo::State::OPEN, new_shard_info.state);
@@ -177,7 +177,7 @@ TEST_F(HomeObjectFixture, SealedShardRecovery) {
     create_pg(pg_id);
 
     // create one shard and seal it.
-    auto shard_info = create_shard(pg_id, Mi, "shard meta");;
+    auto shard_info = create_shard(pg_id, Mi, "shard meta");
     auto shard_id = shard_info.id;
     shard_info = seal_shard(shard_id);
     EXPECT_EQ(ShardInfo::State::SEALED, shard_info.state);
@@ -282,7 +282,6 @@ TEST_F(HomeObjectFixture, CreateShardOnDiskLostMemeber) {
         ASSERT_TRUE(s.hasError()) << "degraded pg on error member should return seal shard fail, pg_id "
                                   << degrade_pg_id << "shard_id " << pg_shard_id_map[degrade_pg_id]
                                   << " replica number " << g_helper->replica_num();
-
         tid = generateRandomTraceId();
         s = _obj_inst->shard_manager()->create_shard(degrade_pg_id, 64 * Mi, "shard meta", tid).get();
         ASSERT_TRUE(s.hasError()) << "degraded pg on error member should return create shard fail, pg_id "

@@ -104,6 +104,7 @@ private:
 
     // Shard migration info: tracks shards that need migration from v1 to v2 format
     std::vector< shard_id_t > shards_to_migrate_;
+    std::vector< pg_id_t > destoryed_stale_pgs_;
 
 public:
     // Old version shard_info_superblk (v0.01) - for backward compatibility testing and migration
@@ -332,7 +333,7 @@ public:
 
                 register_me_to_farm();
                 attach_gather_cb(std::bind(&PGMetrics::on_gather, this));
-                blk_size = pg_.repl_dev_->get_blk_size();
+                blk_size = homestore::data_service().get_blk_size();
             }
             ~PGMetrics() { deregister_me_from_farm(); }
             PGMetrics(const PGMetrics&) = delete;
@@ -881,6 +882,8 @@ public:
      */
     bool pg_destroy(pg_id_t pg_id, bool need_to_pause_pg_state_machine = false);
 
+    void destroy_pg_resource(pg_id_t pg_id);
+
     bool pause_pg_state_machine(pg_id_t pg_id);
 
     bool resume_pg_state_machine(pg_id_t pg_id);
@@ -977,7 +980,7 @@ public:
      * @param pg_id The ID of the PG whose shards are to be destroyed.
      * @return True if the chunks in the PG can be garbage collected, false otherwise.
      */
-    bool can_chunks_in_pg_be_gc(pg_id_t pg_id) const;
+    bool is_pg_alive(pg_id_t pg_id) const;
 
     bool pg_exists(pg_id_t pg_id) const;
 
