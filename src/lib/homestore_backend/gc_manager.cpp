@@ -223,25 +223,25 @@ std::shared_ptr< GCManager::pdev_gc_actor > GCManager::get_pdev_gc_actor(uint32_
     return it->second;
 }
 
-uint32_t GCManager::get_chunk_gc_ratio(chunk_id_t chunk_id) {
+float GCManager::get_chunk_gc_ratio(chunk_id_t chunk_id) {
     auto chunk = m_chunk_selector->get_extend_vchunk(chunk_id);
 
     // Only AVAILABLE chunks are eligible: INUSE means an open shard owns it, GC means already being processed.
-    if (chunk->m_state != ChunkState::AVAILABLE) { return 0; }
+    if (chunk->m_state != ChunkState::AVAILABLE) { return 0.0f; }
 
     const auto defrag_blk_num = chunk->get_defrag_nblks();
-    if (!defrag_blk_num) { return 0; }
+    if (!defrag_blk_num) { return 0.0f; }
 
     // Chunks with no pg assignment are unowned and do not need GC.
-    if (!chunk->m_pg_id.has_value()) { return 0; }
+    if (!chunk->m_pg_id.has_value()) { return 0.0f; }
 
     // If the pg is currently destroyed or not yet alive (e.g. baseline resync), skip it;
     // add_gc_task will enforce this again at submission time as a safety guard.
     // FIXME: if we want avoiding GC on certain PG/CHUNK, we might added here.
-    if (!m_hs_home_object->is_pg_alive(chunk->m_pg_id.value())) { return 0; }
+    if (!m_hs_home_object->is_pg_alive(chunk->m_pg_id.value())) { return 0.0f; }
 
     const auto total_blk_num = chunk->get_total_blks();
-    const uint32_t ratio_pct = static_cast< uint32_t >((100 * defrag_blk_num) / total_blk_num);
+    const float ratio_pct = (100.0f * static_cast< float >(defrag_blk_num)) / static_cast< float >(total_blk_num);
 
     LOGDEBUGMOD(gcmgr,
                 "gc scan chunk_id={}, use_blks={}, available_blks={}, total_blks={}, defrag_blks={}, "
@@ -296,15 +296,15 @@ void GCManager::scan_chunks_for_gc() {
         // worth scheduling and are dropped during collection.
         struct ChunkGCInfo {
             chunk_id_t chunk_id;
-            // integer percentage [0,100]; computed as (100*defrag_blks)/total_blks
-            uint32_t garbage_ratio_pct;
+            // floating-point percentage [0.0, 100.0]; computed as (100.0*defrag_blks)/total_blks
+            float garbage_ratio_pct;
         };
         auto min_heap_cmp = [](const ChunkGCInfo& a, const ChunkGCInfo& b) {
             return a.garbage_ratio_pct > b.garbage_ratio_pct;
         };
         std::priority_queue< ChunkGCInfo, std::vector< ChunkGCInfo >, decltype(min_heap_cmp) > top_k(min_heap_cmp);
         for (const auto& chunk_id : chunks) {
-            const uint32_t ratio_pct = get_chunk_gc_ratio(chunk_id);
+            const float ratio_pct = get_chunk_gc_ratio(chunk_id);
             if (ratio_pct <= gc_thresh_low) { continue; }
             if (top_k.size() < max_task_num) {
                 top_k.push({chunk_id, ratio_pct});

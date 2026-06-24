@@ -351,10 +351,10 @@ public:
     std::shared_ptr< pdev_gc_actor >
     try_create_pdev_gc_actor(uint32_t pdev_id, const homestore::superblk< GCManager::gc_actor_superblk >& gc_actor_sb);
 
-    // Returns the garbage ratio percentage (0-100) for the given chunk if it is a valid GC candidate,
-    // or 0 if the chunk is not eligible (wrong state, no defrag blks, no pg, or pg not gc-able).
-    // Callers compare the returned ratio against their own threshold.
-    uint32_t get_chunk_gc_ratio(chunk_id_t chunk_id);
+    // Returns the garbage ratio percentage [0.0, 100.0] for the given chunk if it is a valid GC candidate,
+    // or 0.0 if the chunk is not eligible (wrong state, no defrag blks, no pg, or pg not gc-able).
+    // Uses floating-point arithmetic to avoid truncation for chunks with very few defrag blocks.
+    float get_chunk_gc_ratio(chunk_id_t chunk_id);
 
     void handle_all_recovered_gc_tasks();
 
