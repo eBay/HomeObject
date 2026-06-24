@@ -257,9 +257,6 @@ void GCManager::scan_chunks_for_gc() {
     const auto gc_thresh_high = HS_BACKEND_DYNAMIC_CONFIG(gc_garbage_rate_threshold);
     auto gc_thresh_low = HS_BACKEND_DYNAMIC_CONFIG(gc_garbage_rate_threshold_low);
 
-    DEBUG_ASSERT(gc_thresh_low <= gc_thresh_high,
-               "gc_garbage_rate_threshold_low({}) must be less than or equal to gc_garbage_rate_threshold({})",
-               gc_thresh_low, gc_thresh_high);
     if (gc_thresh_low > gc_thresh_high) {
         LOGERRORMOD(gcmgr,
                     "gc_garbage_rate_threshold_low={} exceeds gc_garbage_rate_threshold={}, "
