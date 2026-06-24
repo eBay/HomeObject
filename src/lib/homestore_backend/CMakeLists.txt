@@ -155,6 +155,8 @@ add_test(NAME FetchDataWithOriginatorGC
         COMMAND homestore_test_dynamic -csv error --executor immediate --config_path ./
         --override_config hs_backend_config.enable_gc=true
         --override_config hs_backend_config.gc_enable_read_verify=true
+        --override_config hs_backend_config.gc_garbage_rate_threshold=50
+        --override_config hs_backend_config.gc_garbage_rate_threshold_low=30
         --gtest_filter=HomeObjectFixture.FetchDataWithOriginatorGC)
 
 add_executable(homestore_test_gc)
@@ -163,5 +165,6 @@ target_link_libraries(homestore_test_gc PUBLIC homeobject_homestore ${COMMON_TES
 add_test(NAME HomestoreTestGC COMMAND homestore_test_gc -csv error --executor immediate --config_path ./
         --override_config hs_backend_config.enable_gc=true
         --override_config hs_backend_config.gc_enable_read_verify=true
-        --override_config hs_backend_config.gc_garbage_rate_threshold=0 
+        --override_config hs_backend_config.gc_garbage_rate_threshold=0
+        --override_config hs_backend_config.gc_garbage_rate_threshold_low=0
         --override_config hs_backend_config.gc_scan_interval_sec=5)

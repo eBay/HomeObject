@@ -1,3 +1,6 @@
+#include <algorithm>
+#include <queue>
+
 #include <homestore/btree/btree_req.hpp>
 #include <homestore/btree/btree_kv.hpp>
 
@@ -220,63 +223,152 @@ std::shared_ptr< GCManager::pdev_gc_actor > GCManager::get_pdev_gc_actor(uint32_
     return it->second;
 }
 
-bool GCManager::is_eligible_for_gc(chunk_id_t chunk_id) {
+uint32_t GCManager::get_chunk_gc_ratio(chunk_id_t chunk_id) {
     auto chunk = m_chunk_selector->get_extend_vchunk(chunk_id);
-    const auto defrag_blk_num = chunk->get_defrag_nblks();
-    if (!defrag_blk_num) { return false; }
 
-    // 1 if the chunk state is inuse, it is occupied by a open shard, so it can not be selected and we don't need gc it.
-    // 2 if the chunk state is gc, it means this chunk is being gc, or this is a reserved chunk, so we don't need gc it.
-    if (chunk->m_state != ChunkState::AVAILABLE) {
-        LOGDEBUGMOD(gcmgr, "chunk_id={} state is {}, not eligible for gc", chunk_id, chunk->m_state)
-        return false;
-    }
+    // Only AVAILABLE chunks are eligible: INUSE means an open shard owns it, GC means already being processed.
+    if (chunk->m_state != ChunkState::AVAILABLE) { return 0; }
+
+    const auto defrag_blk_num = chunk->get_defrag_nblks();
+    if (!defrag_blk_num) { return 0; }
+
+    // Chunks with no pg assignment are unowned and do not need GC.
+    if (!chunk->m_pg_id.has_value()) { return 0; }
+
+    // If the pg is currently destroyed or not yet alive (e.g. baseline resync), skip it;
+    // add_gc_task will enforce this again at submission time as a safety guard.
+    // FIXME: if we want avoiding GC on certain PG/CHUNK, we might added here.
+    if (!m_hs_home_object->is_pg_alive(chunk->m_pg_id.value())) { return 0; }
 
     const auto total_blk_num = chunk->get_total_blks();
-    const auto gc_garbage_rate_threshold = HS_BACKEND_DYNAMIC_CONFIG(gc_garbage_rate_threshold);
-    bool should_gc = 100 * defrag_blk_num > total_blk_num * gc_garbage_rate_threshold;
+    const uint32_t ratio_pct = static_cast< uint32_t >((100 * defrag_blk_num) / total_blk_num);
 
     LOGDEBUGMOD(gcmgr,
-                "gc scan chunk_id={}, use_blks={}, available_blks={}, total_blks={}, defrag_blks={}, should_gc={}",
-                chunk_id, chunk->get_used_blks(), chunk->available_blks(), total_blk_num, defrag_blk_num, should_gc);
+                "gc scan chunk_id={}, use_blks={}, available_blks={}, total_blks={}, defrag_blks={}, "
+                "garbage_ratio_pct={}",
+                chunk_id, chunk->get_used_blks(), chunk->available_blks(), total_blk_num, defrag_blk_num, ratio_pct);
 
-    return should_gc;
+    return ratio_pct;
 }
 
 void GCManager::scan_chunks_for_gc() {
     const auto reserved_chunk_num_per_pdev = HS_BACKEND_DYNAMIC_CONFIG(reserved_chunk_num_per_pdev);
     const auto reserved_chunk_num_per_pdev_for_egc = HS_BACKEND_DYNAMIC_CONFIG(reserved_chunk_num_per_pdev_for_egc);
+    const auto gc_thresh_high = HS_BACKEND_DYNAMIC_CONFIG(gc_garbage_rate_threshold);
+    auto gc_thresh_low = HS_BACKEND_DYNAMIC_CONFIG(gc_garbage_rate_threshold_low);
+
+    DEBUG_ASSERT(gc_thresh_low <= gc_thresh_high,
+               "gc_garbage_rate_threshold_low({}) must be less than or equal to gc_garbage_rate_threshold({})",
+               gc_thresh_low, gc_thresh_high);
+    if (gc_thresh_low > gc_thresh_high) {
+        LOGERRORMOD(gcmgr,
+                    "gc_garbage_rate_threshold_low={} exceeds gc_garbage_rate_threshold={}, "
+                    "auto-correcting low to {}",
+                    gc_thresh_low, gc_thresh_high, gc_thresh_high / 2);
+        gc_thresh_low = gc_thresh_high / 2;
+    }
 
     for (const auto& [pdev_id, chunks] : m_chunk_selector->get_pdev_chunks()) {
-        auto max_task_num = 2 * (reserved_chunk_num_per_pdev - reserved_chunk_num_per_pdev_for_egc);
+        const uint32_t max_task_num = 2 * (reserved_chunk_num_per_pdev - reserved_chunk_num_per_pdev_for_egc);
+
         auto it = m_pdev_gc_actors.find(pdev_id);
         RELEASE_ASSERT(it != m_pdev_gc_actors.end(), "can not find gc actor for pdev_id {} when scanning chunks for gc",
                        pdev_id);
         auto& actor = it->second;
 
+        // Compute remaining capacity against the true cross-scan quota.
+        // m_pending_normal_gc_task_count tracks all tasks currently queued or running in m_gc_executor,
+        // not just tasks submitted by this scan cycle. This prevents unbounded queue growth across scans.
+        const uint32_t already_pending = actor->get_pending_normal_task_count();
+        if (already_pending >= max_task_num) {
+            LOGINFOMOD(gcmgr,
+                       "pdev_id={} already has {}/{} pending normal gc tasks, skipping submission this scan cycle",
+                       pdev_id, already_pending, max_task_num);
+            continue;
+        }
+        const uint32_t remaining_capacity = max_task_num - already_pending;
+        // Low-tier chunks (below high watermark) may consume at most half the remaining capacity so
+        // that high-tier chunks always get priority when quota is tight.
+        const uint32_t low_tier_cap = remaining_capacity / 2;
+
+        // Collect at most max_task_num chunks with the highest garbage ratios via a bounded
+        // min-heap. K = max_task_num (fixed during the scan) rather than remaining_capacity
+        // (which may shrink/grow as tasks queue/complete) so we always have enough candidates
+        // ready if capacity opens up later. Submission is still gated by the dynamic
+        // remaining_capacity / low_tier_cap below. Chunks at or below gc_thresh_low are not
+        // worth scheduling and are dropped during collection.
+        struct ChunkGCInfo {
+            chunk_id_t chunk_id;
+            // integer percentage [0,100]; computed as (100*defrag_blks)/total_blks
+            uint32_t garbage_ratio_pct;
+        };
+        auto min_heap_cmp = [](const ChunkGCInfo& a, const ChunkGCInfo& b) {
+            return a.garbage_ratio_pct > b.garbage_ratio_pct;
+        };
+        std::priority_queue< ChunkGCInfo, std::vector< ChunkGCInfo >, decltype(min_heap_cmp) > top_k(min_heap_cmp);
         for (const auto& chunk_id : chunks) {
-            if (is_eligible_for_gc(chunk_id)) {
-                auto future = actor->add_gc_task(static_cast< uint8_t >(task_priority::normal), chunk_id);
-                if (future.isReady()) {
-                    if (future.value()) {
-                        LOGINFOMOD(
-                            gcmgr,
-                            "gc task for chunk_id={} on pdev_id={} has been submitted and successfully completed "
-                            "shortly",
-                            chunk_id, pdev_id);
-                    } else {
-                        LOGWARNMOD(gcmgr,
-                                   "got false after add_gc_task for chunk_id={} on pdev_id={}, it means we cannot mark "
-                                   "this chunk to gc state(there is an open shard on this chunk ATM) or this task is "
-                                   "executed shortly but fails(fail to copy data or update gc index table) ",
-                                   chunk_id, pdev_id);
-                    }
-                } else if (0 == --max_task_num) {
-                    LOGINFOMOD(gcmgr, "reached max gc task limit for pdev_id={}, stopping further gc task submissions",
-                               pdev_id);
-                    break;
-                }
+            const uint32_t ratio_pct = get_chunk_gc_ratio(chunk_id);
+            if (ratio_pct <= gc_thresh_low) { continue; }
+            if (top_k.size() < max_task_num) {
+                top_k.push({chunk_id, ratio_pct});
+            } else if (ratio_pct > top_k.top().garbage_ratio_pct) {
+                top_k.pop();
+                top_k.push({chunk_id, ratio_pct});
             }
+        }
+
+        // Drain the min-heap into a presized vector, writing back-to-front: the heap pops in
+        // ascending ratio order, so placing each popped element at the current trailing index
+        // yields a descending-by-ratio sequence directly — no separate reverse pass needed.
+        std::vector< ChunkGCInfo > eligible(top_k.size());
+        for (size_t i = eligible.size(); i > 0; --i) {
+            eligible[i - 1] = top_k.top();
+            top_k.pop();
+        }
+
+        // Submit GC tasks respecting a two-tier quota within the remaining capacity:
+        //   - high-tier (ratio > gc_thresh_high): can consume the full remaining_capacity
+        //   - low-tier  (gc_thresh_low < ratio <= gc_thresh_high): capped at remaining_capacity/2
+        // The descending traversal guarantees all high-tier chunks are submitted before low-tier ones.
+        uint32_t newly_submitted = 0;
+        uint32_t low_tier_submitted = 0;
+        for (const auto& info : eligible) {
+            if (newly_submitted >= remaining_capacity) { break; }
+
+            const bool is_high_tier = (info.garbage_ratio_pct > gc_thresh_high);
+            if (!is_high_tier && low_tier_submitted >= low_tier_cap) { continue; }
+
+            auto future = actor->add_gc_task(static_cast< uint8_t >(task_priority::normal), info.chunk_id);
+            if (future.isReady()) {
+                if (future.value()) {
+                    LOGINFOMOD(gcmgr,
+                               "gc task for chunk_id={} on pdev_id={} has been submitted and successfully completed "
+                               "shortly",
+                               info.chunk_id, pdev_id);
+                } else {
+                    LOGWARNMOD(gcmgr,
+                               "got false after add_gc_task for chunk_id={} on pdev_id={}, it means we cannot mark "
+                               "this chunk to gc state(there is an open shard on this chunk ATM) or this task is "
+                               "executed shortly but fails(fail to copy data or update gc index table) ",
+                               info.chunk_id, pdev_id);
+                }
+            } else {
+                ++newly_submitted;
+                if (!is_high_tier) { ++low_tier_submitted; }
+                LOGINFOMOD(gcmgr,
+                           "submitted gc task for chunk_id={} on pdev_id={}, garbage_ratio_pct={}, tier={}, "
+                           "newly_submitted={}/{}, low_tier_submitted={}/{}, total_pending={}",
+                           info.chunk_id, pdev_id, info.garbage_ratio_pct, is_high_tier ? "high" : "low",
+                           newly_submitted, remaining_capacity, low_tier_submitted, low_tier_cap,
+                           already_pending + newly_submitted);
+            }
+        }
+        if (newly_submitted > 0) {
+            LOGINFOMOD(gcmgr,
+                       "pdev_id={} scan complete: submitted {} new gc tasks (total pending now ~{}), "
+                       "low_tier={}, remaining_capacity was {}",
+                       pdev_id, newly_submitted, already_pending + newly_submitted, low_tier_submitted,
+                       remaining_capacity);
         }
     }
 }
@@ -384,6 +476,9 @@ folly::SemiFuture< bool > GCManager::pdev_gc_actor::add_gc_task(uint8_t priority
                 process_gc_task(move_from_chunk, priority, std::move(promise), gc_task_id);
             });
         } else {
+            // Increment BEFORE handing the task to the executor so that an immediately-completing
+            // task (which decrements via ~gc_task_guard) cannot underflow the counter.
+            m_pending_normal_gc_task_count.fetch_add(1, std::memory_order_relaxed);
             m_gc_executor->add([this, gc_task_id, priority, move_from_chunk, promise = std::move(promise)]() mutable {
                 LOGDEBUGMOD(gcmgr, "start gc task : move_from_chunk_id={}, priority={}", move_from_chunk, priority);
                 process_gc_task(move_from_chunk, priority, std::move(promise), gc_task_id);
@@ -1261,6 +1356,11 @@ void GCManager::pdev_gc_actor::process_gc_task(chunk_id_t move_from_chunk, uint8
     if (vchunk->m_state != ChunkState::GC) {
         GCLOGW(task_id, pg_id, NO_SHARD_ID, "move_from_chunk={} is expected to in GC state but not!", move_from_chunk);
         task.setValue(false);
+        // We return before constructing gc_task_guard, so we must mirror its bookkeeping here:
+        // decrement the per-pdev pending normal-priority counter that add_gc_task incremented.
+        if (priority == static_cast< uint8_t >(task_priority::normal)) {
+            m_pending_normal_gc_task_count.fetch_sub(1, std::memory_order_relaxed);
+        }
         m_hs_home_object->gc_manager()->decr_pg_pending_gc_task(pg_id);
         return;
     }
@@ -1426,6 +1526,9 @@ GCManager::pdev_gc_actor::~pdev_gc_actor() {
 GCManager::pdev_gc_actor::gc_task_guard::~gc_task_guard() {
     m_gc_actor->on_gc_task_completed(priority, pg_id, move_from_chunk, move_to_chunk, vchunk_id, success, task_id);
     task.setValue(success);
+    if (priority == static_cast< uint8_t >(task_priority::normal)) {
+        m_gc_actor->m_pending_normal_gc_task_count.fetch_sub(1, std::memory_order_relaxed);
+    }
     m_gc_actor->m_hs_home_object->gc_manager()->decr_pg_pending_gc_task(pg_id);
 }
 

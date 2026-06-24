@@ -246,6 +246,12 @@ public:
         void stop();
         uint32_t get_pdev_id() const { return m_pdev_id; }
 
+        // Returns the number of normal-priority GC tasks that are currently queued or running in
+        // m_gc_executor. Used by scan_chunks_for_gc to enforce a cross-scan quota cap.
+        uint32_t get_pending_normal_task_count() const {
+            return m_pending_normal_gc_task_count.load(std::memory_order_relaxed);
+        }
+
     private:
         void process_gc_task(chunk_id_t move_from_chunk, uint8_t priority, folly::Promise< bool > task,
                              const uint64_t task_id);
@@ -312,6 +318,10 @@ public:
         std::shared_ptr< folly::IOThreadPoolExecutor > m_gc_executor;
         std::shared_ptr< folly::IOThreadPoolExecutor > m_egc_executor;
         std::atomic_bool m_is_stopped{true};
+        // Tracks normal-priority GC tasks that are queued or actively running in m_gc_executor.
+        // Incremented in add_gc_task after a task is enqueued; decremented in on_gc_task_completed.
+        // Used by scan_chunks_for_gc to enforce a true cross-scan quota cap.
+        std::atomic< uint32_t > m_pending_normal_gc_task_count{0};
         // since we have a very small number of reserved chunks, a vector is enough
         // TODO:: use a map if we have a large number of reserved chunks
         std::vector< homestore::superblk< GCManager::gc_reserved_chunk_superblk > > m_reserved_chunks;
@@ -341,7 +351,10 @@ public:
     std::shared_ptr< pdev_gc_actor >
     try_create_pdev_gc_actor(uint32_t pdev_id, const homestore::superblk< GCManager::gc_actor_superblk >& gc_actor_sb);
 
-    bool is_eligible_for_gc(chunk_id_t chunk_id);
+    // Returns the garbage ratio percentage (0-100) for the given chunk if it is a valid GC candidate,
+    // or 0 if the chunk is not eligible (wrong state, no defrag blks, no pg, or pg not gc-able).
+    // Callers compare the returned ratio against their own threshold.
+    uint32_t get_chunk_gc_ratio(chunk_id_t chunk_id);
 
     void handle_all_recovered_gc_tasks();
 

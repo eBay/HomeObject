@@ -35,8 +35,11 @@ table HSBackendSettings {
     //GC scan interval(second)
     gc_scan_interval_sec: uint64 = 60;
 
-    //GC garbage rate threshold, upon which a chunk will be selected for gc
-    gc_garbage_rate_threshold: uint8 = 50;
+    //GC garbage rate high watermark: chunks above this threshold use the full GC task quota
+    gc_garbage_rate_threshold: uint8 = 50 (hotswap);
+
+    //GC garbage rate low watermark: chunks above this but below the high watermark use half the GC task quota
+    gc_garbage_rate_threshold_low: uint8 = 30 (hotswap);
 
     //enable read verify when gc is copying data
     gc_enable_read_verify: bool = true;
