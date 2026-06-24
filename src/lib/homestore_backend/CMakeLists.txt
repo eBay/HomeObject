@@ -138,6 +138,7 @@ add_test(NAME HomestoreResyncTestWithLeaderRestart
         --override_config homestore_config.consensus.max_grpc_message_size=138412032
         --override_config homestore_config.consensus.replace_member_sync_check_interval_ms=1000
         --override_config homestore_config.consensus.laggy_threshold=2000
+        --log_mods homeobject:trace,replication:trace
         --gtest_filter=HomeObjectFixture.RestartLeader*)
 #add_test(NAME HomestoreReplaceMemberRollbackTest
 #        COMMAND homestore_test_dynamic -csv error --executor immediate --config_path ./

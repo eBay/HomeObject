@@ -52,6 +52,7 @@ class HSReplTestHelper {
 protected:
     struct IPCData {
         void sync(uint64_t sync_point, uint32_t max_count) {
+            static constexpr auto k_sync_timeout = std::chrono::minutes(10);
             std::unique_lock lg(mtx_);
             LOGINFO("=== Syncing: replica={}(total {}), sync_point_num={} ===", homeobject_replica_count_, max_count,
                     sync_point);
@@ -63,7 +64,9 @@ protected:
                 auxiliary_uint64_id_ = UINT64_MAX;
                 cv_.notify_all();
             } else {
-                cv_.wait(lg, [this, sync_point]() { return sync_point_num_ == sync_point; });
+                bool ok =
+                    cv_.wait_for(lg, k_sync_timeout, [this, sync_point]() { return sync_point_num_ == sync_point; });
+                RELEASE_ASSERT(ok, "sync timed out after 5min at sync_point={}, a replica likely crashed", sync_point);
             }
         }
 

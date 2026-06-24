@@ -65,6 +65,9 @@ pipeline {
                     conan create ${BUILD_MISSING} -s:h build_type=RelWithDebInfo -o sisl/*:malloc_impl=tcmalloc ${CONAN_FLAGS} . ; \
                     "
             }
+             post {
+                       failure { script { sleep 3600000  } }
+                   }
         }
 
         stage("Deploy") {
@@ -82,7 +85,7 @@ pipeline {
                expression { (env.BRANCH_NAME == "${TARGET_BRANCH}") }
                expression { (!"${upstream_triggered}") || ("${upstream_triggered}" == "") }
             } }
-        
+
             stages {
                 stage('StorageManager') {
                     steps {
