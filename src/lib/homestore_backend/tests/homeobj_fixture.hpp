@@ -49,7 +49,7 @@ public:
 
         HSHomeObject::_hs_chunk_size = SISL_OPTIONS["chunk_size"].as< uint64_t >() * Mi;
         _obj_inst = std::dynamic_pointer_cast< HSHomeObject >(g_helper->build_new_homeobject());
-        
+
         // Used to export metrics, it should be called after init_homeobject
         if (SISL_OPTIONS["enable_http"].as< bool >()) { g_helper->app->start_http_server(); }
         if (!g_helper->is_current_testcase_restarted()) {
@@ -785,12 +785,16 @@ public:
 
     // wait for the last blob to be created locally, which means all the blob before this blob are created
     void wait_for_blob(shard_id_t shard_id, blob_id_t blob_id) {
+        static constexpr auto k_blob_timeout = std::chrono::minutes(10);
+        auto deadline = std::chrono::steady_clock::now() + k_blob_timeout;
         while (true) {
             if (blob_exist(shard_id, blob_id)) {
                 LOGINFO("shard {} blob {} is created locally, which means all the blob before {} are created", shard_id,
                         blob_id, blob_id);
                 return;
             }
+            RELEASE_ASSERT(std::chrono::steady_clock::now() < deadline,
+                           "wait_for_blob timed out after 5min: shard={} blob={}", shard_id, blob_id);
             std::this_thread::sleep_for(1s);
         }
     }
