@@ -355,13 +355,6 @@ TEST_F(HomeObjectFixture, ShardVersionMigrationRecovery) {
             old_sb->version = HSHomeObject::DataHeader::data_header_version;
             old_sb->type = HSHomeObject::DataHeader::data_type_t::SHARD_INFO;
             old_sb->sb_version = 0x02;
-            // Simulate the actual bug: first v2 shard has incorrect type field set to BLOB_INFO
-            if (shard_id == shard_ids[0]) {
-                old_sb->type = HSHomeObject::DataHeader::data_type_t::BLOB_INFO; // Bug scenario
-                LOGINFO("Created v2 shard {} with BLOB_INFO type (bug scenario)", shard_id);
-            } else {
-                LOGINFO("Created v2 shard {}", shard_id);
-            }
             // Convert v3 ShardInfo to v2 ShardInfo (v2 doesn't have sealed_lsn field)
             old_sb->info.id = orig_data.info.id;
             old_sb->info.placement_group = orig_data.info.placement_group;
@@ -377,6 +370,7 @@ TEST_F(HomeObjectFixture, ShardVersionMigrationRecovery) {
             old_sb->p_chunk_id = orig_data.p_chunk_id;
             old_sb->v_chunk_id = orig_data.v_chunk_id;
             old_sb.write();
+            LOGINFO("Created v2 shard {}", shard_id);
         } else {
             // Create v3 shard (already migrated)
             homestore::superblk< HSHomeObject::shard_info_superblk > new_sb("ShardManager");
