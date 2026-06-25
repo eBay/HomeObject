@@ -31,7 +31,7 @@ static ShardInfo shardinfo_from_v2(const HSHomeObject::v2_ShardInfo& v2) {
     info.id = v2.id;
     info.placement_group = v2.placement_group;
     info.state = v2.state;
-    info.lsn = v2.lsn;
+    info.create_lsn = v2.lsn;
     info.sealed_lsn = INT64_MAX;
     info.created_time = v2.created_time;
     info.last_modified_time = v2.last_modified_time;
@@ -46,7 +46,7 @@ static ShardInfo shardinfo_from_v2(const HSHomeObject::v2_ShardInfo& v2) {
 // Handles all supported on-disk versions. Returns nullopt for unknown versions.
 static std::optional< std::tuple< ShardInfo, homestore::chunk_num_t, homestore::chunk_num_t > >
 decode_shard_sb(const HSHomeObject::shard_info_superblk* sb) {
-    if (sb->sb_version >= HSHomeObject::shard_info_superblk::shard_sb_version) {
+    if (sb->sb_version == HSHomeObject::shard_info_superblk::shard_sb_version) {
         return std::make_tuple(sb->info, sb->p_chunk_id, sb->v_chunk_id);
     } else if (sb->sb_version == 0x02) {
         const auto* v2sb = r_cast< const HSHomeObject::v2_shard_info_superblk* >(sb);
@@ -122,7 +122,7 @@ std::string HSHomeObject::serialize_shard_info(const ShardInfo& info) {
     j["shard_info"]["shard_id_t"] = info.id;
     j["shard_info"]["pg_id_t"] = info.placement_group;
     j["shard_info"]["state"] = info.state;
-    j["shard_info"]["lsn"] = info.lsn;
+    j["shard_info"]["lsn"] = info.create_lsn;
     j["shard_info"]["sealed_lsn"] = info.sealed_lsn;
     j["shard_info"]["created_time"] = info.created_time;
     j["shard_info"]["modified_time"] = info.last_modified_time;
@@ -138,7 +138,7 @@ ShardInfo HSHomeObject::deserialize_shard_info(const char* json_str, size_t str_
     shard_info.id = shard_json["shard_info"]["shard_id_t"].get< shard_id_t >();
     shard_info.placement_group = shard_json["shard_info"]["pg_id_t"].get< pg_id_t >();
     shard_info.state = static_cast< ShardInfo::State >(shard_json["shard_info"]["state"].get< int >());
-    shard_info.lsn = shard_json["shard_info"]["lsn"].get< uint64_t >();
+    shard_info.create_lsn = shard_json["shard_info"]["lsn"].get< uint64_t >();
     shard_info.sealed_lsn = shard_json["shard_info"].contains("sealed_lsn")
         ? shard_json["shard_info"]["sealed_lsn"].get< uint64_t >()
         : INT64_MAX;
@@ -239,7 +239,7 @@ ShardManager::AsyncResult< ShardInfo > HSHomeObject::_create_shard(pg_id_t pg_ow
     sb->info = ShardInfo{.id = new_shard_id,
                          .placement_group = pg_owner,
                          .state = ShardInfo::State::OPEN,
-                         .lsn = 0,
+                         .create_lsn = 0,
                          .created_time = create_time,
                          .last_modified_time = create_time,
                          .available_capacity_bytes = size_bytes,
@@ -551,7 +551,7 @@ void HSHomeObject::on_shard_message_commit(int64_t lsn, sisl::blob const& h, sha
             decode_shard_sb(r_cast< const shard_info_superblk* >(h.cbytes() + sizeof(ReplicationMessageHeader)));
         RELEASE_ASSERT(decoded_shard_sb.has_value(), "failed to decode shard superblk in commit CREATE_SHARD_MSG");
         auto& [shard_info, p_chunk_id_unused, v_chunk_id] = decoded_shard_sb.value();
-        shard_info.lsn = lsn;
+        shard_info.create_lsn = lsn;
 
         local_create_shard(shard_info, v_chunk_id, tid);
         if (ctx) { ctx->promise_.setValue(ShardManager::Result< ShardInfo >(shard_info)); }
@@ -624,7 +624,7 @@ void HSHomeObject::on_shard_message_commit(int64_t lsn, sisl::blob const& h, sha
 
 void HSHomeObject::on_shard_meta_blk_found(homestore::meta_blk* mblk, sisl::byte_view buf) {
     auto* header = reinterpret_cast< const DataHeader* >(buf.bytes());
-    RELEASE_ASSERT(header->version == DataHeader::data_header_version, "Unknown shard superblock DataHeader version {}",
+    RELEASE_ASSERT(header->valid(), "Unknown shard superblock DataHeader magic={} version={}", header->magic,
                    header->version);
 
     homestore::superblk< shard_info_superblk > sb(_shard_meta_name);

@@ -265,7 +265,8 @@ void HttpManager::get_shard(const Pistache::Rest::Request& request, Pistache::Ht
     j["created_time"] = shard_info.created_time;
     j["last_modified_time"] = shard_info.last_modified_time;
     j["state"] = shard_info.state;
-    j["lsn"] = shard_info.lsn;
+    j["created_lsn"] = shard_info.create_lsn;
+    j["sealed_lsn"] = shard_info.sealed_lsn;
     j["meta"] = std::string(reinterpret_cast< const char* >(shard_info.meta));
     auto blobs = ho_.get_shard_blobs(shard_id);
     if (!blobs) {
@@ -305,7 +306,8 @@ void HttpManager::dump_chunk(const Pistache::Rest::Request& request, Pistache::H
         shard_json["created_time"] = s.info.created_time;
         shard_json["last_modified_time"] = s.info.last_modified_time;
         shard_json["state"] = s.info.state;
-        shard_json["lsn"] = s.info.lsn;
+        shard_json["created_lsn"] = s.info.create_lsn;
+        shard_json["sealed_lsn"] = s.info.sealed_lsn;
         shard_json["meta"] = std::string(reinterpret_cast< const char* >(s.info.meta));
         j["shards"].push_back(shard_json);
     }
@@ -343,7 +345,8 @@ void HttpManager::dump_shard(const Pistache::Rest::Request& request, Pistache::H
     j["created_time"] = shard_info.created_time;
     j["last_modified_time"] = shard_info.last_modified_time;
     j["state"] = shard_info.state;
-    j["lsn"] = shard_info.lsn;
+    j["created_lsn"] = shard_info.create_lsn;
+    j["sealed_lsn"] = shard_info.sealed_lsn;
     j["meta"] = std::string(reinterpret_cast< const char* >(shard_info.meta));
 
     auto r = ho_.get_shard_blobs(shard_id);

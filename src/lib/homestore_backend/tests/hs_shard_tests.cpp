@@ -366,7 +366,7 @@ TEST_F(HomeObjectFixture, ShardVersionMigrationRecovery) {
             old_sb->info.id = orig_data.info.id;
             old_sb->info.placement_group = orig_data.info.placement_group;
             old_sb->info.state = orig_data.info.state;
-            old_sb->info.lsn = orig_data.info.lsn;
+            old_sb->info.lsn = orig_data.info.create_lsn;
             old_sb->info.created_time = orig_data.info.created_time;
             old_sb->info.last_modified_time = orig_data.info.last_modified_time;
             old_sb->info.available_capacity_bytes = orig_data.info.available_capacity_bytes;
@@ -377,7 +377,6 @@ TEST_F(HomeObjectFixture, ShardVersionMigrationRecovery) {
             old_sb->p_chunk_id = orig_data.p_chunk_id;
             old_sb->v_chunk_id = orig_data.v_chunk_id;
             old_sb.write();
-            LOGINFO("Created v2 shard {}", shard_id);
         } else {
             // Create v3 shard (already migrated)
             homestore::superblk< HSHomeObject::shard_info_superblk > new_sb("ShardManager");

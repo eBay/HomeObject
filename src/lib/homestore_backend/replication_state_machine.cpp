@@ -221,7 +221,7 @@ ReplicationStateMachine::get_blk_alloc_hints(sisl::blob const& header, uint32_t 
             // Old format: shard message carried shard header/footer data blocks. Return committed_blk_id
             // so HomeStore skips block allocation and data write. Shard on_commit will ignore pbas.
             homestore::blk_alloc_hints hints;
-            hints.committed_blk_id = homestore::MultiBlkId{homestore::BlkId{0, 1, 0xFFFF}};
+            hints.committed_blk_id = HSHomeObject::tombstone_pbas;
             LOGW("get_blk_alloc_hints called for old shard message type={}, shard={}, pg={}, return committed_blk hint "
                  "to skip blk allocation",
                  msg_header->msg_type, msg_header->shard_id, msg_header->pg_id);
