@@ -176,11 +176,14 @@ public:
         }
 
         // set v_chunk_id to IPC
-        run_on_pg_leader(pg_id, [&]() {
-            auto v_chunkID = _obj_inst->get_shard_v_chunk_id(shard_id);
-            RELEASE_ASSERT(v_chunkID.has_value(), "failed to get shard v_chunk_id");
-            g_helper->set_auxiliary_uint64_id(v_chunkID.value());
-        });
+        run_on_pg_leader_with_retry(pg_id,
+            [&] { return g_helper->get_auxiliary_uint64_id() != UINT64_MAX; },
+            [&]() -> bool {
+                auto v_chunkID = _obj_inst->get_shard_v_chunk_id(shard_id);
+                RELEASE_ASSERT(v_chunkID.has_value(), "failed to get shard v_chunk_id");
+                g_helper->set_auxiliary_uint64_id(v_chunkID.value());
+                return true;
+            });
 
         // get v_chunk_id from IPC and compare with local
         auto leader_v_chunk_id = g_helper->get_auxiliary_uint64_id();
