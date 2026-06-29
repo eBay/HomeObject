@@ -387,7 +387,7 @@ TEST_F(HomeObjectFixture, SnapshotReceiveHandler) {
         shard.total_capacity_bytes = 1024 * Mi;
         shard.lsn = snp_lsn;
         auto meta_str = "shard meta:" + std::to_string(i);
-        std::memcpy(shard.meta, meta_str.c_str(),meta_str.length());
+        std::memcpy(shard.meta, meta_str.c_str(), meta_str.length());
         shard.meta[meta_str.size()] = '\0';
 
         auto v_chunk_id = _obj_inst->chunk_selector()->get_most_available_blk_chunk(shard.id, pg_id);
@@ -431,7 +431,8 @@ TEST_F(HomeObjectFixture, SnapshotReceiveHandler) {
 
                 // Construct raw blob buffer
                 auto blob = build_blob(cur_blob_id);
-                const auto aligned_hdr_size = sisl::round_up(sizeof(HSHomeObject::BlobHeader), _obj_inst->_data_block_size);
+                const auto aligned_hdr_size =
+                    sisl::round_up(sizeof(HSHomeObject::BlobHeader), _obj_inst->_data_block_size);
                 sisl::io_blob_safe blob_raw(aligned_hdr_size + blob.body.size(), io_align);
                 HSHomeObject::BlobHeader hdr;
                 hdr.type = HSHomeObject::DataHeader::data_type_t::BLOB_INFO;

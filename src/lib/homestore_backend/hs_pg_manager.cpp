@@ -946,7 +946,7 @@ void HSHomeObject::on_pg_meta_blk_found(sisl::byte_view const& buf, void* meta_c
         //
         // When a destroyed repl_dev is recovered, it is skipped (see RaftReplService::load_repl_dev()),
         // so no log replay occurs. We must therefore destroy the pg resource when no repl_dev is found.
-        destoryed_stale_pgs_.emplace_back(pg_id);
+        destroyed_stale_pgs_.emplace_back(pg_id);
     } else {
         rdev = std::move(v.value());
     }

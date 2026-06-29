@@ -104,7 +104,7 @@ private:
 
     // Shard migration info: tracks shards that need migration from v1 to v2 format
     std::vector< shard_id_t > shards_to_migrate_;
-    std::vector< pg_id_t > destoryed_stale_pgs_;
+    std::vector< pg_id_t > destroyed_stale_pgs_;
 
 public:
     // Old version shard_info_superblk (v0.01) - for backward compatibility testing and migration
