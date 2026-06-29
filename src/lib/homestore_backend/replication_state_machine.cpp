@@ -181,8 +181,7 @@ void ReplicationStateMachine::on_error(ReplServiceError error, const sisl::blob&
         break;
     }
     case ReplicationMessageType::CREATE_SHARD_MSG: {
-        bool res = home_object_->release_chunk_based_on_create_shard_message(header);
-        if (!res) { LOGW("failed to release chunk based on create shard msg"); }
+        // Create shard is log only, no need to release chunk anymore, just return error to caller.
         auto result_ctx = boost::static_pointer_cast< repl_result_ctx< ShardManager::Result< ShardInfo > > >(ctx).get();
         result_ctx->promise_.setValue(folly::makeUnexpected(toShardError(error)));
         break;
@@ -213,13 +212,21 @@ ReplicationStateMachine::get_blk_alloc_hints(sisl::blob const& header, uint32_t 
     switch (msg_header->msg_type) {
     case ReplicationMessageType::CREATE_SHARD_MSG:
     case ReplicationMessageType::SEAL_SHARD_MSG: {
-        // CREATE_SHARD and SEAL_SHARD are log-only messages (no data blocks), so get_blk_alloc_hints
-        // should never be called for them. If we reach here, something is wrong.
-        RELEASE_ASSERT(false,
-                       "get_blk_alloc_hints called for log-only message type={}, shard={}, pg={} -- "
-                       "this should never happen",
-                       msg_header->msg_type, msg_header->shard_id, msg_header->pg_id);
-        return folly::makeUnexpected(homestore::ReplServiceError::FAILED);
+        if (data_size == 0) {
+            // New log-only format: should not reach here, but handle gracefully.
+            LOGW("get_blk_alloc_hints called for log-only shard message type={}, shard={}, pg={}", msg_header->msg_type,
+                 msg_header->shard_id, msg_header->pg_id);
+            return homestore::blk_alloc_hints{};
+        } else {
+            // Old format: shard message carried shard header/footer data blocks. Return committed_blk_id
+            // so HomeStore skips block allocation and data write. Shard on_commit will ignore pbas.
+            homestore::blk_alloc_hints hints;
+            hints.committed_blk_id = HSHomeObject::tombstone_pbas;
+            LOGW("get_blk_alloc_hints called for old shard message type={}, shard={}, pg={}, return committed_blk hint "
+                 "to skip blk allocation",
+                 msg_header->msg_type, msg_header->shard_id, msg_header->pg_id);
+            return hints;
+        }
     }
 
     case ReplicationMessageType::PUT_BLOB_MSG:
