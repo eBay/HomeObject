@@ -151,36 +151,40 @@ public:
     ShardInfo create_shard(pg_id_t pg_id, uint64_t size_bytes, std::string meta) {
         g_helper->sync();
         if (!am_i_in_pg(pg_id)) return {};
-        // schedule create_shard only on leader
         auto tid = generateRandomTraceId();
-        run_on_pg_leader(pg_id, [&]() {
-            auto s = _obj_inst->shard_manager()->create_shard(pg_id, size_bytes, meta, tid).get();
-            RELEASE_ASSERT(!!s, "failed to create shard");
-            auto ret = s.value();
-            g_helper->set_uint64_id(ret.id);
-        });
 
-        // wait for create_shard finished on leader and shard_id set to the uint64_id in IPC.
-        while (g_helper->get_uint64_id() == INVALID_UINT64_ID) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-        }
+        // All replicas loop: the current leader runs create_shard and sets uint64_id;
+        // if the leader changes before executing, the new leader picks it up next iteration.
+        // done_check waits for both the IPC slot to be set and local shard replication,
+        // consistent with the put_blob pattern.
+        run_on_pg_leader_with_retry(
+            pg_id,
+            [&] {
+                auto id = g_helper->get_uint64_id();
+                return id != INVALID_UINT64_ID && shard_exist(id, tid);
+            },
+            [&]() -> bool {
+                auto s = _obj_inst->shard_manager()->create_shard(pg_id, size_bytes, meta, tid).get();
+                if (!s) {
+                    if (is_not_leader_error(s.error())) return false;
+                    RELEASE_ASSERT(false, "failed to create shard");
+                }
+                g_helper->set_uint64_id(s.value().id);
+                return true;
+            });
 
-        // get shard_id from IPC
+        // get shard_id from IPC (guaranteed set and locally replicated by done_check)
         auto shard_id = g_helper->get_uint64_id();
 
-        // all the members need to wait for shard creation to complete locally
-        while (!shard_exist(shard_id, tid)) {
-            // for leader, shard creation is done locally and will nor reach here. but for follower, we need to wait for
-            // shard creation to complete locally
-            std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-        }
-
         // set v_chunk_id to IPC
-        run_on_pg_leader(pg_id, [&]() {
-            auto v_chunkID = _obj_inst->get_shard_v_chunk_id(shard_id);
-            RELEASE_ASSERT(v_chunkID.has_value(), "failed to get shard v_chunk_id");
-            g_helper->set_auxiliary_uint64_id(v_chunkID.value());
-        });
+        run_on_pg_leader_with_retry(
+            pg_id, [&] { return g_helper->get_auxiliary_uint64_id() != INVALID_UINT64_ID; },
+            [&]() -> bool {
+                auto v_chunkID = _obj_inst->get_shard_v_chunk_id(shard_id);
+                RELEASE_ASSERT(v_chunkID.has_value(), "failed to get shard v_chunk_id");
+                g_helper->set_auxiliary_uint64_id(v_chunkID.value());
+                return true;
+            });
 
         // get v_chunk_id from IPC and compare with local
         auto leader_v_chunk_id = g_helper->get_auxiliary_uint64_id();
@@ -200,20 +204,29 @@ public:
         if (!r) return {};
         auto pg_id = r.value().placement_group;
 
-        run_on_pg_leader(pg_id, [&]() {
+        std::optional< ShardInfo > sealed_opt;
+        auto is_sealed = [&]() -> bool {
+            auto res = _obj_inst->shard_manager()->get_shard(shard_id, tid).get();
+            if (res && res.value().state == ShardInfo::State::SEALED) {
+                sealed_opt = res.value();
+                return true;
+            }
+            return false;
+        };
+
+        run_on_pg_leader_with_retry(pg_id, is_sealed, [&]() -> bool {
+            if (is_sealed()) return true; // idempotent: already sealed, sealed_opt captured inside is_sealed
             auto s = _obj_inst->shard_manager()->seal_shard(shard_id, tid).get();
-            RELEASE_ASSERT(!!s, "failed to seal shard");
+            if (!s) {
+                if (is_not_leader_error(s.error())) return false;
+                RELEASE_ASSERT(false, "failed to seal shard");
+            }
+            sealed_opt = s.value(); // leader path: capture directly from seal result, no extra get_shard needed
+            return true;
         });
 
-        while (true) {
-            auto r = _obj_inst->shard_manager()->get_shard(shard_id, tid).get();
-            RELEASE_ASSERT(!!r, "failed to get shard {}", shard_id);
-            auto shard_info = r.value();
-            if (shard_info.state == ShardInfo::State::SEALED) { return shard_info; }
-            // for leader, shard sealing is done locally and will nor reach here. but for follower, we need to wait for
-            // shard is sealed locally
-            std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-        }
+        RELEASE_ASSERT(sealed_opt.has_value(), "shard {} not sealed after run_on_pg_leader_with_retry", shard_id);
+        return sealed_opt.value();
     }
 
     void put_blob(shard_id_t shard_id, Blob&& blob) {
@@ -223,21 +236,25 @@ public:
         if (!r) return;
         auto pg_id = r.value().placement_group;
 
-        run_on_pg_leader(pg_id, [&]() {
-            auto b = _obj_inst->blob_manager()->put(shard_id, std::move(blob), tid).get();
-            RELEASE_ASSERT(!!b, "failed to pub blob");
-            g_helper->set_uint64_id(b.value());
-        });
-
-        while (g_helper->get_uint64_id() == INVALID_UINT64_ID) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-        }
-        auto blob_id = g_helper->get_uint64_id();
-
-        // make sure the blob is created locally
-        while (!blob_exist(shard_id, blob_id)) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-        }
+        // Clone blob so it remains valid across retries (the move only happens on success).
+        auto blob_to_put = std::move(blob);
+        // IPC slot carries the assigned blob_id from leader to all replicas.
+        // done_check also waits for blob_exist so no separate replication-wait loop is needed.
+        run_on_pg_leader_with_retry(
+            pg_id,
+            [&] {
+                auto blob_id = g_helper->get_uint64_id();
+                return blob_id != INVALID_UINT64_ID && blob_exist(shard_id, blob_id);
+            },
+            [&]() -> bool {
+                auto b = _obj_inst->blob_manager()->put(shard_id, blob_to_put.clone(), tid).get();
+                if (!b) {
+                    if (is_not_leader_error(b.error())) return false;
+                    RELEASE_ASSERT(false, "failed to put blob");
+                }
+                g_helper->set_uint64_id(b.value());
+                return true;
+            });
     }
 
     /**
@@ -264,48 +281,50 @@ public:
         std::map< shard_id_t, std::map< blob_id_t, uint64_t > > shard_blob_ids_map;
         for (const auto& [pg_id, shard_vec] : pg_shard_id_vec) {
             if (!am_i_in_pg(pg_id)) continue;
-            // the blob_id of a pg is a continuous number starting from 0 and increasing by 1
+            // Build ordered submission list and pre-compute return map (actual_written_blk_count_for_blob is pure).
+            std::vector< std::pair< shard_id_t, blob_id_t > > blob_order;
             blob_id_t current_blob_id{pg_blob_id[pg_id]};
             for (const auto& shard_id : shard_vec) {
                 for (uint64_t k = 0; k < num_blobs_per_shard; k++) {
-                    run_on_pg_leader(pg_id, [&]() {
-                        auto put_blob = build_blob(current_blob_id);
-                        auto tid = generateRandomTraceId();
-
-                        LOGDEBUG("Put blob pg={} shard {} blob {} size {} data {} trace_id={}", pg_id, shard_id,
-                                 current_blob_id, put_blob.body.size(),
-                                 hex_bytes(put_blob.body.cbytes(), std::min(10u, put_blob.body.size())), tid);
-
-                        auto b = _obj_inst->blob_manager()->put(shard_id, std::move(put_blob), tid).get();
-
-                        if (!b) {
-                            LOGERROR("Failed to put blob pg={} shard {} error={}", pg_id, shard_id, b.error());
-                            ASSERT_TRUE(false);
-                        }
-
-                        auto blob_id = b.value();
-                        ASSERT_EQ(blob_id, current_blob_id) << "the predicted blob id is not correct!";
-
-                        if (trigger_cp_on_leader) { trigger_cp(true); }
-                    });
+                    blob_order.emplace_back(shard_id, current_blob_id);
                     auto [it, _] = shard_blob_ids_map.try_emplace(shard_id, std::map< blob_id_t, uint64_t >());
-                    auto& blob_ids = it->second;
-                    blob_ids[current_blob_id] = actual_written_blk_count_for_blob(current_blob_id);
+                    it->second[current_blob_id] = actual_written_blk_count_for_blob(current_blob_id);
                     current_blob_id++;
                 }
             }
+            if (blob_order.empty()) continue;
+            auto [last_shard_id, last_blob_id] = blob_order.back();
 
-            // wait for the last blob to be created locally
-            auto shard_id = shard_vec.back();
+            // All replicas wait for the last blob; the leader submits all missing blobs in one pass.
+            // If leadership changes mid-batch, the new leader resumes from where the old one left off.
+            // In replace_member tests an out-member may be removed before the last blob arrives; am_i_in_pg guards
+            // that.
+            run_on_pg_leader_with_retry(
+                pg_id, [&] { return !am_i_in_pg(pg_id) || blob_exist(last_shard_id, last_blob_id); },
+                [&]() -> bool {
+                    for (auto& [shard_id, blob_id] : blob_order) {
+                        if (blob_exist(shard_id, blob_id)) continue; // already committed, skip
+                        auto put_blob = build_blob(blob_id);
+                        auto tid = generateRandomTraceId();
+                        LOGDEBUG("Put blob pg={} shard {} blob {} size {} data {} trace_id={}", pg_id, shard_id,
+                                 blob_id, put_blob.body.size(),
+                                 hex_bytes(put_blob.body.cbytes(), std::min(10u, put_blob.body.size())), tid);
+                        auto b = _obj_inst->blob_manager()->put(shard_id, std::move(put_blob), tid).get();
+                        if (!b) {
+                            if (is_not_leader_error(b.error())) return false;
+                            RELEASE_ASSERT(false, "Failed to put blob pg={} shard {} error={}", pg_id, shard_id,
+                                           b.error());
+                        }
+                        RELEASE_ASSERT(b.value() == blob_id, "predicted blob_id={} actual={}", blob_id, b.value());
+                        if (trigger_cp_on_leader) { trigger_cp(true); }
+                    }
+                    return true;
+                });
+
+            // Update pg_blob_id after the batch is confirmed so it always reflects actual committed blobs.
             pg_blob_id[pg_id] = current_blob_id;
-            auto last_blob_id = pg_blob_id[pg_id] - 1;
-            // In replace_member test, the time to remove learner is uncertain, so the out member may be stuck here.
-            while (am_i_in_pg(pg_id) && !blob_exist(shard_id, last_blob_id)) {
-                LOGINFO("waiting for pg={} blob {} to be created locally", pg_id, last_blob_id);
-                std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-            }
-            LOGINFO("pg {} shard {} blob {} is created locally, which means all the blob before {} are created", pg_id,
-                    shard_id, last_blob_id, last_blob_id);
+            LOGINFO("pg={} shard={} blob={} confirmed locally — all blobs in batch are visible", pg_id, last_shard_id,
+                    last_blob_id);
         }
 
         return shard_blob_ids_map;
@@ -314,66 +333,86 @@ public:
     void del_blob(pg_id_t pg_id, shard_id_t shard_id, blob_id_t blob_id) {
         g_helper->sync();
         auto tid = generateRandomTraceId();
-        run_on_pg_leader(pg_id, [&]() {
-            auto g = _obj_inst->blob_manager()->del(shard_id, blob_id, tid).get();
-            ASSERT_TRUE(g);
-            LOGINFO("delete blob, pg={} shard {} blob {} trace_id={}", pg_id, shard_id, blob_id, tid);
-        });
-        while (blob_exist(shard_id, blob_id)) {
-            LOGINFO("waiting for shard {} blob {} to be deleted locally, trace_id={}", shard_id, blob_id, tid);
-            std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-        }
+        run_on_pg_leader_with_retry(
+            pg_id, [&] { return !blob_exist(shard_id, blob_id); },
+            [&]() -> bool {
+                if (!blob_exist(shard_id, blob_id)) return true; // idempotent: already deleted
+                auto g = _obj_inst->blob_manager()->del(shard_id, blob_id, tid).get();
+                if (!g) {
+                    if (is_not_leader_error(g.error())) return false;
+                    RELEASE_ASSERT(false, "failed to del blob");
+                }
+                LOGINFO("delete blob, pg={} shard {} blob {} trace_id={}", pg_id, shard_id, blob_id, tid);
+                return true;
+            });
     }
 
     void del_blobs(pg_id_t pg_id, std::map< shard_id_t, std::set< blob_id_t > > const& shard_blob_ids_map) {
         g_helper->sync();
-        auto tid = generateRandomTraceId();
-        for (const auto& [shard_id, blob_ids] : shard_blob_ids_map) {
-            for (const auto& blob_id : blob_ids) {
-                run_on_pg_leader(pg_id, [&]() {
-                    auto g = _obj_inst->blob_manager()->del(shard_id, blob_id, tid).get();
-                    ASSERT_TRUE(g);
-                    LOGDEBUG("delete blob, pg={} shard {} blob {} trace_id={}", pg_id, shard_id, blob_id, tid);
-                });
-            }
-        }
-
+        if (shard_blob_ids_map.empty()) return;
         auto last_shard_id = shard_blob_ids_map.rbegin()->first;
-        auto last_blob_id = *(shard_blob_ids_map.rbegin()->second.rbegin());
-        // wait for the last blob to be deleted locally
+        auto last_blob_id = *shard_blob_ids_map.rbegin()->second.rbegin();
 
-        while (blob_exist(last_shard_id, last_blob_id)) {
-            LOGINFO("waiting for shard {} blob {} to be deleted locally", last_shard_id, last_blob_id);
-            std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-        }
+        // All replicas wait for the last blob to be absent; the leader deletes all surviving blobs in one pass.
+        // If leadership changes mid-batch, the new leader resumes by skipping already-deleted blobs.
+        // !am_i_in_pg guards the replace_member case: a removed member stops receiving raft updates and
+        // would otherwise hang waiting for a deletion it will never see locally.
+        run_on_pg_leader_with_retry(
+            pg_id, [&] { return !am_i_in_pg(pg_id) || !blob_exist(last_shard_id, last_blob_id); },
+            [&]() -> bool {
+                for (const auto& [shard_id, blob_ids] : shard_blob_ids_map) {
+                    for (const auto& blob_id : blob_ids) {
+                        if (!blob_exist(shard_id, blob_id)) continue; // already deleted
+                        auto tid = generateRandomTraceId();
+                        auto g = _obj_inst->blob_manager()->del(shard_id, blob_id, tid).get();
+                        if (!g) {
+                            if (is_not_leader_error(g.error())) return false;
+                            RELEASE_ASSERT(false, "failed to del blob");
+                        }
+                        LOGDEBUG("delete blob, pg={} shard {} blob {} trace_id={}", pg_id, shard_id, blob_id, tid);
+                    }
+                }
+                return true;
+            });
     }
 
-    // TODO:make this run in parallel
     void del_all_blobs(std::map< pg_id_t, std::vector< shard_id_t > > const& pg_shard_id_vec,
                        uint64_t const num_blobs_per_shard, std::map< pg_id_t, blob_id_t >& pg_blob_id) {
         g_helper->sync();
         for (const auto& [pg_id, shard_vec] : pg_shard_id_vec) {
             if (!am_i_in_pg(pg_id)) continue;
-            run_on_pg_leader(pg_id, [&]() {
-                blob_id_t current_blob_id{0};
-                for (; current_blob_id < pg_blob_id[pg_id];) {
-                    for (const auto& shard_id : shard_vec) {
-                        for (uint64_t k = 0; k < num_blobs_per_shard; k++) {
-                            auto tid = generateRandomTraceId();
-                            auto g = _obj_inst->blob_manager()->del(shard_id, current_blob_id, tid).get();
-                            ASSERT_TRUE(g);
-                            LOGINFO("delete blob shard {} blob {}", shard_id, current_blob_id);
-                            current_blob_id++;
-                        }
+            if (shard_vec.empty() || pg_blob_id[pg_id] == 0) continue;
+
+            // Build ordered deletion list matching the put_blobs submission order.
+            std::vector< std::pair< shard_id_t, blob_id_t > > blob_order;
+            blob_id_t current_blob_id{0};
+            for (; current_blob_id < pg_blob_id[pg_id];) {
+                for (const auto& shard_id : shard_vec) {
+                    for (uint64_t k = 0; k < num_blobs_per_shard; k++) {
+                        blob_order.emplace_back(shard_id, current_blob_id);
+                        current_blob_id++;
                     }
                 }
-            });
-            auto shard_id = shard_vec.back();
-            auto blob_id = pg_blob_id[pg_id] - 1;
-            while (blob_exist(shard_id, blob_id)) {
-                LOGINFO("waiting for shard {} blob {} to be deleted locally", shard_id, blob_id);
-                std::this_thread::sleep_for(std::chrono::milliseconds(1000));
             }
+
+            auto [last_shard_id, last_blob_id] = blob_order.back();
+
+            // All replicas wait for the last blob to be absent; the leader deletes all surviving blobs in one pass.
+            run_on_pg_leader_with_retry(
+                pg_id, [&] { return !blob_exist(last_shard_id, last_blob_id); },
+                [&]() -> bool {
+                    for (auto& [shard_id, blob_id] : blob_order) {
+                        if (!blob_exist(shard_id, blob_id)) continue; // already deleted
+                        auto tid = generateRandomTraceId();
+                        auto g = _obj_inst->blob_manager()->del(shard_id, blob_id, tid).get();
+                        if (!g) {
+                            if (is_not_leader_error(g.error())) return false;
+                            RELEASE_ASSERT(false, "failed to del blob");
+                        }
+                        LOGINFO("delete blob shard {} blob {}", shard_id, blob_id);
+                    }
+                    return true;
+                });
         }
     }
 
@@ -743,6 +782,84 @@ public:
         if (!res) return;
         if (g_helper->my_replica_id() != pg_stats.leader_id) { lambda(); }
         // TODO: add logic for check and retry of leader change if necessary
+    }
+
+    // done_check: () -> bool — called by all replicas; returns true when the operation is complete.
+    // leader_op:  () -> bool — called only when this replica is the current leader;
+    //                          true = succeeded, false = lost leadership mid-op (will retry).
+    // Solves the deadlock where a leader switch between sync() and run_on_pg_leader() leaves
+    // nobody executing the lambda: the new leader picks it up in the next loop iteration.
+    void run_on_pg_leader_with_retry(pg_id_t pg_id, auto&& done_check, auto&& leader_op, uint32_t timeout_secs = 60) {
+        auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(timeout_secs);
+        while (std::chrono::steady_clock::now() < deadline) {
+            if (done_check()) return;
+            PGStats pg_stats;
+            auto res = _obj_inst->pg_manager()->get_stats(pg_id, pg_stats);
+            if (!res) {
+                LOGWARN("run_on_pg_leader_with_retry: get_stats failed on pg={}, retrying...", pg_id);
+            } else if (g_helper->my_replica_id() == pg_stats.leader_id) {
+                if (leader_op()) return;
+                // leader_op returned false: lost leadership during execution, retry
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        }
+        PGStats pg_stats{};
+        const auto res = _obj_inst->pg_manager()->get_stats(pg_id, pg_stats);
+        const auto leader_id = res ? pg_stats.leader_id : uuids::nil_uuid();
+        RELEASE_ASSERT(
+            false, "run_on_pg_leader_with_retry: timeout after {}s on pg={} current_leader={} am_leader={} stats_ok={}",
+            timeout_secs, pg_id, leader_id, g_helper->my_replica_id() == leader_id, res);
+    }
+
+    static bool is_not_leader_error(const ShardError& err) {
+        auto c = err.getCode();
+        return c == ShardErrorCode::NOT_LEADER || c == ShardErrorCode::RETRY_REQUEST ||
+            c == ShardErrorCode::PG_NOT_READY;
+    }
+
+    static bool is_not_leader_error(const BlobError& err) {
+        auto c = err.getCode();
+        return c == BlobErrorCode::NOT_LEADER || c == BlobErrorCode::RETRY_REQUEST;
+    }
+
+    // Yields Raft leadership to the desired replica and waits for the change to take effect.
+    // Call before sync() in tests that need a stable, predictable leader.
+    void ensure_leader(pg_id_t pg_id, uint8_t desired_replica = 0, uint32_t timeout_secs = 30) {
+        if (!am_i_in_pg(pg_id)) return;
+        auto desired_id = g_helper->replica_id(desired_replica);
+        if (desired_id.is_nil()) return;
+
+        // Verify the desired replica is actually a member of this PG before attempting transfer.
+        {
+            PGStats pg_stats{};
+            if (!_obj_inst->pg_manager()->get_stats(pg_id, pg_stats)) {
+                LOGWARN("ensure_leader: get_stats failed for pg={}, skipping member validation", pg_id);
+            } else {
+                const bool is_member = std::any_of(pg_stats.members.begin(), pg_stats.members.end(),
+                                                   [&](const auto& m) { return m.id == desired_id; });
+                RELEASE_ASSERT(is_member, "ensure_leader: replica {} is not a member of pg={}", desired_id, pg_id);
+            }
+        }
+
+        auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(timeout_secs);
+        while (true) {
+            RELEASE_ASSERT(std::chrono::steady_clock::now() < deadline,
+                           "ensure_leader: timeout after {}s, pg={} desired={}", timeout_secs, pg_id, desired_id);
+
+            PGStats pg_stats{};
+            const auto res = _obj_inst->pg_manager()->get_stats(pg_id, pg_stats);
+            if (!res || pg_stats.leader_id.is_nil()) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(500));
+                continue;
+            }
+            if (pg_stats.leader_id == desired_id) return;
+
+            if (g_helper->my_replica_id() == pg_stats.leader_id) {
+                auto hs_pg = _obj_inst->get_hs_pg(pg_id);
+                if (hs_pg) { hs_pg->yield_leadership_to_follower(desired_id); }
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        }
     }
 
     peer_id_t get_leader_id(pg_id_t pg_id) {
