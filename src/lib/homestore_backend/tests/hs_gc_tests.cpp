@@ -74,15 +74,13 @@ TEST_F(HomeObjectFixture, BasicGC) {
             uint64_t total_blob_occupied_blk_count{0};
             const auto& shard_vec = pg_shard_id_vec[pg_id];
             for (const auto& shard_id : shard_vec) {
-                // TODO: GC will not persist shard header/footer futher,
-                // temporarily comment blk count check.
-                // total_blob_occupied_blk_count += 2; /*header and footer*/
+                // shard create/seal is log-only; no header/footer blocks written
                 for (const auto& [_, blk_count] : shard_blob_ids_map[shard_id]) {
                     total_blob_occupied_blk_count += blk_count;
                 }
             }
             // check pg durable entities
-            // ASSERT_EQ(hs_pg->durable_entities().total_occupied_blk_count, total_blob_occupied_blk_count);
+            ASSERT_EQ(hs_pg->durable_entities().total_occupied_blk_count, total_blob_occupied_blk_count);
 
             // check pg index table, the valid blob index count should be equal to the blob count
             ASSERT_EQ(get_valid_blob_count_in_pg(pg_id), pg_blob_id[pg_id]);
@@ -117,7 +115,7 @@ TEST_F(HomeObjectFixture, BasicGC) {
             ASSERT_TRUE(chunk_opt.has_value());
             auto chunk_id = chunk_opt.value();
             // now, the chunk state is not determined, maybe GC(being gc) or AVAILABLE(complete gc), skip checking it.
-            uint32_t used_blks{2}; /* header and footer */
+            uint32_t used_blks{0};
 
             for (const auto& [_, blk_count] : blob_to_blk_count) {
                 used_blks += blk_count;
@@ -192,14 +190,13 @@ TEST_F(HomeObjectFixture, BasicGC) {
         uint64_t total_blob_occupied_blk_count{0};
         const auto& shard_vec = pg_shard_id_vec[pg_id];
         for (const auto& shard_id : shard_vec) {
-            // total_blob_occupied_blk_count += 2; /*header and footer*/
             for (const auto& [_, blk_count] : shard_blob_ids_map[shard_id]) {
                 total_blob_occupied_blk_count += blk_count;
             }
         }
 
-        // ASSERT_EQ(hs_pg->pg_sb_->total_occupied_blk_count, total_blob_occupied_blk_count);
-        // ASSERT_EQ(hs_pg->durable_entities().total_occupied_blk_count, total_blob_occupied_blk_count);
+        ASSERT_EQ(hs_pg->pg_sb_->total_occupied_blk_count, total_blob_occupied_blk_count);
+        ASSERT_EQ(hs_pg->durable_entities().total_occupied_blk_count, total_blob_occupied_blk_count);
     }
 
     restart();
@@ -241,13 +238,12 @@ TEST_F(HomeObjectFixture, BasicGC) {
         uint64_t total_blob_occupied_blk_count{0};
         const auto& shard_vec = pg_shard_id_vec[pg_id];
         for (const auto& shard_id : shard_vec) {
-            // total_blob_occupied_blk_count += 2; /*header and footer*/
             for (const auto& [_, blk_count] : shard_blob_ids_map[shard_id]) {
                 total_blob_occupied_blk_count += blk_count;
             }
         }
-        // ASSERT_EQ(hs_pg->pg_sb_->total_occupied_blk_count, total_blob_occupied_blk_count);
-        // ASSERT_EQ(hs_pg->durable_entities().total_occupied_blk_count, total_blob_occupied_blk_count);
+        ASSERT_EQ(hs_pg->pg_sb_->total_occupied_blk_count, total_blob_occupied_blk_count);
+        ASSERT_EQ(hs_pg->durable_entities().total_occupied_blk_count, total_blob_occupied_blk_count);
     }
 
     // delete remaining blobs
@@ -627,13 +623,10 @@ void HomeObjectFixture::EmergentGC(bool with_crash_recovery) {
         uint64_t total_blob_occupied_blk_count{0};
         const auto& shard_vec = pg_shard_id_vec[pg_id];
         for (const auto& shard_id : shard_vec) {
-            total_blob_occupied_blk_count += 2; /*header and footer*/
             for (const auto& [_, blk_count] : shard_blob_ids_map[shard_id]) {
                 total_blob_occupied_blk_count += blk_count;
             }
         }
-        // for each chunk, we have an open shard, which has only header.
-        total_blob_occupied_blk_count -= pg_chunk_nums[pg_id];
 
         ASSERT_EQ(hs_pg->pg_sb_->total_occupied_blk_count, total_blob_occupied_blk_count);
         ASSERT_EQ(hs_pg->durable_entities().total_occupied_blk_count, total_blob_occupied_blk_count);
@@ -685,13 +678,10 @@ void HomeObjectFixture::EmergentGC(bool with_crash_recovery) {
         uint64_t total_blob_occupied_blk_count{0};
         const auto& shard_vec = pg_shard_id_vec[pg_id];
         for (const auto& shard_id : shard_vec) {
-            total_blob_occupied_blk_count += 2; /*header and footer*/
             for (const auto& [_, blk_count] : shard_blob_ids_map[shard_id]) {
                 total_blob_occupied_blk_count += blk_count;
             }
         }
-        // for each chunk, we have an open shard, which has only header.
-        total_blob_occupied_blk_count -= pg_chunk_nums[pg_id];
 
         ASSERT_EQ(hs_pg->pg_sb_->total_occupied_blk_count, total_blob_occupied_blk_count);
         ASSERT_EQ(hs_pg->durable_entities().total_occupied_blk_count, total_blob_occupied_blk_count);
@@ -728,25 +718,23 @@ void HomeObjectFixture::EmergentGC(bool with_crash_recovery) {
 
     futs.clear();
 
-    // for each chunk in this pg, there is only one shard header
+    // for each chunk in this pg, all blobs are gone (no header/footer since shard create is log-only)
     for (const auto& [pg_id, chunk_num] : pg_chunk_nums) {
         const auto pg_chunks = chunk_selector->get_pg_chunks(pg_id);
         for (uint64_t i{0}; i < chunk_num; i++) {
             auto chunk_id = pg_chunks->at(i);
             auto EXVchunk = chunk_selector->get_extend_vchunk(chunk_id);
 
-            // the open shard is not sealed, so there is only the shard header for each shard
-            ASSERT_EQ(EXVchunk->get_used_blks(), 1);
+            ASSERT_EQ(EXVchunk->get_used_blks(), 0);
         }
     }
 
     // check vchunk to pchunk for every pg
     for (const auto& [pg_id, shard_vec] : pg_shard_id_vec) {
         auto& hs_pg = HS_PG_map[pg_id];
-        // check pg durable entities. only shard header left, and every chunk has a open shard, so
-        // total_occupied_blk_count is equal to the num of chunks in this pg since each chunk has a shard header.
-        ASSERT_EQ(hs_pg->pg_sb_->total_occupied_blk_count, pg_chunk_nums[pg_id]);
-        ASSERT_EQ(hs_pg->durable_entities().total_occupied_blk_count, pg_chunk_nums[pg_id]);
+        // all blobs deleted and gc'd; no header/footer blks since shard create is log-only
+        ASSERT_EQ(hs_pg->pg_sb_->total_occupied_blk_count, 0);
+        ASSERT_EQ(hs_pg->durable_entities().total_occupied_blk_count, 0);
 
         // after all blobs have been deleted, the pg index table should be empty
         ASSERT_EQ(get_valid_blob_count_in_pg(pg_id), 0);

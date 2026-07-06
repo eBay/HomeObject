@@ -177,3 +177,17 @@ add_test(NAME HomestoreTestGC_ShardRaceTests
         --override_config hs_backend_config.gc_garbage_rate_threshold=0
         --override_config hs_backend_config.gc_scan_interval_sec=5
         --gtest_filter=HomeObjectFixture.StalePChunkRouteAfterGC:HomeObjectFixture.StaleBlobRouteAfterSealAndGC)
+
+# All tests share disk, port, and shared-memory resources, so run them serially to avoid parallel conflicts.
+set_tests_properties(
+    HomestoreTestBlob
+    HomestoreTestMisc
+    HomestoreTestReplaceMember
+    HomestoreTestReplaceMemberWithBaselineResync
+    HomestoreTestBaselineResync
+    HomestoreResyncTestWithFollowerRestart
+    HomestoreResyncTestWithLeaderRestart
+    FetchDataWithOriginatorGC
+    HomestoreTestGC
+    HomestoreTestGC_ShardRaceTests
+    PROPERTIES RUN_SERIAL TRUE)

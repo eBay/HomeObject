@@ -229,6 +229,20 @@ bool HSHomeObject::local_add_blob_info(pg_id_t const pg_id, BlobInfo const& blob
         return false;
     }
     if (!exist_already) {
+        homestore::chunk_num_t sb_pchunk_id;
+        {
+            std::shared_lock lock_guard(_shard_lock);
+            const auto iter = _shard_map.find(blob_info.shard_id);
+            RELEASE_ASSERT(iter != _shard_map.end(), "shardID=0x{:x}, pg={}, shard=0x{:x}, shard does not exist",
+                           blob_info.shard_id, (blob_info.shard_id >> homeobject::shard_width),
+                           (blob_info.shard_id & homeobject::shard_mask));
+            sb_pchunk_id = d_cast< HS_Shard* >((*iter->second).get())->p_chunk_id();
+        }
+        RELEASE_ASSERT(blob_info.pbas.chunk_num() == sb_pchunk_id,
+                       "traceID={}, commit-time pchunk mismatch: blob pchunk={} shard pchunk={} "
+                       "shard=0x{:x} blob={} pg={}",
+                       tid, blob_info.pbas.chunk_num(), sb_pchunk_id, blob_info.shard_id, blob_info.blob_id, pg_id);
+
         // The PG superblock (durable entities) will be persisted as part of HS_CLIENT Checkpoint, which is always
         // done ahead of the Index Checkpoint. Hence, if the index already has this entity, whatever durable
         // counters updated as part of the update would have been persisted already in PG superblock. So if we were
