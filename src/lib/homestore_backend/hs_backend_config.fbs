@@ -14,7 +14,7 @@ table HSBackendSettings {
     backend_timer_us: uint64 = 60000000 (hotswap);
 
     // Maximum size of a snapshot batch
-    max_snapshot_batch_size_mb: uint64 = 128 (hotswap);
+    max_snapshot_batch_size_mb: uint64 = 64 (hotswap);
 
     //Snapshot blob load retry count
     snapshot_blob_load_retry: uint8 = 3 (hotswap);
