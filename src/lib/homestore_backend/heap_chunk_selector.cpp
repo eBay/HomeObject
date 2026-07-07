@@ -44,34 +44,10 @@ void HeapChunkSelector::add_chunk_internal(const chunk_num_t p_chunk_id, bool ad
     }
 }
 
-// select_chunk will only be called in homestore when creating a shard.
+// select_chunk will never be called in homestore since create shard is log only.
 csharedChunk HeapChunkSelector::select_chunk(homestore::blk_count_t count, const homestore::blk_alloc_hints& hint) {
-    auto& chunkIdHint = hint.chunk_id_hint;
-    if (chunkIdHint.has_value()) {
-        LOGWARNMOD(homeobject, "should not allocated a chunk with exiting chunkIdHint={} in hint!",
-                   chunkIdHint.value());
-        return nullptr;
-    }
-
-    if (!hint.application_hint.has_value()) {
-        LOGWARNMOD(homeobject, "should not allocated a chunk without exiting application_hint in hint!");
-        return nullptr;
-    } else {
-        // Both chunk_num_t and pg_id_t are of type uint16_t.
-        static_assert(std::is_same< pg_id_t, uint16_t >::value, "pg_id_t is not uint16_t");
-        static_assert(std::is_same< homestore::chunk_num_t, uint16_t >::value, "chunk_num_t is not uint16_t");
-        auto application_hint = hint.application_hint.value();
-        pg_id_t pg_id = (uint16_t)(application_hint >> 16 & 0xFFFF);
-        homestore::chunk_num_t v_chunk_id = (uint16_t)(application_hint & 0xFFFF);
-        auto exVChunk = select_specific_chunk(pg_id, v_chunk_id);
-        if (exVChunk == nullptr) {
-            LOGWARNMOD(homeobject, "failed to select chunk with pg_id={} and v_chunk_id={} from application_hint={}",
-                       pg_id, v_chunk_id, application_hint);
-            return nullptr;
-        } else {
-            return exVChunk->get_internal_chunk();
-        }
-    }
+    RELEASE_ASSERT(false, "create shard is log only, this function should never be called");
+    return nullptr;
 }
 
 bool HeapChunkSelector::try_mark_chunk_to_gc_state(const chunk_num_t chunk_id, bool force) {
