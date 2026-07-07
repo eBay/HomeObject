@@ -742,27 +742,6 @@ bool GCManager::pdev_gc_actor::replace_blob_index(
     return true;
 }
 
-sisl::sg_list GCManager::pdev_gc_actor::generate_shard_super_blk_sg_list(shard_id_t shard_id) {
-    // TODO: do the buffer check before using it.
-    auto raw_shard_sb = m_hs_home_object->_get_hs_shard(shard_id);
-    RELEASE_ASSERT(raw_shard_sb, "can not find shard super blk for shard_id=0x{:x} !!!", shard_id);
-
-    const auto shard_sb =
-        const_cast< HSHomeObject::HS_Shard* >(d_cast< const HSHomeObject::HS_Shard* >(raw_shard_sb))->sb_.get();
-
-    auto blk_size = homestore::data_service().get_blk_size();
-    auto shard_sb_size = sizeof(HSHomeObject::shard_info_superblk);
-    auto total_size = sisl::round_up(shard_sb_size, blk_size);
-    auto shard_sb_buf = iomanager.iobuf_alloc(blk_size, total_size);
-
-    std::memcpy(shard_sb_buf, shard_sb, shard_sb_size);
-
-    sisl::sg_list shard_sb_sgs;
-    shard_sb_sgs.size = total_size;
-    shard_sb_sgs.iovs.emplace_back(iovec{.iov_base = shard_sb_buf, .iov_len = total_size});
-    return shard_sb_sgs;
-}
-
 // note that, when we copy data, there is not create shard or put blob in this chunk, only delete blob might happen.
 bool GCManager::pdev_gc_actor::copy_valid_data(
     chunk_id_t move_from_chunk, chunk_id_t move_to_chunk,
@@ -815,13 +794,11 @@ bool GCManager::pdev_gc_actor::copy_valid_data(
 
     homestore::blk_alloc_hints hints;
     hints.chunk_id_hint = move_to_chunk;
-    homestore::MultiBlkId out_blkids;
 
     auto pg_index_table = m_hs_home_object->get_hs_pg(pg_id)->index_table_;
     const auto blk_size = data_service.get_blk_size();
 
     for (const auto& shard_id : shards) {
-        bool is_last_shard = (shard_id == last_shard_id);
         std::vector< std::pair< BlobRouteKey, BlobRouteValue > > valid_blob_indexes;
         auto start_key = BlobRouteKey{BlobRoute{shard_id, std::numeric_limits< uint64_t >::min()}};
         auto end_key = BlobRouteKey{BlobRoute{shard_id, std::numeric_limits< uint64_t >::max()}};
@@ -878,12 +855,8 @@ bool GCManager::pdev_gc_actor::copy_valid_data(
         }
 
         if (valid_blob_indexes.empty()) {
-            GCLOGD(task_id, pg_id, shard_id, "empty shard found in move_from_chunk={}", move_from_chunk);
-            // TODO::send a delete shard request to raft channel. there is a case that when we are doing gc, the
-            // shard becomes empty, need to handle this case
-
-            // we should always write a shard header for the last shard if the state of it is open.
-            if (last_shard_state != ShardInfo::State::OPEN || !is_last_shard) continue;
+            GCLOGD(task_id, pg_id, shard_id, "empty shard found in move_from_chunk={}, skip", move_from_chunk);
+            continue;
         } else {
             GCLOGD(task_id, pg_id, shard_id, "{} valid blobs found in move_from_chunk={}", valid_blob_indexes.size(),
                    move_from_chunk);
@@ -903,220 +876,120 @@ bool GCManager::pdev_gc_actor::copy_valid_data(
             }
         }
 
-        // prepare a shard header for this shard in move_to_chunk
-        sisl::sg_list header_sgs = generate_shard_super_blk_sg_list(shard_id);
+        // copy all the valid blobs in the shard from move_from_chunk to move_to_chunk
+        std::vector< folly::Future< bool > > futs;
+        for (const auto& [k, v] : valid_blob_indexes) {
+            // k is shard_id + blob_id, v is multiblk id
+            auto pba = v.pbas();
+            auto total_size = pba.blk_count() * blk_size;
 
-        // we ignore the state in shard header blk. we never read a shard header since we don`t know where it is(nor
-        // record the pba in indextable)
-#if 0
-        // we now generate shard header from metablk. the shard state in shard header blk should be open, but for sealed
-        // shard, the state in the generated in-memory header_sgs is sealed.
-        if (!is_last_shard_in_emergent_chunk) {
-            // for the sealed shard, the shard state in header should also be open.now, the written header is the same
-            // as footer except the shard state, so we lost the original header.
-            r_cast< HSHomeObject::shard_info_superblk* >(header_sgs.iovs[0].iov_base)->info.state =
-                ShardInfo::State::OPEN;
+            // buffer for read and write data
+            sisl::sg_list data_sgs;
+            data_sgs.size = total_size;
+            data_sgs.iovs.emplace_back(
+                iovec{.iov_base = iomanager.iobuf_alloc(blk_size, total_size), .iov_len = total_size});
 
-            // TODO:: get the original header from the move_from_chunk and change the following part if needed.
-            /*
-            uint64_t created_time;
-            uint64_t last_modified_time;
-            uint64_t available_capacity_bytes;
-            uint64_t total_capacity_bytes;
-            */
-        }
-#endif
-        // TODO::involve ratelimiter in the following code, where read/write are scheduled. or do we need a central
-        // ratelimter shared by all components except client io?
-        const auto succeed_copying_shard =
-            // 1 write the shard header to move_to_chunk
-            data_service.async_alloc_write(header_sgs, hints, out_blkids)
-                .thenValue([this, &hints, &move_to_chunk, &move_from_chunk, &is_last_shard, &shard_id, &blk_size,
-                            &valid_blob_indexes, &data_service, task_id, &last_shard_state, &copied_blobs, pg_id,
-                            header_sgs = std::move(header_sgs)](auto&& err) {
-                    RELEASE_ASSERT(header_sgs.iovs.size() == 1, "header_sgs.iovs.size() should be 1, but not!");
-                    // shard header occupies one blk
-                    COUNTER_INCREMENT(metrics_, gc_write_blk_count, 1);
-                    iomanager.iobuf_free(reinterpret_cast< uint8_t* >(header_sgs.iovs[0].iov_base));
-                    if (err) {
-                        GCLOGE(task_id, pg_id, shard_id,
-                               "Failed to write shard header for move_to_chunk={}, err={}, err_category={}, "
-                               "err_message={}",
-                               move_to_chunk, err.value(), err.category().name(), err.message());
-                        return folly::makeFuture< bool >(false);
-                    }
+            futs.emplace_back(std::move(
+                // read blob from move_from_chunk
+                data_service.async_read(pba, data_sgs, total_size)
+                    .thenValue([this, k, &hints, &move_from_chunk, &move_to_chunk, &data_service, task_id, pg_id,
+                                data_sgs = std::move(data_sgs), pba, &copied_blobs](auto&& err) {
+                        COUNTER_INCREMENT(metrics_, gc_read_blk_count, pba.blk_count());
+                        RELEASE_ASSERT(data_sgs.iovs.size() == 1, "data_sgs.iovs.size() should be 1, but not!");
 
-                    if (valid_blob_indexes.empty()) {
-                        RELEASE_ASSERT(is_last_shard && last_shard_state == ShardInfo::State::OPEN,
-                                       "find empty shard in move_from_chunk={} "
-                                       "but is_emergent is false, shard_id=0x{:x}, pg_id={}",
-                                       move_from_chunk, shard_id, pg_id);
-                        return folly::makeFuture< bool >(true);
-                    }
+                        const auto shard_id = k.key().shard;
+                        const auto blob_id = k.key().blob;
 
-                    std::vector< folly::Future< bool > > futs;
+                        if (err) {
+                            GCLOGE(task_id, pg_id, shard_id,
+                                   "Failed to read blob from move_from_chunk={}, blob_id={}, err={}, "
+                                   "err_category={}, err_message={}",
+                                   move_from_chunk, blob_id, err.value(), err.category().name(), err.message());
+                            iomanager.iobuf_free(reinterpret_cast< uint8_t* >(data_sgs.iovs[0].iov_base));
+                            return folly::makeFuture< bool >(false);
+                        }
 
-                    // 2 copy all the valid blobs in the shard from move_from_chunk to move_to_chunk
-                    for (const auto& [k, v] : valid_blob_indexes) {
-                        // k is shard_id + blob_id, v is multiblk id
-                        auto pba = v.pbas();
-                        auto total_size = pba.blk_count() * blk_size;
+                        GCLOGD(task_id, pg_id, shard_id,
+                               "successfully read blob from move_from_chunk={}, blob_id={}, pba={}", move_from_chunk,
+                               blob_id, pba.to_string());
 
-                        // buffer for read and write data
-                        sisl::sg_list data_sgs;
-                        data_sgs.size = total_size;
-                        data_sgs.iovs.emplace_back(
-                            iovec{.iov_base = iomanager.iobuf_alloc(blk_size, total_size), .iov_len = total_size});
+                        if (m_enable_read_verify) {
+                            // after a blob is deleted at originator, if it receives a fetch_data request of
+                            // this blob, a fake delete_marker blob will be returned to the requester. This
+                            // case happens in incremental resync scenario. when verifying blob, if it is a
+                            // delete_marker, we let it pass the verification in gc scenario so that it will
+                            // not block any gc task.
+                            if (!m_hs_home_object->verify_blob(data_sgs.iovs[0].iov_base, shard_id, blob_id, true)) {
+                                GCLOGE(task_id, pg_id, shard_id,
+                                       "blob verification fails for move_from_chunk={}, blob_id={}, pba={}",
+                                       move_from_chunk, blob_id, pba.to_string());
+                                iomanager.iobuf_free(reinterpret_cast< uint8_t* >(data_sgs.iovs[0].iov_base));
+                                return folly::makeFuture< bool >(false);
+                            }
+                        }
 
-                        futs.emplace_back(std::move(
-                            // read blob from move_from_chunk
-                            data_service.async_read(pba, data_sgs, total_size)
-                                .thenValue([this, k, &hints, &move_from_chunk, &move_to_chunk, &data_service, task_id,
-                                            pg_id, data_sgs = std::move(data_sgs), pba, &copied_blobs](auto&& err) {
-                                    COUNTER_INCREMENT(metrics_, gc_read_blk_count, pba.blk_count());
-                                    RELEASE_ASSERT(data_sgs.iovs.size() == 1,
-                                                   "data_sgs.iovs.size() should be 1, but not!");
-
-                                    const auto shard_id = k.key().shard;
-                                    const auto blob_id = k.key().blob;
-
-                                    if (err) {
-                                        GCLOGE(task_id, pg_id, shard_id,
-                                               "Failed to read blob from move_from_chunk={}, blob_id={}, err={}, "
-                                               "err_category={}, err_message={}",
-                                               move_from_chunk, blob_id, err.value(), err.category().name(),
-                                               err.message());
-                                        iomanager.iobuf_free(reinterpret_cast< uint8_t* >(data_sgs.iovs[0].iov_base));
-                                        return folly::makeFuture< bool >(false);
-                                    }
-
-                                    GCLOGD(task_id, pg_id, shard_id,
-                                           "successfully read blob from move_from_chunk={}, blob_id={}, pba={}",
-                                           move_from_chunk, blob_id, pba.to_string());
-
-                                    if (m_enable_read_verify) {
-                                        // after a blob is deleted at originator, if it receives a fetch_data request of
-                                        // this blob, a fake delete_marker blob will be returned to the requester. This
-                                        // case happens in incremental resync scenario. when verifying blob, if it is a
-                                        // delete_marker, we let it pass the verification in gc scenario so that it will
-                                        // not block any gc task.
-                                        if (!m_hs_home_object->verify_blob(data_sgs.iovs[0].iov_base, shard_id, blob_id,
-                                                                           true)) {
-                                            GCLOGE(task_id, pg_id, shard_id,
-                                                   "blob verification fails for move_from_chunk={}, blob_id={}, pba={}",
-                                                   move_from_chunk, blob_id, pba.to_string());
-                                            iomanager.iobuf_free(
-                                                reinterpret_cast< uint8_t* >(data_sgs.iovs[0].iov_base));
-                                            return folly::makeFuture< bool >(false);
-                                        }
-                                    }
-
-                                    // write the blob to the move_to_chunk. we do not care about the blob order in a
-                                    // shard since we can not guarantee a certain order
-                                    homestore::MultiBlkId new_pba;
-                                    return data_service.async_alloc_write(data_sgs, hints, new_pba)
-                                        .thenValue([this, shard_id, blob_id, new_pba, &move_to_chunk, task_id, pg_id,
-                                                    &copied_blobs, data_sgs = std::move(data_sgs)](auto&& err) {
-                                            COUNTER_INCREMENT(metrics_, gc_write_blk_count, new_pba.blk_count());
-                                            RELEASE_ASSERT(data_sgs.iovs.size() == 1,
-                                                           "data_sgs.iovs.size() should be 1, but not!");
-                                            iomanager.iobuf_free(
-                                                reinterpret_cast< uint8_t* >(data_sgs.iovs[0].iov_base));
-                                            if (err) {
-                                                GCLOGE(task_id, pg_id, shard_id,
-                                                       "Failed to write blob to move_to_chunk={}, blob_id={}, err={}, "
-                                                       "err_category={}, err_message={}",
-                                                       move_to_chunk, blob_id, err.value(), err.category().name(),
-                                                       err.message());
-                                                return false;
-                                            }
-
-                                            // insert a new entry to gc index table for this blob. [move_to_chunk_id,
-                                            // shard_id, blob_id] -> [new pba]
-                                            BlobRouteByChunkKey key{BlobRouteByChunk{move_to_chunk, shard_id, blob_id}};
-                                            BlobRouteValue value{new_pba}, existing_value;
-
-                                            homestore::BtreeSinglePutRequest put_req{
-                                                &key, &value, homestore::btree_put_type::INSERT, &existing_value};
-                                            auto status = m_index_table->put(put_req);
-                                            if (status != homestore::btree_status_t::success) {
-                                                GCLOGE(task_id, pg_id, shard_id,
-                                                       "Failed to insert new key to gc index table for "
-                                                       "move_to_chunk={}, blob_id={}, err={}",
-                                                       move_to_chunk, blob_id, status);
-                                                return false;
-                                            }
-
-                                            GCLOGD(task_id, pg_id, shard_id,
-                                                   "successfully insert new key to gc index table for "
-                                                   "move_to_chunk={}, blob_id={}, new_pba={}",
-                                                   move_to_chunk, blob_id, new_pba.to_string());
-
-                                            BlobRouteByChunk route_key{move_to_chunk, shard_id, blob_id};
-                                            auto ret = copied_blobs.insert(route_key, value);
-                                            RELEASE_ASSERT(ret.second,
-                                                           "we should not copy the same blob twice in gc task, "
-                                                           "move_to_chunk={}, shard_id=0x{:x}, pg_id={}, blob_id={}",
-                                                           move_to_chunk, shard_id, pg_id, blob_id);
-
-                                            return true;
-                                        });
-                                })));
-                    }
-
-                    // 3 write a shard footer for this shard
-                    sisl::sg_list footer_sgs = generate_shard_super_blk_sg_list(shard_id);
-                    return folly::collectAllUnsafe(futs)
-                        .thenValue([this, &is_last_shard, &shard_id, &blk_size, &hints, &move_to_chunk, pg_id,
-                                    &last_shard_state, task_id, &data_service, footer_sgs](auto&& results) {
-                            // if any blob copy fails, we will not write footer, and drop this gc task
-                            for (auto const& ok : results) {
-                                RELEASE_ASSERT(ok.hasValue(), "we never throw any exception when copying data");
-                                if (!ok.value()) {
+                        // write the blob to the move_to_chunk. we do not care about the blob order in a
+                        // shard since we can not guarantee a certain order
+                        homestore::MultiBlkId new_pba;
+                        return data_service.async_alloc_write(data_sgs, hints, new_pba)
+                            .thenValue([this, shard_id, blob_id, new_pba, &move_to_chunk, task_id, pg_id, &copied_blobs,
+                                        data_sgs = std::move(data_sgs)](auto&& err) {
+                                COUNTER_INCREMENT(metrics_, gc_write_blk_count, new_pba.blk_count());
+                                RELEASE_ASSERT(data_sgs.iovs.size() == 1, "data_sgs.iovs.size() should be 1, but not!");
+                                iomanager.iobuf_free(reinterpret_cast< uint8_t* >(data_sgs.iovs[0].iov_base));
+                                if (err) {
                                     GCLOGE(task_id, pg_id, shard_id,
-                                           "Failed to copy blob for move_to_chunk={}, will cancel this task",
-                                           move_to_chunk);
-                                    // if any op fails, we drop this gc task.
-                                    return folly::makeFuture< std::error_code >(
-                                        std::make_error_code(std::errc::operation_canceled));
+                                           "Failed to write blob to move_to_chunk={}, blob_id={}, err={}, "
+                                           "err_category={}, err_message={}",
+                                           move_to_chunk, blob_id, err.value(), err.category().name(), err.message());
+                                    return false;
                                 }
-                            }
 
-                            // we skip writing footer only if the last shard of this chunk is in open state.
-                            if (is_last_shard && last_shard_state == ShardInfo::State::OPEN) {
+                                // insert a new entry to gc index table for this blob. [move_to_chunk_id,
+                                // shard_id, blob_id] -> [new pba]
+                                BlobRouteByChunkKey key{BlobRouteByChunk{move_to_chunk, shard_id, blob_id}};
+                                BlobRouteValue value{new_pba}, existing_value;
+
+                                homestore::BtreeSinglePutRequest put_req{
+                                    &key, &value, homestore::btree_put_type::INSERT, &existing_value};
+                                auto status = m_index_table->put(put_req);
+                                if (status != homestore::btree_status_t::success) {
+                                    GCLOGE(task_id, pg_id, shard_id,
+                                           "Failed to insert new key to gc index table for "
+                                           "move_to_chunk={}, blob_id={}, err={}",
+                                           move_to_chunk, blob_id, status);
+                                    return false;
+                                }
+
                                 GCLOGD(task_id, pg_id, shard_id,
-                                       "skip writing the footer for move_to_chunk={} for emergent gc task",
-                                       move_to_chunk);
-                                return folly::makeFuture< std::error_code >(std::error_code{});
-                            }
+                                       "successfully insert new key to gc index table for "
+                                       "move_to_chunk={}, blob_id={}, new_pba={}",
+                                       move_to_chunk, blob_id, new_pba.to_string());
 
-                            // write shard footer, which occupies one blk
+                                BlobRouteByChunk route_key{move_to_chunk, shard_id, blob_id};
+                                auto ret = copied_blobs.insert(route_key, value);
+                                RELEASE_ASSERT(ret.second,
+                                               "we should not copy the same blob twice in gc task, "
+                                               "move_to_chunk={}, shard_id=0x{:x}, pg_id={}, blob_id={}",
+                                               move_to_chunk, shard_id, pg_id, blob_id);
 
-                            // in fact , we have a dangling reference of out_blkids here, but it does not matter since
-                            // we do not use it after this and the async_alloc_write will complete soon and the memory
-                            // of out_blkids will be released after that.
-                            homestore::MultiBlkId out_blkids;
-                            COUNTER_INCREMENT(metrics_, gc_write_blk_count, 1);
-                            return data_service.async_alloc_write(footer_sgs, hints, out_blkids);
-                        })
-                        .thenValue([this, &move_to_chunk, &shard_id, footer_sgs, task_id, pg_id](auto&& err) {
-                            RELEASE_ASSERT(footer_sgs.iovs.size() == 1, "footer_sgs.iovs.size() should be 1, but not!");
-                            iomanager.iobuf_free(reinterpret_cast< uint8_t* >(footer_sgs.iovs[0].iov_base));
+                                return true;
+                            });
+                    })));
+        }
 
-                            if (err) {
-                                // we will come here if:
-                                //  1 any blob copy fails, then err is operation_cancelled
-                                //  2 write footer fails， then err is the error code of write footer
-                                GCLOGE(
-                                    task_id, pg_id, shard_id,
-                                    "Failed to copy some blobs or failed to write shard footer for move_to_chunk={}, "
-                                    "err={}, error_category={}, error_message={}, pls check the log for more "
-                                    "detailed info",
-                                    move_to_chunk, err.value(), err.category().name(), err.message());
-                                return false;
-                            }
-                            return true;
-                        });
+        const auto succeed_copying_shard =
+            folly::collectAllUnsafe(futs)
+                .thenValue([this, &shard_id, &move_to_chunk, task_id, pg_id](auto&& results) {
+                    for (auto const& ok : results) {
+                        RELEASE_ASSERT(ok.hasValue(), "we never throw any exception when copying data");
+                        if (!ok.value()) {
+                            GCLOGE(task_id, pg_id, shard_id,
+                                   "Failed to copy blob for move_to_chunk={}, will cancel this task", move_to_chunk);
+                            return false;
+                        }
+                    }
+                    return true;
                 })
                 .get();
 

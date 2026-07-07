@@ -44,27 +44,10 @@ void HeapChunkSelector::add_chunk_internal(const chunk_num_t p_chunk_id, bool ad
     }
 }
 
-// select_chunk will only be called in homestore when creating a shard.
+// select_chunk will never be called in homestore since create shard is log only.
 csharedChunk HeapChunkSelector::select_chunk(homestore::blk_count_t count, const homestore::blk_alloc_hints& hint) {
-    auto& chunkIdHint = hint.chunk_id_hint;
-    if (chunkIdHint.has_value()) {
-        LOGWARNMOD(homeobject, "should not allocated a chunk with exiting chunkIdHint={} in hint!",
-                   chunkIdHint.value());
-        return nullptr;
-    }
-
-    if (!hint.application_hint.has_value()) {
-        LOGWARNMOD(homeobject, "should not allocated a chunk without exiting application_hint in hint!");
-        return nullptr;
-    } else {
-        // Both chunk_num_t and pg_id_t are of type uint16_t.
-        static_assert(std::is_same< pg_id_t, uint16_t >::value, "pg_id_t is not uint16_t");
-        static_assert(std::is_same< homestore::chunk_num_t, uint16_t >::value, "chunk_num_t is not uint16_t");
-        auto application_hint = hint.application_hint.value();
-        pg_id_t pg_id = (uint16_t)(application_hint >> 16 & 0xFFFF);
-        homestore::chunk_num_t v_chunk_id = (uint16_t)(application_hint & 0xFFFF);
-        return select_specific_chunk(pg_id, v_chunk_id);
-    }
+    RELEASE_ASSERT(false, "create shard is log only, this function should never be called");
+    return nullptr;
 }
 
 bool HeapChunkSelector::try_mark_chunk_to_gc_state(const chunk_num_t chunk_id, bool force) {
@@ -106,7 +89,8 @@ void HeapChunkSelector::mark_chunk_out_of_gc_state(const chunk_num_t chunk_id, c
                 final_state);
 }
 
-csharedChunk HeapChunkSelector::select_specific_chunk(const pg_id_t pg_id, const chunk_num_t v_chunk_id) {
+homestore::cshared< HeapChunkSelector::ExtendedVChunk >
+HeapChunkSelector::select_specific_chunk(const pg_id_t pg_id, const chunk_num_t v_chunk_id) {
     homestore::shared< ExtendedVChunk > chunk;
 
     while (true) {
@@ -147,7 +131,7 @@ csharedChunk HeapChunkSelector::select_specific_chunk(const pg_id_t pg_id, const
 
     LOGDEBUGMOD(homeobject, "chunk={} is selected for v_chunk_id={}, pg={}", chunk->get_chunk_id(), v_chunk_id, pg_id);
 
-    return chunk->get_internal_chunk();
+    return chunk;
 }
 
 void HeapChunkSelector::foreach_chunks(std::function< void(csharedChunk&) >&& cb) {
@@ -510,12 +494,13 @@ std::shared_ptr< const std::vector< homestore::chunk_num_t > > HeapChunkSelector
     return p_chunk_ids;
 }
 
-std::optional< homestore::chunk_num_t > HeapChunkSelector::get_most_available_blk_chunk(uint64_t ctx, pg_id_t pg_id) {
+homestore::cshared< HeapChunkSelector::ExtendedVChunk >
+HeapChunkSelector::pick_most_available_blk_chunk(uint64_t ctx, pg_id_t pg_id) {
     std::shared_lock lock_guard(m_chunk_selector_mtx);
     auto pg_it = m_per_pg_chunks.find(pg_id);
     if (pg_it == m_per_pg_chunks.end()) {
         LOGWARNMOD(homeobject, "No pg found for pg={}", pg_id);
-        return std::nullopt;
+        return nullptr;
     }
     std::scoped_lock lock(pg_it->second->mtx);
     auto pg_chunk_collection = pg_it->second;
@@ -527,7 +512,7 @@ std::optional< homestore::chunk_num_t > HeapChunkSelector::get_most_available_bl
                          });
     if (!(*max_it)->available()) {
         LOGWARNMOD(homeobject, "No available chunk for pg={}, ctx=0x{:x}", pg_id, ctx);
-        return std::nullopt;
+        return nullptr;
     }
     auto v_chunk_id = std::distance(pg_chunks.begin(), max_it);
     LOGDEBUGMOD(homeobject, "Picked v_chunk_id={} : [p_chunk_id={}, avail={}], ctx=0x{:x}", v_chunk_id,
@@ -535,7 +520,7 @@ std::optional< homestore::chunk_num_t > HeapChunkSelector::get_most_available_bl
     pg_chunks[v_chunk_id]->m_state = ChunkState::INUSE;
     --pg_chunk_collection->available_num_chunks;
     pg_chunk_collection->available_blk_count -= pg_chunks[v_chunk_id]->available_blks();
-    return v_chunk_id;
+    return pg_chunks[v_chunk_id];
 }
 
 // return the maximum number of chunks that can be allocated on pdev

@@ -646,7 +646,7 @@ public:
         EXPECT_EQ(lhs.id, rhs.id);
         EXPECT_EQ(lhs.placement_group, rhs.placement_group);
         EXPECT_EQ(lhs.state, rhs.state);
-        EXPECT_EQ(lhs.lsn, rhs.lsn);
+        EXPECT_EQ(lhs.create_lsn, rhs.create_lsn);
         EXPECT_EQ(lhs.created_time, rhs.created_time);
         EXPECT_EQ(lhs.last_modified_time, rhs.last_modified_time);
         EXPECT_EQ(lhs.available_capacity_bytes, rhs.available_capacity_bytes);

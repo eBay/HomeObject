@@ -168,8 +168,6 @@ TEST_F(HeapChunkSelectorTest, test_for_each_chunk) {
 TEST_F(HeapChunkSelectorTest, test_total_disks) { ASSERT_EQ(HCS.total_disks(), 3); }
 
 TEST_F(HeapChunkSelectorTest, test_identical_layout) {
-    const homestore::blk_count_t count = 1;
-    homestore::blk_alloc_hints hints;
     for (uint16_t pg_id = 1; pg_id < 4; ++pg_id) {
         chunk_num_t p_chunk_id = 0;
         auto pg_chunk_collection = HCS.m_per_pg_chunks[pg_id];
@@ -177,38 +175,39 @@ TEST_F(HeapChunkSelectorTest, test_identical_layout) {
         for (int j = 3; j > 0; --j) {
             ASSERT_EQ(pg_chunk_collection->available_blk_count, start_available_blk_count);
 
-            const auto v_chunkID = HCS.get_most_available_blk_chunk(j, pg_id);
-            ASSERT_TRUE(v_chunkID.has_value());
-            p_chunk_id = pg_chunk_collection->m_pg_chunks[v_chunkID.value()]->get_chunk_id();
+            const auto exVchunk = HCS.pick_most_available_blk_chunk(j, pg_id);
+            ASSERT_NE(exVchunk, nullptr);
+            ASSERT_TRUE(exVchunk->m_v_chunk_id.has_value());
+            const auto v_chunk_id = exVchunk->m_v_chunk_id.value();
+            p_chunk_id = pg_chunk_collection->m_pg_chunks[v_chunk_id]->get_chunk_id();
             ASSERT_EQ(HCS.m_chunks[p_chunk_id]->m_state, ChunkState::INUSE);
             ASSERT_EQ(pg_chunk_collection->available_num_chunks, j - 1);
             ASSERT_EQ(pg_chunk_collection->available_blk_count, start_available_blk_count - j);
 
             const auto v_chunkID2 = HCS.m_chunks[p_chunk_id]->m_v_chunk_id;
             ASSERT_TRUE(v_chunkID2.has_value());
-            ASSERT_EQ(v_chunkID.value(), v_chunkID2.value());
-            hints.application_hint = ((uint64_t)pg_id << 16) | v_chunkID.value();
+            ASSERT_EQ(v_chunk_id, v_chunkID2.value());
 
-            // mock leader on_commit
-            ASSERT_NE(HCS.select_chunk(count, hints), nullptr);
+            // mock leader on_commit: chunk already INUSE, select_specific_chunk is a no-op
+            ASSERT_NE(HCS.select_specific_chunk(pg_id, v_chunk_id), nullptr);
             ASSERT_EQ(HCS.m_chunks[p_chunk_id]->m_state, ChunkState::INUSE);
             ASSERT_EQ(pg_chunk_collection->available_num_chunks, j - 1);
             ASSERT_EQ(pg_chunk_collection->available_blk_count, start_available_blk_count - j);
 
             // mock leader rollback or on_error
-            ASSERT_TRUE(HCS.release_chunk(pg_id, v_chunkID.value()));
+            ASSERT_TRUE(HCS.release_chunk(pg_id, v_chunk_id));
             ASSERT_EQ(HCS.m_chunks[p_chunk_id]->m_state, ChunkState::AVAILABLE);
             ASSERT_EQ(pg_chunk_collection->available_num_chunks, j);
             ASSERT_EQ(pg_chunk_collection->available_blk_count, start_available_blk_count);
 
             // mock follower rollback or on_error
-            ASSERT_TRUE(HCS.release_chunk(pg_id, v_chunkID.value()));
+            ASSERT_TRUE(HCS.release_chunk(pg_id, v_chunk_id));
             ASSERT_EQ(HCS.m_chunks[p_chunk_id]->m_state, ChunkState::AVAILABLE);
             ASSERT_EQ(pg_chunk_collection->available_num_chunks, j);
             ASSERT_EQ(pg_chunk_collection->available_blk_count, start_available_blk_count);
 
             // mock follower on_commit
-            ASSERT_NE(HCS.select_chunk(count, hints), nullptr); // leader select
+            ASSERT_NE(HCS.select_specific_chunk(pg_id, v_chunk_id), nullptr);
             ASSERT_EQ(HCS.m_chunks[p_chunk_id]->m_state, ChunkState::INUSE);
             ASSERT_EQ(pg_chunk_collection->available_num_chunks, j - 1);
             ASSERT_EQ(pg_chunk_collection->available_blk_count, start_available_blk_count - j);
@@ -216,25 +215,7 @@ TEST_F(HeapChunkSelectorTest, test_identical_layout) {
             start_available_blk_count -= j;
         }
         // all chunks have been given out
-        ASSERT_FALSE(HCS.get_most_available_blk_chunk(9999, pg_id).has_value());
-    }
-}
-
-TEST_F(HeapChunkSelectorTest, test_select_chunk) {
-    homestore::blk_count_t count = 1;
-    homestore::blk_alloc_hints hints;
-    auto chunk = HCS.select_chunk(count, hints);
-    ASSERT_EQ(chunk, nullptr);
-
-    for (uint16_t pg_id = 1; pg_id < 4; ++pg_id) {
-        for (int j = 3; j > 0; --j) {
-            chunk_num_t v_chunk_id = 3 - j;
-            hints.application_hint = ((uint64_t)pg_id << 16) | v_chunk_id;
-            auto chunk = HCS.select_chunk(count, hints);
-            ASSERT_NE(chunk, nullptr);
-            ASSERT_EQ(chunk->get_pdev_id(), pg_id); // in this ut, pg_id is same as pdev id
-            ASSERT_EQ(chunk->available_blks(), j);
-        }
+        ASSERT_EQ(nullptr, HCS.pick_most_available_blk_chunk(9999, pg_id));
     }
 }
 
@@ -252,16 +233,17 @@ TEST_F(HeapChunkSelectorTest, test_select_specific_chunk_and_release_chunk) {
         const chunk_num_t p_chunk_id = chunk_ids->at(v_chunk_id);
 
         auto pg_chunk_collection = HCS.m_per_pg_chunks[pg_id];
-        auto chunk = HCS.select_specific_chunk(pg_id, v_chunk_id);
-        ASSERT_NE(nullptr, chunk);
-        ASSERT_EQ(chunk->get_chunk_id(), p_chunk_id);
+        auto p_chunkID = HCS.select_specific_chunk(pg_id, v_chunk_id);
+        ASSERT_NE(p_chunkID, nullptr);
+        ASSERT_EQ(p_chunkID->get_chunk_id(), p_chunk_id);
         ASSERT_EQ(HCS.m_chunks[p_chunk_id]->m_state, ChunkState::INUSE);
         ASSERT_EQ(pg_chunk_collection->available_num_chunks, 2);
         ASSERT_EQ(pg_chunk_collection->available_blk_count, 1 + 2);
 
         // test select an INUSE chunk
-        chunk = HCS.select_specific_chunk(pg_id, v_chunk_id);
-        ASSERT_NE(nullptr, chunk);
+        p_chunkID = HCS.select_specific_chunk(pg_id, v_chunk_id);
+        ASSERT_NE(p_chunkID, nullptr);
+        ASSERT_EQ(p_chunkID->get_chunk_id(), p_chunk_id);
         ASSERT_EQ(HCS.m_chunks[p_chunk_id]->m_state, ChunkState::INUSE);
         ASSERT_EQ(pg_chunk_collection->available_num_chunks, 2);
         ASSERT_EQ(pg_chunk_collection->available_blk_count, 1 + 2);
@@ -279,13 +261,14 @@ TEST_F(HeapChunkSelectorTest, test_select_specific_chunk_and_release_chunk) {
         ASSERT_EQ(pg_chunk_collection->available_blk_count, 1 + 2 + 3);
 
         // select again
-        chunk = HCS.select_specific_chunk(pg_id, v_chunk_id);
-        ASSERT_NE(nullptr, chunk);
+        p_chunkID = HCS.select_specific_chunk(pg_id, v_chunk_id);
+        ASSERT_NE(p_chunkID, nullptr);
+        ASSERT_EQ(p_chunkID->get_chunk_id(), p_chunk_id);
         ASSERT_EQ(HCS.m_chunks[p_chunk_id]->m_state, ChunkState::INUSE);
         ASSERT_EQ(pg_chunk_collection->available_num_chunks, 2);
         ASSERT_EQ(pg_chunk_collection->available_blk_count, 1 + 2);
-        ASSERT_EQ(pg_id, chunk->get_pdev_id()); // in this ut, pg_id is same as pdev id
-        ASSERT_EQ(p_chunk_id, chunk->get_chunk_id());
+        ASSERT_EQ(pg_id, HCS.m_chunks[p_chunk_id]->get_pdev_id()); // in this ut, pg_id is same as pdev id
+        ASSERT_EQ(p_chunk_id, HCS.m_chunks[p_chunk_id]->get_chunk_id());
     }
 }
 
@@ -378,12 +361,13 @@ TEST_F(HeapChunkSelectorTest, test_recovery) {
         ASSERT_EQ(pg_chunk_collection->m_pg_chunks[0]->m_state, ChunkState::INUSE);
         ASSERT_EQ(pg_chunk_collection->m_pg_chunks[1]->m_state, ChunkState::AVAILABLE);
 
-        const auto v_chunkID = HCS_recovery.get_most_available_blk_chunk(9999, pg_id);
-        ASSERT_TRUE(v_chunkID.has_value());
-        auto chunk = HCS_recovery.select_specific_chunk(pg_id, v_chunkID.value());
-        ASSERT_NE(chunk, nullptr);
-        ASSERT_EQ(chunk->get_pdev_id(), pg_id);
-        ASSERT_EQ(chunk->available_blks(), 2);
+        const auto exVchunk = HCS_recovery.pick_most_available_blk_chunk(9999, pg_id);
+        ASSERT_NE(exVchunk, nullptr);
+        ASSERT_TRUE(exVchunk->m_v_chunk_id.has_value());
+        auto selected_chunk = HCS_recovery.select_specific_chunk(pg_id, exVchunk->m_v_chunk_id.value());
+        ASSERT_NE(selected_chunk, nullptr);
+        ASSERT_EQ(selected_chunk->get_pdev_id(), pg_id);
+        ASSERT_EQ(selected_chunk->available_blks(), 2);
         ASSERT_EQ(pg_chunk_collection->m_pg_chunks[1]->m_state, ChunkState::INUSE);
     }
 }
