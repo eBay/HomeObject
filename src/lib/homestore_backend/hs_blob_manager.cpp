@@ -6,6 +6,9 @@
 #include "lib/blob_route.hpp"
 #include <homestore/homestore.hpp>
 #include <homestore/blkdata_service.hpp>
+#ifdef _PRERELEASE
+#include <iomgr/iomgr_flip.hpp>
+#endif
 
 SISL_LOGGING_DECL(blobmgr)
 
@@ -226,6 +229,20 @@ bool HSHomeObject::local_add_blob_info(pg_id_t const pg_id, BlobInfo const& blob
         return false;
     }
     if (!exist_already) {
+        homestore::chunk_num_t sb_pchunk_id;
+        {
+            std::shared_lock lock_guard(_shard_lock);
+            const auto iter = _shard_map.find(blob_info.shard_id);
+            RELEASE_ASSERT(iter != _shard_map.end(), "shardID=0x{:x}, pg={}, shard=0x{:x}, shard does not exist",
+                           blob_info.shard_id, (blob_info.shard_id >> homeobject::shard_width),
+                           (blob_info.shard_id & homeobject::shard_mask));
+            sb_pchunk_id = d_cast< HS_Shard* >((*iter->second).get())->p_chunk_id();
+        }
+        RELEASE_ASSERT(blob_info.pbas.chunk_num() == sb_pchunk_id,
+                       "traceID={}, commit-time pchunk mismatch: blob pchunk={} shard pchunk={} "
+                       "shard=0x{:x} blob={} pg={}",
+                       tid, blob_info.pbas.chunk_num(), sb_pchunk_id, blob_info.shard_id, blob_info.blob_id, pg_id);
+
         // The PG superblock (durable entities) will be persisted as part of HS_CLIENT Checkpoint, which is always
         // done ahead of the Index Checkpoint. Hence, if the index already has this entity, whatever durable
         // counters updated as part of the update would have been persisted already in PG superblock. So if we were
@@ -266,11 +283,46 @@ void HSHomeObject::on_blob_put_commit(int64_t lsn, sisl::blob const& header, sis
         return;
     }
 
+#ifdef _PRERELEASE
+    // Pause PUT_BLOB commit at function entry. While paused the test can seal the shard; the
+    // sealed_lsn guard then rejects this late blob when the gate releases.
+    iomgr_flip::instance()->callback_flip("pause_put_blob_commit");
+#endif
+
+    const auto shard_id = msg_header->shard_id;
     auto const blob_id = *(reinterpret_cast< blob_id_t* >(const_cast< uint8_t* >(key.cbytes())));
+
+    int64_t shard_sealed_lsn;
+    {
+        std::scoped_lock lock_guard(_shard_lock);
+        auto iter = _shard_map.find(shard_id);
+        RELEASE_ASSERT(iter != _shard_map.end(), "shardID=0x{:x}, pg={}, shard=0x{:x}, shard does not exist", shard_id,
+                       (shard_id >> homeobject::shard_width), (shard_id & homeobject::shard_mask));
+        shard_sealed_lsn = (*iter->second)->info.sealed_lsn;
+    }
+
+    if (lsn >= shard_sealed_lsn) {
+        homestore::data_service().async_free_blk(pbas).thenValue([lsn, shard_id, blob_id, tid, pbas](auto&& err) {
+            if (err) {
+                BLOGW(tid, shard_id, blob_id, "failed to free blob data blk, err={}, lsn={}, blkid={}", err.message(),
+                      lsn, pbas.to_string());
+            } else {
+                BLOGD(tid, shard_id, blob_id, "succeed to free blob data blk, lsn={}, blkid={}", lsn, pbas.to_string());
+            }
+        });
+
+        BLOGD(tid, shard_id, blob_id,
+              "try to commit put_blob message to a non-open shard, lsn={}, shard_sealed_lsn={}, skip it!", lsn,
+              shard_sealed_lsn);
+
+        if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(BlobError(BlobErrorCode::SEALED_SHARD))); }
+        return;
+    }
+
     auto const pg_id = msg_header->pg_id;
 
     BlobInfo blob_info;
-    blob_info.shard_id = msg_header->shard_id;
+    blob_info.shard_id = shard_id;
     blob_info.blob_id = blob_id;
     blob_info.pbas = pbas;
 

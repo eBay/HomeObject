@@ -24,14 +24,14 @@ HSHomeObject::PGBlobIterator::PGBlobIterator(HSHomeObject& home_obj, homestore::
     if (upto_lsn != 0) {
         // Iterate all shards and its blobs which have lsn <= upto_lsn
         for (auto& shard : pg->shards_) {
-            if (shard->info.lsn <= upto_lsn) {
+            if (shard->info.create_lsn <= upto_lsn) {
                 auto v_chunk_id = home_obj_.get_shard_v_chunk_id(shard->info.id);
                 shard_list_.emplace_back(shard->info, v_chunk_id.value());
             }
         }
         // Sort shard list by <vchunkid, lsn> to ensure open shards positioned after sealed shards within each chunk
         std::ranges::sort(shard_list_, [](const ShardEntry& a, const ShardEntry& b) {
-            return a.v_chunk_num != b.v_chunk_num ? a.v_chunk_num < b.v_chunk_num : a.info.lsn < b.info.lsn;
+            return a.v_chunk_num != b.v_chunk_num ? a.v_chunk_num < b.v_chunk_num : a.info.create_lsn < b.info.create_lsn;
         });
     }
 }
@@ -215,8 +215,9 @@ bool HSHomeObject::PGBlobIterator::create_shard_snapshot_data(sisl::io_blob_safe
     auto shard = shard_list_[cur_shard_idx_];
     std::vector< uint8_t > meta_bytes(shard.info.meta, shard.info.meta + ShardInfo::meta_length);
     auto shard_entry = CreateResyncShardMetaDataDirect(
-        builder_, shard.info.id, pg_id, static_cast< uint8_t >(shard.info.state), shard.info.lsn,
-        shard.info.created_time, shard.info.last_modified_time, shard.info.total_capacity_bytes, shard.v_chunk_num, &meta_bytes);
+        builder_, shard.info.id, pg_id, static_cast< uint8_t >(shard.info.state), shard.info.create_lsn,
+        shard.info.created_time, shard.info.last_modified_time, shard.info.total_capacity_bytes, shard.v_chunk_num,
+        &meta_bytes, shard.info.sealed_lsn);
 
     builder_.FinishSizePrefixed(shard_entry);
 

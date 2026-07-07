@@ -79,7 +79,8 @@ int HSHomeObject::SnapshotReceiveHandler::process_shard_snapshot_data(ResyncShar
     shard_sb->info.id = shard_meta.shard_id();
     shard_sb->info.placement_group = shard_meta.pg_id();
     shard_sb->info.state = static_cast< ShardInfo::State >(shard_meta.state());
-    shard_sb->info.lsn = shard_meta.created_lsn();
+    shard_sb->info.create_lsn = shard_meta.created_lsn();
+    shard_sb->info.sealed_lsn = shard_meta.sealed_lsn();
     shard_sb->info.created_time = shard_meta.created_time();
     shard_sb->info.last_modified_time = shard_meta.last_modified_time();
     shard_sb->info.available_capacity_bytes = shard_meta.total_capacity_bytes();
@@ -89,56 +90,8 @@ int HSHomeObject::SnapshotReceiveHandler::process_shard_snapshot_data(ResyncShar
         std::memcpy(shard_sb->info.meta, shard_meta.meta()->Data(), ShardInfo::meta_length);
     }
     shard_sb->v_chunk_id = shard_meta.vchunk_id();
-
-    homestore::blk_alloc_hints hints;
-    hints.application_hint = static_cast< uint64_t >(ctx_->pg_id) << 16 | shard_sb->v_chunk_id;
-
-    homestore::MultiBlkId blk_id;
-    auto status = homestore::data_service().alloc_blks(
-        sisl::round_up(aligned_buf.size(), homestore::data_service().get_blk_size()), hints, blk_id);
-    if (status != homestore::BlkAllocStatus::SUCCESS) {
-        LOGE("Failed to allocate blocks for shardID=0x{:x}, pg={}, shard=0x{:x}", shard_meta.shard_id(),
-             (shard_meta.shard_id() >> homeobject::shard_width), (shard_meta.shard_id() & homeobject::shard_mask));
-        return ALLOC_BLK_ERR;
-    }
-    shard_sb->p_chunk_id = blk_id.to_single_blkid().chunk_num();
-
-    auto free_allocated_blks = [blk_id]() {
-        homestore::data_service().async_free_blk(blk_id).thenValue([blk_id](auto&& err) {
-            LOGD("Freed blk_id={} due to failure in persisting shard info, err {}", blk_id.to_string(),
-                 err ? err.message() : "nil");
-        });
-    };
-
-#ifdef _PRERELEASE
-    if (iomgr_flip::instance()->test_flip("snapshot_receiver_shard_write_data_error")) {
-        LOGW("Simulating shard snapshot write data error");
-        free_allocated_blks();
-        return WRITE_DATA_ERR;
-    }
-#endif
-    const auto ret = homestore::data_service()
-                         .async_write(r_cast< char const* >(aligned_buf.cbytes()), aligned_buf.size(), blk_id)
-                         .thenValue([&blk_id](auto&& err) -> BlobManager::AsyncResult< blob_id_t > {
-                             // TODO: do we need to update repl_dev metrics?
-                             if (err) {
-                                 LOGE("Failed to write shard info to blk_id={}", blk_id.to_string());
-                                 return folly::makeUnexpected(BlobError(BlobErrorCode::REPLICATION_ERROR));
-                             }
-                             LOGD("Shard info written to blk_id={}", blk_id.to_string());
-                             return 0;
-                         })
-                         .get();
-    if (ret.hasError()) {
-        LOGE("Failed to write shard info of shardID=0x{:x}, pg={}, shard=0x{:x} to blk_id={}", shard_meta.shard_id(),
-             (shard_meta.shard_id() >> homeobject::shard_width), (shard_meta.shard_id() & homeobject::shard_mask),
-             blk_id.to_string());
-        free_allocated_blks();
-        return WRITE_DATA_ERR;
-    }
-
     // Now let's create local shard
-    home_obj_.local_create_shard(shard_sb->info, shard_sb->v_chunk_id, shard_sb->p_chunk_id, blk_id.blk_count());
+    home_obj_.local_create_shard(shard_sb->info, shard_sb->v_chunk_id);
     ctx_->shard_cursor = shard_meta.shard_id();
     ctx_->cur_batch_num = 0;
     return 0;

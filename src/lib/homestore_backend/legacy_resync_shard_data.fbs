@@ -1,0 +1,19 @@
+native_include "sisl/utility/non_null_ptr.hpp";
+
+namespace homeobject;
+
+// Schema snapshot of ResyncShardMetaData before sealed_lsn was added.
+// Used only in compatibility tests to produce old-format buffers.
+table ResyncLegacyShardMetaData {
+    shard_id : uint64;
+    pg_id : uint16;
+    state : ubyte;
+    created_lsn : uint64;
+    created_time : uint64;
+    last_modified_time : ulong;
+    total_capacity_bytes : ulong;
+    vchunk_id : uint16;
+    meta: [ubyte];
+}
+
+root_type ResyncLegacyShardMetaData;

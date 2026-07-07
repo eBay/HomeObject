@@ -64,7 +64,7 @@ TEST_F(HomeObjectFixture, PGBlobIterator) {
     seal_shard(pg->shards_.front()->info.id);
     ASSERT_EQ(pg->shards_.front()->info.state, homeobject::ShardInfo::State::SEALED);
     // Filter out the last shard
-    auto snp_lsn = pg->shards_.back()->info.lsn - 1;
+    auto snp_lsn = pg->shards_.back()->info.create_lsn - 1;
     // Delete some blobs: delete the first blob of each shard
     blob_id_t current_blob_id{0};
     for (auto& shard : shard_list) {
@@ -108,7 +108,7 @@ TEST_F(HomeObjectFixture, PGBlobIterator) {
     auto idx = 0;
     ASSERT_EQ(pg->shards_.size() - 1, pg_msg->shard_ids()->size());
     for (auto& shard : pg->shards_) {
-        if (shard->info.lsn > snp_lsn) { continue; }
+        if (shard->info.create_lsn > snp_lsn) { continue; }
         ASSERT_EQ(shard->info.id, pg_msg->shard_ids()->Get(idx++));
     }
 
@@ -118,7 +118,7 @@ TEST_F(HomeObjectFixture, PGBlobIterator) {
         auto shard_seq_num = HSHomeObject::get_sequence_num_from_shard_id(shard->info.id);
         auto batch_id = 0;
         objId oid(shard_seq_num, batch_id++);
-        if (shard->info.lsn > snp_lsn) {
+        if (shard->info.create_lsn > snp_lsn) {
             ASSERT_FALSE(pg_iter->update_cursor(oid));
             continue;
         }
@@ -140,7 +140,8 @@ TEST_F(HomeObjectFixture, PGBlobIterator) {
         ASSERT_EQ(shard_msg->shard_id(), shard->info.id);
         ASSERT_EQ(shard_msg->pg_id(), pg->pg_info_.id);
         ASSERT_EQ(shard_msg->state(), static_cast< uint8_t >(shard->info.state));
-        ASSERT_EQ(shard_msg->created_lsn(), shard->info.lsn);
+        ASSERT_EQ(shard_msg->created_lsn(), shard->info.create_lsn);
+        ASSERT_EQ(shard_msg->sealed_lsn(), shard->info.sealed_lsn);
         ASSERT_EQ(shard_msg->created_time(), shard->info.created_time);
         ASSERT_EQ(shard_msg->last_modified_time(), shard->info.last_modified_time);
         ASSERT_EQ(shard_msg->total_capacity_bytes(), shard->info.total_capacity_bytes);
@@ -214,7 +215,7 @@ TEST_F(HomeObjectFixture, PGBlobIteratorGCMoveDetection) {
     auto pg = _obj_inst->get_hs_pg(pg_id);
     ASSERT_TRUE(pg != nullptr);
 
-    auto snp_lsn = pg->shards_.back()->info.lsn;
+    auto snp_lsn = pg->shards_.back()->info.create_lsn;
     auto pg_iter = std::make_shared< HSHomeObject::PGBlobIterator >(*_obj_inst, pg->pg_info_.replica_set_uuid, snp_lsn);
     ASSERT_EQ(pg_iter->shard_list_.size(), 2u);
     pg_iter->max_batch_size_ = 1 * Mi;
@@ -280,7 +281,7 @@ TEST_F(HomeObjectFixture, PGBlobIteratorGCTombstoneDetection) {
     auto pg = _obj_inst->get_hs_pg(pg_id);
     ASSERT_TRUE(pg != nullptr);
 
-    auto snp_lsn = pg->shards_.back()->info.lsn;
+    auto snp_lsn = pg->shards_.back()->info.create_lsn;
     auto pg_iter = std::make_shared< HSHomeObject::PGBlobIterator >(*_obj_inst, pg->pg_info_.replica_set_uuid, snp_lsn);
     pg_iter->max_batch_size_ = 1 * Mi;
 
@@ -385,16 +386,19 @@ TEST_F(HomeObjectFixture, SnapshotReceiveHandler) {
         shard.created_time = get_time_since_epoch_ms();
         shard.last_modified_time = shard.created_time;
         shard.total_capacity_bytes = 1024 * Mi;
-        shard.lsn = snp_lsn;
+        shard.create_lsn = snp_lsn;
         auto meta_str = "shard meta:" + std::to_string(i);
         std::memcpy(shard.meta, meta_str.c_str(), meta_str.length());
         shard.meta[meta_str.size()] = '\0';
 
-        auto v_chunk_id = _obj_inst->chunk_selector()->get_most_available_blk_chunk(shard.id, pg_id);
-
-        auto shard_entry = CreateResyncShardMetaData(builder, shard.id, pg_id, static_cast< uint8_t >(shard.state),
-                                                     shard.lsn, shard.created_time, shard.last_modified_time,
-                                                     shard.total_capacity_bytes, v_chunk_id.value());
+        auto exVchunk = _obj_inst->chunk_selector()->pick_most_available_blk_chunk(shard.id, pg_id);
+        RELEASE_ASSERT(exVchunk != nullptr, "chunk selection failed with v_chunk_id={} in pg={}", shard.id, pg_id);
+        RELEASE_ASSERT(exVchunk->m_v_chunk_id.has_value(), "v_chunk_id should have value for selected chunk for pg={}",
+                       pg_id);
+        auto shard_entry =
+            CreateResyncShardMetaData(builder, shard.id, pg_id, static_cast< uint8_t >(shard.state), shard.create_lsn,
+                                      shard.created_time, shard.last_modified_time, shard.total_capacity_bytes,
+                                      exVchunk->m_v_chunk_id.value(), 0 /* meta */, shard.sealed_lsn);
         builder.Finish(shard_entry);
         auto shard_meta = GetResyncShardMetaData(builder.GetBufferPointer());
         auto status = handler->process_shard_snapshot_data(*shard_meta);
@@ -412,7 +416,8 @@ TEST_F(HomeObjectFixture, SnapshotReceiveHandler) {
         ASSERT_EQ(shard_res.created_time, shard.created_time);
         ASSERT_EQ(shard_res.last_modified_time, shard.last_modified_time);
         ASSERT_EQ(shard_res.total_capacity_bytes, shard.total_capacity_bytes);
-        ASSERT_EQ(shard_res.lsn, shard.lsn);
+        ASSERT_EQ(shard_res.create_lsn, shard.create_lsn);
+        ASSERT_EQ(shard_res.sealed_lsn, shard.sealed_lsn);
 
         // Step 2-2: Test write blob batch data
         // Generate ResyncBlobDataBatch message
@@ -507,7 +512,7 @@ TEST_F(HomeObjectFixture, SnapshotReceiveHandler) {
         if (shard.state == ShardInfo::State::SEALED) {
             auto v = _obj_inst->get_shard_v_chunk_id(shard.id);
             ASSERT_TRUE(v.has_value());
-            ASSERT_EQ(v.value(), v_chunk_id.value());
+            ASSERT_EQ(v.value(), exVchunk->m_v_chunk_id.value());
             ASSERT_TRUE(_obj_inst->chunk_selector()->is_chunk_available(pg_id, v.value()));
         }
     }

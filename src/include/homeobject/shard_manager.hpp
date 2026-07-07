@@ -35,13 +35,14 @@ struct ShardInfo {
     shard_id_t id;
     pg_id_t placement_group;
     State state;
-    uint64_t lsn; // created_lsn
+    uint64_t create_lsn;
     uint64_t created_time;
     uint64_t last_modified_time;
     uint64_t available_capacity_bytes;
     uint64_t total_capacity_bytes;
     std::optional< peer_id_t > current_leader{std::nullopt};
     uint8_t meta[meta_length]{};
+    uint64_t sealed_lsn{INT64_MAX}; // appended after all v2 fields for forward compat
 
     auto operator<=>(ShardInfo const& rhs) const { return id <=> rhs.id; }
     auto operator==(ShardInfo const& rhs) const { return id == rhs.id; }
@@ -57,7 +58,8 @@ public:
 
     virtual AsyncResult< ShardInfo > get_shard(shard_id_t id, trace_id_t tid = 0) const = 0;
     virtual AsyncResult< InfoList > list_shards(pg_id_t id, trace_id_t tid = 0) const = 0;
-    virtual AsyncResult< ShardInfo > create_shard(pg_id_t pg_owner, uint64_t size_bytes, std::string meta, trace_id_t tid = 0) = 0;
+    virtual AsyncResult< ShardInfo > create_shard(pg_id_t pg_owner, uint64_t size_bytes, std::string meta,
+                                                  trace_id_t tid = 0) = 0;
     virtual AsyncResult< ShardInfo > seal_shard(shard_id_t id, trace_id_t tid = 0) = 0;
 };
 

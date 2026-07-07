@@ -45,6 +45,7 @@ settings_gen_cpp(
     hs_backend_config.fbs
     resync_pg_data.fbs
     resync_shard_data.fbs
+    legacy_resync_shard_data.fbs
     resync_blob_data.fbs
   )
 
@@ -55,28 +56,28 @@ add_subdirectory(tests)
 add_executable(homestore_test_pg)
 target_sources(homestore_test_pg PRIVATE $<TARGET_OBJECTS:homestore_tests_pg>)
 target_link_libraries(homestore_test_pg PUBLIC homeobject_homestore ${COMMON_TEST_DEPS})
-add_test(NAME HomestoreTestPg COMMAND homestore_test_pg -csv error --executor immediate --config_path ./
+add_test(NAME HomestoreTestPg COMMAND homestore_test_pg --executor immediate --config_path ./
         --override_config homestore_config.consensus.snapshot_freq_distance:0
         --override_config homestore_config.consensus.max_grpc_message_size:138412032)
 
 add_executable(homestore_test_shard)
 target_sources(homestore_test_shard PRIVATE $<TARGET_OBJECTS:homestore_tests_shard>)
 target_link_libraries(homestore_test_shard PUBLIC homeobject_homestore ${COMMON_TEST_DEPS})
-add_test(NAME HomestoreTestShard COMMAND homestore_test_shard -csv error --executor immediate --config_path ./
+add_test(NAME HomestoreTestShard COMMAND homestore_test_shard --executor immediate --config_path ./
         --override_config homestore_config.consensus.snapshot_freq_distance:0
         --override_config homestore_config.consensus.max_grpc_message_size:138412032)
 
 add_executable(homestore_test_blob)
 target_sources(homestore_test_blob PRIVATE $<TARGET_OBJECTS:homestore_tests_blob>)
 target_link_libraries(homestore_test_blob PUBLIC homeobject_homestore ${COMMON_TEST_DEPS})
-add_test(NAME HomestoreTestBlob COMMAND homestore_test_blob -csv error --executor immediate --config_path ./
+add_test(NAME HomestoreTestBlob COMMAND homestore_test_blob --executor immediate --config_path ./
         --override_config homestore_config.consensus.snapshot_freq_distance:0
         --override_config homestore_config.consensus.max_grpc_message_size:138412032)
 
 add_executable(homestore_test_misc)
 target_sources(homestore_test_misc PRIVATE $<TARGET_OBJECTS:homestore_tests_misc>)
 target_link_libraries(homestore_test_misc PUBLIC homeobject_homestore ${COMMON_TEST_DEPS})
-add_test(NAME HomestoreTestMisc COMMAND homestore_test_misc -csv error --executor immediate --config_path ./
+add_test(NAME HomestoreTestMisc COMMAND homestore_test_misc --executor immediate --config_path ./
         --override_config homestore_config.consensus.snapshot_freq_distance=0
         --override_config homestore_config.consensus.max_grpc_message_size=138412032
         --override_config hs_backend_config.enable_gc=false)
@@ -86,7 +87,7 @@ add_executable(homestore_test_dynamic)
 target_sources(homestore_test_dynamic PRIVATE $<TARGET_OBJECTS:homestore_tests_dynamic>)
 target_link_libraries(homestore_test_dynamic PUBLIC homeobject_homestore ${COMMON_TEST_DEPS})
 add_test(NAME HomestoreTestReplaceMember
-        COMMAND homestore_test_dynamic -csv error --executor immediate --config_path ./
+        COMMAND homestore_test_dynamic --executor immediate --config_path ./
         --override_config homestore_config.consensus.snapshot_freq_distance=0
         --override_config homestore_config.generic.repl_dev_cleanup_interval_sec=5
         --override_config homestore_config.consensus.max_grpc_message_size=138412032
@@ -95,7 +96,7 @@ add_test(NAME HomestoreTestReplaceMember
         --gtest_filter=HomeObjectFixture.ReplaceMember)
 # To test both baseline & incremental resync functionality, we use 13 to minimize the likelihood of it being a divisor of the total LSN (currently 30)
 add_test(NAME HomestoreTestReplaceMemberWithBaselineResync
-        COMMAND homestore_test_dynamic -csv error --executor immediate --config_path ./
+        COMMAND homestore_test_dynamic --executor immediate --config_path ./
         --override_config homestore_config.consensus.snapshot_freq_distance=13
         --override_config homestore_config.consensus.num_reserved_log_items=13
         --override_config homestore_config.resource_limits.raft_logstore_reserve_threshold=13
@@ -106,7 +107,7 @@ add_test(NAME HomestoreTestReplaceMemberWithBaselineResync
         --override_config homestore_config.consensus.laggy_threshold=2000
         --gtest_filter=HomeObjectFixture.ReplaceMember)
 add_test(NAME HomestoreTestBaselineResync
-        COMMAND homestore_test_dynamic -csv error --executor immediate --config_path ./
+        COMMAND homestore_test_dynamic --executor immediate --config_path ./
         --override_config homestore_config.consensus.snapshot_freq_distance=13
         --override_config homestore_config.consensus.num_reserved_log_items=13
         --override_config homestore_config.resource_limits.raft_logstore_reserve_threshold=13
@@ -117,7 +118,7 @@ add_test(NAME HomestoreTestBaselineResync
         --override_config homestore_config.consensus.laggy_threshold=2000
         --gtest_filter=HomeObjectFixture.BaselineResync*)
 add_test(NAME HomestoreResyncTestWithFollowerRestart
-        COMMAND homestore_test_dynamic -csv error --executor immediate --config_path ./
+        COMMAND homestore_test_dynamic --executor immediate --config_path ./
         --override_config homestore_config.consensus.snapshot_freq_distance=13
         --override_config homestore_config.consensus.num_reserved_log_items=13
         --override_config homestore_config.resource_limits.raft_logstore_reserve_threshold=13
@@ -128,7 +129,7 @@ add_test(NAME HomestoreResyncTestWithFollowerRestart
         --override_config homestore_config.consensus.laggy_threshold=2000
         --gtest_filter=HomeObjectFixture.RestartFollower*)
 add_test(NAME HomestoreResyncTestWithLeaderRestart
-        COMMAND homestore_test_dynamic -csv error --executor immediate --config_path ./
+        COMMAND homestore_test_dynamic --executor immediate --config_path ./
         --override_config homestore_config.consensus.snapshot_freq_distance=13
         --override_config homestore_config.consensus.num_reserved_log_items=13
         --override_config homestore_config.resource_limits.raft_logstore_reserve_threshold=13
@@ -139,7 +140,7 @@ add_test(NAME HomestoreResyncTestWithLeaderRestart
         --override_config homestore_config.consensus.laggy_threshold=2000
         --gtest_filter=HomeObjectFixture.RestartLeader*)
 #add_test(NAME HomestoreReplaceMemberRollbackTest
-#        COMMAND homestore_test_dynamic -csv error --executor immediate --config_path ./
+#        COMMAND homestore_test_dynamic --executor immediate --config_path ./
 #        --override_config homestore_config.consensus.snapshot_freq_distance=13
 #        --override_config homestore_config.consensus.num_reserved_log_items=13
 #        --override_config homestore_config.resource_limits.raft_logstore_reserve_threshold=13
@@ -152,7 +153,7 @@ add_test(NAME HomestoreResyncTestWithLeaderRestart
 
 # GC tests
 add_test(NAME FetchDataWithOriginatorGC
-        COMMAND homestore_test_dynamic -csv error --executor immediate --config_path ./
+        COMMAND homestore_test_dynamic --executor immediate --config_path ./
         --override_config hs_backend_config.enable_gc=true
         --override_config hs_backend_config.gc_enable_read_verify=true
         --override_config hs_backend_config.gc_garbage_rate_threshold=50
@@ -162,9 +163,35 @@ add_test(NAME FetchDataWithOriginatorGC
 add_executable(homestore_test_gc)
 target_sources(homestore_test_gc PRIVATE $<TARGET_OBJECTS:homestore_tests_gc>)
 target_link_libraries(homestore_test_gc PUBLIC homeobject_homestore ${COMMON_TEST_DEPS})
-add_test(NAME HomestoreTestGC COMMAND homestore_test_gc -csv error --executor immediate --config_path ./
+add_test(NAME HomestoreTestGC COMMAND homestore_test_gc --executor immediate --config_path ./
         --override_config hs_backend_config.enable_gc=true
         --override_config hs_backend_config.gc_enable_read_verify=true
         --override_config hs_backend_config.gc_garbage_rate_threshold=0
         --override_config hs_backend_config.gc_garbage_rate_threshold_low=0
-        --override_config hs_backend_config.gc_scan_interval_sec=5)
+        --override_config hs_backend_config.gc_scan_interval_sec=5
+        --gtest_filter=-HomeObjectFixture.StalePChunkRouteAfterGC:-HomeObjectFixture.StaleBlobRouteAfterSealAndGC)
+
+# Shard-race repro tests: require chunks_per_pg=1 (forces vchunk reuse after seal) and gc_garbage_rate_threshold=0.
+# Run together since they share the same config requirements.
+add_test(NAME HomestoreTestGC_ShardRaceTests
+        COMMAND homestore_test_gc --executor immediate --config_path ./
+        --chunks_per_pg 1
+        --override_config hs_backend_config.enable_gc=true
+        --override_config hs_backend_config.gc_garbage_rate_threshold=0
+        --override_config hs_backend_config.gc_garbage_rate_threshold_low=0
+        --override_config hs_backend_config.gc_scan_interval_sec=5
+        --gtest_filter=HomeObjectFixture.StalePChunkRouteAfterGC:HomeObjectFixture.StaleBlobRouteAfterSealAndGC)
+
+# All tests share disk, port, and shared-memory resources, so run them serially to avoid parallel conflicts.
+set_tests_properties(
+    HomestoreTestBlob
+    HomestoreTestMisc
+    HomestoreTestReplaceMember
+    HomestoreTestReplaceMemberWithBaselineResync
+    HomestoreTestBaselineResync
+    HomestoreResyncTestWithFollowerRestart
+    HomestoreResyncTestWithLeaderRestart
+    FetchDataWithOriginatorGC
+    HomestoreTestGC
+    HomestoreTestGC_ShardRaceTests
+    PROPERTIES RUN_SERIAL TRUE)
