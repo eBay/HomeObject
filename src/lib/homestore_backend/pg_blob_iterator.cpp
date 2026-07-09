@@ -24,14 +24,37 @@ HSHomeObject::PGBlobIterator::PGBlobIterator(HSHomeObject& home_obj, homestore::
     if (upto_lsn != 0) {
         // Iterate all shards and its blobs which have lsn <= upto_lsn
         for (auto& shard : pg->shards_) {
-            if (shard->info.create_lsn <= upto_lsn) {
-                auto v_chunk_id = home_obj_.get_shard_v_chunk_id(shard->info.id);
-                shard_list_.emplace_back(shard->info, v_chunk_id.value());
+            auto shard_info = shard->info;
+            if (shard_info.create_lsn <= upto_lsn) {
+                auto v_chunk_id = home_obj_.get_shard_v_chunk_id(shard_info.id);
+                RELEASE_ASSERT(v_chunk_id.has_value(), "v_chunk_id not found for shard_id={}", shard_info.id);
+
+                /*
+                 * Snapshot metadata may reflect the leader's latest shard state, even when that
+                 * state transition happened after the snapshot LSN cutoff. If such a shard is
+                 * treated as sealed during snapshot apply, the receiver may release the backing
+                 * chunk too early. That chunk can then be reclaimed or relocated before log replay
+                 * catches up, leaving later writes to use stale physical-chunk information and
+                 * eventually fail during commit.
+                 *
+                 * To keep snapshot state consistent with the requested cutoff, convert any shard
+                 * whose sealed_lsn is beyond upto_lsn back to OPEN for iteration purposes and follower will received
+                 * and commit the seal_shard log for this shard after the snapshot apply is completed, where the shard
+                 * state and sealed_lsn will be updated to the correct value.
+                 */
+
+                if (shard_info.state == ShardInfo::State::SEALED && shard_info.sealed_lsn > upto_lsn) {
+                    shard_info.state = ShardInfo::State::OPEN;
+                    shard_info.sealed_lsn = INT64_MAX;
+                }
+
+                shard_list_.emplace_back(shard_info, v_chunk_id.value());
             }
         }
         // Sort shard list by <vchunkid, lsn> to ensure open shards positioned after sealed shards within each chunk
         std::ranges::sort(shard_list_, [](const ShardEntry& a, const ShardEntry& b) {
-            return a.v_chunk_num != b.v_chunk_num ? a.v_chunk_num < b.v_chunk_num : a.info.create_lsn < b.info.create_lsn;
+            return a.v_chunk_num != b.v_chunk_num ? a.v_chunk_num < b.v_chunk_num
+                                                  : a.info.create_lsn < b.info.create_lsn;
         });
     }
 }

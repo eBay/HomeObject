@@ -139,9 +139,16 @@ TEST_F(HomeObjectFixture, PGBlobIterator) {
         auto shard_msg = GetSizePrefixedResyncShardMetaData(meta_data.cbytes() + sizeof(SyncMessageHeader));
         ASSERT_EQ(shard_msg->shard_id(), shard->info.id);
         ASSERT_EQ(shard_msg->pg_id(), pg->pg_info_.id);
-        ASSERT_EQ(shard_msg->state(), static_cast< uint8_t >(shard->info.state));
+        // A shard sealed after the snapshot LSN is downgraded to OPEN for snapshot consistency.
+        auto expected_state = shard->info.state;
+        auto expected_sealed_lsn = shard->info.sealed_lsn;
+        if (expected_state == ShardInfo::State::SEALED && shard->info.sealed_lsn > snp_lsn) {
+            expected_state = ShardInfo::State::OPEN;
+            expected_sealed_lsn = static_cast< uint64_t >(INT64_MAX);
+        }
+        ASSERT_EQ(shard_msg->state(), static_cast< uint8_t >(expected_state));
         ASSERT_EQ(shard_msg->created_lsn(), shard->info.create_lsn);
-        ASSERT_EQ(shard_msg->sealed_lsn(), shard->info.sealed_lsn);
+        ASSERT_EQ(shard_msg->sealed_lsn(), expected_sealed_lsn);
         ASSERT_EQ(shard_msg->created_time(), shard->info.created_time);
         ASSERT_EQ(shard_msg->last_modified_time(), shard->info.last_modified_time);
         ASSERT_EQ(shard_msg->total_capacity_bytes(), shard->info.total_capacity_bytes);
@@ -314,6 +321,74 @@ TEST_F(HomeObjectFixture, PGBlobIteratorGCTombstoneDetection) {
     ASSERT_FALSE(pg_iter->create_blobs_snapshot_data(data_blob));
 
     pg_iter->stop();
+}
+
+// Verifies that a shard sealed after the snapshot LSN cutoff is presented as OPEN to the snapshot
+// receiver (Case A), while a shard sealed at or before the cutoff remains SEALED (Case B).
+//
+// Without this conversion a receiver applying the snapshot could release the shard's backing chunk
+// too early, before log replay has a chance to replay the seal_shard entry, leading to stale
+// physical-chunk references and write failures.
+TEST_F(HomeObjectFixture, PGBlobIteratorSealedLsnCutoff) {
+    constexpr pg_id_t pg_id{1};
+    create_pg(pg_id);
+    auto shard_1_info = create_shard(pg_id, 64 * Mi, "shard1");
+    auto shard_2_info = create_shard(pg_id, 64 * Mi, "shard2");
+
+    // Seal shard_1 after shard_2 is created so that shard_1.sealed_lsn > shard_2.create_lsn.
+    seal_shard(shard_1_info.id);
+
+    auto pg = _obj_inst->get_hs_pg(pg_id);
+    ASSERT_TRUE(pg != nullptr);
+
+    // Identify shards by id to be independent of sort order in shard_list_.
+    Shard* pg_shard_1 = nullptr;
+    Shard* pg_shard_2 = nullptr;
+    for (auto& s : pg->shards_) {
+        if (s->info.id == shard_1_info.id) pg_shard_1 = s.get();
+        if (s->info.id == shard_2_info.id) pg_shard_2 = s.get();
+    }
+    ASSERT_TRUE(pg_shard_1 != nullptr && pg_shard_2 != nullptr);
+    ASSERT_EQ(pg_shard_1->info.state, ShardInfo::State::SEALED);
+    // Guarantee that sealing happened after shard_2 was created.
+    ASSERT_GT(pg_shard_1->info.sealed_lsn, pg_shard_2->info.create_lsn);
+
+    // Case A: snp_lsn falls between shard_1.create_lsn and shard_1.sealed_lsn.
+    // shard_1 must be downgraded to OPEN so the receiver does not release its chunk prematurely.
+    {
+        auto snp_lsn = pg_shard_2->info.create_lsn;
+        ASSERT_GT(snp_lsn, pg_shard_1->info.create_lsn);
+        ASSERT_LT(snp_lsn, pg_shard_1->info.sealed_lsn);
+
+        auto pg_iter = std::make_shared< HSHomeObject::PGBlobIterator >(*_obj_inst, pg->pg_info_.replica_set_uuid, snp_lsn);
+        ASSERT_EQ(pg_iter->shard_list_.size(), 2u);
+
+        auto it1 = std::find_if(pg_iter->shard_list_.begin(), pg_iter->shard_list_.end(),
+                                [&](const auto& e) { return e.info.id == shard_1_info.id; });
+        ASSERT_NE(it1, pg_iter->shard_list_.end());
+        EXPECT_EQ(it1->info.state, ShardInfo::State::OPEN);
+        EXPECT_EQ(it1->info.sealed_lsn, static_cast< uint64_t >(INT64_MAX));
+
+        auto it2 = std::find_if(pg_iter->shard_list_.begin(), pg_iter->shard_list_.end(),
+                                [&](const auto& e) { return e.info.id == shard_2_info.id; });
+        ASSERT_NE(it2, pg_iter->shard_list_.end());
+        EXPECT_EQ(it2->info.state, ShardInfo::State::OPEN);
+    }
+
+    // Case B: snp_lsn >= shard_1.sealed_lsn.
+    // shard_1 was fully sealed within the snapshot range and must remain SEALED.
+    {
+        auto snp_lsn = pg_shard_1->info.sealed_lsn;
+
+        auto pg_iter = std::make_shared< HSHomeObject::PGBlobIterator >(*_obj_inst, pg->pg_info_.replica_set_uuid, snp_lsn);
+        ASSERT_EQ(pg_iter->shard_list_.size(), 2u);
+
+        auto it1 = std::find_if(pg_iter->shard_list_.begin(), pg_iter->shard_list_.end(),
+                                [&](const auto& e) { return e.info.id == shard_1_info.id; });
+        ASSERT_NE(it1, pg_iter->shard_list_.end());
+        EXPECT_EQ(it1->info.state, ShardInfo::State::SEALED);
+        EXPECT_EQ(it1->info.sealed_lsn, pg_shard_1->info.sealed_lsn);
+    }
 }
 
 TEST_F(HomeObjectFixture, SnapshotReceiveHandler) {
