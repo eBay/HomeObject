@@ -151,7 +151,6 @@ int HSHomeObject::SnapshotReceiveHandler::process_blobs_snapshot_data(ResyncBlob
 #ifdef _PRERELEASE
         auto delay = iomgr_flip::instance()->get_test_flip< long >("simulate_write_snapshot_save_blob_delay",
                                                                    static_cast< long >(blob->blob_id()));
-        LOGD("simulate_write_snapshot_save_blob_delay flip, triggered={}, blob={}", delay.has_value(), blob->blob_id());
         if (delay) {
             LOGI("Simulating pg snapshot receive data with delay, delay={}, blob_id={}", delay.get(), blob->blob_id());
             std::this_thread::sleep_for(std::chrono::milliseconds(delay.get()));
@@ -165,8 +164,17 @@ int HSHomeObject::SnapshotReceiveHandler::process_blobs_snapshot_data(ResyncBlob
             ctx_->index_table = hs_pg->index_table_;
         }
         RELEASE_ASSERT(ctx_->index_table != nullptr, "Index table instance null");
-        if (home_obj_.get_blob_from_index_table(ctx_->index_table, ctx_->shard_cursor, blob->blob_id())) {
-            LOGD("Skip already persisted blob_id={}", blob->blob_id());
+        if (auto blob_index =
+                home_obj_.get_blob_from_index_table(ctx_->index_table, ctx_->shard_cursor, blob->blob_id());
+            blob_index) {
+            // Blob already in index, re-commit the blk_id to restore both allocator watermarks (m_last_append_offset
+            // and m_commit_offset) in case we are recovering from a crash where the IndexSvc txn journal persisted the
+            // BTree entry but the AppendBlkAllocator CP superblock was not yet flushed. Without this the allocator
+            // would consider those blocks free and could silently overwrite them with a new blob, causing data
+            // corruption.
+            auto blk_id = blob_index.value();
+            homestore::data_service().commit_blk(blk_id, true /* recommit */);
+            LOGD("Skip already persisted blob_id={}, re-committed blk_id={}", blob->blob_id(), blk_id.to_string());
             skipped_blobs++;
             continue;
         }

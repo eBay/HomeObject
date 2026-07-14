@@ -3,6 +3,7 @@
 .cache
 .clangd
 .claude/*
+.opencode/*
 
 build
 test_package/build
