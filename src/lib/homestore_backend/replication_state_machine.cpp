@@ -469,7 +469,7 @@ void ReplicationStateMachine::write_snapshot_obj(std::shared_ptr< homestore::sna
         if (home_object_->pg_exists(pg_data->pg_id())) {
             LOGI("pg already exists, clean pg resources before snapshot, pg={} {}", pg_data->pg_id(), log_suffix);
             // Need to pause state machine before destroying the PG, if fail, let raft retry.
-            if (!home_object_->pg_destroy(pg_data->pg_id())) {
+            if (!home_object_->pg_destroy(pg_data->pg_id(), true)) {
                 LOGE("failed to destroy existing pg, let raft retry, pg={} {}", pg_data->pg_id(), log_suffix);
                 return;
             }
