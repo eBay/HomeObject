@@ -1,6 +1,7 @@
 #include "homeobj_fixture.hpp"
 #include "generated/resync_blob_data_generated.h"
 #include <homestore/replication_service.hpp>
+#include <homestore/blkdata_service.hpp>
 
 // CP related tests
 TEST_F(HomeObjectFixture, HSHomeObjectCPTestBasic) {
@@ -360,7 +361,8 @@ TEST_F(HomeObjectFixture, PGBlobIteratorSealedLsnCutoff) {
         ASSERT_GT(snp_lsn, pg_shard_1->info.create_lsn);
         ASSERT_LT(snp_lsn, pg_shard_1->info.sealed_lsn);
 
-        auto pg_iter = std::make_shared< HSHomeObject::PGBlobIterator >(*_obj_inst, pg->pg_info_.replica_set_uuid, snp_lsn);
+        auto pg_iter =
+            std::make_shared< HSHomeObject::PGBlobIterator >(*_obj_inst, pg->pg_info_.replica_set_uuid, snp_lsn);
         ASSERT_EQ(pg_iter->shard_list_.size(), 2u);
 
         auto it1 = std::find_if(pg_iter->shard_list_.begin(), pg_iter->shard_list_.end(),
@@ -380,7 +382,8 @@ TEST_F(HomeObjectFixture, PGBlobIteratorSealedLsnCutoff) {
     {
         auto snp_lsn = pg_shard_1->info.sealed_lsn;
 
-        auto pg_iter = std::make_shared< HSHomeObject::PGBlobIterator >(*_obj_inst, pg->pg_info_.replica_set_uuid, snp_lsn);
+        auto pg_iter =
+            std::make_shared< HSHomeObject::PGBlobIterator >(*_obj_inst, pg->pg_info_.replica_set_uuid, snp_lsn);
         ASSERT_EQ(pg_iter->shard_list_.size(), 2u);
 
         auto it1 = std::find_if(pg_iter->shard_list_.begin(), pg_iter->shard_list_.end(),
@@ -590,5 +593,207 @@ TEST_F(HomeObjectFixture, SnapshotReceiveHandler) {
             ASSERT_EQ(v.value(), exVchunk->m_v_chunk_id.value());
             ASSERT_TRUE(_obj_inst->chunk_selector()->is_chunk_available(pg_id, v.value()));
         }
+    }
+}
+
+// Test: verify the case (https://jirap.corp.ebay.com/browse/SDSTOR-23023) when the snapshot receiver re-delivers a blob
+// batch that was already indexed (because the IndexSvc journal survived a crash but the AppendBlkAllocator CP superblk
+// did not), the allocator watermarks are correctly restored via commit_blk(recommit=true) so that subsequent
+// allocations cannot silently reuse the already-occupied blocks.
+//
+// Scenario:
+//   1. Partial first delivery (blobs 0..num_blobs_partial-1) — written, committed, indexed.
+//   2. Crash simulated via VChunk::reset(), zeroing the allocator watermarks exactly as
+//      AppendBlkAllocator::on_meta_blk_found() would after a CP that missed the allocator flush.
+//   3. Full second delivery (blobs 0..num_blobs_total-1) — blobs 0..num_blobs_partial-1 hit the
+//      dedup path and must restore watermarks; blobs num_blobs_partial..num_blobs_total-1 are new
+//      and must be allocated strictly above the already-written blocks.
+//
+// Without the fix the allocator watermarks stay at 0 after step 3, so the new blobs (step 3) get
+// allocated from blk 0, silently overwriting the data written in step 1.
+TEST_F(HomeObjectFixture, SnapshotReceiveHandlerAllocatorResyncAfterCrash) {
+    constexpr uint64_t snp_lsn = 1;
+    constexpr pg_id_t pg_id = 1;
+    constexpr blob_id_t num_blobs_partial = 2; // blobs written before the simulated crash
+    constexpr blob_id_t num_blobs_total = 4;   // full set re-delivered after crash
+
+    // ---- Setup: create PG and handler (mirrors SnapshotReceiveHandler test) ----
+    create_pg(pg_id);
+    auto pg = _obj_inst->get_hs_pg(pg_id);
+    ASSERT_NE(pg, nullptr);
+    PGStats stats;
+    ASSERT_TRUE(_obj_inst->pg_manager()->get_stats(pg_id, stats));
+    auto r_dev = homestore::HomeStore::instance()->repl_service().get_repl_dev(stats.replica_set_uuid);
+    ASSERT_TRUE(r_dev.hasValue());
+
+    auto handler = std::make_unique< homeobject::HSHomeObject::SnapshotReceiveHandler >(*_obj_inst, r_dev.value());
+    handler->reset_context_and_metrics(snp_lsn, pg_id);
+
+    // ---- PG meta ----
+    flatbuffers::FlatBufferBuilder builder;
+    std::vector< flatbuffers::Offset< Member > > members;
+    std::vector< uint8_t > uuid(stats.replica_set_uuid.begin(), stats.replica_set_uuid.end());
+    for (auto& member : stats.members) {
+        auto priority = member.id == stats.leader_id ? 1 : 0;
+        auto id = std::vector< uint8_t >(member.id.begin(), member.id.end());
+        members.push_back(CreateMemberDirect(builder, &id, member.name.c_str(), priority));
+    }
+    std::vector< uint64_t > shard_ids = {1};
+    auto pg_entry = CreateResyncPGMetaDataDirect(builder, pg_id, &uuid, pg->pg_info_.size,
+                                                 pg->pg_info_.expected_member_num, pg->pg_info_.chunk_size,
+                                                 num_blobs_total /*blob_seq_num*/, 1 /*shard_seq_num*/, &members,
+                                                 &shard_ids);
+    builder.Finish(pg_entry);
+    ASSERT_EQ(handler->process_pg_snapshot_data(*GetResyncPGMetaData(builder.GetBufferPointer())), 0);
+    builder.Reset();
+
+    // ---- Shard meta ----
+    constexpr shard_id_t shard_id = 1;
+    auto exVchunk = _obj_inst->chunk_selector()->pick_most_available_blk_chunk(shard_id, pg_id);
+    ASSERT_NE(exVchunk, nullptr);
+    ASSERT_TRUE(exVchunk->m_v_chunk_id.has_value());
+
+    auto shard_entry = CreateResyncShardMetaData(
+        builder, shard_id, pg_id, static_cast< uint8_t >(ShardInfo::State::OPEN), snp_lsn /*create_lsn*/,
+        get_time_since_epoch_ms() /*created_time*/, get_time_since_epoch_ms() /*modified_time*/, 1024 * Mi /*capacity*/,
+        exVchunk->m_v_chunk_id.value(), 0 /*meta*/, 0 /*sealed_lsn*/);
+    builder.Finish(shard_entry);
+    ASSERT_EQ(handler->process_shard_snapshot_data(*GetResyncShardMetaData(builder.GetBufferPointer())), 0);
+    builder.Reset();
+
+    // ---- Helper: build a blob batch covering [start_blob_id, end_blob_id) ----
+    auto make_blob_batch = [&](flatbuffers::FlatBufferBuilder& b, blob_id_t start_blob_id, blob_id_t end_blob_id,
+                               bool is_last) {
+        std::vector< flatbuffers::Offset< ResyncBlobData > > blob_entries;
+        for (blob_id_t blob_id = start_blob_id; blob_id < end_blob_id; blob_id++) {
+            auto blob = build_blob(blob_id);
+            const auto aligned_hdr_size = sisl::round_up(sizeof(HSHomeObject::BlobHeader), _obj_inst->_data_block_size);
+            sisl::io_blob_safe blob_raw(aligned_hdr_size + blob.body.size(), io_align);
+
+            HSHomeObject::BlobHeader hdr;
+            hdr.type = HSHomeObject::DataHeader::data_type_t::BLOB_INFO;
+            hdr.shard_id = shard_id;
+            hdr.blob_id = blob_id;
+            hdr.hash_algorithm = HSHomeObject::BlobHeader::HashAlgorithm::CRC32;
+            hdr.blob_size = blob.body.size();
+            hdr.user_key_size = blob.user_key.size();
+            hdr.object_offset = blob.object_off;
+            hdr.data_offset = aligned_hdr_size;
+            if (!blob.user_key.empty()) { std::memcpy(hdr.user_key, blob.user_key.data(), blob.user_key.size()); }
+            _obj_inst->compute_blob_payload_hash(hdr.hash_algorithm, blob.body.cbytes(), blob.body.size(), hdr.hash,
+                                                 HSHomeObject::BlobHeader::blob_max_hash_len);
+            hdr.seal();
+            std::memcpy(blob_raw.bytes(), &hdr, sizeof(HSHomeObject::BlobHeader));
+            std::memcpy(blob_raw.bytes() + hdr.data_offset, blob.body.cbytes(), blob.body.size());
+
+            std::vector< uint8_t > data(blob_raw.bytes(), blob_raw.bytes() + blob_raw.size());
+            blob_entries.push_back(
+                CreateResyncBlobDataDirect(b, blob_id, static_cast< uint8_t >(ResyncBlobState::NORMAL), &data));
+        }
+        b.Finish(CreateResyncBlobDataBatchDirect(b, &blob_entries, is_last));
+    };
+
+    // ---- First delivery: partial batch (blobs 0..num_blobs_partial-1), not the last batch ----
+    // Simulates the pre-crash state: these blobs are written to disk, committed, and indexed.
+    // is_last_batch=false so update_snp_info_sb (the CP+shard-cursor write) is NOT triggered,
+    // matching the real crash scenario where the shard was only partially received.
+    LOGINFO("TEST: first (partial) delivery, blobs [0, {})", num_blobs_partial);
+    make_blob_batch(builder, 0, num_blobs_partial, false /*is_last*/);
+    ASSERT_EQ(handler->process_blobs_snapshot_data(*GetResyncBlobDataBatch(builder.GetBufferPointer()), 1 /*batch_num*/,
+                                                   false /*is_last_batch*/),
+              0);
+    builder.Reset();
+
+    // Confirm only the partial set is readable and indexed
+    for (blob_id_t blob_id = 0; blob_id < num_blobs_partial; blob_id++) {
+        auto result = _obj_inst->blob_manager()->get(shard_id, blob_id, 0, 0).get();
+        ASSERT_TRUE(!!result) << "blob_id=" << blob_id << " should be readable after partial delivery";
+    }
+    for (blob_id_t blob_id = num_blobs_partial; blob_id < num_blobs_total; blob_id++) {
+        auto result = _obj_inst->blob_manager()->get(shard_id, blob_id, 0, 0).get();
+        ASSERT_FALSE(!!result) << "blob_id=" << blob_id << " should NOT exist before full delivery";
+    }
+
+    // Capture the blk_ids assigned to the partial set — these are the blocks the allocator must
+    // protect during re-delivery so new blobs don't overwrite them.
+    auto index_table = _obj_inst->get_hs_pg(pg_id)->index_table_;
+    ASSERT_NE(index_table, nullptr);
+    std::vector< homestore::MultiBlkId > partial_blk_ids;
+    for (blob_id_t blob_id = 0; blob_id < num_blobs_partial; blob_id++) {
+        auto res = _obj_inst->get_blob_from_index_table(index_table, shard_id, blob_id);
+        ASSERT_TRUE(res.hasValue()) << "blob_id=" << blob_id << " must be in index after partial delivery";
+        partial_blk_ids.push_back(res.value());
+    }
+
+    // ---- Simulate crash: reset allocator watermarks to zero ----
+    // Replicates AppendBlkAllocator::on_meta_blk_found() recovering from a CP that captured
+    // the IndexSvc BTree entries for blobs 0..num_blobs_partial-1 but did NOT flush the
+    // AppendBlkAllocator commit_offset superblock. Both watermarks (m_last_append_offset,
+    // m_commit_offset) are restored to 0, so the allocator considers the chunk fully empty.
+    auto p_chunk_id = _obj_inst->get_shard_p_chunk_id(shard_id);
+    ASSERT_TRUE(p_chunk_id.has_value());
+    auto vchunk = _obj_inst->chunk_selector()->m_chunks.at(*p_chunk_id);
+    ASSERT_NE(vchunk, nullptr);
+
+    const auto used_blks_after_partial = vchunk->get_used_blks();
+    ASSERT_GT(used_blks_after_partial, 0u) << "allocator must have advanced after partial delivery";
+
+    LOGINFO("TEST: simulating crash — resetting allocator watermarks (used_blks was {})", used_blks_after_partial);
+    vchunk->reset(); // zeroes m_last_append_offset and m_commit_offset
+    ASSERT_EQ(vchunk->get_used_blks(), 0u) << "used_blks must be 0 after reset (simulating crashed CP)";
+
+    // ---- Second delivery: full batch (blobs 0..num_blobs_total-1), is_last_batch=true ----
+    // Blobs 0..num_blobs_partial-1 are already in the index → dedup path fires.
+    //   Without fix: watermarks stay at 0; blobs num_blobs_partial..num_blobs_total-1 get
+    //                allocated from blk 0, silently overwriting the data for blobs 0..num_blobs_partial-1.
+    //   With fix:    commit_blk(recommit=true) restores watermarks to cover the partial set;
+    //                new blobs are then allocated strictly above them.
+    // Blobs num_blobs_partial..num_blobs_total-1 are new → normal write path.
+    LOGINFO("TEST: second (full) delivery after crash, blobs [0, {})", num_blobs_total);
+    handler->ctx_->cur_batch_num = 0; // reset so batch_num=1 is accepted again
+    make_blob_batch(builder, 0, num_blobs_total, true /*is_last*/);
+    ASSERT_EQ(handler->process_blobs_snapshot_data(*GetResyncBlobDataBatch(builder.GetBufferPointer()), 1 /*batch_num*/,
+                                                   true /*is_last_batch*/),
+              0);
+    builder.Reset();
+
+    // ---- Verify allocator watermarks advanced beyond the partial set ----
+    // The new blobs (num_blobs_partial..num_blobs_total-1) must have been allocated above the
+    // partial set, so used_blks must now exceed what the partial delivery alone had consumed.
+    const auto used_blks_after_full = vchunk->get_used_blks();
+    LOGINFO("TEST: used_blks after full delivery: {} (partial delivery had {})", used_blks_after_full,
+            used_blks_after_partial);
+    ASSERT_GT(used_blks_after_full, used_blks_after_partial)
+        << "new blobs must have been allocated above the partial set, advancing the watermark further";
+
+    // ---- Verify no overlap: a fresh alloc must land ABOVE all blobs (partial + new) ----
+    // Core safety check: without the fix, alloc_blks() returns blk 0 (watermark stayed 0),
+    // overlapping the data written for blobs 0..num_blobs_partial-1 in the first delivery.
+    homestore::MultiBlkId new_blk_id;
+    homestore::blk_alloc_hints hints;
+    hints.chunk_id_hint = *p_chunk_id;
+    auto alloc_status =
+        homestore::data_service().alloc_blks(homestore::data_service().get_blk_size(), hints, new_blk_id);
+    ASSERT_EQ(alloc_status, homestore::BlkAllocStatus::SUCCESS);
+
+    for (const auto& existing_blk : partial_blk_ids) {
+        auto existing_end = existing_blk.blk_num() + existing_blk.blk_count();
+        ASSERT_GE(new_blk_id.blk_num(), existing_end)
+            << "new allocation at blk " << new_blk_id.blk_num() << " must not overlap partial blob at blks ["
+            << existing_blk.blk_num() << ", " << existing_end << ")";
+    }
+    homestore::data_service().async_free_blk(new_blk_id).get();
+
+    // ---- Verify all blobs are readable with correct content ----
+    // Blobs 0..num_blobs_partial-1: must retain the data from the first delivery (not overwritten
+    // by the new-blob allocations in the second delivery).
+    // Blobs num_blobs_partial..num_blobs_total-1: must be readable as newly written.
+    for (blob_id_t blob_id = 0; blob_id < num_blobs_total; blob_id++) {
+        auto result = _obj_inst->blob_manager()->get(shard_id, blob_id, 0, 0).get();
+        ASSERT_TRUE(!!result) << "blob_id=" << blob_id << " must be readable after full delivery";
+        auto expected = build_blob(blob_id);
+        ASSERT_EQ(result->body.size(), expected.body.size());
+        ASSERT_EQ(std::memcmp(result->body.bytes(), expected.body.cbytes(), expected.body.size()), 0)
+            << "blob_id=" << blob_id << " data must match expected content";
     }
 }
