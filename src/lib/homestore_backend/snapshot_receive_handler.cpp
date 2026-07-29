@@ -92,6 +92,19 @@ int HSHomeObject::SnapshotReceiveHandler::process_shard_snapshot_data(ResyncShar
     shard_sb->v_chunk_id = shard_meta.vchunk_id();
     // Now let's create local shard
     home_obj_.local_create_shard(shard_sb->info, shard_sb->v_chunk_id);
+    {
+        std::unique_lock< std::shared_mutex > lock(ctx_->progress_lock);
+        if (ctx_->shard_cursor == shard_meta.shard_id()) {
+            ctx_->progress.complete_blobs -= ctx_->cur_shard_complete_blobs;
+            ctx_->progress.complete_bytes -= ctx_->cur_shard_complete_bytes;
+            if (ctx_->cur_shard_completed) { ctx_->progress.complete_shards--; }
+        }
+        ctx_->cur_shard_complete_blobs = 0;
+        ctx_->cur_shard_complete_bytes = 0;
+        ctx_->cur_shard_completed = false;
+        ctx_->progress.cur_batch_blobs = 0;
+        ctx_->progress.cur_batch_bytes = 0;
+    }
     ctx_->shard_cursor = shard_meta.shard_id();
     ctx_->cur_batch_num = 0;
     return 0;
@@ -117,6 +130,13 @@ int HSHomeObject::SnapshotReceiveHandler::process_blobs_snapshot_data(ResyncBlob
         std::unique_lock< std::shared_mutex > lock(ctx_->progress_lock);
         ctx_->progress.complete_blobs -= ctx_->progress.cur_batch_blobs;
         ctx_->progress.complete_bytes -= ctx_->progress.cur_batch_bytes;
+        ctx_->cur_shard_complete_blobs -= ctx_->progress.cur_batch_blobs;
+        ctx_->cur_shard_complete_bytes -= ctx_->progress.cur_batch_bytes;
+        ctx_->progress.cur_batch_blobs = 0;
+        ctx_->progress.cur_batch_bytes = 0;
+    } else {
+        std::unique_lock< std::shared_mutex > lock(ctx_->progress_lock);
+        // A new batch must not inherit the prior batch's rollback contribution.
         ctx_->progress.cur_batch_blobs = 0;
         ctx_->progress.cur_batch_bytes = 0;
     }
@@ -136,6 +156,7 @@ int HSHomeObject::SnapshotReceiveHandler::process_blobs_snapshot_data(ResyncBlob
     std::vector< std::shared_ptr< sisl::io_blob_safe > > data_bufs;
 
     auto skipped_blobs = 0;
+    bool found_unexpected_corruption = false;
     for (unsigned int i = 0; i < data_blobs.blob_list()->size(); i++) {
         const auto blob = data_blobs.blob_list()->Get(i);
 
@@ -145,6 +166,9 @@ int HSHomeObject::SnapshotReceiveHandler::process_blobs_snapshot_data(ResyncBlob
             skipped_blobs++;
             continue;
         }
+
+        // Count the logical batch size even when an existing blob is re-committed during replay.
+        total_bytes += blob->data()->size();
 
         auto start = Clock::now();
 
@@ -188,7 +212,8 @@ int HSHomeObject::SnapshotReceiveHandler::process_blobs_snapshot_data(ResyncBlob
                 LOGE("Blob verification failed for blob_id={}", blob->blob_id());
                 std::unique_lock< std::shared_mutex > lock(ctx_->progress_lock);
                 ctx_->progress.error_count++;
-                return BLOB_DATA_CORRUPTED;
+                found_unexpected_corruption = true;
+                break;
             }
         } else {
             LOGW("find corrupted_blobs={} in shardID=0x{:x}, pg={}, shard=0x{:x}", blob->blob_id(), ctx_->shard_cursor,
@@ -271,9 +296,9 @@ int HSHomeObject::SnapshotReceiveHandler::process_blobs_snapshot_data(ResyncBlob
                     LOGD("Persisted blob_id={} in {}us", blob_id, duration);
                     return std::error_code{};
                 }));
-        total_bytes += data_size;
     }
     auto ec = collect_all_futures(futs).get();
+    if (found_unexpected_corruption) { return BLOB_DATA_CORRUPTED; }
     // when there is a allocation failure it breaks the while loop earlier.
     auto all_io_submitted = (futs.size() + skipped_blobs == data_blobs.blob_list()->size());
 
@@ -298,8 +323,9 @@ int HSHomeObject::SnapshotReceiveHandler::process_blobs_snapshot_data(ResyncBlob
         ctx_->progress.cur_batch_bytes = total_bytes;
         ctx_->progress.complete_blobs += ctx_->progress.cur_batch_blobs;
         ctx_->progress.complete_bytes += ctx_->progress.cur_batch_bytes;
+        ctx_->cur_shard_complete_blobs += ctx_->progress.cur_batch_blobs;
+        ctx_->cur_shard_complete_bytes += ctx_->progress.cur_batch_bytes;
     }
-
     if (is_last_batch) {
         // Release chunk for sealed shard
         ShardInfo::State state;
@@ -313,7 +339,8 @@ int HSHomeObject::SnapshotReceiveHandler::process_blobs_snapshot_data(ResyncBlob
         }
         {
             std::unique_lock< std::shared_mutex > lock(ctx_->progress_lock);
-            ctx_->progress.complete_shards++;
+            if (!ctx_->cur_shard_completed) { ctx_->progress.complete_shards++; }
+            ctx_->cur_shard_completed = true;
         }
         // We only update the snp info superblk on completion of each shard, since resumption is also shard-level
         update_snp_info_sb(ctx_->shard_cursor == ctx_->shard_list.front());
