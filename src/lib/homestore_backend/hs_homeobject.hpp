@@ -667,8 +667,14 @@ public:
             const int64_t snp_lsn;
             const pg_id_t pg_id;
             shared< BlobIndexTable > index_table;
+
+            // Progress and accounting fields
+            uint64_t cur_shard_complete_blobs{0};
+            uint64_t cur_shard_complete_bytes{0};
+            bool cur_shard_completed{false};
             std::shared_mutex progress_lock;
             snapshot_progress progress;
+
             SnapshotContext(int64_t lsn, pg_id_t pg_id) : snp_lsn{lsn}, pg_id{pg_id} {}
         };
 
