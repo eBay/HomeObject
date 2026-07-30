@@ -203,6 +203,80 @@ TEST_F(HomeObjectFixture, PGBlobIterator) {
     ASSERT_TRUE(pg_iter->update_cursor(objId(LAST_OBJ_ID)));
 }
 
+// Regression test for a batch resend bug with retained look-ahead prefetch data, where the old bounded prefetch loop
+// could stop after rebuilding only a prefix of the resent batch when retained bytes plus that prefix reached the 2x
+// batch limit. The required latter blob(s) was then missing from prefetched_blobs_, and every retry failed at the
+// same cursor. Derive a batch limit from actual stored blob sizes to reproduce that topology without depending on
+// random sizes.
+TEST_F(HomeObjectFixture, PGBlobIteratorBatchResendPrefetchFrontier) {
+    constexpr pg_id_t pg_id{1};
+    constexpr uint64_t num_blobs{8};
+
+    create_pg(pg_id);
+    auto const shard = create_shard(pg_id, 64 * Mi, "shard meta");
+    std::map< pg_id_t, std::vector< shard_id_t > > pg_shard_map{{pg_id, {shard.id}}};
+    std::map< pg_id_t, blob_id_t > pg_blob_id{{pg_id, 0}};
+    put_blobs(pg_shard_map, num_blobs, pg_blob_id);
+
+    auto pg = _obj_inst->get_hs_pg(pg_id);
+    ASSERT_NE(pg, nullptr);
+    auto pg_iter =
+        std::make_shared< HSHomeObject::PGBlobIterator >(*_obj_inst, pg->pg_info_.replica_set_uuid, shard.create_lsn);
+    auto const shard_seq_num = HSHomeObject::get_sequence_num_from_shard_id(shard.id);
+    ASSERT_TRUE(pg_iter->update_cursor(objId(shard_seq_num, 0)));
+    ASSERT_TRUE(pg_iter->generate_shard_blob_list());
+
+    // Find a batch limit B from the actual stored sizes such that initial prefetch retains look-ahead, while on resend:
+    // retained look-ahead + a rebuilt batch prefix >= 2B before the final required batch blob is prefetched.
+    std::vector< uint64_t > prefix_bytes{0};
+    for (auto const& info : pg_iter->cur_blob_list_) {
+        prefix_bytes.push_back(prefix_bytes.back() + info.pbas.blk_count() * pg_iter->repl_dev_->get_blk_size());
+    }
+    bool topology_configured = false;
+    for (size_t batch_blobs = 2; batch_blobs < prefix_bytes.size() - 1 && !topology_configured; batch_blobs++) {
+        for (size_t prefetched_blobs = batch_blobs + 1; prefetched_blobs < prefix_bytes.size(); prefetched_blobs++) {
+            auto const min_batch_size =
+                std::max(prefix_bytes[batch_blobs - 1], prefix_bytes[prefetched_blobs - 1] / 2) + 1;
+            auto const max_batch_size = std::min(
+                {prefix_bytes[batch_blobs], prefix_bytes[prefetched_blobs] / 2,
+                 (prefix_bytes[prefetched_blobs] - prefix_bytes[batch_blobs] + prefix_bytes[batch_blobs - 1]) / 2});
+            if (min_batch_size <= max_batch_size) {
+                pg_iter->max_batch_size_ = min_batch_size;
+                topology_configured = true;
+                break;
+            }
+        }
+    }
+    ASSERT_TRUE(topology_configured);
+
+    sisl::io_blob_safe shard_meta;
+    ASSERT_TRUE(pg_iter->create_shard_snapshot_data(shard_meta));
+    objId batch_oid(shard_seq_num, 1);
+    ASSERT_TRUE(pg_iter->update_cursor(batch_oid));
+    sisl::io_blob_safe blob_batch;
+    ASSERT_TRUE(pg_iter->create_blobs_snapshot_data(blob_batch));
+    auto blob_msg = GetSizePrefixedResyncBlobDataBatch(blob_batch.cbytes() + sizeof(SyncMessageHeader));
+    ASSERT_GT(blob_msg->blob_list()->size(), 1);
+    ASSERT_FALSE(pg_iter->prefetched_blobs_.empty());
+
+    uint64_t resend_prefix_bytes{0};
+    for (uint32_t i = 0; i + 1 < blob_msg->blob_list()->size(); i++) {
+        auto const blob_id = blob_msg->blob_list()->Get(i)->blob_id();
+        auto const info = std::ranges::find(pg_iter->cur_blob_list_, blob_id, &HSHomeObject::BlobInfo::blob_id);
+        ASSERT_NE(info, pg_iter->cur_blob_list_.end());
+        resend_prefix_bytes += info->pbas.blk_count() * pg_iter->repl_dev_->get_blk_size();
+    }
+    ASSERT_GE(pg_iter->inflight_prefetch_bytes_ + resend_prefix_bytes, pg_iter->max_batch_size_ * 2);
+    ASSERT_LT(blob_msg->blob_list()->Get(blob_msg->blob_list()->size() - 1)->blob_id(),
+              pg_iter->prefetched_blobs_.begin()->first);
+
+    ASSERT_TRUE(pg_iter->update_cursor(batch_oid));
+    sisl::io_blob_safe resent_blob_batch;
+    ASSERT_TRUE(pg_iter->create_blobs_snapshot_data(resent_blob_batch));
+    ASSERT_EQ(resent_blob_batch.size(), blob_batch.size());
+    ASSERT_EQ(std::memcmp(resent_blob_batch.cbytes(), blob_batch.cbytes(), blob_batch.size()), 0);
+}
+
 // Simulates a GC race where blob blkID changes between generate_shard_blob_list and load_blob_data.
 // Injects a cross-shard pbas into cur_blob_list_ so verify_blob fails (shard_id mismatch in blob header).
 // The retry inside load_blob_data_with_blkid re-reads the index, finds the updated pbas, and re-reads
@@ -512,8 +586,11 @@ TEST_F(HomeObjectFixture, SnapshotReceiveHandler) {
             std::vector< flatbuffers::Offset< ResyncBlobData > > blob_entries;
             auto const batch_start_blob_id = cur_blob_id;
             for (uint64_t k = 0; k < num_blobs_per_batch; k++) {
-                auto blob_state = corrupt_dis(gen) <= corrupted_blob_percentage ? ResyncBlobState::CORRUPTED
-                                                                                : ResyncBlobState::NORMAL;
+                // An injected batch corruption must affect a normal blob so the receiver verifies and rejects it.
+                // CORRUPTED blobs intentionally bypass verification and are covered by clean batches below.
+                auto blob_state = is_corrupted_batch || corrupt_dis(gen) > corrupted_blob_percentage
+                    ? ResyncBlobState::NORMAL
+                    : ResyncBlobState::CORRUPTED;
 
                 // Construct raw blob buffer
                 auto blob = build_blob(cur_blob_id);

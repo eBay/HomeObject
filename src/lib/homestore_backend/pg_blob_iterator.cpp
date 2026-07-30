@@ -320,7 +320,11 @@ bool HSHomeObject::PGBlobIterator::prefetch_blobs_snapshot_data() {
     LOGD("prefetch_blobs_snapshot_data, inflight={}, idx={}, max_batch_size * 2 = {}", inflight_prefetch_bytes_,
          cur_start_blob_idx_, max_batch_size_ * 2);
     auto idx = cur_start_blob_idx_;
-    while (inflight_prefetch_bytes_ < max_batch_size_ * 2 && idx < cur_blob_list_.size()) {
+    // On batch resend, retained look-ahead may already consume part of the 2x budget. Allow missing blobs before the
+    // earliest retained blob to bypass the limit so the current batch can always be rebuilt.
+    const auto prefetch_frontier = prefetched_blobs_.empty() ? blob_id_t{0} : prefetched_blobs_.begin()->first;
+    while (idx < cur_blob_list_.size() &&
+           (inflight_prefetch_bytes_ < max_batch_size_ * 2 || cur_blob_list_[idx].blob_id < prefetch_frontier)) {
         auto info = cur_blob_list_[idx++];
         total_blobs++;
         // handle deleted object
@@ -337,9 +341,8 @@ bool HSHomeObject::PGBlobIterator::prefetch_blobs_snapshot_data() {
             skipped_blobs++;
             continue;
         }
-        auto expect_blob_size = info.pbas.blk_count() * repl_dev_->get_blk_size();
-        inflight_prefetch_bytes_ += expect_blob_size;
-        LOGD("will prefetch {}", info.blob_id);
+        inflight_prefetch_bytes_ += info.pbas.blk_count() * repl_dev_->get_blk_size();
+        LOGD("Will prefetch {}: frontier {}, inflight {}", info.blob_id, prefetch_frontier, inflight_prefetch_bytes_);
         prefetch_list.emplace_back(info);
     }
     // POC: sort the prefetch_list by pbas, trying to let IO submitted to disk more sequential.
@@ -426,8 +429,10 @@ bool HSHomeObject::PGBlobIterator::create_blobs_snapshot_data(sisl::io_blob_safe
                 LOGE("blob {} not found in prefetched blob map", info.blob_id);
                 break;
             }
+            auto const expect_blob_size = info.pbas.blk_count() * repl_dev_->get_blk_size();
             auto res = std::move(it->second).get();
             prefetched_blobs_.erase(it);
+            inflight_prefetch_bytes_ -= expect_blob_size;
 
             if (res.hasError()) {
                 LOGE("blob {} hit error {}", info.blob_id, res.error());
@@ -436,8 +441,6 @@ bool HSHomeObject::PGBlobIterator::create_blobs_snapshot_data(sisl::io_blob_safe
             }
             std::vector< uint8_t > data(res->blob_.cbytes(), res->blob_.cbytes() + res->blob_.size());
             blob_entries.push_back(CreateResyncBlobDataDirect(builder_, res->blob_id_, (uint8_t)res->state_, &data));
-            auto const expect_blob_size = info.pbas.blk_count() * repl_dev_->get_blk_size();
-            inflight_prefetch_bytes_ -= expect_blob_size;
             total_bytes += expect_blob_size;
             fetched_blobs++;
         }
