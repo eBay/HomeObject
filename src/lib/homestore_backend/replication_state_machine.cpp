@@ -272,12 +272,13 @@ homestore::AsyncReplResult<>
 ReplicationStateMachine::create_snapshot(std::shared_ptr< homestore::snapshot_context > context) {
     std::lock_guard lk(m_snapshot_lock);
     if (get_snapshot_context() != nullptr && context->get_lsn() < m_snapshot_context->get_lsn()) {
-        LOGI("Skipping create snapshot, new snapshot lsn={} is less than current snapshot lsn={}", context->get_lsn(),
-             m_snapshot_context->get_lsn());
+        LOGD("Skipping older snapshot context: group={}, requested_lsn={}, current_lsn={}",
+             boost::uuids::to_string(repl_dev()->group_id()), context->get_lsn(), m_snapshot_context->get_lsn());
         return folly::makeSemiFuture< homestore::ReplResult< folly::Unit > >(folly::Unit{});
     }
 
-    LOGI("create snapshot with lsn={}", context->get_lsn());
+    LOGI("Created resync snapshot context: group={}, lsn={}", boost::uuids::to_string(repl_dev()->group_id()),
+         context->get_lsn());
     set_snapshot_context(context);
     return folly::makeSemiFuture< homestore::ReplResult< folly::Unit > >(folly::Unit{});
 }
@@ -285,9 +286,9 @@ ReplicationStateMachine::create_snapshot(std::shared_ptr< homestore::snapshot_co
 bool ReplicationStateMachine::apply_snapshot(std::shared_ptr< homestore::snapshot_context > context) {
 #ifdef _PRERELEASE
     auto delay = iomgr_flip::instance()->get_test_flip< long >("simulate_apply_snapshot_delay");
-    LOGD("simulate_apply_snapshot_delay flip, triggered={}", delay.has_value());
     if (delay) {
-        LOGI("Simulating apply snapshot with delay, delay={}", delay.get());
+        LOGD("Simulating resync snapshot apply delay: group={}, delay_ms={}",
+             boost::uuids::to_string(repl_dev()->group_id()), delay.get());
         std::this_thread::sleep_for(std::chrono::milliseconds(delay.get()));
     }
     // Currently, nuraft will pause state machine and resume it after the last snp obj is saved. So we don't need to
@@ -297,6 +298,8 @@ bool ReplicationStateMachine::apply_snapshot(std::shared_ptr< homestore::snapsho
 
     std::lock_guard lk(m_snapshot_lock);
     set_snapshot_context(context);
+    LOGI("Applied resync snapshot: group={}, lsn={}", boost::uuids::to_string(repl_dev()->group_id()),
+         context->get_lsn());
     return true;
 }
 
@@ -316,7 +319,7 @@ int ReplicationStateMachine::read_snapshot_obj(std::shared_ptr< homestore::snaps
                                                                        context->get_lsn());
             auto pg_iter_ptr = new std::shared_ptr< HSHomeObject::PGBlobIterator >(pg_iter);
             snp_obj->user_ctx = static_cast< void* >(pg_iter_ptr);
-            LOGD("Allocated new pg blob iterator={}, group={}, lsn={}", snp_obj->user_ctx,
+            LOGD("Allocated PGBlobIterator: iterator={}, group={}, snapshot_lsn={}", snp_obj->user_ctx,
                  boost::uuids::to_string(repl_dev()->group_id()), context->get_lsn());
         } else {
             auto pg_iter_ptr = static_cast< std::shared_ptr< HSHomeObject::PGBlobIterator >* >(snp_obj->user_ctx);
@@ -340,14 +343,14 @@ int ReplicationStateMachine::read_snapshot_obj(std::shared_ptr< homestore::snaps
     if (snp_obj->offset == LAST_OBJ_ID) {
         // No more shards to read, baseline resync is finished after this.
         snp_obj->is_last_obj = true;
-        LOGD("Read snapshot end, {}", log_str);
+        LOGI("Completed resync snapshot read: pg={}, {}", pg_iter->pg_id, log_str);
         return 0;
     }
 
     auto obj_id = objId(snp_obj->offset);
     log_str = fmt::format("{} shard_seq_num=0x{:x} batch_num={}", log_str, obj_id.shard_seq_num, obj_id.batch_id);
 
-    LOGI("Read current snp obj {}", log_str)
+    LOGI("Reading resync object: {}", log_str)
     if (!pg_iter->update_cursor(obj_id)) {
         // There is a known corner case (not sure if it is the only case): If free_user_snp_ctx and read_snapshot_obj
         // (we enable NuRaft bg snapshot) occur at the same time, and free_user_snp_ctx is called first, pg_iter is
@@ -355,7 +358,7 @@ int ReplicationStateMachine::read_snapshot_obj(std::shared_ptr< homestore::snaps
         // will be x|y which may hit into invalid objId condition. If inconsistency happens, reset the cursor to the
         // beginning(0|0), send an empty message, and let follower validate (lsn may change) and reset its cursor to the
         // checkpoint to proceed with snapshot resync.
-        LOGW("Invalid objId in snapshot read, reset cursor to the beginning, {}", log_str);
+        LOGW("Invalid resync cursor; resetting donor cursor: {}", log_str);
         pg_iter->reset_cursor();
         return 0;
     }
@@ -399,19 +402,19 @@ void ReplicationStateMachine::write_snapshot_obj(std::shared_ptr< homestore::sna
     if (!m_snp_rcv_handler) {
         m_snp_rcv_handler = std::make_unique< HSHomeObject::SnapshotReceiveHandler >(*home_object_, r_dev);
         if (m_snp_rcv_handler->load_prev_context_and_metrics()) {
-            LOGI("Reloaded previous snapshot context, lsn={} pg={} next_shard:0x{:x}", context->get_lsn(),
+            LOGI("Reloaded resync receiver context: lsn={}, pg={}, next_shard=0x{:x}",
+                 m_snp_rcv_handler->get_context_lsn(),
                  m_snp_rcv_handler->get_context_pg_id(), m_snp_rcv_handler->get_next_shard());
         }
     }
 
     auto obj_id = objId(snp_obj->offset);
     auto log_suffix =
-        fmt::format("group={} lsn={} shard=0x{:x} batch_num={} size={}", uuids::to_string(r_dev->group_id()),
+        fmt::format("group={}, lsn={}, shard_seq=0x{:x}, batch={}, bytes={}", uuids::to_string(r_dev->group_id()),
                     context->get_lsn(), obj_id.shard_seq_num, obj_id.batch_id, snp_obj->blob.size());
-    LOGI("Received snapshot obj, {}", log_suffix);
+    LOGI("Writing resync object: {}", log_suffix);
 
     if (snp_obj->is_last_obj) {
-        LOGD("Write snapshot reached is_last_obj true {}", log_suffix);
         set_snapshot_context(context); // Update the snapshot context in case apply_snapshot is not called
         auto hs_pg = home_object_->get_hs_pg(m_snp_rcv_handler->get_context_pg_id());
         hs_pg->pg_state_.clear_state(PGStateMask::BASELINE_RESYNC);
@@ -419,32 +422,29 @@ void ReplicationStateMachine::write_snapshot_obj(std::shared_ptr< homestore::sna
         // since this replica will leave the PG and no later logs will be received, no need to reset this.
         reset_no_space_left_error_info();
         repl_dev()->reset_latch_lsn();
+        LOGI("Completed resync snapshot write: {}", log_suffix);
         return;
     }
 
     // Check message integrity
 #ifdef _PRERELEASE
     if (iomgr_flip::instance()->test_flip("state_machine_write_corrupted_data")) {
-        LOGW("Simulating writing corrupted snapshot data, lsn={}, obj_id={} shard 0x{:x} batch={}", context->get_lsn(),
-             obj_id.value, obj_id.shard_seq_num, obj_id.batch_id);
+        LOGD("Simulating corrupted resync object: {}", log_suffix);
         return;
     }
 #endif
     if (snp_obj->blob.size() < sizeof(SyncMessageHeader)) {
-        LOGE("invalid snapshot message size {} in write_snapshot_data, lsn={}, obj_id={} shard 0x{:x} batch={}",
-             snp_obj->blob.size(), context->get_lsn(), obj_id.value, obj_id.shard_seq_num, obj_id.batch_id);
+        LOGE("Invalid resync object size: minimum_bytes={}, {}", sizeof(SyncMessageHeader), log_suffix);
         return;
     }
     auto header = r_cast< const SyncMessageHeader* >(snp_obj->blob.cbytes());
     if (header->corrupted()) {
-        LOGE("corrupted message in write_snapshot_data, lsn={}, obj_id={} shard 0x{:x} batch={}", context->get_lsn(),
-             obj_id.value, obj_id.shard_seq_num, obj_id.batch_id);
+        LOGE("Corrupted resync object header: {}", log_suffix);
         return;
     }
     if (auto payload_size = snp_obj->blob.size() - sizeof(SyncMessageHeader); payload_size != header->payload_size) {
-        LOGE("payload size mismatch in write_snapshot_data {} != {}, lsn={}, obj_id={} shard 0x{:x} batch={}",
-             payload_size, header->payload_size, context->get_lsn(), obj_id.value, obj_id.shard_seq_num,
-             obj_id.batch_id);
+        LOGE("Resync object payload size mismatch: actual_bytes={}, expected_bytes={}, {}", payload_size,
+             header->payload_size, log_suffix);
         return;
     }
     auto data_buf = snp_obj->blob.cbytes() + sizeof(SyncMessageHeader);
@@ -458,7 +458,7 @@ void ReplicationStateMachine::write_snapshot_obj(std::shared_ptr< homestore::sna
         if (m_snp_rcv_handler->get_context_lsn() == context->get_lsn() && m_snp_rcv_handler->get_shard_cursor() != 0) {
             // Request to resume from the beginning of shard
             snp_obj->offset = snapshot_offset_for_next_shard(m_snp_rcv_handler->get_shard_cursor());
-            LOGI("Resume from previous context breakpoint, lsn={} pg={} next_shard:0x{:x}, shard_cursor:0x{:x}",
+            LOGI("Resuming resync receiver context: lsn={}, pg={}, next_shard=0x{:x}, shard_cursor=0x{:x}",
                  context->get_lsn(), pg_data->pg_id(), m_snp_rcv_handler->get_next_shard(),
                  m_snp_rcv_handler->get_shard_cursor());
             return;
@@ -467,25 +467,26 @@ void ReplicationStateMachine::write_snapshot_obj(std::shared_ptr< homestore::sna
         // Init a new transmission
         // If PG already exists, clean the stale pg resources. Let's resync on a pristine base
         if (home_object_->pg_exists(pg_data->pg_id())) {
-            LOGI("pg already exists, clean pg resources before snapshot, pg={} {}", pg_data->pg_id(), log_suffix);
+            LOGI("Resetting existing PG before resync: pg={}, {}", pg_data->pg_id(), log_suffix);
             // Need to pause state machine before destroying the PG, if fail, let raft retry.
             if (!home_object_->pg_destroy(pg_data->pg_id(), true)) {
-                LOGE("failed to destroy existing pg, let raft retry, pg={} {}", pg_data->pg_id(), log_suffix);
+                LOGE("Failed to reset existing PG before resync; requesting retry: pg={}, {}", pg_data->pg_id(),
+                     log_suffix);
                 return;
             }
         }
-        LOGI("reset context from lsn={} to lsn={}", m_snp_rcv_handler->get_context_lsn(), context->get_lsn());
+        LOGD("Resetting resync receiver context: previous_lsn={}, new_lsn={}",
+             m_snp_rcv_handler->get_context_lsn(), context->get_lsn());
         m_snp_rcv_handler->reset_context_and_metrics(context->get_lsn(), pg_data->pg_id());
 
         auto ret = m_snp_rcv_handler->process_pg_snapshot_data(*pg_data);
         if (ret) {
             // Do not proceed, will request for resending the PG data
-            LOGE("Failed to process PG snapshot data lsn={} obj_id={} shard 0x{:x} batch={}, err={}",
-                 context->get_lsn(), obj_id.value, obj_id.shard_seq_num, obj_id.batch_id, ret);
+            LOGE("Failed to process resync PG metadata: error={}, {}", ret, log_suffix);
             return;
         }
         snp_obj->offset = snapshot_offset_for_next_shard(m_snp_rcv_handler->get_next_shard());
-        LOGI("Write snapshot, processed PG data pg={} {}", pg_data->pg_id(), log_suffix);
+        LOGD("Dispatched resync PG metadata: pg={}, {}", pg_data->pg_id(), log_suffix);
         return;
     }
 
@@ -496,17 +497,17 @@ void ReplicationStateMachine::write_snapshot_obj(std::shared_ptr< homestore::sna
     if (!m_snp_rcv_handler->is_valid_obj_id(obj_id)) {
         if (m_snp_rcv_handler->get_shard_cursor() == HSHomeObject::SnapshotReceiveHandler::shard_list_end_marker) {
             snp_obj->offset = LAST_OBJ_ID;
-            LOGW("Leader resending last batch , we already done. Setting offset to LAST_OBJ_ID", context->get_lsn(),
-                 m_snp_rcv_handler->get_next_shard(), m_snp_rcv_handler->get_shard_cursor());
+            LOGW("Ignoring resync object after shard completion: lsn={}, next_shard=0x{:x}, shard_cursor=0x{:x}",
+                 context->get_lsn(), m_snp_rcv_handler->get_next_shard(), m_snp_rcv_handler->get_shard_cursor());
         } else if (m_snp_rcv_handler->get_shard_cursor() == HSHomeObject::SnapshotReceiveHandler::invalid_shard_id) {
             // Could happen if interrupted before the first shard is done
             snp_obj->offset = objId(0, 0).value;
-            LOGW("No shard cursor found, resume from the beginning pg meta. lsn={}", context->get_lsn());
+            LOGW("Resync receiver has no shard cursor; requesting PG metadata: lsn={}", context->get_lsn());
         } else {
             snp_obj->offset =
                 objId(HSHomeObject::get_sequence_num_from_shard_id(m_snp_rcv_handler->get_shard_cursor()), 0).value;
-            LOGW("Obj id not matching with the current shard/blob cursor, resume from previous context breakpoint, "
-                 "lsn={} next_shard:0x{:x}, shard_cursor:0x{:x}",
+            LOGW("Invalid resync receiver cursor; requesting shard metadata: lsn={}, next_shard=0x{:x}, "
+                 "shard_cursor=0x{:x}",
                  context->get_lsn(), m_snp_rcv_handler->get_next_shard(), m_snp_rcv_handler->get_shard_cursor());
         }
         return;
@@ -522,13 +523,12 @@ void ReplicationStateMachine::write_snapshot_obj(std::shared_ptr< homestore::sna
         auto ret = m_snp_rcv_handler->process_shard_snapshot_data(*shard_data);
         if (ret) {
             // Do not proceed, will request for resending the shard data
-            LOGE("Failed to process shard snapshot data lsn={} obj_id={} shard 0x{:x} batch={}, err={}",
-                 context->get_lsn(), obj_id.value, obj_id.shard_seq_num, obj_id.batch_id, ret);
+            LOGE("Failed to process resync shard metadata: error={}, {}", ret, log_suffix);
             return;
         }
         // Request for the next batch
         snp_obj->offset = objId(obj_id.shard_seq_num, 1).value;
-        LOGD("Write snapshot, processed shard data shard_seq_num:0x{:x} {}", obj_id.shard_seq_num, log_suffix);
+        LOGD("Dispatched resync shard metadata: {}", log_suffix);
         return;
     }
 
@@ -538,8 +538,7 @@ void ReplicationStateMachine::write_snapshot_obj(std::shared_ptr< homestore::sna
         m_snp_rcv_handler->process_blobs_snapshot_data(*blob_batch, obj_id.batch_id, blob_batch->is_last_batch());
     if (ret) {
         // Do not proceed, will request for resending the current blob batch
-        LOGE("Failed to process blob snapshot data lsn={} obj_id={} shard 0x{:x} batch={}, err={}", context->get_lsn(),
-             obj_id.value, obj_id.shard_seq_num, obj_id.batch_id, ret);
+        LOGE("Failed to process resync shard batch: error={}, {}", ret, log_suffix);
         return;
     }
     // Set next obj_id to fetch
@@ -549,8 +548,7 @@ void ReplicationStateMachine::write_snapshot_obj(std::shared_ptr< homestore::sna
         snp_obj->offset = objId(obj_id.shard_seq_num, obj_id.batch_id + 1).value;
     }
 
-    LOGD("Write snapshot, processed blob data shard_seq_num:0x{:x} batch_num={} {}", obj_id.shard_seq_num,
-         obj_id.batch_id, log_suffix);
+    LOGD("Dispatched resync shard batch: {}", log_suffix);
 }
 
 void ReplicationStateMachine::free_user_snp_ctx(void*& user_snp_ctx) {
