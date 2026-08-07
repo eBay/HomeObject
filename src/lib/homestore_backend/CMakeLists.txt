@@ -30,6 +30,8 @@ target_sources("${PROJECT_NAME}_homestore" PRIVATE
     hs_cp_callbacks.cpp
     hs_http_manager.cpp
     gc_manager.cpp
+    scrub_manager.cpp
+    MPMCPriorityQueue.hpp
     $<TARGET_OBJECTS:${PROJECT_NAME}_core>
 )
 target_link_libraries("${PROJECT_NAME}_homestore" PUBLIC
@@ -42,11 +44,14 @@ settings_gen_cpp(
     ${FLATBUFFERS_FLATC_EXECUTABLE}
     ${CMAKE_CURRENT_BINARY_DIR}/generated/
     "${PROJECT_NAME}_homestore"
-    hs_backend_config.fbs
-    resync_pg_data.fbs
-    resync_shard_data.fbs
-    legacy_resync_shard_data.fbs
-    resync_blob_data.fbs
+    hs_homeobject_fbs/hs_backend_config.fbs
+    hs_homeobject_fbs/resync_pg_data.fbs
+    hs_homeobject_fbs/resync_shard_data.fbs
+    hs_homeobject_fbs/resync_blob_data.fbs
+    
+    hs_homeobject_fbs/scrub_common.fbs
+    hs_homeobject_fbs/scrub_req.fbs
+    hs_homeobject_fbs/scrub_result.fbs
   )
 
 # Unit test objects
@@ -155,7 +160,6 @@ add_test(NAME HomestoreResyncTestWithLeaderRestart
 add_test(NAME FetchDataWithOriginatorGC
         COMMAND homestore_test_dynamic --executor immediate --config_path ./
         --override_config hs_backend_config.enable_gc=true
-        --override_config hs_backend_config.gc_enable_read_verify=true
         --override_config hs_backend_config.gc_garbage_rate_threshold=50
         --override_config hs_backend_config.gc_garbage_rate_threshold_low=30
         --gtest_filter=HomeObjectFixture.FetchDataWithOriginatorGC)
@@ -165,7 +169,6 @@ target_sources(homestore_test_gc PRIVATE $<TARGET_OBJECTS:homestore_tests_gc>)
 target_link_libraries(homestore_test_gc PUBLIC homeobject_homestore ${COMMON_TEST_DEPS})
 add_test(NAME HomestoreTestGC COMMAND homestore_test_gc --executor immediate --config_path ./
         --override_config hs_backend_config.enable_gc=true
-        --override_config hs_backend_config.gc_enable_read_verify=true
         --override_config hs_backend_config.gc_garbage_rate_threshold=0
         --override_config hs_backend_config.gc_garbage_rate_threshold_low=0
         --override_config hs_backend_config.gc_scan_interval_sec=5
@@ -182,6 +185,13 @@ add_test(NAME HomestoreTestGC_ShardRaceTests
         --override_config hs_backend_config.gc_scan_interval_sec=5
         --gtest_filter=HomeObjectFixture.StalePChunkRouteAfterGC:HomeObjectFixture.StaleBlobRouteAfterSealAndGC)
 
+add_executable(homestore_test_scrubber)
+target_sources(homestore_test_scrubber PRIVATE $<TARGET_OBJECTS:homestore_tests_scrubber>)
+target_link_libraries(homestore_test_scrubber PUBLIC homeobject_homestore ${COMMON_TEST_DEPS})
+add_test(NAME HomestoreTestScrubber COMMAND homestore_test_scrubber -csv error --executor immediate --config_path ./
+        --override_config hs_backend_config.enable_scrubber=true
+        --override_config nuraft_mesg_config.mesg_factory_config.data_request_deadline_secs:10)
+
 # All tests share disk, port, and shared-memory resources, so run them serially to avoid parallel conflicts.
 set_tests_properties(
     HomestoreTestBlob
@@ -194,4 +204,9 @@ set_tests_properties(
     FetchDataWithOriginatorGC
     HomestoreTestGC
     HomestoreTestGC_ShardRaceTests
+    HomestoreTestScrubber
     PROPERTIES RUN_SERIAL TRUE)
+
+
+
+

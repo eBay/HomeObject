@@ -312,6 +312,14 @@ void HSHomeObject::init_homestore() {
     } else {
         LOGI("GC is disabled");
     }
+
+    // start scrubber
+    if (HS_BACKEND_DYNAMIC_CONFIG(enable_scrubber)) {
+        LOGI("Starting scrub manager");
+        scrub_mgr_->start();
+    } else {
+        LOGI("scrub manager is disabled");
+    }
 }
 
 void HSHomeObject::on_replica_restart() {
@@ -362,7 +370,6 @@ void HSHomeObject::on_replica_restart() {
 
         // gc_manager will be created only once here. we need make sure gc manager is created after all the pg meta blk
         // are replayed since we build pdev chunk heap in the constructor of gc manager , which depends on the pg meta.
-
         // gc metablk handlers are registered in the constructor of gc manager
         gc_mgr_ = std::make_shared< GCManager >(this);
 
@@ -437,6 +444,9 @@ void HSHomeObject::on_replica_restart() {
         }
         destroyed_stale_pgs_.clear();
     });
+
+    // initialize scrub manager
+    scrub_mgr_ = std::make_shared< ScrubManager >(this);
 }
 
 #if 0
@@ -506,16 +516,20 @@ void HSHomeObject::shutdown() {
         LOGI("waiting for {} pending requests to complete", pending_reqs);
         std::this_thread::sleep_for(std::chrono::milliseconds(1000));
     };
-    LOGI("start stopping GC");
+    LOGI("stopping GC");
     // we need stop gc before shutting down homestore(where metaservice is shutdown), because gc mgr needs metaservice
     // to persist gc task metablk if there is any ongoing gc task. after stopping gc manager, there is no gc task
     // anymore, and thus now new gc task will be written to metaservice during homestore shutdown.
-    gc_mgr_->stop();
+    if (gc_mgr_) gc_mgr_->stop();
+
+    LOGI("stopping scrubbing");
+    if (scrub_mgr_) scrub_mgr_->stop();
 
     LOGI("start shutting down HomeStore");
     homestore::HomeStore::instance()->shutdown();
     homestore::HomeStore::reset_instance();
     gc_mgr_.reset();
+    scrub_mgr_.reset();
     iomanager.stop();
     LOGI("complete shutting down HomeStore");
 }

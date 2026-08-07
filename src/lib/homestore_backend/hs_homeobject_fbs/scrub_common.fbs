@@ -1,0 +1,25 @@
+native_include "sisl/utility/non_null_ptr.hpp";
+
+namespace homeobject;
+
+enum ScrubStatus : uint8 {
+  NONE = 0,
+  IO_ERROR = 1,
+  MISMATCH = 2,
+  NOT_FOUND = 3
+}
+
+enum ScrubType : uint8 {
+  META = 0,
+  SHALLOW_BLOB = 1,
+  DEEP_BLOB = 2,
+  CHECK_BLOB_EXISTENCE = 3,
+  CHECK_SHARD_EXISTENCE = 4
+}
+
+table ScrubResultEntry {
+  shard_id:     uint64;
+  blob_id:      uint64;
+  scrub_result: ScrubStatus;  
+  hash:         uint64;
+}

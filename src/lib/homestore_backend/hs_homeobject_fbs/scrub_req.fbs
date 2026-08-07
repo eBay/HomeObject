@@ -1,0 +1,17 @@
+include "scrub_common.fbs";
+
+namespace homeobject;
+
+table ScrubReq {
+  pg_id:          uint16;
+  req_id:         uint64;
+  scrub_lsn:      int64;
+  start_shard_id: uint64;
+  start_blob_id:  uint64;
+  end_shard_id:   uint64;
+  end_blob_id:    uint64;
+  issuer_uuid:    [ubyte];
+  scrub_type:     ScrubType;  
+}
+
+root_type ScrubReq;
