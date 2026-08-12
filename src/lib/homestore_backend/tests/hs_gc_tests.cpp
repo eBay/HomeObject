@@ -1094,25 +1094,25 @@ TEST_F(HomeObjectFixture, StalePChunkRouteAfterGC) {
 }
 
 // ===================================================================================================
-// StaleBlobRouteAfterSealAndGC: PUT_BLOB races with SEAL_SHARD pre_commit; sealed_lsn guard rejects it.
+// StaleBlobRouteAfterSealAndGC: PUT_BLOB races with SEAL_SHARD commit; sealed_lsn guard rejects it.
 //
 // Production scenario :
 //   A PUT_BLOB whose admission check passed (shard OPEN) should be rejected if the shard gets
 //   sealed before the blob is committed. The sealed_lsn guard in on_blob_put_commit must catch it.
 //
 // Exact sequence modelled (single replica, leader):
-//   ① SEAL_SHARD pre_commit fires and PAUSES before changing state=SEALED
-//      (flip "pause_seal_pre_commit").  At this point shard state is still OPEN.
+//   ① SEAL_SHARD commit fires and PAUSES before changing state=SEALED / sealed_lsn
+//      (flip "pause_seal_commit").  At this point shard state is still OPEN.
 //   ② _put_blob is called in the test thread. get_blk_alloc_hints sees state==OPEN → passes,
 //      blk is allocated on pchunk_A.  The put is async (raft not yet committed).
-//   ③ Gate releases → state = SEALED → SEAL_SHARD commit → sealed_lsn = X.
+//   ③ Gate releases → state = SEALED → sealed_lsn = X.
 //   ④ PUT_BLOB commit (lsn = X+1): on_blob_put_commit checks lsn(X+1) >= sealed_lsn(X) → reject.
 //      The allocated blk is freed; the blob does NOT land in the pg index.
 //
 // Verification: the late blob is absent from the index; bulk blobs are still readable.
 //
 // Runs on the leader replica only; no multi-replica complexity needed.
-// Pause point: flip "pause_seal_pre_commit". Compiled out of release builds.
+// Pause point: flip "pause_seal_commit". Compiled out of release builds.
 // ===================================================================================================
 TEST_F(HomeObjectFixture, StaleBlobRouteAfterSealAndGC) {
     const pg_id_t pg_id = 1;
@@ -1141,23 +1141,22 @@ TEST_F(HomeObjectFixture, StaleBlobRouteAfterSealAndGC) {
     std::map< pg_id_t, blob_id_t > pg_blob_id{{pg_id, 0}};
     put_blobs(shards, num_blobs_per_shard, pg_blob_id);
 
-    // ---- arm the flip on the leader: pause SEAL pre_commit before state=SEALED ----
+    // ---- arm the flip on the leader: pause SEAL commit before state=SEALED ----
     if (i_am_leader) {
         auto dont_care = m_fc.create_condition("", flip::Operator::DONT_CARE, (int)0);
         flip::FlipFrequency freq;
         freq.set_count(3); // 3 replicas all call callback_flip; count must be >= num_replicas
         freq.set_percent(100);
-        m_fc.inject_callback_flip< void >("pause_seal_pre_commit", {dont_care}, freq, std::function< void() >([&]() {
-                                              LOGI(
-                                                  "[StaleBlobRouteAfterSealAndGC] pausing SEAL pre_commit BEFORE lock");
-                                              std::unique_lock< std::mutex > lk(repro2_mtx);
-                                              repro2_blocked.store(true);
-                                              repro2_cv.notify_all();
-                                              repro2_cv.wait(lk, [&] { return repro2_released.load(); });
-                                              LOGI("[StaleBlobRouteAfterSealAndGC] resuming SEAL pre_commit");
-                                          }));
-        LOGINFO("[StaleBlobRouteAfterSealAndGC] armed pause_seal_pre_commit on leader replica={}",
-                g_helper->replica_num());
+        m_fc.inject_callback_flip< void >(
+            "pause_seal_commit", {dont_care}, freq, std::function< void() >([&]() {
+                LOGI("[StaleBlobRouteAfterSealAndGC] pausing SEAL commit BEFORE state update");
+                std::unique_lock< std::mutex > lk(repro2_mtx);
+                repro2_blocked.store(true);
+                repro2_cv.notify_all();
+                repro2_cv.wait(lk, [&] { return repro2_released.load(); });
+                LOGI("[StaleBlobRouteAfterSealAndGC] resuming SEAL commit");
+            }));
+        LOGINFO("[StaleBlobRouteAfterSealAndGC] armed pause_seal_commit on leader replica={}", g_helper->replica_num());
     }
 
     g_helper->sync(); // make sure flip is armed on all replicas before proceeding
@@ -1166,7 +1165,7 @@ TEST_F(HomeObjectFixture, StaleBlobRouteAfterSealAndGC) {
     blob_id_t late_blob_id [[maybe_unused]] = INVALID_UINT64_ID;
     if (i_am_leader) {
         // 1. Start seal_shard in a background thread so it runs concurrently.
-        //    seal_shard will hit the gate in pre_commit and pause there.
+        //    seal_shard will hit the gate in commit and pause there.
         auto tid = generateRandomTraceId();
         bool seal_ok = false;
         std::thread seal_thread([&]() {
@@ -1174,18 +1173,18 @@ TEST_F(HomeObjectFixture, StaleBlobRouteAfterSealAndGC) {
             seal_ok = r.hasValue();
         });
 
-        // 2. Wait until pre_commit is paused (shard state is still OPEN).
+        // 2. Wait until commit is paused (shard state is still OPEN).
         {
             std::unique_lock< std::mutex > lk(repro2_mtx);
             if (!repro2_cv.wait_for(lk, std::chrono::seconds(30), [&] { return repro2_blocked.load(); })) {
                 repro2_released.store(true); // avoid deadlock if gate never fires
                 repro2_cv.notify_all();
                 seal_thread.join();
-                m_fc.remove_flip("pause_seal_pre_commit");
-                FAIL() << "SEAL pre_commit never reached the pause point";
+                m_fc.remove_flip("pause_seal_commit");
+                FAIL() << "SEAL commit never reached the pause point";
             }
         }
-        LOGINFO("[StaleBlobRouteAfterSealAndGC] leader sees SEAL pre_commit paused; shard state=OPEN; "
+        LOGINFO("[StaleBlobRouteAfterSealAndGC] leader sees SEAL commit paused; shard state=OPEN; "
                 "calling _put_blob with shard still OPEN");
 
         // 3. Call _put_blob in a background thread: shard state is OPEN → get_blk_alloc_hints
@@ -1199,9 +1198,8 @@ TEST_F(HomeObjectFixture, StaleBlobRouteAfterSealAndGC) {
                     b.hasValue() ? "admitted" : "rejected");
         });
 
-        // 4. Release the gate: state = SEALED, seal pre_commit returns → raft commits seal.
-        //    After seal commit, sealed_lsn = lsn_seal.  Then put_blob commit fires and
-        //    on_blob_put_commit checks lsn(put) >= sealed_lsn → rejects.
+        // 4. Release the gate: state = SEALED, seal commit returns with sealed_lsn = lsn_seal.
+        //    Then put_blob commit fires and on_blob_put_commit checks lsn(put) >= sealed_lsn → rejects.
         {
             std::unique_lock< std::mutex > lk(repro2_mtx);
             repro2_released.store(true);
@@ -1212,7 +1210,7 @@ TEST_F(HomeObjectFixture, StaleBlobRouteAfterSealAndGC) {
         // 5. Wait for both background threads.
         blob_thread.join();
         seal_thread.join();
-        m_fc.remove_flip("pause_seal_pre_commit");
+        m_fc.remove_flip("pause_seal_commit");
         ASSERT_TRUE(seal_ok) << "seal_shard failed";
 
         EXPECT_TRUE(blob_rejected)
