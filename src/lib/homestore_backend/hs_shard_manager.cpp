@@ -397,42 +397,10 @@ bool HSHomeObject::on_shard_message_pre_commit(int64_t lsn, sisl::blob const& he
         return false;
     }
 
-#ifdef _PRERELEASE
-    if (msg_header->msg_type == ReplicationMessageType::SEAL_SHARD_MSG) {
-        // Pause SEAL pre_commit at function entry, before state=SEALED. Test thread can race
-        // _put_blob while shard is still OPEN; sealed_lsn guard rejects the late blob on commit.
-        iomgr_flip::instance()->callback_flip("pause_seal_pre_commit");
-    }
-#endif
-
-    switch (msg_header->msg_type) {
-    case ReplicationMessageType::SEAL_SHARD_MSG: {
-        auto decoded_shard_sb =
-            decode_shard_sb(r_cast< const shard_info_superblk* >(header.cbytes() + sizeof(ReplicationMessageHeader)));
-        RELEASE_ASSERT(decoded_shard_sb.has_value(), "failed to decode shard superblk in pre_commit SEAL_SHARD_MSG");
-        auto& [shard_info, p_chunk_id_unused, v_chunk_id_unused] = decoded_shard_sb.value();
-
-        {
-            std::scoped_lock lock_guard(_shard_lock);
-            auto iter = _shard_map.find(shard_info.id);
-            RELEASE_ASSERT(iter != _shard_map.end(), "shardID=0x{:x}, pg={}, shard=0x{:x}, shard does not exist",
-                           shard_info.id, (shard_info.id >> homeobject::shard_width),
-                           (shard_info.id & homeobject::shard_mask));
-            auto& state = (*iter->second)->info.state;
-            // we just change the state to SEALED, so that it will fail the later coming put_blob on this shard and will
-            // be easy for rollback.
-            // the update of superblk will be done in on_shard_message_commit;
-            if (state == ShardInfo::State::OPEN) {
-                state = ShardInfo::State::SEALED;
-            } else {
-                SLOGW(tid, shard_info.id, "try to seal an unopened shard");
-            }
-        }
-    }
-    default: {
-        break;
-    }
-    }
+    // SEAL_SHARD state transition is done in on_shard_message_commit, not here.
+    // Reason: create+seal can land in the same raft batch; create only inserts the shard into
+    // _shard_map on commit, so seal pre_commit would fail to find the shard.
+    // Late put_blob is rejected by the sealed_lsn guard in on_blob_put_commit.
     return true;
 }
 
@@ -459,27 +427,9 @@ void HSHomeObject::on_shard_message_rollback(int64_t lsn, sisl::blob const& head
         break;
     }
     case ReplicationMessageType::SEAL_SHARD_MSG: {
-        auto decoded_shard_sb =
-            decode_shard_sb(r_cast< const shard_info_superblk* >(header.cbytes() + sizeof(ReplicationMessageHeader)));
-        RELEASE_ASSERT(decoded_shard_sb.has_value(), "failed to decode shard superblk in rollback SEAL_SHARD_MSG");
-        auto& [shard_info, p_chunk_id_unused, v_chunk_id_unused] = decoded_shard_sb.value();
-        {
-            std::scoped_lock lock_guard(_shard_lock);
-            auto iter = _shard_map.find(shard_info.id);
-            RELEASE_ASSERT(iter != _shard_map.end(), "shardID=0x{:x}, pg={}, shard=0x{:x}, shard does not exist",
-                           shard_info.id, (shard_info.id >> homeobject::shard_width),
-                           (shard_info.id & homeobject::shard_mask));
-            auto& state = (*iter->second)->info.state;
-            // we just change the state to SEALED, since it will be easy for rollback
-            // the update of superblk will be done in on_shard_message_commit;
-            if (state == ShardInfo::State::SEALED) {
-                state = ShardInfo::State::OPEN;
-                SLOGD(tid, shard_info.id, "rollback seal shard message, lsn={}", lsn);
-            } else {
-                SLOGW(tid, shard_info.id,
-                      "try to rollback seal_shard message , but the shard state is not sealed, lsn= {}", lsn);
-            }
-        }
+        // Seal no longer mutates shard state in pre_commit, so rollback has nothing to revert
+        // in the shard map. Just fail the proposer's promise.
+        SLOGD(tid, msg_header->shard_id, "rollback seal shard message, type={}, lsn={}", msg_header->msg_type, lsn);
         // TODO:set a proper error code
         if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(ShardError(ShardErrorCode::RETRY_REQUEST))); }
 
@@ -532,6 +482,10 @@ void HSHomeObject::on_shard_message_commit(int64_t lsn, sisl::blob const& h, sha
 
 #ifdef _PRERELEASE
     if (header->msg_type == ReplicationMessageType::SEAL_SHARD_MSG) {
+        // Pause SEAL commit at function entry, before state=SEALED / sealed_lsn update.
+        // Test thread can race _put_blob while shard is still OPEN; sealed_lsn guard rejects
+        // the late blob when this gate is released and seal commit finishes.
+        iomgr_flip::instance()->callback_flip("pause_seal_commit");
         // Wait for CREATE_SHARD (next log) to be in log store before SEAL releases its vchunk.
         // Polled via get_last_append_lsn() so it doesn't rely on pre_commit signals. Armed on the
         // repro follower only; no-op on leader and other followers.
@@ -567,18 +521,21 @@ void HSHomeObject::on_shard_message_commit(int64_t lsn, sisl::blob const& h, sha
         RELEASE_ASSERT(decoded_shard_sb.has_value(), "failed to decode shard superblk in commit SEAL_SHARD_MSG");
         auto& [shard_info, p_chunk_id_unused, v_chunk_id_unused] = decoded_shard_sb.value();
 
-        ShardInfo::State state;
         {
             std::scoped_lock lock_guard(_shard_lock);
             auto iter = _shard_map.find(shard_info.id);
             RELEASE_ASSERT(iter != _shard_map.end(), "shardID=0x{:x}, pg={}, shard=0x{:x}, shard does not exist",
                            shard_info.id, (shard_info.id >> homeobject::shard_width),
                            (shard_info.id & homeobject::shard_mask));
-            state = (*iter->second)->info.state;
+            auto& state = (*iter->second)->info.state;
+            // State transition moved here from pre_commit so create+seal in the same raft batch works:
+            // create commit adds the shard to the map before seal commit runs.
+            if (state == ShardInfo::State::OPEN) {
+                state = ShardInfo::State::SEALED;
+            } else {
+                SLOGW(tid, shard_info.id, "try to seal an unopened shard, current_state={}", static_cast< int >(state));
+            }
         }
-
-        RELEASE_ASSERT(state == ShardInfo::State::SEALED,
-                       "try to commit SEAL_SHARD_MSG but shard state is not sealed. shardID={}", shard_info.id);
 
         // Corner case:
         // Assume cp_lsn = dc_lsn = 10.
