@@ -123,8 +123,8 @@ bool HSHomeObject::PGBlobIterator::update_cursor(const objId& id) {
         cur_batch_blob_count_ = 0;
     }
     cur_obj_id = id;
-    LOGD("Advanced resync cursor: pg={}, obj={}, shard_index={}, blob_index={}", pg_id, id.to_string(),
-         cur_shard_idx_, cur_start_blob_idx_);
+    LOGD("Advanced resync cursor: pg={}, obj={}, shard_index={}, blob_index={}", pg_id, id.to_string(), cur_shard_idx_,
+         cur_start_blob_idx_);
     return true;
 }
 
@@ -215,8 +215,8 @@ bool HSHomeObject::PGBlobIterator::create_pg_snapshot_data(sisl::io_blob_safe& m
     builder_.FinishSizePrefixed(pg_entry);
 
     pack_resync_message(meta_blob, SyncMessageType::PG_META);
-    LOGI("Created resync PG metadata: pg={}, shards={}, active_blobs={}, occupied_bytes={}", pg_id,
-         shard_ids.size(), total_blobs, total_bytes);
+    LOGI("Created resync PG metadata: pg={}, shards={}, active_blobs={}, occupied_bytes={}", pg_id, shard_ids.size(),
+         total_blobs, total_bytes);
     return true;
 }
 
@@ -236,8 +236,8 @@ bool HSHomeObject::PGBlobIterator::generate_shard_blob_list() {
 #endif
     auto r = home_obj_.query_blobs_in_shard(pg_id, cur_obj_id.shard_seq_num, 0, UINT64_MAX);
     if (!r) {
-        LOGE("Failed to query resync shard blobs: pg={}, shard_seq=0x{:x}, error={}", pg_id,
-             cur_obj_id.shard_seq_num, r.error());
+        LOGE("Failed to query resync shard blobs: pg={}, shard_seq=0x{:x}, error={}", pg_id, cur_obj_id.shard_seq_num,
+             r.error());
         return false;
     }
     cur_blob_list_ = r.value();
@@ -284,9 +284,8 @@ HSHomeObject::PGBlobIterator::load_blob_data_with_blkid(shard_id_t shard_id, blo
     sgs.size = total_size;
     sgs.iovs.emplace_back(iovec{.iov_base = read_buf.bytes(), .iov_len = read_buf.size()});
 
-    LOGT("Reading resync blob: pg={}, shard=0x{:x}, blob={}, blkid={}, bytes={}",
-         (shard_id >> homeobject::shard_width), (shard_id & homeobject::shard_mask), blob_id, blkid.to_string(),
-         total_size);
+    LOGT("Reading resync blob: pg={}, shard=0x{:x}, blob={}, blkid={}, bytes={}", (shard_id >> homeobject::shard_width),
+         (shard_id & homeobject::shard_mask), blob_id, blkid.to_string(), total_size);
     return repl_dev_->async_read(blkid, sgs, total_size)
         .thenValue([this, blob_id, shard_id, blkid, read_buf = std::move(read_buf)](
                        auto&& result) mutable -> BlobManager::AsyncResult< blob_read_result > {
@@ -316,8 +315,8 @@ HSHomeObject::PGBlobIterator::load_blob_data_with_blkid(shard_id_t shard_id, blo
                 // Blob was deleted concurrently after generate_shard_blob_list captured its pbas.
                 // Do not send stale bytes as CORRUPTED — signal READ_FAILED so the snapshot restarts
                 // and generate_shard_blob_list picks up tombstone_pbas, skipping the blob cleanly.
-                LOGW("Resync blob was deleted during read; restarting snapshot: pg={}, shard_id=0x{:x}, blob={}",
-                     pg_id, shard_id, blob_id);
+                LOGW("Resync blob was deleted during read; restarting snapshot: pg={}, shard_id=0x{:x}, blob={}", pg_id,
+                     shard_id, blob_id);
                 return folly::makeUnexpected(BlobError(BlobErrorCode::READ_FAILED));
             }
             if (current_pbas.value() == blkid) {
@@ -330,7 +329,8 @@ HSHomeObject::PGBlobIterator::load_blob_data_with_blkid(shard_id_t shard_id, blo
             }
 
             // GC moved the blob — retry with the updated blkid. Folly flattens the returned future.
-            LOGI("Resync blob relocated by GC during read; retrying: pg={}, shard_id=0x{:x}, blob={}, old_blkid={}, new_blkid={}",
+            LOGI("Resync blob relocated by GC during read; retrying: pg={}, shard_id=0x{:x}, blob={}, old_blkid={}, "
+                 "new_blkid={}",
                  pg_id, shard_id, blob_id, blkid.to_string(), current_pbas.value().to_string());
             return load_blob_data_with_blkid(shard_id, blob_id, current_pbas.value());
         });
@@ -345,8 +345,8 @@ bool HSHomeObject::PGBlobIterator::prefetch_blobs_snapshot_data() {
     // On batch resend, retained look-ahead may already consume part of the 2x budget. Allow missing blobs before the
     // earliest retained blob to bypass the limit so the current batch can always be rebuilt.
     const auto prefetch_frontier = prefetched_blobs_.empty() ? blob_id_t{0} : prefetched_blobs_.begin()->first;
-    LOGT("Prefetching blobs: pg={}, shard_seq=0x{:x}, cursor_blob={}, frontier={}, inflight_bytes={}",
-         pg_id, cur_obj_id.shard_seq_num, cur_start_blob_idx_, prefetch_frontier, inflight_prefetch_bytes_);
+    LOGT("Prefetching blobs: pg={}, shard_seq=0x{:x}, cursor_blob={}, frontier={}, inflight_bytes={}", pg_id,
+         cur_obj_id.shard_seq_num, cur_start_blob_idx_, prefetch_frontier, inflight_prefetch_bytes_);
     while (idx < cur_blob_list_.size() &&
            (inflight_prefetch_bytes_ < max_batch_size_ * 2 || cur_blob_list_[idx].blob_id < prefetch_frontier)) {
         auto info = cur_blob_list_[idx++];
@@ -407,7 +407,8 @@ bool HSHomeObject::PGBlobIterator::prefetch_blobs_snapshot_data() {
                         return result;
                     }));
     }
-    LOGD("Resync prefetch window: pg={}, shard_seq=0x{:x}, cursor_blob={}, frontier={}, submitted_blobs={}, skipped_blobs={}, inflight_bytes={}, limit_bytes={}",
+    LOGD("Resync prefetch window: pg={}, shard_seq=0x{:x}, cursor_blob={}, frontier={}, submitted_blobs={}, "
+         "skipped_blobs={}, inflight_bytes={}, limit_bytes={}",
          pg_id, cur_obj_id.shard_seq_num, cur_start_blob_idx_, prefetch_frontier, prefetch_list.size(), skipped_blobs,
          inflight_prefetch_bytes_, max_batch_size_ * 2);
     return true;
@@ -440,7 +441,7 @@ bool HSHomeObject::PGBlobIterator::create_blobs_snapshot_data(sisl::io_blob_safe
             // handle deleted object
             if (info.pbas == tombstone_pbas) {
                 LOGT("Skipping deleted resync blob: pg={}, shard=0x{:x}, blob={}",
-                    info.shard_id >> homeobject::shard_width, info.shard_id & homeobject::shard_mask, info.blob_id);
+                     info.shard_id >> homeobject::shard_width, info.shard_id & homeobject::shard_mask, info.blob_id);
                 // ignore
                 skipped_blobs++;
                 continue;
@@ -449,7 +450,8 @@ bool HSHomeObject::PGBlobIterator::create_blobs_snapshot_data(sisl::io_blob_safe
             auto it = prefetched_blobs_.find(info.blob_id);
             if (it == prefetched_blobs_.end()) {
                 hit_error = true;
-                LOGE("Resync batch cannot find prefetched blob: pg={}, shard_seq=0x{:x}, batch={}, blob={}, cursor_blob={}, inflight_bytes={}, prefetched_blobs={}",
+                LOGE("Resync batch cannot find prefetched blob: pg={}, shard_seq=0x{:x}, batch={}, blob={}, "
+                     "cursor_blob={}, inflight_bytes={}, prefetched_blobs={}",
                      pg_id, cur_obj_id.shard_seq_num, cur_obj_id.batch_id, info.blob_id, cur_start_blob_idx_,
                      inflight_prefetch_bytes_, prefetched_blobs_.size());
                 break;
@@ -473,7 +475,8 @@ bool HSHomeObject::PGBlobIterator::create_blobs_snapshot_data(sisl::io_blob_safe
     }
 
     if (skipped_blobs + fetched_blobs != total_blobs) {
-        LOGE("Incomplete resync batch: pg={}, shard_seq=0x{:x}, batch={}, examined_blobs={}, skipped_blobs={}, expected_blobs={}, fetched_blobs={}",
+        LOGE("Incomplete resync batch: pg={}, shard_seq=0x{:x}, batch={}, examined_blobs={}, skipped_blobs={}, "
+             "expected_blobs={}, fetched_blobs={}",
              pg_id, cur_obj_id.shard_seq_num, cur_obj_id.batch_id, total_blobs, skipped_blobs,
              total_blobs - skipped_blobs, fetched_blobs);
         hit_error = true;
@@ -489,7 +492,8 @@ bool HSHomeObject::PGBlobIterator::create_blobs_snapshot_data(sisl::io_blob_safe
     if (idx == cur_blob_list_.size()) { end_of_shard = true; }
     builder_.FinishSizePrefixed(CreateResyncBlobDataBatchDirect(builder_, &blob_entries, end_of_shard));
 
-    LOGI("Created resync shard batch: pg={}, shard_seq=0x{:x}, batch={}, blobs={}, skipped_blobs={}, bytes={}, end_of_shard={}, next_blob={}",
+    LOGI("Created resync shard batch: pg={}, shard_seq=0x{:x}, batch={}, blobs={}, skipped_blobs={}, bytes={}, "
+         "end_of_shard={}, next_blob={}",
          pg_id, cur_obj_id.shard_seq_num, cur_obj_id.batch_id, blob_entries.size(), skipped_blobs, total_bytes,
          end_of_shard, idx);
 

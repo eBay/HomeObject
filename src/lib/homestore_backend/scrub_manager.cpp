@@ -840,10 +840,14 @@ void ScrubManager::handle_pg_scrub_task(scrub_task task) {
         scrub_task& task;
         std::shared_ptr< ShallowScrubReport >& scrub_report;
         const pg_id_t& pg_id;
+        std::shared_ptr< PGScrubContext > scrub_ctx; // set after ctx is emplaced; nullptr until then
 
         ~scrub_task_guard() {
+            // Return nullptr when cancelled so callers can distinguish cancellation from a
+            // completed scrub that legitimately found no issues (e.g. an empty PG).
+            const bool was_cancelled = scrub_ctx && scrub_ctx->cancelled.load();
             pg_scrub_ctx_map.erase(pg_id);
-            task.scrub_report_promise->setValue(scrub_report);
+            task.scrub_report_promise->setValue(was_cancelled ? nullptr : scrub_report);
             auto hs_pg = home_obj->get_hs_pg(pg_id);
             if (hs_pg) {
                 hs_pg->in_scrubbing.store(false);
@@ -853,7 +857,7 @@ void ScrubManager::handle_pg_scrub_task(scrub_task task) {
                 LOGWARNMOD(scrubmgr, "cannot find hs_pg to clear SCRUBBING state for pg={}!", pg_id);
             }
         }
-    } guard{m_hs_home_object, m_pg_scrub_ctx_map, task, pg_scrub_report, pg_id};
+    } guard{m_hs_home_object, m_pg_scrub_ctx_map, task, pg_scrub_report, pg_id, nullptr};
 
     const auto hs_pg = m_hs_home_object->get_hs_pg(pg_id);
     if (!hs_pg) {
@@ -865,6 +869,7 @@ void ScrubManager::handle_pg_scrub_task(scrub_task task) {
     RELEASE_ASSERT(happened,
                    "pg={} should not have a running scrub task since we set in_scrubbing in submit_scrub_task", pg_id);
     auto& scrub_ctx = ctx_it->second;
+    guard.scrub_ctx = scrub_ctx; // Allow the guard to detect cancellation at teardown
 
     // this is the last committed shard_id. we cannot get shard_sequence_num here since some of the shard might be
     // not committed yet. note that, this depends on the fact that the last committed shard is always at the end of

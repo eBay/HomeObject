@@ -709,12 +709,12 @@ bool GCManager::pdev_gc_actor::replace_blob_index(
         // 1 if the key exist, and the filter returns homestore::put_filter_decision::replace, the ret will be
         // homestore::btree_status_t::success
 
-        // 2 if the key exist , and the filter returns homestore::put_filter_decision::remove,  the ret will be
+        // 2 if the key exist , and the filter returns homestore::put_filter_decision::remove, the ret will be
         // homestore::btree_status_t::filtered_out.(this might happen if a key is deleted after data copy but before
         // replace index)
 
-        // 3 if the key does not exist, the ret will be homestore::btree_status_t::not_found(this might
-        // happen when crash recovery)
+        // 3 if the key does not exist, the ret will be homestore::btree_status_t::not_found(this might happen when
+        // crash recovery)
 
         if (ret != homestore::btree_status_t::success && ret != homestore::btree_status_t::filtered_out &&
             ret != homestore::btree_status_t::not_found) {
@@ -1364,8 +1364,14 @@ bool GCManager::pdev_gc_actor::process_after_gc_metablk_persisted(
     // now, all the blob indexes have been replaced successfully, we can destroy the gc task superblk
     gc_task_sb.destroy();
 
-    const auto reclaimed_blk_count = m_chunk_selector->get_extend_vchunk(move_from_chunk)->get_used_blks() -
-        m_chunk_selector->get_extend_vchunk(move_to_chunk)->get_used_blks();
+    const auto used_blks_in_move_from_chunk = m_chunk_selector->get_extend_vchunk(move_from_chunk)->get_used_blks();
+    const auto used_blks_in_move_to_chunk = m_chunk_selector->get_extend_vchunk(move_to_chunk)->get_used_blks();
+
+    RELEASE_ASSERT(used_blks_in_move_from_chunk >= used_blks_in_move_to_chunk,
+                   "used blks in move_from_chunk={} should be greater than or equal to used blks in move_to_chunk={}",
+                   move_from_chunk, move_to_chunk);
+
+    const auto reclaimed_blk_count = used_blks_in_move_from_chunk - used_blks_in_move_to_chunk;
 
     durable_entities_update([this, priority, reclaimed_blk_count](auto& de) {
         priority == static_cast< uint8_t >(task_priority::normal)

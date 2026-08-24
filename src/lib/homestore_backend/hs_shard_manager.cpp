@@ -745,8 +745,6 @@ const std::set< shard_id_t > HSHomeObject::get_shards_in_chunk(homestore::chunk_
 
 void HSHomeObject::update_shard_meta_after_gc(const homestore::chunk_num_t move_from_chunk,
                                               const homestore::chunk_num_t move_to_chunk, const uint64_t task_id) {
-    auto shards = get_shards_in_chunk(move_from_chunk);
-
     // TODO::optimize this lock
     std::scoped_lock lock_guard(_shard_lock);
 

@@ -776,6 +776,29 @@ public:
         // TODO: add logic for check and retry of leader change if necessary
     }
 
+    // Submit a scrub task and wait for it; retry if the task was cancelled mid-flight (e.g. due
+    // to a leader switch).  Returns nullptr on non-leader replicas.  RELEASE_ASSERTs if the
+    // retry deadline is exceeded while this replica is still the leader.
+    std::shared_ptr< ScrubManager::ShallowScrubReport > submit_scrub_with_retry(pg_id_t pg_id, bool is_deep,
+                                                                                uint32_t timeout_secs = 60) {
+        auto scrub_mgr = _obj_inst->scrub_manager();
+        auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(timeout_secs);
+        while (std::chrono::steady_clock::now() < deadline) {
+            PGStats pg_stats;
+            if (!_obj_inst->pg_manager()->get_stats(pg_id, pg_stats)) return nullptr;
+            if (g_helper->my_replica_id() != pg_stats.leader_id) return nullptr;
+
+            auto report = scrub_mgr->submit_scrub_task(pg_id, is_deep, SCRUB_TRIGGER_TYPE::MANUALLY).get();
+            if (report) return report;
+
+            // null means the task was cancelled (leader switch); re-check leadership and retry.
+            LOGWARN("scrub task cancelled for pg={} (leader switch?), retrying…", pg_id);
+            std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        }
+        RELEASE_ASSERT(false, "submit_scrub_with_retry: timeout after {}s for pg={}", timeout_secs, pg_id);
+        return nullptr;
+    }
+
     void run_on_pg_follower(pg_id_t pg_id, auto&& lambda) {
         PGStats pg_stats;
         auto res = _obj_inst->pg_manager()->get_stats(pg_id, pg_stats);

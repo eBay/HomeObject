@@ -186,7 +186,7 @@ TEST_F(HomeObjectFixture, BasicScrubTest) {
     // empty pg scrub should report no issues
     run_on_pg_leader(pg_id, [&]() {
         // Deep scrub on empty PG should complete without errors
-        auto scrub_report = scrub_mgr->submit_scrub_task(pg_id, true /* is_deep */, SCRUB_TRIGGER_TYPE::MANUALLY).get();
+        auto scrub_report = submit_scrub_with_retry(pg_id, true /* is_deep */);
 
         ASSERT_NE(scrub_report, nullptr) << "Deep scrub report should not be null for empty PG";
         auto deep_scrub_report = std::dynamic_pointer_cast< ScrubManager::DeepScrubReport >(scrub_report);
@@ -206,7 +206,7 @@ TEST_F(HomeObjectFixture, BasicScrubTest) {
             << "Empty PG should have no inconsistent blobs";
 
         // Shallow scrub on empty PG
-        scrub_report = scrub_mgr->submit_scrub_task(pg_id, false /* is_deep */, SCRUB_TRIGGER_TYPE::MANUALLY).get();
+        scrub_report = submit_scrub_with_retry(pg_id, false /* is_deep */);
 
         EXPECT_TRUE(scrub_report->get_corrupted_shards().empty()) << "Empty PG should have no corrupted shards";
         EXPECT_TRUE(scrub_report->get_corrupted_pg_metas().empty()) << "No PG metas should be corrupted in normal case";
@@ -237,7 +237,7 @@ TEST_F(HomeObjectFixture, BasicScrubTest) {
     // pg with empty shard scrub should report no issues
     run_on_pg_leader(pg_id, [&]() {
         // Deep scrub on PG with empty shards should complete without errors
-        auto scrub_report = scrub_mgr->submit_scrub_task(pg_id, true /* is_deep */, SCRUB_TRIGGER_TYPE::MANUALLY).get();
+        auto scrub_report = submit_scrub_with_retry(pg_id, true /* is_deep */);
 
         ASSERT_NE(scrub_report, nullptr) << "Deep scrub report should not be null for PG with empty shards";
         auto deep_scrub_report = std::dynamic_pointer_cast< ScrubManager::DeepScrubReport >(scrub_report);
@@ -261,7 +261,7 @@ TEST_F(HomeObjectFixture, BasicScrubTest) {
             << "PG with empty shards should have no inconsistent blobs";
 
         // Shallow scrub on PG with empty shards should complete without errors
-        scrub_report = scrub_mgr->submit_scrub_task(pg_id, false /* is_deep */, SCRUB_TRIGGER_TYPE::MANUALLY).get();
+        scrub_report = submit_scrub_with_retry(pg_id, false /* is_deep */);
 
         EXPECT_TRUE(scrub_report->get_corrupted_shards().empty())
             << "PG with empty shards should have no corrupted shards";
@@ -283,7 +283,7 @@ TEST_F(HomeObjectFixture, BasicScrubTest) {
     // everything is healthy, deep scrub should report no issues.
     run_on_pg_leader(pg_id, [&]() {
         // Deep scrub on healthy PG should complete without errors
-        auto scrub_report = scrub_mgr->submit_scrub_task(pg_id, true /* is_deep */, SCRUB_TRIGGER_TYPE::MANUALLY).get();
+        auto scrub_report = submit_scrub_with_retry(pg_id, true /* is_deep */);
 
         ASSERT_NE(scrub_report, nullptr) << "Deep scrub report should not be null for healthy PG";
         auto deep_scrub_report = std::dynamic_pointer_cast< ScrubManager::DeepScrubReport >(scrub_report);
@@ -302,7 +302,7 @@ TEST_F(HomeObjectFixture, BasicScrubTest) {
             << "Healthy PG should have no inconsistent blobs";
 
         // Shallow scrub on healthy PG should complete without errors
-        scrub_report = scrub_mgr->submit_scrub_task(pg_id, false /* is_deep */, SCRUB_TRIGGER_TYPE::MANUALLY).get();
+        scrub_report = submit_scrub_with_retry(pg_id, false /* is_deep */);
 
         EXPECT_TRUE(scrub_report->get_corrupted_shards().empty()) << "Healthy PG should have no corrupted shards";
         EXPECT_TRUE(scrub_report->get_corrupted_pg_metas().empty()) << "No PG metas should be corrupted in normal case";
@@ -350,7 +350,7 @@ TEST_F(HomeObjectFixture, BasicScrubTest) {
 
     run_on_pg_leader(pg_id, [&]() {
         // do deep scrub and check the scrub report
-        auto scrub_report = scrub_mgr->submit_scrub_task(pg_id, true /* is_deep */, SCRUB_TRIGGER_TYPE::MANUALLY).get();
+        auto scrub_report = submit_scrub_with_retry(pg_id, true /* is_deep */);
 
         ASSERT_NE(scrub_report, nullptr) << "Deep scrub report should not be null";
         auto deep_scrub_report = std::dynamic_pointer_cast< ScrubManager::DeepScrubReport >(scrub_report);
@@ -406,7 +406,7 @@ TEST_F(HomeObjectFixture, BasicScrubTest) {
             << "The inconsistent blob should be reported in deep scrub report for leader peer_id=" << leader_uuid;
 
         // do shallow scrub， shallow scrub can only find missing blob/shard
-        auto shallow_scrub_report = scrub_mgr->submit_scrub_task(pg_id, false, SCRUB_TRIGGER_TYPE::MANUALLY).get();
+        auto shallow_scrub_report = submit_scrub_with_retry(pg_id, false);
         ASSERT_NE(shallow_scrub_report, nullptr) << "Shallow scrub report should not be null";
 
         auto miss_blob_in_shallow_report = shallow_scrub_report->get_missing_blobs();
@@ -498,7 +498,7 @@ TEST_F(HomeObjectFixture, BasicScrubTest) {
     // Run scrub and verify both leader and follower corruptions are detected
     run_on_pg_leader(pg_id, [&]() {
         LOGINFO("Running deep scrub to detect both leader and follower corruptions");
-        auto scrub_report = scrub_mgr->submit_scrub_task(pg_id, true /* is_deep */, SCRUB_TRIGGER_TYPE::MANUALLY).get();
+        auto scrub_report = submit_scrub_with_retry(pg_id, true /* is_deep */);
 
         ASSERT_NE(scrub_report, nullptr) << "Deep scrub report should not be null";
         auto deep_scrub_report = std::dynamic_pointer_cast< ScrubManager::DeepScrubReport >(scrub_report);
@@ -645,7 +645,7 @@ TEST_F(HomeObjectFixture, LeaderMissingShardTest) {
         }
 
         // ===== Deep scrub =====
-        auto scrub_report = scrub_mgr->submit_scrub_task(pg_id, true, SCRUB_TRIGGER_TYPE::MANUALLY).get();
+        auto scrub_report = submit_scrub_with_retry(pg_id, true);
         ASSERT_NE(scrub_report, nullptr) << "Deep scrub report should not be null";
         auto deep_scrub_report = std::dynamic_pointer_cast< ScrubManager::DeepScrubReport >(scrub_report);
         ASSERT_NE(deep_scrub_report, nullptr) << "Should be DeepScrubReport";
@@ -681,7 +681,7 @@ TEST_F(HomeObjectFixture, LeaderMissingShardTest) {
         }
 
         // ===== Shallow scrub =====
-        auto shallow_scrub_report = scrub_mgr->submit_scrub_task(pg_id, false, SCRUB_TRIGGER_TYPE::MANUALLY).get();
+        auto shallow_scrub_report = submit_scrub_with_retry(pg_id, false);
         ASSERT_NE(shallow_scrub_report, nullptr) << "Shallow scrub report should not be null";
 
         // Missing shard must be detected in shallow scrub as well.
@@ -742,7 +742,7 @@ TEST_F(HomeObjectFixture, ScrubSuperblockPersistenceTest) {
         std::this_thread::sleep_for(std::chrono::seconds(2));
 
         // Run a deep scrub
-        scrub_mgr->submit_scrub_task(pg_id, true /* is_deep */, SCRUB_TRIGGER_TYPE::MANUALLY).get();
+        submit_scrub_with_retry(pg_id, true /* is_deep */);
 
         // Check that deep scrub timestamp updated
         auto after_deep_sb = scrub_mgr->get_scrub_superblk(pg_id);
@@ -755,7 +755,7 @@ TEST_F(HomeObjectFixture, ScrubSuperblockPersistenceTest) {
         std::this_thread::sleep_for(std::chrono::seconds(2));
 
         // Run a shallow scrub
-        scrub_mgr->submit_scrub_task(pg_id, false /* is_deep */, SCRUB_TRIGGER_TYPE::MANUALLY).get();
+        submit_scrub_with_retry(pg_id, false /* is_deep */);
 
         // Check that shallow scrub timestamp updated
         auto after_shallow_sb = scrub_mgr->get_scrub_superblk(pg_id);
@@ -914,8 +914,7 @@ TEST_F(HomeObjectFixture, ReconcileScrubReportTest) {
             follower_peer_ids.insert(member.id);
         }
 
-        auto scrub_report =
-            scrub_mgr->submit_scrub_task(pg_id, false /* shallow */, SCRUB_TRIGGER_TYPE::MANUALLY).get();
+        auto scrub_report = submit_scrub_with_retry(pg_id, false /* shallow */);
 
         // missing_blobs[blob_route] = peers that have the blob; followers are absent from that set.
         auto missing_blobs = scrub_report->get_missing_blobs();
@@ -945,7 +944,7 @@ TEST_F(HomeObjectFixture, ReconcileScrubReportTest) {
                 std::this_thread::sleep_for(std::chrono::seconds(2));
             }));
 
-        scrub_report = scrub_mgr->submit_scrub_task(pg_id, false /* shallow */, SCRUB_TRIGGER_TYPE::MANUALLY).get();
+        scrub_report = submit_scrub_with_retry(pg_id, false /* shallow */);
 
         remove_flip("delete_missing_blob_through_raft");
 
@@ -998,7 +997,7 @@ TEST_F(HomeObjectFixture, AddRemovePGScrubTest) {
         // Wait a bit to ensure timestamp will be different
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
-        auto report = scrub_mgr->submit_scrub_task(pg_id, false, SCRUB_TRIGGER_TYPE::MANUALLY).get();
+        auto report = submit_scrub_with_retry(pg_id, false);
         ASSERT_NE(report, nullptr) << "Scrub report should not be null";
 
         // Verify timestamp was updated after scrub

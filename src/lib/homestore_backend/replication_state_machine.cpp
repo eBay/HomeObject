@@ -404,8 +404,8 @@ void ReplicationStateMachine::write_snapshot_obj(std::shared_ptr< homestore::sna
         m_snp_rcv_handler = std::make_unique< HSHomeObject::SnapshotReceiveHandler >(*home_object_, r_dev);
         if (m_snp_rcv_handler->load_prev_context_and_metrics()) {
             LOGI("Reloaded resync receiver context: lsn={}, pg={}, next_shard=0x{:x}",
-                 m_snp_rcv_handler->get_context_lsn(),
-                 m_snp_rcv_handler->get_context_pg_id(), m_snp_rcv_handler->get_next_shard());
+                 m_snp_rcv_handler->get_context_lsn(), m_snp_rcv_handler->get_context_pg_id(),
+                 m_snp_rcv_handler->get_next_shard());
         }
     }
 
@@ -476,8 +476,8 @@ void ReplicationStateMachine::write_snapshot_obj(std::shared_ptr< homestore::sna
                 return;
             }
         }
-        LOGD("Resetting resync receiver context: previous_lsn={}, new_lsn={}",
-             m_snp_rcv_handler->get_context_lsn(), context->get_lsn());
+        LOGD("Resetting resync receiver context: previous_lsn={}, new_lsn={}", m_snp_rcv_handler->get_context_lsn(),
+             context->get_lsn());
         m_snp_rcv_handler->reset_context_and_metrics(context->get_lsn(), pg_data->pg_id());
 
         auto ret = m_snp_rcv_handler->process_pg_snapshot_data(*pg_data);
