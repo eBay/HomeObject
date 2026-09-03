@@ -1,5 +1,8 @@
 #pragma once
+#include <array>
 #include <string>
+
+#include <fmt/format.h>
 
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wmaybe-uninitialized"
@@ -150,6 +153,46 @@ public:
                     gc_time_duration_s_egc, "how long a successful egc task takes by second",
                     HistogramBucketsType(LinearUpto64Buckets)); // 17 buckets covering 0-64 seconds in 4s increments
 
+                // Backlog / pressure snapshot gauges. Values refreshed once per scan cycle by
+                // GCManager::scan_chunks_for_gc; worst-case staleness = gc_scan_interval_sec.
+                REGISTER_GAUGE(pending_gc_bytes,
+                               "Total reclaimable garbage bytes in PG-owned chunks on this pdev");
+                REGISTER_GAUGE(eligible_gc_bytes,
+                               "Reclaimable bytes currently eligible for normal GC on this pdev");
+                REGISTER_GAUGE(eligible_gc_chunk_count,
+                               "Chunks currently eligible for normal GC on this pdev");
+                REGISTER_GAUGE(pending_normal_gc_task_count,
+                               "Normal-priority GC tasks queued or running on this pdev");
+
+                // Distribution of the pending backlog by garbage-ratio bucket. We register 10
+                // gauges under a single Prometheus metric name (`pending_gc_chunks_ratio`),
+                // differentiated by a `bucket` label. The REGISTER_GAUGE macro uses a compile-
+                // time singleton per name and cannot express this shape (all 10 would collapse
+                // to one gauge index), so we call the impl directly and store the returned
+                // indices ourselves. Each label reads as "(lo, hi]% ratio"; the first bucket
+                // is (0, 10]% because a chunk contributes only if it has garbage.
+                //
+                // Descriptions embed the bucket label because sisl's JSON dump keys entries by
+                // description text (see MetricsGroupImpl::get_result_in_json in sisl); without
+                // per-bucket descriptions the 10 registrations collapse to one JSON entry
+                // (last-wins) and the test-log dumps become useless for verifying distribution
+                // shape. Prometheus text output is unaffected — it uses HELP (unchanged across
+                // registrations) and disambiguates series by labels.
+                static constexpr std::array< const char*, 10 > kRatioBucketLabels = {
+                    "00-10", "10-20", "20-30", "30-40", "40-50",
+                    "50-60", "60-70", "70-80", "80-90", "90-100"};
+                for (size_t i = 0; i < kRatioBucketLabels.size(); ++i) {
+                    const auto lo = i * 10;
+                    const auto hi = (i + 1) * 10;
+                    const auto desc = fmt::format(
+                        "Snapshot count of pending chunks with garbage ratio in ({}, {}]% "
+                        "(bucket={})",
+                        lo, hi, kRatioBucketLabels[i]);
+                    ratio_bucket_indices_[i] = m_impl_ptr->register_gauge(
+                        "pending_gc_chunks_ratio", desc, "" /* report_name */,
+                        sisl::metric_label{"bucket", kRatioBucketLabels[i]});
+                }
+
                 register_me_to_farm();
                 attach_gather_cb(std::bind(&pdev_gc_metrics::on_gather, this));
             }
@@ -177,11 +220,29 @@ public:
                     *this, total_reclaimed_space_by_egc,
                     gc_actor_.durable_entities().total_reclaimed_blk_count_by_egc.load(std::memory_order_relaxed) *
                         blk_size_);
+
+                // Backlog / pressure snapshot gauges. Read the last-published scan accumulators.
+                GAUGE_UPDATE(*this, pending_gc_bytes, gc_actor_.get_pending_gc_bytes());
+                GAUGE_UPDATE(*this, eligible_gc_bytes, gc_actor_.get_eligible_gc_bytes());
+                GAUGE_UPDATE(*this, eligible_gc_chunk_count, gc_actor_.get_eligible_gc_chunk_count());
+                GAUGE_UPDATE(*this, pending_normal_gc_task_count, gc_actor_.get_pending_normal_task_count());
+
+                // Bypass GAUGE_UPDATE for the same reason as bucket registration: we need to
+                // address 10 distinct gauge indices that share one metric name.
+                for (size_t i = 0; i < ratio_bucket_indices_.size(); ++i) {
+                    m_impl_ptr->gauge_update(
+                        ratio_bucket_indices_[i],
+                        static_cast< int64_t >(gc_actor_.get_pending_ratio_bucket(i)));
+                }
             }
 
         private:
             pdev_gc_actor const& gc_actor_;
             uint32_t blk_size_;
+            // Indices returned by m_impl_ptr->register_gauge, one per ratio bucket. Populated
+            // during construction and consumed by on_gather (see above). Kept as a member so we
+            // can address each bucket by index — the compile-time-name macro cannot.
+            std::array< uint64_t, 10 > ratio_bucket_indices_{};
         };
 
     public:
@@ -252,6 +313,36 @@ public:
             return m_pending_normal_gc_task_count.load(std::memory_order_relaxed);
         }
 
+        // Snapshot readers used by pdev_gc_metrics::on_gather. Return the last value published
+        // by GCManager::scan_chunks_for_gc for this pdev; 0 before the first scan completes.
+        uint64_t get_pending_gc_bytes() const {
+            return m_pending_gc_bytes.load(std::memory_order_relaxed);
+        }
+        uint64_t get_eligible_gc_bytes() const {
+            return m_eligible_gc_bytes.load(std::memory_order_relaxed);
+        }
+        uint32_t get_eligible_gc_chunk_count() const {
+            return m_eligible_gc_chunk_count.load(std::memory_order_relaxed);
+        }
+        uint32_t get_pending_ratio_bucket(size_t bucket_idx) const {
+            return m_pending_ratio_buckets[bucket_idx].load(std::memory_order_relaxed);
+        }
+
+        // Publishes a full backlog snapshot atomically-per-field. Callers (the scanner) compute
+        // the totals locally over all chunks on this pdev, then hand them in via one call so the
+        // metrics stay internally consistent within a scan cycle. Between-gauge drift is bounded
+        // by one scan interval; individual scalars are aligned and therefore torn-read safe.
+        void publish_scan_snapshot(uint64_t pending_bytes, uint64_t eligible_bytes,
+                                   uint32_t eligible_chunks,
+                                   const std::array< uint32_t, 10 >& ratio_buckets) {
+            m_pending_gc_bytes.store(pending_bytes, std::memory_order_relaxed);
+            m_eligible_gc_bytes.store(eligible_bytes, std::memory_order_relaxed);
+            m_eligible_gc_chunk_count.store(eligible_chunks, std::memory_order_relaxed);
+            for (size_t i = 0; i < ratio_buckets.size(); ++i) {
+                m_pending_ratio_buckets[i].store(ratio_buckets[i], std::memory_order_relaxed);
+            }
+        }
+
     private:
         void process_gc_task(chunk_id_t move_from_chunk, uint8_t priority, folly::Promise< bool > task,
                              const uint64_t task_id);
@@ -318,6 +409,16 @@ public:
         // Incremented in add_gc_task after a task is enqueued; decremented in on_gc_task_completed.
         // Used by scan_chunks_for_gc to enforce a true cross-scan quota cap.
         std::atomic< uint32_t > m_pending_normal_gc_task_count{0};
+
+        // Snapshot accumulators for the backlog / pressure gauges (see publish_scan_snapshot).
+        // Refreshed once per pdev iteration in GCManager::scan_chunks_for_gc; consumed by
+        // pdev_gc_metrics::on_gather via the get_* accessors above. Worst-case staleness =
+        // gc_scan_interval_sec. Relaxed ordering is sufficient because each metric is an aligned
+        // scalar and the values are advisory snapshots, not synchronization state.
+        std::atomic< uint64_t > m_pending_gc_bytes{0};
+        std::atomic< uint64_t > m_eligible_gc_bytes{0};
+        std::atomic< uint32_t > m_eligible_gc_chunk_count{0};
+        std::array< std::atomic< uint32_t >, 10 > m_pending_ratio_buckets{};
         // since we have a very small number of reserved chunks, a vector is enough
         // TODO:: use a map if we have a large number of reserved chunks
         std::vector< homestore::superblk< GCManager::gc_reserved_chunk_superblk > > m_reserved_chunks;
@@ -351,6 +452,20 @@ public:
     // or 0.0 if the chunk is not eligible (wrong state, no defrag blks, no pg, or pg not gc-able).
     // Uses floating-point arithmetic to avoid truncation for chunks with very few defrag blocks.
     float get_chunk_gc_ratio(chunk_id_t chunk_id);
+
+    // One-shot snapshot of chunk state relevant to GC decisions. Populated with a single
+    // ExtendedVChunk lookup so scan_chunks_for_gc can compute both submission decisions AND
+    // backlog metrics without a second hash+lock roundtrip. `gc_thresh_low` is the low-watermark
+    // percentage used to set the `eligible` flag; pass 0 if you only care about is_gc_candidate.
+    struct ChunkGCSnapshot {
+        uint32_t defrag_blks = 0;
+        uint32_t total_blks = 0;
+        float ratio_pct = 0.0f; // 100.0 * defrag_blks / total_blks; 0 if defrag_blks == 0
+        bool has_pg = false;
+        bool is_gc_candidate = false; // AVAILABLE && has_pg && pg_alive && defrag_blks > 0
+        bool eligible = false;        // is_gc_candidate && ratio_pct > gc_thresh_low
+    };
+    ChunkGCSnapshot get_chunk_gc_snapshot(chunk_id_t chunk_id, uint8_t gc_thresh_low);
 
     void handle_all_recovered_gc_tasks();
 
