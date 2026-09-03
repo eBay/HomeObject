@@ -223,32 +223,52 @@ std::shared_ptr< GCManager::pdev_gc_actor > GCManager::get_pdev_gc_actor(uint32_
     return it->second;
 }
 
-float GCManager::get_chunk_gc_ratio(chunk_id_t chunk_id) {
+GCManager::ChunkGCSnapshot GCManager::get_chunk_gc_snapshot(chunk_id_t chunk_id, uint8_t gc_thresh_low) {
+    ChunkGCSnapshot snap;
     auto chunk = m_chunk_selector->get_extend_vchunk(chunk_id);
 
-    // Only AVAILABLE chunks are eligible: INUSE means an open shard owns it, GC means already being processed.
-    if (chunk->m_state != ChunkState::AVAILABLE) { return 0.0f; }
+    // Populate raw fields regardless of eligibility. Metrics callers include chunks that are
+    // currently INUSE, being GCed, or owned by a not-yet-alive PG in the "pending" backlog, so
+    // we must not early-return here.
+    snap.defrag_blks = chunk->get_defrag_nblks();
+    snap.total_blks = chunk->get_total_blks();
+    snap.has_pg = chunk->m_pg_id.has_value();
 
-    const auto defrag_blk_num = chunk->get_defrag_nblks();
-    if (!defrag_blk_num) { return 0.0f; }
+    if (snap.defrag_blks > 0 && snap.total_blks > 0) {
+        snap.ratio_pct =
+            (100.0f * static_cast< float >(snap.defrag_blks)) / static_cast< float >(snap.total_blks);
+    }
 
-    // Chunks with no pg assignment are unowned and do not need GC.
-    if (!chunk->m_pg_id.has_value()) { return 0.0f; }
+    // is_gc_candidate mirrors the original get_chunk_gc_ratio non-zero condition:
+    //   - Only AVAILABLE chunks are candidates: INUSE means an open shard owns them, GC means
+    //     already being processed.
+    //   - Chunks with no pg assignment are unowned and do not need GC.
+    //   - If the pg is destroyed or not yet alive (e.g. baseline resync), skip it; add_gc_task
+    //     enforces this again at submission time as a safety guard.
+    // FIXME: if we want avoiding GC on certain PG/CHUNK, we might add here.
+    // Short-circuit AND on `snap.has_pg` guards the .value() call below.
+    const bool pg_gc_able = snap.has_pg && m_hs_home_object->is_pg_alive(chunk->m_pg_id.value());
+    snap.is_gc_candidate = (chunk->m_state == ChunkState::AVAILABLE) && (snap.defrag_blks > 0) && pg_gc_able;
 
-    // If the pg is currently destroyed or not yet alive (e.g. baseline resync), skip it;
-    // add_gc_task will enforce this again at submission time as a safety guard.
-    // FIXME: if we want avoiding GC on certain PG/CHUNK, we might added here.
-    if (!m_hs_home_object->is_pg_alive(chunk->m_pg_id.value())) { return 0.0f; }
-
-    const auto total_blk_num = chunk->get_total_blks();
-    const float ratio_pct = (100.0f * static_cast< float >(defrag_blk_num)) / static_cast< float >(total_blk_num);
+    // eligible adds the low-watermark cutoff — only ratios strictly above gc_thresh_low are worth
+    // scheduling. Matches the scanner's original `ratio_pct > gc_thresh_low` filter.
+    snap.eligible = snap.is_gc_candidate && (snap.ratio_pct > static_cast< float >(gc_thresh_low));
 
     LOGDEBUGMOD(gcmgr,
                 "gc scan chunk_id={}, use_blks={}, available_blks={}, total_blks={}, defrag_blks={}, "
-                "garbage_ratio_pct={}",
-                chunk_id, chunk->get_used_blks(), chunk->available_blks(), total_blk_num, defrag_blk_num, ratio_pct);
+                "garbage_ratio_pct={}, has_pg={}, is_gc_candidate={}, eligible={}",
+                chunk_id, chunk->get_used_blks(), chunk->available_blks(), snap.total_blks, snap.defrag_blks,
+                snap.ratio_pct, snap.has_pg, snap.is_gc_candidate, snap.eligible);
 
-    return ratio_pct;
+    return snap;
+}
+
+float GCManager::get_chunk_gc_ratio(chunk_id_t chunk_id) {
+    // Preserve the original contract: return the actual ratio for chunks passing every gate
+    // except the low-watermark threshold; return 0 otherwise. Callers that need finer control
+    // (scanner, metrics accumulation) should call get_chunk_gc_snapshot directly.
+    const auto snap = get_chunk_gc_snapshot(chunk_id, 0 /* gc_thresh_low */);
+    return snap.is_gc_candidate ? snap.ratio_pct : 0.0f;
 }
 
 void GCManager::scan_chunks_for_gc() {
@@ -273,21 +293,6 @@ void GCManager::scan_chunks_for_gc() {
                        pdev_id);
         auto& actor = it->second;
 
-        // Compute remaining capacity against the true cross-scan quota.
-        // m_pending_normal_gc_task_count tracks all tasks currently queued or running in m_gc_executor,
-        // not just tasks submitted by this scan cycle. This prevents unbounded queue growth across scans.
-        const uint32_t already_pending = actor->get_pending_normal_task_count();
-        if (already_pending >= max_task_num) {
-            LOGINFOMOD(gcmgr,
-                       "pdev_id={} already has {}/{} pending normal gc tasks, skipping submission this scan cycle",
-                       pdev_id, already_pending, max_task_num);
-            continue;
-        }
-        const uint32_t remaining_capacity = max_task_num - already_pending;
-        // Low-tier chunks (below high watermark) may consume at most half the remaining capacity so
-        // that high-tier chunks always get priority when quota is tight.
-        const uint32_t low_tier_cap = remaining_capacity / 2;
-
         // Collect at most max_task_num chunks with the highest garbage ratios via a bounded
         // min-heap. K = max_task_num (fixed during the scan) rather than remaining_capacity
         // (which may shrink/grow as tasks queue/complete) so we always have enough candidates
@@ -303,16 +308,75 @@ void GCManager::scan_chunks_for_gc() {
             return a.garbage_ratio_pct > b.garbage_ratio_pct;
         };
         std::priority_queue< ChunkGCInfo, std::vector< ChunkGCInfo >, decltype(min_heap_cmp) > top_k(min_heap_cmp);
+
+        // Snapshot accumulators for the backlog / pressure gauges. Published to actor atomics
+        // after the loop so metrics stay internally consistent within a scan cycle. See
+        // pdev_gc_actor::m_pending_* for freshness semantics (worst-case staleness =
+        // gc_scan_interval_sec). blk_size is pulled once per pdev to avoid repeated calls.
+        //
+        // Accumulation runs unconditionally — even when the pdev's normal-GC queue is saturated
+        // (see saturation check below). Losing metric refresh precisely when the queue is
+        // backlogged would blind operators to the pressure that is the whole point of these
+        // gauges; we always pay the O(N_chunks) scan cost, only the submission phase is gated.
+        const uint32_t blk_size = homestore::data_service().get_blk_size();
+        uint64_t pending_bytes = 0;
+        uint64_t eligible_bytes = 0;
+        uint32_t eligible_chunk_count = 0;
+        std::array< uint32_t, 10 > pending_ratio_buckets{};
+
         for (const auto& chunk_id : chunks) {
-            const float ratio_pct = get_chunk_gc_ratio(chunk_id);
-            if (ratio_pct <= gc_thresh_low) { continue; }
-            if (top_k.size() < max_task_num) {
-                top_k.push({chunk_id, ratio_pct});
-            } else if (ratio_pct > top_k.top().garbage_ratio_pct) {
-                top_k.pop();
-                top_k.push({chunk_id, ratio_pct});
+            const auto snap = get_chunk_gc_snapshot(chunk_id, static_cast< uint8_t >(gc_thresh_low));
+
+            // "Pending" set: any PG-owned chunk with garbage, regardless of state / PG liveness.
+            // Feeds pending_gc_bytes and the ratio bucket distribution — these describe the raw
+            // backlog visible to operators, not what GC will actually pick up this cycle.
+            if (snap.has_pg && snap.defrag_blks > 0 && snap.total_blks > 0) {
+                pending_bytes += static_cast< uint64_t >(snap.defrag_blks) * blk_size;
+                // Bucket idx via integer ceil division: (10*defrag - 1) / total. Maps ratio in
+                // (0, 10]% to idx 0, (10, 20]% to idx 1, ..., (90, 100]% to idx 9. Requires
+                // defrag_blks > 0 (guarded above) so the -1 does not underflow.
+                const size_t idx = std::min< size_t >(
+                    9, (10ULL * static_cast< uint64_t >(snap.defrag_blks) - 1ULL) / snap.total_blks);
+                ++pending_ratio_buckets[idx];
+            }
+
+            // "Eligible" subset: chunks the scanner would consider for a normal GC task right now.
+            // Fed into the min-heap for submission AND into the eligible_* gauges so operators can
+            // see the delta between raw backlog and what current policy actually picks up.
+            if (snap.eligible) {
+                eligible_bytes += static_cast< uint64_t >(snap.defrag_blks) * blk_size;
+                ++eligible_chunk_count;
+
+                if (top_k.size() < max_task_num) {
+                    top_k.push({chunk_id, snap.ratio_pct});
+                } else if (snap.ratio_pct > top_k.top().garbage_ratio_pct) {
+                    top_k.pop();
+                    top_k.push({chunk_id, snap.ratio_pct});
+                }
             }
         }
+
+        // Publish the fresh snapshot for pdev_gc_metrics::on_gather to observe on the next scrape.
+        // This is intentionally done BEFORE the saturation short-circuit below so pending_gc_bytes,
+        // eligible_gc_bytes and the ratio distribution stay fresh even when the pdev is skipping
+        // submission — that is exactly when operators need visibility into the growing backlog.
+        actor->publish_scan_snapshot(pending_bytes, eligible_bytes, eligible_chunk_count,
+                                     pending_ratio_buckets);
+
+        // Compute remaining capacity against the true cross-scan quota.
+        // m_pending_normal_gc_task_count tracks all tasks currently queued or running in m_gc_executor,
+        // not just tasks submitted by this scan cycle. This prevents unbounded queue growth across scans.
+        const uint32_t already_pending = actor->get_pending_normal_task_count();
+        if (already_pending >= max_task_num) {
+            LOGINFOMOD(gcmgr,
+                       "pdev_id={} already has {}/{} pending normal gc tasks, skipping submission this scan cycle",
+                       pdev_id, already_pending, max_task_num);
+            continue;
+        }
+        const uint32_t remaining_capacity = max_task_num - already_pending;
+        // Low-tier chunks (below high watermark) may consume at most half the remaining capacity so
+        // that high-tier chunks always get priority when quota is tight.
+        const uint32_t low_tier_cap = remaining_capacity / 2;
 
         // Drain the min-heap into a presized vector, writing back-to-front: the heap pops in
         // ascending ratio order, so placing each popped element at the current trailing index
@@ -390,6 +454,12 @@ GCManager::pdev_gc_actor::pdev_gc_actor(const homestore::superblk< GCManager::gc
     durable_entities_.failed_egc_task_count = gc_actor_sb->failed_egc_task_count;
     durable_entities_.total_reclaimed_blk_count_by_gc = gc_actor_sb->total_reclaimed_blk_count_by_gc;
     durable_entities_.total_reclaimed_blk_count_by_egc = gc_actor_sb->total_reclaimed_blk_count_by_egc;
+
+    // Pre-C++20 std::atomic default-constructs to an unspecified value; zero the ratio-bucket
+    // atomics explicitly so metrics scrapes before the first scan return well-defined zeros.
+    for (auto& bucket : m_pending_ratio_buckets) {
+        bucket.store(0, std::memory_order_relaxed);
+    }
 }
 
 void GCManager::pdev_gc_actor::start() {
