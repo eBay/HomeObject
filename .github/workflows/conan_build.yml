@@ -5,9 +5,11 @@ on:
   push:
     branches:
       - stable/v4.x
+      - dev/hs_v8
   pull_request:
     branches:
       - stable/v4.x
+      - dev/hs_v8
 
 jobs:
   Build:
