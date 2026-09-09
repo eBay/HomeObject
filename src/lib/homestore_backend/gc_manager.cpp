@@ -13,8 +13,8 @@ SISL_LOGGING_DECL(gcmgr)
 #define RECOVERD_GC_TASK_ID 0
 
 #define GCLOG(level, gc_task_id, pg_id, shard_id, msg, ...)                                                            \
-    LOG##level##MOD(gcmgr, "[gc_task_id={}, pg_id={}, shard_id=0x{:x}] " msg, gc_task_id, pg_id, shard_id,             \
-                    ##__VA_ARGS__)
+    LOG##level##MOD(gcmgr, "[gc_task_id={}, pg_id={}, shard_id=0x{:x}] " msg, gc_task_id, pg_id,                       \
+                    shard_id, ##__VA_ARGS__)
 
 #define GCLOGT(gc_task_id, pg_id, shard_id, msg, ...) GCLOG(TRACE, gc_task_id, pg_id, shard_id, msg, ##__VA_ARGS__)
 #define GCLOGD(gc_task_id, pg_id, shard_id, msg, ...) GCLOG(DEBUG, gc_task_id, pg_id, shard_id, msg, ##__VA_ARGS__)
@@ -235,8 +235,7 @@ GCManager::ChunkGCSnapshot GCManager::get_chunk_gc_snapshot(chunk_id_t chunk_id,
     snap.has_pg = chunk->m_pg_id.has_value();
 
     if (snap.defrag_blks > 0 && snap.total_blks > 0) {
-        snap.ratio_pct =
-            (100.0f * static_cast< float >(snap.defrag_blks)) / static_cast< float >(snap.total_blks);
+        snap.ratio_pct = (100.0f * static_cast< float >(snap.defrag_blks)) / static_cast< float >(snap.total_blks);
     }
 
     // is_gc_candidate mirrors the original get_chunk_gc_ratio non-zero condition:
@@ -335,8 +334,8 @@ void GCManager::scan_chunks_for_gc() {
                 // Bucket idx via integer ceil division: (10*defrag - 1) / total. Maps ratio in
                 // (0, 10]% to idx 0, (10, 20]% to idx 1, ..., (90, 100]% to idx 9. Requires
                 // defrag_blks > 0 (guarded above) so the -1 does not underflow.
-                const size_t idx = std::min< size_t >(
-                    9, (10ULL * static_cast< uint64_t >(snap.defrag_blks) - 1ULL) / snap.total_blks);
+                const size_t idx =
+                    std::min< size_t >(9, (10ULL * static_cast< uint64_t >(snap.defrag_blks) - 1ULL) / snap.total_blks);
                 ++pending_ratio_buckets[idx];
             }
 
@@ -360,8 +359,7 @@ void GCManager::scan_chunks_for_gc() {
         // This is intentionally done BEFORE the saturation short-circuit below so pending_gc_bytes,
         // eligible_gc_bytes and the ratio distribution stay fresh even when the pdev is skipping
         // submission — that is exactly when operators need visibility into the growing backlog.
-        actor->publish_scan_snapshot(pending_bytes, eligible_bytes, eligible_chunk_count,
-                                     pending_ratio_buckets);
+        actor->publish_scan_snapshot(pending_bytes, eligible_bytes, eligible_chunk_count, pending_ratio_buckets);
 
         // Compute remaining capacity against the true cross-scan quota.
         // m_pending_normal_gc_task_count tracks all tasks currently queued or running in m_gc_executor,
@@ -469,19 +467,23 @@ void GCManager::pdev_gc_actor::start() {
         return;
     }
 
-    const auto reserved_chunk_num_per_pdev = HS_BACKEND_DYNAMIC_CONFIG(reserved_chunk_num_per_pdev);
-    const auto reserved_chunk_num_per_pdev_for_egc = HS_BACKEND_DYNAMIC_CONFIG(reserved_chunk_num_per_pdev_for_egc);
+    const uint8_t reserved_chunk_num_per_pdev = HS_BACKEND_DYNAMIC_CONFIG(reserved_chunk_num_per_pdev);
+    const uint8_t reserved_chunk_num_per_pdev_for_egc = HS_BACKEND_DYNAMIC_CONFIG(reserved_chunk_num_per_pdev_for_egc);
+    uint8_t normal_gc_thread_num = HS_BACKEND_DYNAMIC_CONFIG(normal_gc_thread_num_per_pdev);
 
     RELEASE_ASSERT(reserved_chunk_num_per_pdev > reserved_chunk_num_per_pdev_for_egc,
                    "reserved chunk number {} per pdev should be greater than {}", reserved_chunk_num_per_pdev,
                    reserved_chunk_num_per_pdev_for_egc);
-    // thread number is the same as reserved chunk, which can make sure every gc thread can take a reserved chunk
-    // for gc
-    m_gc_executor = std::make_shared< folly::IOThreadPoolExecutor >(reserved_chunk_num_per_pdev -
-                                                                    reserved_chunk_num_per_pdev_for_egc);
+
+    RELEASE_ASSERT(normal_gc_thread_num > 0, "normal_gc_thread_num_per_pdev should be greater than 0");
+    normal_gc_thread_num =
+        std::min< uint8_t >(normal_gc_thread_num, reserved_chunk_num_per_pdev - reserved_chunk_num_per_pdev_for_egc);
+
+    m_gc_executor = std::make_shared< folly::IOThreadPoolExecutor >(normal_gc_thread_num);
     m_egc_executor = std::make_shared< folly::IOThreadPoolExecutor >(reserved_chunk_num_per_pdev_for_egc);
 
-    LOGINFOMOD(gcmgr, "pdev gc actor for pdev_id={} has started", m_pdev_id);
+    LOGINFOMOD(gcmgr, "pdev gc actor for pdev_id={} has started, {} threads for normal gc and {} threads for egc",
+               m_pdev_id, normal_gc_thread_num, reserved_chunk_num_per_pdev_for_egc);
 }
 
 void GCManager::pdev_gc_actor::stop() {
