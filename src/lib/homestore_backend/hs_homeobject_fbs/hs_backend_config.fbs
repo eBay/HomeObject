@@ -29,10 +29,17 @@ table HSBackendSettings {
     //TODO: make this hotswap after scrubber is well tested
     enable_scrubber: bool = false;
 
-    //Total reserved chunk num (dedicated for gc/egc) per pdev 
+    //thread number for normal gc. 
+    //the upper limit is reserved_chunk_num_per_pdev - reserved_chunk_num_per_pdev_for_egc
+    //the lower limit is 1
+    normal_gc_thread_num_per_pdev: uint8 = 4;
+
+    //Total reserved chunk num per pdev. 
+    //never change this after bootstrap
     reserved_chunk_num_per_pdev: uint8 = 6;
 
-    //Reserved chunk number (dedicated for egc) per pdev
+    //Reserved chunk number per pdev dedicated for egc
+    //never change this after bootstrap
     reserved_chunk_num_per_pdev_for_egc: uint8 = 2;
 
     //GC scan interval(second)
