@@ -10,7 +10,7 @@ required_conan_version = ">=1.60.0"
 
 class HomeObjectConan(ConanFile):
     name = "homeobject"
-    version = "4.2.7"
+    version = "4.2.8"
 
     homepage = "https://github.com/eBay/HomeObject"
     description = "Blob Store built on HomeStore"
@@ -51,7 +51,7 @@ class HomeObjectConan(ConanFile):
 
     def requirements(self):
         self.requires("sisl/[^13.2]", transitive_headers=True)
-        self.requires("homestore/[^7.5.12]")
+        self.requires("homestore/[7.5.15]")
 
     def validate(self):
         if self.info.settings.compiler.cppstd:
