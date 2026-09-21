@@ -51,7 +51,7 @@ class HomeObjectConan(ConanFile):
 
     def requirements(self):
         self.requires("sisl/[^13.2]", transitive_headers=True)
-        self.requires("homestore/[7.5.15-2]@oss/dev")
+        self.requires("homestore/7.5.15-2@oss/dev")
 
     def validate(self):
         if self.info.settings.compiler.cppstd:
