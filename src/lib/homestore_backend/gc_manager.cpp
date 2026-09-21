@@ -13,8 +13,8 @@ SISL_LOGGING_DECL(gcmgr)
 #define RECOVERD_GC_TASK_ID 0
 
 #define GCLOG(level, gc_task_id, pg_id, shard_id, msg, ...)                                                            \
-    LOG##level##MOD(gcmgr, "[gc_task_id={}, pg_id={}, shard_id=0x{:x}] " msg, gc_task_id, pg_id,                       \
-                    shard_id, ##__VA_ARGS__)
+    LOG##level##MOD(gcmgr, "[gc_task_id={}, pg_id={}, shard_id=0x{:x}] " msg, gc_task_id, pg_id, shard_id,             \
+                    ##__VA_ARGS__)
 
 #define GCLOGT(gc_task_id, pg_id, shard_id, msg, ...) GCLOG(TRACE, gc_task_id, pg_id, shard_id, msg, ##__VA_ARGS__)
 #define GCLOGD(gc_task_id, pg_id, shard_id, msg, ...) GCLOG(DEBUG, gc_task_id, pg_id, shard_id, msg, ##__VA_ARGS__)
@@ -253,7 +253,7 @@ GCManager::ChunkGCSnapshot GCManager::get_chunk_gc_snapshot(chunk_id_t chunk_id,
     // scheduling. Matches the scanner's original `ratio_pct > gc_thresh_low` filter.
     snap.eligible = snap.is_gc_candidate && (snap.ratio_pct > static_cast< float >(gc_thresh_low));
 
-    LOGDEBUGMOD(gcmgr,
+    LOGTRACEMOD(gcmgr,
                 "gc scan chunk_id={}, use_blks={}, available_blks={}, total_blks={}, defrag_blks={}, "
                 "garbage_ratio_pct={}, has_pg={}, is_gc_candidate={}, eligible={}",
                 chunk_id, chunk->get_used_blks(), chunk->available_blks(), snap.total_blks, snap.defrag_blks,
@@ -519,7 +519,7 @@ folly::SemiFuture< bool > GCManager::pdev_gc_actor::add_gc_task(uint8_t priority
     auto EXvchunk = m_chunk_selector->get_extend_vchunk(move_from_chunk);
     // it does not belong to any pg, so we don't need to gc it.
     if (!EXvchunk->m_pg_id.has_value()) {
-        LOGDEBUGMOD(gcmgr, "chunk_id={} belongs to no pg, not eligible for gc", move_from_chunk)
+        LOGTRACEMOD(gcmgr, "chunk_id={} belongs to no pg, not eligible for gc", move_from_chunk)
         return folly::makeSemiFuture< bool >(false);
     }
 
@@ -527,7 +527,7 @@ folly::SemiFuture< bool > GCManager::pdev_gc_actor::add_gc_task(uint8_t priority
     m_hs_home_object->gc_manager()->incr_pg_pending_gc_task(pg_id);
 
     if (!m_hs_home_object->is_pg_alive(pg_id)) {
-        LOGDEBUGMOD(gcmgr, "chunk_id={} belongs to pg {}, which is not eligible for gc at this moment!",
+        LOGTRACEMOD(gcmgr, "chunk_id={} belongs to pg {}, which is not eligible for gc at this moment!",
                     move_from_chunk, pg_id)
         m_hs_home_object->gc_manager()->decr_pg_pending_gc_task(pg_id);
         return folly::makeSemiFuture< bool >(false);
@@ -613,8 +613,8 @@ void GCManager::pdev_gc_actor::handle_recovered_gc_task(
     const chunk_id_t vchunk_id = gc_task_sb->vchunk_id;
     const uint8_t priority = gc_task_sb->priority;
 
-    LOGDEBUGMOD(gcmgr, "start handling recovered gc task: move_from_chunk_id={}, move_to_chunk_id={}, priority={}",
-                move_from_chunk, move_to_chunk, priority);
+    LOGINFOMOD(gcmgr, "start handling recovered gc task: move_from_chunk_id={}, move_to_chunk_id={}, priority={}",
+               move_from_chunk, move_to_chunk, priority);
 
     // 1 we need to move the move_to_chunk out of the reserved chunk queue
     std::list< chunk_id_t > reserved_chunks;
@@ -671,7 +671,7 @@ void GCManager::pdev_gc_actor::handle_recovered_gc_task(
     // marked as completed
     on_gc_task_completed(priority, pg_id, move_from_chunk, move_to_chunk, vchunk_id, true, 0);
 
-    GCLOGD(RECOVERD_GC_TASK_ID, pg_id, NO_SHARD_ID,
+    GCLOGI(RECOVERD_GC_TASK_ID, pg_id, NO_SHARD_ID,
            "finish handling recovered gc task: move_from_chunk_id={}, move_to_chunk_id={}, priority={}",
            move_from_chunk, move_to_chunk, priority);
 }
@@ -737,7 +737,7 @@ bool GCManager::pdev_gc_actor::replace_blob_index(
                 const auto& new_pbas = new_pba_value.pbas();
 
                 if (existing_pbas == HSHomeObject::tombstone_pbas) {
-                    GCLOGD(task_id, pg_id, shard,
+                    GCLOGT(task_id, pg_id, shard,
                            "remove tombstone when updating pg index after data copy blob_id={}, move_from_chunk={}, "
                            "move_to_chunk={}",
                            blob, move_from_chunk, move_to_chunk);
@@ -749,7 +749,7 @@ bool GCManager::pdev_gc_actor::replace_blob_index(
                     // task_id 0 is used dedicatedly for recovered gc task
                     if (!task_id && existing_pbas == new_pbas) {
                         // in recovery
-                        GCLOGD(task_id, pg_id, shard,
+                        GCLOGT(task_id, pg_id, shard,
                                "An already upated blob index found during recovery, which is expected. blob_id={}, "
                                "move_from_chunk={}, move_to_chunk={}, existing_pbas={}",
                                blob, move_from_chunk, move_to_chunk, existing_pbas.to_string());
@@ -769,7 +769,7 @@ bool GCManager::pdev_gc_actor::replace_blob_index(
                            new_pbas.to_string());
                 }
 
-                GCLOGD(task_id, pg_id, shard,
+                GCLOGT(task_id, pg_id, shard,
                        "will replace blob_id={}, move_from_chunk={}, move_to_chunk={} from blk_id={} to blk_id={}",
                        blob, move_from_chunk, move_to_chunk, existing_pbas.to_string(), new_pbas.to_string());
 
@@ -798,10 +798,13 @@ bool GCManager::pdev_gc_actor::replace_blob_index(
             return false;
         }
 
-        GCLOGD(task_id, pg_id, shard,
+        GCLOGT(task_id, pg_id, shard,
                "successfully update index table, ret={}, move_from_chunk={}, move_to_chunk={}, blob_id={}", ret,
                move_from_chunk, move_to_chunk, blob);
     }
+
+    GCLOGD(task_id, pg_id, NO_SHARD_ID, "successfully update index table, move_from_chunk={}, move_to_chunk={}",
+           move_from_chunk, move_to_chunk);
 
     // TODO:: revisit the following part with the consideration of persisting order for recovery.
 
@@ -981,7 +984,7 @@ bool GCManager::pdev_gc_actor::copy_valid_data(
                             return folly::makeFuture< bool >(false);
                         }
 
-                        GCLOGD(task_id, pg_id, shard_id,
+                        GCLOGT(task_id, pg_id, shard_id,
                                "successfully read blob from move_from_chunk={}, blob_id={}, pba={}", move_from_chunk,
                                blob_id, pba.to_string());
 
@@ -1033,7 +1036,7 @@ bool GCManager::pdev_gc_actor::copy_valid_data(
                                     return false;
                                 }
 
-                                GCLOGD(task_id, pg_id, shard_id,
+                                GCLOGT(task_id, pg_id, shard_id,
                                        "successfully insert new key to gc index table for "
                                        "move_to_chunk={}, blob_id={}, new_pba={}",
                                        move_to_chunk, blob_id, new_pba.to_string());
@@ -1269,7 +1272,7 @@ void GCManager::pdev_gc_actor::on_gc_task_completed(uint8_t priority, pg_id_t pg
             priority == static_cast< uint8_t >(task_priority::normal) ? de.success_gc_task_count.fetch_add(1)
                                                                       : de.success_egc_task_count.fetch_add(1);
         });
-        GCLOGD(task_id, pg_id, NO_SHARD_ID,
+        GCLOGI(task_id, pg_id, NO_SHARD_ID,
                "vchunk_id={} has been updated from move_from_chunk={} to move_to_chunk={}, final state is "
                "updated to {}, task with priority={} is completed!",
                vchunk_id, move_from_chunk, move_to_chunk, final_state, priority);
@@ -1292,7 +1295,7 @@ void GCManager::pdev_gc_actor::process_gc_task(chunk_id_t move_from_chunk, uint8
     RELEASE_ASSERT(vchunk->m_pg_id.has_value(), "chunk_id={} is expected to belong to a pg, but not!", move_from_chunk);
     const auto pg_id = vchunk->m_pg_id.value();
 
-    GCLOGD(task_id, pg_id, NO_SHARD_ID, "start process gc task for move_from_chunk={} with priority={} ",
+    GCLOGI(task_id, pg_id, NO_SHARD_ID, "start process gc task for move_from_chunk={} with priority={} ",
            move_from_chunk, priority);
 
     if (vchunk->m_state != ChunkState::GC) {
@@ -1316,7 +1319,7 @@ void GCManager::pdev_gc_actor::process_gc_task(chunk_id_t move_from_chunk, uint8
     // to the amount of reserved number, so we can make sure that a gc task handle thread can always get a reserved
     // chunk, so actually the blockingRead here will not block in any case and return immediately.
     m_reserved_chunk_queue.blockingRead(move_to_chunk);
-    GCLOGD(task_id, pg_id, NO_SHARD_ID,
+    GCLOGI(task_id, pg_id, NO_SHARD_ID,
            "task for move_from_chunk={} to move_to_chunk={} with priority={} start copying data", move_from_chunk,
            move_to_chunk, priority);
 
