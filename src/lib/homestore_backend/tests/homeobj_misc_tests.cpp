@@ -203,6 +203,80 @@ TEST_F(HomeObjectFixture, PGBlobIterator) {
     ASSERT_TRUE(pg_iter->update_cursor(objId(LAST_OBJ_ID)));
 }
 
+// Regression test for a batch resend bug with retained look-ahead prefetch data, where the old bounded prefetch loop
+// could stop after rebuilding only a prefix of the resent batch when retained bytes plus that prefix reached the 2x
+// batch limit. The required latter blob(s) was then missing from prefetched_blobs_, and every retry failed at the
+// same cursor. Derive a batch limit from actual stored blob sizes to reproduce that topology without depending on
+// random sizes.
+TEST_F(HomeObjectFixture, PGBlobIteratorBatchResendPrefetchFrontier) {
+    constexpr pg_id_t pg_id{1};
+    constexpr uint64_t num_blobs{8};
+
+    create_pg(pg_id);
+    auto const shard = create_shard(pg_id, 64 * Mi, "shard meta");
+    std::map< pg_id_t, std::vector< shard_id_t > > pg_shard_map{{pg_id, {shard.id}}};
+    std::map< pg_id_t, blob_id_t > pg_blob_id{{pg_id, 0}};
+    put_blobs(pg_shard_map, num_blobs, pg_blob_id);
+
+    auto pg = _obj_inst->get_hs_pg(pg_id);
+    ASSERT_NE(pg, nullptr);
+    auto pg_iter =
+        std::make_shared< HSHomeObject::PGBlobIterator >(*_obj_inst, pg->pg_info_.replica_set_uuid, shard.create_lsn);
+    auto const shard_seq_num = HSHomeObject::get_sequence_num_from_shard_id(shard.id);
+    ASSERT_TRUE(pg_iter->update_cursor(objId(shard_seq_num, 0)));
+    ASSERT_TRUE(pg_iter->generate_shard_blob_list());
+
+    // Find a batch limit B from the actual stored sizes such that initial prefetch retains look-ahead, while on resend:
+    // retained look-ahead + a rebuilt batch prefix >= 2B before the final required batch blob is prefetched.
+    std::vector< uint64_t > prefix_bytes{0};
+    for (auto const& info : pg_iter->cur_blob_list_) {
+        prefix_bytes.push_back(prefix_bytes.back() + info.pbas.blk_count() * pg_iter->repl_dev_->get_blk_size());
+    }
+    bool topology_configured = false;
+    for (size_t batch_blobs = 2; batch_blobs < prefix_bytes.size() - 1 && !topology_configured; batch_blobs++) {
+        for (size_t prefetched_blobs = batch_blobs + 1; prefetched_blobs < prefix_bytes.size(); prefetched_blobs++) {
+            auto const min_batch_size =
+                std::max(prefix_bytes[batch_blobs - 1], prefix_bytes[prefetched_blobs - 1] / 2) + 1;
+            auto const max_batch_size = std::min(
+                {prefix_bytes[batch_blobs], prefix_bytes[prefetched_blobs] / 2,
+                 (prefix_bytes[prefetched_blobs] - prefix_bytes[batch_blobs] + prefix_bytes[batch_blobs - 1]) / 2});
+            if (min_batch_size <= max_batch_size) {
+                pg_iter->max_batch_size_ = min_batch_size;
+                topology_configured = true;
+                break;
+            }
+        }
+    }
+    ASSERT_TRUE(topology_configured);
+
+    sisl::io_blob_safe shard_meta;
+    ASSERT_TRUE(pg_iter->create_shard_snapshot_data(shard_meta));
+    objId batch_oid(shard_seq_num, 1);
+    ASSERT_TRUE(pg_iter->update_cursor(batch_oid));
+    sisl::io_blob_safe blob_batch;
+    ASSERT_TRUE(pg_iter->create_blobs_snapshot_data(blob_batch));
+    auto blob_msg = GetSizePrefixedResyncBlobDataBatch(blob_batch.cbytes() + sizeof(SyncMessageHeader));
+    ASSERT_GT(blob_msg->blob_list()->size(), 1);
+    ASSERT_FALSE(pg_iter->prefetched_blobs_.empty());
+
+    uint64_t resend_prefix_bytes{0};
+    for (uint32_t i = 0; i + 1 < blob_msg->blob_list()->size(); i++) {
+        auto const blob_id = blob_msg->blob_list()->Get(i)->blob_id();
+        auto const info = std::ranges::find(pg_iter->cur_blob_list_, blob_id, &HSHomeObject::BlobInfo::blob_id);
+        ASSERT_NE(info, pg_iter->cur_blob_list_.end());
+        resend_prefix_bytes += info->pbas.blk_count() * pg_iter->repl_dev_->get_blk_size();
+    }
+    ASSERT_GE(pg_iter->inflight_prefetch_bytes_ + resend_prefix_bytes, pg_iter->max_batch_size_ * 2);
+    ASSERT_LT(blob_msg->blob_list()->Get(blob_msg->blob_list()->size() - 1)->blob_id(),
+              pg_iter->prefetched_blobs_.begin()->first);
+
+    ASSERT_TRUE(pg_iter->update_cursor(batch_oid));
+    sisl::io_blob_safe resent_blob_batch;
+    ASSERT_TRUE(pg_iter->create_blobs_snapshot_data(resent_blob_batch));
+    ASSERT_EQ(resent_blob_batch.size(), blob_batch.size());
+    ASSERT_EQ(std::memcmp(resent_blob_batch.cbytes(), blob_batch.cbytes(), blob_batch.size()), 0);
+}
+
 // Simulates a GC race where blob blkID changes between generate_shard_blob_list and load_blob_data.
 // Injects a cross-shard pbas into cur_blob_list_ so verify_blob fails (shard_id mismatch in blob header).
 // The retry inside load_blob_data_with_blkid re-reads the index, finds the updated pbas, and re-reads
@@ -436,7 +510,8 @@ TEST_F(HomeObjectFixture, SnapshotReceiveHandler) {
     }
     auto pg_entry =
         CreateResyncPGMetaDataDirect(builder, pg_id, &uuid, pg->pg_info_.size, pg->pg_info_.expected_member_num,
-                                     pg->pg_info_.chunk_size, blob_seq_num, num_shards_per_pg, &members, &shard_ids);
+                                     pg->pg_info_.chunk_size, blob_seq_num, num_shards_per_pg, &members, &shard_ids,
+                                     blob_seq_num /* total_blobs_to_transfer */);
     builder.Finish(pg_entry);
     auto pg_meta = GetResyncPGMetaData(builder.GetBufferPointer());
     auto ret = handler->process_pg_snapshot_data(*pg_meta);
@@ -450,6 +525,7 @@ TEST_F(HomeObjectFixture, SnapshotReceiveHandler) {
     std::uniform_int_distribution<> random_bytes_dis(1, 16 * 1024);
 
     blob_id_t cur_blob_id{0};
+    uint64_t expected_complete_blobs{0};
     for (uint64_t i = 1; i <= num_shards_per_pg; i++) {
         LOGINFO("TESTING: applying meta for shard {}", i);
         ASSERT_TRUE(handler->is_valid_obj_id(objId(HSHomeObject::get_sequence_num_from_shard_id(i), 0)));
@@ -503,14 +579,18 @@ TEST_F(HomeObjectFixture, SnapshotReceiveHandler) {
         for (uint64_t j = 1; j <= num_batches_per_shard; j++) {
             ASSERT_TRUE(handler->is_valid_obj_id(objId(HSHomeObject::get_sequence_num_from_shard_id(shard.id), j)));
 
-            // Don't test unexpected corruption on the last batch, since for simplicity we're not simulating resending
+            // Keep the final batch clean so each shard completes even if a prior batch needs a resend.
             bool is_corrupted_batch =
                 j < num_batches_per_shard && corrupt_dis(gen) <= unexpected_corrupted_batch_percentage;
             LOGINFO("TESTING: applying blobs for shard {} batch {}, is_corrupted {}", shard.id, j, is_corrupted_batch);
             std::vector< flatbuffers::Offset< ResyncBlobData > > blob_entries;
+            auto const batch_start_blob_id = cur_blob_id;
             for (uint64_t k = 0; k < num_blobs_per_batch; k++) {
-                auto blob_state = corrupt_dis(gen) <= corrupted_blob_percentage ? ResyncBlobState::CORRUPTED
-                                                                                : ResyncBlobState::NORMAL;
+                // An injected batch corruption must affect a normal blob so the receiver verifies and rejects it.
+                // CORRUPTED blobs intentionally bypass verification and are covered by clean batches below.
+                auto blob_state = is_corrupted_batch || corrupt_dis(gen) > corrupted_blob_percentage
+                    ? ResyncBlobState::NORMAL
+                    : ResyncBlobState::CORRUPTED;
 
                 // Construct raw blob buffer
                 auto blob = build_blob(cur_blob_id);
@@ -560,9 +640,46 @@ TEST_F(HomeObjectFixture, SnapshotReceiveHandler) {
             ret = handler->process_blobs_snapshot_data(*blob_batch, j, j == num_batches_per_shard);
             if (is_corrupted_batch) {
                 ASSERT_NE(ret, 0);
+                builder.Reset();
+                std::vector< flatbuffers::Offset< ResyncBlobData > > retry_blob_entries;
+                for (blob_id_t retry_blob_id = batch_start_blob_id;
+                     retry_blob_id < batch_start_blob_id + num_blobs_per_batch; retry_blob_id++) {
+                    auto retry_blob = build_blob(retry_blob_id);
+                    const auto aligned_hdr_size =
+                        sisl::round_up(sizeof(HSHomeObject::BlobHeader), _obj_inst->_data_block_size);
+                    sisl::io_blob_safe retry_blob_raw(aligned_hdr_size + retry_blob.body.size(), io_align);
+                    HSHomeObject::BlobHeader retry_hdr;
+                    retry_hdr.type = HSHomeObject::DataHeader::data_type_t::BLOB_INFO;
+                    retry_hdr.shard_id = shard.id;
+                    retry_hdr.blob_id = retry_blob_id;
+                    retry_hdr.hash_algorithm = HSHomeObject::BlobHeader::HashAlgorithm::CRC32;
+                    retry_hdr.blob_size = retry_blob.body.size();
+                    retry_hdr.user_key_size = retry_blob.user_key.size();
+                    retry_hdr.object_offset = retry_blob.object_off;
+                    retry_hdr.data_offset = aligned_hdr_size;
+                    if (!retry_blob.user_key.empty()) {
+                        std::memcpy(retry_hdr.user_key, retry_blob.user_key.data(), retry_blob.user_key.size());
+                    }
+                    _obj_inst->compute_blob_payload_hash(retry_hdr.hash_algorithm, retry_blob.body.cbytes(),
+                                                         retry_blob.body.size(), retry_hdr.hash,
+                                                         HSHomeObject::BlobHeader::blob_max_hash_len);
+                    retry_hdr.seal();
+                    std::memcpy(retry_blob_raw.bytes(), &retry_hdr, sizeof(HSHomeObject::BlobHeader));
+                    std::memcpy(retry_blob_raw.bytes() + retry_hdr.data_offset, retry_blob.body.cbytes(),
+                                retry_blob.body.size());
+                    std::vector retry_data(retry_blob_raw.bytes(), retry_blob_raw.bytes() + retry_blob_raw.size());
+                    retry_blob_entries.push_back(CreateResyncBlobDataDirect(
+                        builder, retry_blob_id, static_cast< uint8_t >(ResyncBlobState::NORMAL), &retry_data));
+                    blob_map[retry_blob_id] = std::make_tuple< Blob, bool >(std::move(retry_blob), false);
+                }
+                builder.Finish(CreateResyncBlobDataBatchDirect(builder, &retry_blob_entries, j == num_batches_per_shard));
+                auto retry_blob_batch = GetResyncBlobDataBatch(builder.GetBufferPointer());
+                ASSERT_EQ(handler->process_blobs_snapshot_data(*retry_blob_batch, j, j == num_batches_per_shard), 0);
             } else {
                 ASSERT_EQ(ret, 0);
             }
+            expected_complete_blobs += num_blobs_per_batch;
+            ASSERT_EQ(handler->ctx_->progress.complete_blobs, expected_complete_blobs);
             builder.Reset();
             ASSERT_EQ(handler->get_shard_cursor(), shard.id);
             ASSERT_EQ(handler->get_next_shard(),
@@ -593,7 +710,10 @@ TEST_F(HomeObjectFixture, SnapshotReceiveHandler) {
             ASSERT_EQ(v.value(), exVchunk->m_v_chunk_id.value());
             ASSERT_TRUE(_obj_inst->chunk_selector()->is_chunk_available(pg_id, v.value()));
         }
+        ASSERT_EQ(handler->ctx_->progress.complete_shards, i);
     }
+    ASSERT_EQ(handler->ctx_->progress.total_blobs, blob_seq_num);
+    ASSERT_EQ(handler->ctx_->progress.total_shards, num_shards_per_pg);
 }
 
 // Test: verify the case (https://jirap.corp.ebay.com/browse/SDSTOR-23023) when the snapshot receiver re-delivers a blob
@@ -692,6 +812,14 @@ TEST_F(HomeObjectFixture, SnapshotReceiveHandlerAllocatorResyncAfterCrash) {
         }
         b.Finish(CreateResyncBlobDataBatchDirect(b, &blob_entries, is_last));
     };
+    auto batch_bytes = [&](blob_id_t start_blob_id, blob_id_t end_blob_id) {
+        uint64_t total_bytes{0};
+        for (blob_id_t blob_id = start_blob_id; blob_id < end_blob_id; blob_id++) {
+            auto blob = build_blob(blob_id);
+            total_bytes += sisl::round_up(sizeof(HSHomeObject::BlobHeader), _obj_inst->_data_block_size) + blob.body.size();
+        }
+        return total_bytes;
+    };
 
     // ---- First delivery: partial batch (blobs 0..num_blobs_partial-1), not the last batch ----
     // Simulates the pre-crash state: these blobs are written to disk, committed, and indexed.
@@ -702,6 +830,8 @@ TEST_F(HomeObjectFixture, SnapshotReceiveHandlerAllocatorResyncAfterCrash) {
     ASSERT_EQ(handler->process_blobs_snapshot_data(*GetResyncBlobDataBatch(builder.GetBufferPointer()), 1 /*batch_num*/,
                                                    false /*is_last_batch*/),
               0);
+    ASSERT_EQ(handler->ctx_->progress.complete_blobs, num_blobs_partial);
+    ASSERT_EQ(handler->ctx_->progress.complete_bytes, batch_bytes(0, num_blobs_partial));
     builder.Reset();
 
     // Confirm only the partial set is readable and indexed
@@ -750,11 +880,23 @@ TEST_F(HomeObjectFixture, SnapshotReceiveHandlerAllocatorResyncAfterCrash) {
     //                new blobs are then allocated strictly above them.
     // Blobs num_blobs_partial..num_blobs_total-1 are new → normal write path.
     LOGINFO("TEST: second (full) delivery after crash, blobs [0, {})", num_blobs_total);
-    handler->ctx_->cur_batch_num = 0; // reset so batch_num=1 is accepted again
+    // Replaying shard metadata resets the shard-local contribution before batch 1 is redelivered.
+    auto replay_shard_entry = CreateResyncShardMetaData(
+        builder, shard_id, pg_id, static_cast< uint8_t >(ShardInfo::State::OPEN), snp_lsn /*create_lsn*/,
+        get_time_since_epoch_ms() /*created_time*/, get_time_since_epoch_ms() /*modified_time*/, 1024 * Mi /*capacity*/,
+        exVchunk->m_v_chunk_id.value(), 0 /*meta*/, 0 /*sealed_lsn*/);
+    builder.Finish(replay_shard_entry);
+    ASSERT_EQ(handler->process_shard_snapshot_data(*GetResyncShardMetaData(builder.GetBufferPointer())), 0);
+    ASSERT_EQ(handler->ctx_->progress.complete_blobs, 0);
+    ASSERT_EQ(handler->ctx_->progress.complete_bytes, 0);
+    builder.Reset();
     make_blob_batch(builder, 0, num_blobs_total, true /*is_last*/);
     ASSERT_EQ(handler->process_blobs_snapshot_data(*GetResyncBlobDataBatch(builder.GetBufferPointer()), 1 /*batch_num*/,
                                                    true /*is_last_batch*/),
               0);
+    ASSERT_EQ(handler->ctx_->progress.complete_blobs, num_blobs_total);
+    ASSERT_EQ(handler->ctx_->progress.complete_bytes, batch_bytes(0, num_blobs_total));
+    ASSERT_EQ(handler->ctx_->progress.complete_shards, 1);
     builder.Reset();
 
     // ---- Verify allocator watermarks advanced beyond the partial set ----
