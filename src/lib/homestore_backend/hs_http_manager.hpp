@@ -29,6 +29,7 @@ public:
     HttpManager(HSHomeObject& ho);
 
 private:
+    void get_liveness(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response);
     void get_obj_life(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response);
     void get_malloc_stats(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response);
     void reconcile_leader(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response);

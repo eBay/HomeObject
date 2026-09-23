@@ -1,6 +1,7 @@
 #pragma once
 
 #include "homeobject/homeobject.hpp"
+#include "homeobject/watchdog_registry.hpp"
 #include "homeobject/blob_manager.hpp"
 #include "homeobject/pg_manager.hpp"
 #include "homeobject/shard_manager.hpp"
@@ -165,6 +166,7 @@ public:
     /// Returns the UUID of this HomeObject.
     peer_id_t our_uuid() const final { return _our_id; }
     HomeObjectStats get_stats() const final { return _get_stats(); }
+    WatchdogRegistry& watchdog_registry() final { return watchdog_registry_; }
     void shutdown() { LOGI("HomeObjectImpl: Executing shutdown procedure"); };
 
     /// PgManager
@@ -201,6 +203,9 @@ public:
     BlobManager::AsyncResult< Blob > get(shard_id_t shard, blob_id_t const& blob, uint64_t off, uint64_t len,
                                          bool allow_skip_verify, trace_id_t tid) const final;
     BlobManager::NullAsyncResult del(shard_id_t shard, blob_id_t const& blob, trace_id_t tid) final;
+
+private:
+    WatchdogRegistry watchdog_registry_;
 };
 
 } // namespace homeobject

@@ -7,6 +7,7 @@
 
 #include "common.hpp"
 #include <sisl/utility/enum.hpp>
+#include "watchdog_registry.hpp"
 
 namespace homeobject {
 
@@ -80,6 +81,7 @@ public:
     virtual std::shared_ptr< PGManager > pg_manager() = 0;
     virtual std::shared_ptr< ShardManager > shard_manager() = 0;
     virtual HomeObjectStats get_stats() const = 0;
+    virtual WatchdogRegistry& watchdog_registry() = 0;
     virtual void shutdown() = 0;
 };
 

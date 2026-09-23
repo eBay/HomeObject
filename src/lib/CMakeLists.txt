@@ -8,6 +8,7 @@ target_sources(${PROJECT_NAME}_core PRIVATE
     blob_manager.cpp
     shard_manager.cpp
     pg_manager.cpp
+    watchdog_registry.cpp
 )
 target_link_libraries(${PROJECT_NAME}_core
     ${COMMON_DEPS}

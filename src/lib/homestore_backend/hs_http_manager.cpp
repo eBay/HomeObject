@@ -47,6 +47,8 @@ HttpManager::HttpManager(HSHomeObject& ho) : ho_(ho) {
     LOGINFO("Setting up HomeObject HTTP routes");
 
     std::vector< iomgr::http_route > routes = {
+        {Pistache::Http::Method::Get, "/api/v1/liveness",
+         Pistache::Rest::Routes::bind(&HttpManager::get_liveness, this)},
         {Pistache::Http::Method::Get, "/api/v1/getObjLife",
          Pistache::Rest::Routes::bind(&HttpManager::get_obj_life, this)},
         {Pistache::Http::Method::Get, "/api/v1/mallocStats",
@@ -107,6 +109,20 @@ HttpManager::HttpManager(HSHomeObject& ho) : ho_(ho) {
     try {
         http_server->setup_routes(routes);
     } catch (std::runtime_error const& e) { LOGERROR("setup routes failed, {}", e.what()); }
+}
+
+void HttpManager::get_liveness(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response) {
+    auto const failures = ho_.watchdog_registry().failures();
+    if (failures.empty()) {
+        response.send(Pistache::Http::Code::Ok, "ok");
+    } else {
+        std::string reason;
+        for (auto const& f : failures) {
+            reason += "[" + f.name + "] " + f.details + "\n";
+        }
+        LOGERROR("liveness check failed: {}", reason);
+        response.send(Pistache::Http::Code::Service_Unavailable, reason);
+    }
 }
 
 void HttpManager::get_obj_life(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response) {

@@ -168,6 +168,12 @@ void ReplicationStateMachine::on_config_rollback(int64_t lsn) {
 
 void ReplicationStateMachine::on_restart() { LOGD("ReplicationStateMachine::on_restart"); }
 
+void ReplicationStateMachine::on_system_exit(int exit_code) {
+    LOGE("nuraft system_exit, code={}", exit_code);
+    system_exit_barks_.push_back(
+        home_object_->watchdog_registry().bark("raft.system_exit", fmt::format("exit_code={}", exit_code)));
+}
+
 void ReplicationStateMachine::on_error(ReplServiceError error, const sisl::blob& header, const sisl::blob& key,
                                        cintrusive< repl_req_ctx >& ctx) {
     RELEASE_ASSERT(ctx, "ctx should not be nullptr in on_error");

@@ -10,6 +10,7 @@
 #include <homestore/blk.h>
 #include "hs_homeobject.hpp"
 #include "replication_message.hpp"
+#include <homeobject/watchdog_registry.hpp>
 
 namespace homeobject {
 
@@ -150,6 +151,9 @@ public:
     /// homeobject should recover all the necessary components to serve log replay/commit requests.
     void on_restart() override;
 
+    /// @brief Called when nuraft hits a fatal error and requests process exit.
+    void on_system_exit(int exit_code) override;
+
     /// @brief Called when the async_alloc_write call failed to initiate replication
     ///
     /// Called only on the node which called async_alloc_write
@@ -256,6 +260,8 @@ private:
     std::mutex m_snp_sync_ctx_lock;
 
     std::unique_ptr< HSHomeObject::SnapshotReceiveHandler > m_snp_rcv_handler;
+
+    std::vector< WatchdogBark > system_exit_barks_;
 
     static uint64_t snapshot_offset_for_next_shard(shard_id_t shard_id);
 
