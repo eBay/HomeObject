@@ -1,4 +1,5 @@
 #include "hs_homeobject.hpp"
+#include <sisl/async/coro.hpp>
 #include <sisl/logging/logging.h>
 #include <sisl/options/options.h>
 #include <sisl/settings/settings.hpp>
@@ -270,13 +271,35 @@ bool HSHomeObject::PGBlobIterator::create_shard_snapshot_data(sisl::io_blob_safe
 }
 
 typedef HSHomeObject::PGBlobIterator::blob_read_result blob_read_result;
-BlobManager::AsyncResult< blob_read_result > HSHomeObject::PGBlobIterator::load_blob_data(const BlobInfo& blob_info) {
+BlobManager::AsyncResult< blob_read_result > HSHomeObject::PGBlobIterator::load_blob_data(BlobInfo blob_info) {
     return load_blob_data_with_blkid(blob_info.shard_id, blob_info.blob_id, blob_info.pbas);
 }
 
 BlobManager::AsyncResult< blob_read_result >
+HSHomeObject::PGBlobIterator::load_prefetched_blob(BlobInfo info, Clock::time_point blob_start) {
+#ifdef _PRERELEASE
+    if (iomgr_flip::instance()->test_flip("pg_blob_iterator_load_blob_data_error")) {
+        LOGD("Simulating resync blob prefetch failure: pg={}, blob={}", pg_id, info.blob_id);
+        COUNTER_INCREMENT(*metrics_, snp_dnr_error_count, 1);
+        co_return std::unexpected(BlobError(BlobErrorCode::READ_FAILED));
+    }
+#endif
+    auto result = co_await load_blob_data(std::move(info));
+    if (!result && result.error().code == BlobErrorCode::READ_FAILED) {
+        LOGE("Failed to prefetch resync blob: pg={}, shard=0x{:x}, blob={}, blkid={}",
+             info.shard_id >> homeobject::shard_width, info.shard_id & homeobject::shard_mask, info.blob_id,
+             info.pbas.to_string());
+        COUNTER_INCREMENT(*metrics_, snp_dnr_error_count, 1);
+    } else {
+        LOGT("Prefetched resync blob: pg={}, blob={}, blkid={}", pg_id, info.blob_id, info.pbas.to_string());
+        HISTOGRAM_OBSERVE(*metrics_, snp_dnr_blob_process_latency, get_elapsed_time_us(blob_start));
+    }
+    co_return result;
+}
+
+BlobManager::AsyncResult< blob_read_result >
 HSHomeObject::PGBlobIterator::load_blob_data_with_blkid(shard_id_t shard_id, blob_id_t blob_id,
-                                                        homestore::MultiBlkId blkid) {
+                                                        homestore::multi_blk_id blkid) {
     auto const total_size = blkid.blk_count() * repl_dev_->get_blk_size();
     sisl::io_blob_safe read_buf{total_size, io_align};
 
@@ -286,54 +309,49 @@ HSHomeObject::PGBlobIterator::load_blob_data_with_blkid(shard_id_t shard_id, blo
 
     LOGT("Reading resync blob: pg={}, shard=0x{:x}, blob={}, blkid={}, bytes={}", (shard_id >> homeobject::shard_width),
          (shard_id & homeobject::shard_mask), blob_id, blkid.to_string(), total_size);
-    return repl_dev_->async_read(blkid, sgs, total_size)
-        .thenValue([this, blob_id, shard_id, blkid, read_buf = std::move(read_buf)](
-                       auto&& result) mutable -> BlobManager::AsyncResult< blob_read_result > {
-            if (result) {
-                LOGE("Failed to read resync blob: pg={}, shard=0x{:x}, blob={}, blkid={}, error={}",
-                     (shard_id >> homeobject::shard_width), (shard_id & homeobject::shard_mask), blob_id,
-                     blkid.to_string(), result.value());
-                return folly::makeUnexpected(BlobError(BlobErrorCode::READ_FAILED));
-            }
+    auto result = co_await repl_dev_->async_read(blkid, sgs, total_size);
+    if (!result) {
+        LOGE("Failed to read resync blob: pg={}, shard=0x{:x}, blob={}, blkid={}, error={}",
+             (shard_id >> homeobject::shard_width), (shard_id & homeobject::shard_mask), blob_id, blkid.to_string(),
+             result.error().message());
+        co_return std::unexpected(BlobError(BlobErrorCode::READ_FAILED));
+    }
 
-            if (home_obj_.verify_blob(read_buf.cbytes(), shard_id, blob_id)) {
-                LOGT("Read resync blob: pg={}, shard=0x{:x}, blob={}", (shard_id >> homeobject::shard_width),
-                     (shard_id & homeobject::shard_mask), blob_id);
-                return blob_read_result(blob_id, std::move(read_buf), ResyncBlobState::NORMAL);
-            }
+    if (home_obj_.verify_blob(read_buf.cbytes(), shard_id, blob_id)) {
+        LOGT("Read resync blob: pg={}, shard=0x{:x}, blob={}", (shard_id >> homeobject::shard_width),
+             (shard_id & homeobject::shard_mask), blob_id);
+        co_return blob_read_result(blob_id, std::move(read_buf), ResyncBlobState::NORMAL);
+    }
 
-            // verify_blob failed — check if GC moved the blob to a new blkid since cur_blob_list_ was captured.
-            auto index_table = home_obj_.get_index_table(pg_id);
-            if (!index_table) {
-                LOGE(
-                    "Cannot resolve resync blob verification failure: pg={} no longer exists, shard_id=0x{:x}, blob={}",
-                    pg_id, shard_id, blob_id);
-                return folly::makeUnexpected(BlobError(BlobErrorCode::READ_FAILED));
-            }
-            auto current_pbas = home_obj_.get_blob_from_index_table(index_table, shard_id, blob_id);
-            if (!current_pbas) {
-                // Blob was deleted concurrently after generate_shard_blob_list captured its pbas.
-                // Do not send stale bytes as CORRUPTED — signal READ_FAILED so the snapshot restarts
-                // and generate_shard_blob_list picks up tombstone_pbas, skipping the blob cleanly.
-                LOGW("Resync blob was deleted during read; restarting snapshot: pg={}, shard_id=0x{:x}, blob={}", pg_id,
-                     shard_id, blob_id);
-                return folly::makeUnexpected(BlobError(BlobErrorCode::READ_FAILED));
-            }
-            if (current_pbas.value() == blkid) {
-                // blkid unchanged — genuinely corrupted data at this location.
-                // Metrics for corrupted blobs are handled on the follower side.
-                LOGE("Resync blob verification failed: pg={}, shard=0x{:x}, blob={}, blkid={}",
-                     (shard_id >> homeobject::shard_width), (shard_id & homeobject::shard_mask), blob_id,
-                     blkid.to_string());
-                return blob_read_result(blob_id, std::move(read_buf), ResyncBlobState::CORRUPTED);
-            }
+    // verify_blob failed — check if GC moved the blob to a new blkid since cur_blob_list_ was captured.
+    auto index_table = home_obj_.get_index_table(pg_id);
+    if (!index_table) {
+        LOGE("Cannot resolve resync blob verification failure: pg={} no longer exists, shard_id=0x{:x}, blob={}", pg_id,
+             shard_id, blob_id);
+        co_return std::unexpected(BlobError(BlobErrorCode::READ_FAILED));
+    }
+    auto current_pbas = home_obj_.get_blob_from_index_table(index_table, shard_id, blob_id);
+    if (!current_pbas) {
+        // Blob was deleted concurrently after generate_shard_blob_list captured its pbas.
+        // Do not send stale bytes as CORRUPTED — signal READ_FAILED so the snapshot restarts
+        // and generate_shard_blob_list picks up tombstone_pbas, skipping the blob cleanly.
+        LOGW("Resync blob was deleted during read; restarting snapshot: pg={}, shard_id=0x{:x}, blob={}", pg_id,
+             shard_id, blob_id);
+        co_return std::unexpected(BlobError(BlobErrorCode::READ_FAILED));
+    }
+    if (current_pbas.value() == blkid) {
+        // blkid unchanged — genuinely corrupted data at this location.
+        // Metrics for corrupted blobs are handled on the follower side.
+        LOGE("Resync blob verification failed: pg={}, shard=0x{:x}, blob={}, blkid={}",
+             (shard_id >> homeobject::shard_width), (shard_id & homeobject::shard_mask), blob_id, blkid.to_string());
+        co_return blob_read_result(blob_id, std::move(read_buf), ResyncBlobState::CORRUPTED);
+    }
 
-            // GC moved the blob — retry with the updated blkid. Folly flattens the returned future.
-            LOGI("Resync blob relocated by GC during read; retrying: pg={}, shard_id=0x{:x}, blob={}, old_blkid={}, "
-                 "new_blkid={}",
-                 pg_id, shard_id, blob_id, blkid.to_string(), current_pbas.value().to_string());
-            return load_blob_data_with_blkid(shard_id, blob_id, current_pbas.value());
-        });
+    // GC moved the blob — retry with the updated blkid.
+    LOGI("Resync blob relocated by GC during read; retrying: pg={}, shard_id=0x{:x}, blob={}, old_blkid={}, "
+         "new_blkid={}",
+         pg_id, shard_id, blob_id, blkid.to_string(), current_pbas.value().to_string());
+    co_return co_await load_blob_data_with_blkid(shard_id, blob_id, current_pbas.value());
 }
 
 bool HSHomeObject::PGBlobIterator::prefetch_blobs_snapshot_data() {
@@ -372,11 +390,6 @@ bool HSHomeObject::PGBlobIterator::prefetch_blobs_snapshot_data() {
               [](const BlobInfo& a, const BlobInfo& b) { return a.pbas < b.pbas; });
     for (auto info : prefetch_list) {
 #ifdef _PRERELEASE
-        if (iomgr_flip::instance()->test_flip("pg_blob_iterator_load_blob_data_error")) {
-            LOGD("Simulating resync blob prefetch failure: pg={}, blob={}", pg_id, info.blob_id);
-            prefetched_blobs_.emplace(info.blob_id, folly::makeUnexpected(BlobError(BlobErrorCode::READ_FAILED)));
-            continue;
-        }
         auto delay = iomgr_flip::instance()->get_test_flip< long >("simulate_read_snapshot_load_blob_delay",
                                                                    static_cast< long >(info.blob_id));
         if (delay) {
@@ -388,24 +401,7 @@ bool HSHomeObject::PGBlobIterator::prefetch_blobs_snapshot_data() {
 
         LOGT("Submitting resync blob read: pg={}, shard_id=0x{:x}, blob={}", pg_id, info.shard_id, info.blob_id);
         // Fixme: Re-enable retries uint8_t retries = HS_BACKEND_DYNAMIC_CONFIG(snapshot_blob_load_retry);
-        prefetched_blobs_.emplace(
-            info.blob_id,
-            std::move(load_blob_data(info))
-                .via(folly::getKeepAliveToken(folly::InlineExecutor::instance()))
-                .thenValue(
-                    [&, info, blob_start](auto&& result) mutable -> BlobManager::AsyncResult< blob_read_result > {
-                        if (result.hasError() && result.error().code == BlobErrorCode::READ_FAILED) {
-                            LOGE("Failed to prefetch resync blob: pg={}, shard=0x{:x}, blob={}, blkid={}",
-                                 info.shard_id >> homeobject::shard_width, info.shard_id & homeobject::shard_mask,
-                                 info.blob_id, info.pbas.to_string());
-                            COUNTER_INCREMENT(*metrics_, snp_dnr_error_count, 1);
-                        } else {
-                            LOGT("Prefetched resync blob: pg={}, blob={}, blkid={}", pg_id, info.blob_id,
-                                 info.pbas.to_string());
-                            HISTOGRAM_OBSERVE(*metrics_, snp_dnr_blob_process_latency, get_elapsed_time_us(blob_start));
-                        }
-                        return result;
-                    }));
+        prefetched_blobs_.emplace(info.blob_id, load_prefetched_blob(info, blob_start));
     }
     LOGD("Resync prefetch window: pg={}, shard_seq=0x{:x}, cursor_blob={}, frontier={}, submitted_blobs={}, "
          "skipped_blobs={}, inflight_bytes={}, limit_bytes={}",
@@ -457,11 +453,11 @@ bool HSHomeObject::PGBlobIterator::create_blobs_snapshot_data(sisl::io_blob_safe
                 break;
             }
             auto const expect_blob_size = info.pbas.blk_count() * repl_dev_->get_blk_size();
-            auto res = std::move(it->second).get();
+            auto res = sisl::async::sync_get(std::move(it->second));
             prefetched_blobs_.erase(it);
             inflight_prefetch_bytes_ -= expect_blob_size;
 
-            if (res.hasError()) {
+            if (!res) {
                 LOGE("Resync batch failed to retrieve blob: pg={}, shard_seq=0x{:x}, batch={}, blob={}, error={}",
                      pg_id, cur_obj_id.shard_seq_num, cur_obj_id.batch_id, info.blob_id, res.error());
                 hit_error = true;
@@ -534,7 +530,7 @@ void HSHomeObject::PGBlobIterator::stop() {
     // Wait for all inflight prefetch blobs to finish and drain the data
     for (auto& blob : prefetched_blobs_) {
         LOGT("Draining prefetched resync blob: pg={}, blob={}", pg_id, blob.first);
-        std::move(blob.second).get();
+        sisl::async::sync_get(std::move(blob.second));
     }
     prefetched_blobs_.clear();
     inflight_prefetch_bytes_ = 0;

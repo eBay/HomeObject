@@ -2,10 +2,10 @@
 
 #include "homeobject/common.hpp"
 
-#include <homestore/chunk_selector.h>
-#include <homestore/vchunk.h>
+#include <homestore/chunk_selector.hpp>
+#include <homestore/vchunk.hpp>
 #include <homestore/homestore_decl.hpp>
-#include <homestore/blk.h>
+#include <homestore/blk.hpp>
 #include <sisl/utility/enum.hpp>
 
 #include <queue>
