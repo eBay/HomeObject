@@ -1,3 +1,5 @@
+#include <sisl/async/coro.hpp>
+#include <sisl/async/when_all.hpp>
 /*********************************************************************************
  * Modifications Copyright 2017-2019 eBay Inc.
  *
@@ -163,9 +165,8 @@ void HomeObjectFixture::RestartFollowerDuringBaselineResyncUsingSigKill(uint64_t
         // ======== Stage 2: replace a member ========
         LOGINFO("start replace member, pg={}, task_id={}", pg_id, task_id);
         run_on_pg_leader(pg_id, [&]() {
-            auto r = _obj_inst->pg_manager()
-                         ->replace_member(pg_id, task_id, out_member_id, PGMember{in_member_id, "new_member", 0})
-                         .get();
+            auto r = sisl::async::sync_get(_obj_inst->pg_manager()->replace_member(
+                pg_id, task_id, out_member_id, PGMember{in_member_id, "new_member", 0}));
             ASSERT_TRUE(r);
         });
 
@@ -315,9 +316,8 @@ TEST_F(HomeObjectFixture, RestartFollowerDuringBaselineResyncUsingGracefulShutdo
     // ======== Stage 2: replace a member ========
     std::string task_id = "task_id";
     run_on_pg_leader(pg_id, [&]() {
-        auto r = _obj_inst->pg_manager()
-                     ->replace_member(pg_id, task_id, out_member_id, PGMember{in_member_id, "new_member", 0})
-                     .get();
+        auto r = sisl::async::sync_get(_obj_inst->pg_manager()->replace_member(
+            pg_id, task_id, out_member_id, PGMember{in_member_id, "new_member", 0}));
         ASSERT_TRUE(r);
     });
 
@@ -420,7 +420,7 @@ void HomeObjectFixture::ReplaceMember(bool withGC) {
     if (withGC) {
         run_if_in_pg(pg_id, [&]() {
             auto gc_mgr = _obj_inst->gc_manager();
-            std::vector< folly::SemiFuture< bool > > futs;
+            std::vector< sisl::async::task< bool > > futs;
             for (const auto& [pg_id, shards] : pg_shard_id_vec) {
                 for (const auto& shard_id : shards) {
                     auto chunk_id_opt = _obj_inst->get_shard_p_chunk_id(shard_id);
@@ -429,15 +429,10 @@ void HomeObjectFixture::ReplaceMember(bool withGC) {
                 }
             }
             // wait for all egc completed
-            folly::collectAllUnsafe(futs)
-                .thenValue([](auto&& results) {
-                    for (auto const& ok : results) {
-                        ASSERT_TRUE(ok.hasValue());
-                        // all egc task should be completed
-                        ASSERT_TRUE(ok.value());
-                    }
-                })
-                .get();
+            auto results = sisl::async::sync_get(sisl::async::when_all(std::move(futs)));
+            for (auto const& ok : results) {
+                ASSERT_TRUE(ok);
+            }
 
             futs.clear();
         });
@@ -473,9 +468,8 @@ void HomeObjectFixture::ReplaceMember(bool withGC) {
     std::string task_id = "task_id";
     LOGINFO("start replace member, pg={}, task_id={}", pg_id, task_id);
     run_on_pg_leader(pg_id, [&]() {
-        auto r = _obj_inst->pg_manager()
-                     ->replace_member(pg_id, task_id, out_member_id, PGMember{in_member_id, "new_member", 0})
-                     .get();
+        auto r = sisl::async::sync_get(_obj_inst->pg_manager()->replace_member(
+            pg_id, task_id, out_member_id, PGMember{in_member_id, "new_member", 0}));
         ASSERT_TRUE(r);
     });
 
@@ -648,9 +642,8 @@ void HomeObjectFixture::RestartLeaderDuringBaselineResyncUsingSigKill(uint64_t f
 
         // ========Stage 2: replace a member========
         run_on_pg_leader(pg_id, [&]() {
-            auto r = _obj_inst->pg_manager()
-                         ->replace_member(pg_id, task_id, out_member_id, PGMember{in_member_id, "new_member", 0})
-                         .get();
+            auto r = sisl::async::sync_get(_obj_inst->pg_manager()->replace_member(
+                pg_id, task_id, out_member_id, PGMember{in_member_id, "new_member", 0}));
             ASSERT_TRUE(r);
         });
         initial_leader_replica_id = get_leader_id(pg_id);
@@ -818,9 +811,8 @@ TEST_F(HomeObjectFixture, RollbackReplaceMember) {
     // ======== Stage 2: replace a member ========
     std::string task_id = "task_id";
     run_on_pg_leader(pg_id, [&]() {
-        auto r = _obj_inst->pg_manager()
-                     ->replace_member(pg_id, task_id, out_member_id, PGMember{in_member_id, "new_member", 0})
-                     .get();
+        auto r = sisl::async::sync_get(_obj_inst->pg_manager()->replace_member(
+            pg_id, task_id, out_member_id, PGMember{in_member_id, "new_member", 0}));
         ASSERT_TRUE(r);
     });
 
@@ -860,19 +852,19 @@ TEST_F(HomeObjectFixture, RollbackReplaceMember) {
                     j["member_id"] = boost::uuids::to_string(in_member_id);
                     j["commit_quorum"] = "0";
                     auto r = http_helper.del("/api/v1/member", j.dump());
-                    if (r.code() == Pistache::Http::Code::Ok) {
+                    if (r.code() == 200) {
                         retry = false;
-                    } else if (r.code() == Pistache::Http::Code::Service_Unavailable) {
+                    } else if (r.code() == 503) {
                         LOGINFO("remove_member get RETRY_REQUEST error, will retry");
                         std::this_thread::sleep_for(std::chrono::milliseconds(500));
                     } else {
                         ASSERT_FALSE(true);
                     }
                 } else {
-                    auto r = _obj_inst->pg_manager()->remove_member(pg_id, in_member_id, 0, 0).get();
+                    auto r = sisl::async::sync_get(_obj_inst->pg_manager()->remove_member(pg_id, in_member_id, 0, 0));
                     // new member can not respond to remove_member request because it is stuck at snapshot, so we may
                     // get RETRY_REQUEST error here, but the remove_member takes effective after force removal timeout.
-                    if (!r.hasError()) {
+                    if (!!r) {
                         retry = false;
                     } else if (r.error() == PGError::RETRY_REQUEST) {
                         LOGINFO("remove_member get RETRY_REQUEST error, will retry");
@@ -895,10 +887,11 @@ TEST_F(HomeObjectFixture, RollbackReplaceMember) {
                 j["learner"] = "false";
                 j["commit_quorum"] = "0";
                 auto r = http_helper.post("/api/v1/flip_learner", j.dump());
-                ASSERT_EQ(r.code(), Pistache::Http::Code::Ok);
+                ASSERT_EQ(r.code(), 200);
             } else {
-                auto r = _obj_inst->pg_manager()->flip_learner_flag(pg_id, out_member_id, false, 0, 0).get();
-                ASSERT_FALSE(r.hasError());
+                auto r = sisl::async::sync_get(
+                    _obj_inst->pg_manager()->flip_learner_flag(pg_id, out_member_id, false, 0, 0));
+                ASSERT_FALSE(!r);
             }
         });
         // SyncPoint5 clean task
@@ -906,8 +899,9 @@ TEST_F(HomeObjectFixture, RollbackReplaceMember) {
         LOGINFO("about to clean task")
         run_on_pg_leader(pg_id, [&]() {
             if (!http_enabled) {
-                auto r = _obj_inst->pg_manager()->clean_replace_member_task(pg_id, task_id, 0, 0).get();
-                ASSERT_FALSE(r.hasError());
+                auto r =
+                    sisl::async::sync_get(_obj_inst->pg_manager()->clean_replace_member_task(pg_id, task_id, 0, 0));
+                ASSERT_FALSE(!r);
             } else {
                 HttpHelper http_helper("127.0.0.1", 5000 + g_helper->replica_num());
                 nlohmann::json j;
@@ -915,7 +909,7 @@ TEST_F(HomeObjectFixture, RollbackReplaceMember) {
                 j["task_id"] = task_id;
                 j["commit_quorum"] = "0";
                 auto r = http_helper.del("/api/v1/pg_replacemember_task", j.dump());
-                ASSERT_EQ(r.code(), Pistache::Http::Code::Ok);
+                ASSERT_EQ(r.code(), 200);
             }
         });
         // wait for replication settled
@@ -941,7 +935,7 @@ TEST_F(HomeObjectFixture, RollbackReplaceMember) {
                 auto resource = "/api/v1/pg?group_id=" + boost::uuids::to_string(group_id) +
                     "&replica_id=" + boost::uuids::to_string(g_helper->my_replica_id_);
                 auto r = http_helper.del(resource, "");
-                ASSERT_EQ(r.code(), Pistache::Http::Code::Ok);
+                ASSERT_EQ(r.code(), 200);
             } else {
                 _obj_inst->pg_manager()->exit_pg(group_id, g_helper->my_replica_id(), 0);
             }
@@ -950,7 +944,7 @@ TEST_F(HomeObjectFixture, RollbackReplaceMember) {
         // Test idempotence of exit_pg
         LOGINFO("Try to call exit_pg again pg={}", pg_id);
         auto ret = _obj_inst->pg_manager()->exit_pg(group_id, g_helper->my_replica_id(), 0);
-        ASSERT_FALSE(ret.hasError());
+        ASSERT_FALSE(!ret);
     }
     g_helper->sync();
 }
@@ -998,9 +992,8 @@ TEST_F(HomeObjectFixture, BaselineResyncEmptyPG) {
 
     LOGINFO("start replace member, pg={}, task_id={}", pg_id, task_id);
     run_on_pg_leader(pg_id, [&]() {
-        auto r = _obj_inst->pg_manager()
-                     ->replace_member(pg_id, task_id, out_member_id, PGMember{in_member_id, "new_member", 0})
-                     .get();
+        auto r = sisl::async::sync_get(_obj_inst->pg_manager()->replace_member(
+            pg_id, task_id, out_member_id, PGMember{in_member_id, "new_member", 0}));
         ASSERT_TRUE(r);
     });
 
@@ -1087,9 +1080,8 @@ TEST_F(HomeObjectFixture, BaselineResyncEmptyShard) {
 
     LOGINFO("start replace member, pg={}, task_id={}", pg_id, task_id);
     run_on_pg_leader(pg_id, [&]() {
-        auto r = _obj_inst->pg_manager()
-                     ->replace_member(pg_id, task_id, out_member_id, PGMember{in_member_id, "new_member", 0})
-                     .get();
+        auto r = sisl::async::sync_get(_obj_inst->pg_manager()->replace_member(
+            pg_id, task_id, out_member_id, PGMember{in_member_id, "new_member", 0}));
         ASSERT_TRUE(r);
     });
 
@@ -1169,7 +1161,7 @@ SISL_OPTION_GROUP(
      "true or false"));
 
 SISL_LOGGING_INIT(homeobject)
-#define test_options logging, config, homeobject, test_homeobject_repl_common
+#define test_options logging, config, test_homeobject_repl_common
 SISL_OPTIONS_ENABLE(test_options)
 
 std::unique_ptr< test_common::HSReplTestHelper > g_helper;

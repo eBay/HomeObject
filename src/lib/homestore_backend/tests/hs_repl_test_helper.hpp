@@ -35,9 +35,9 @@
 #include <sisl/settings/settings.hpp>
 #include <sisl/grpc/rpc_client.hpp>
 #include <iomgr/io_environment.hpp>
-#include <iomgr/http_server.hpp>
-
-#include <folly/init/Init.h>
+#include <sisl/http/http_server.hpp>
+#include <httplib/httplib.h>
+#include <homestore/homestore.hpp>
 
 #include "homeobject/common.hpp"
 
@@ -160,15 +160,16 @@ public:
             return SISL_OPTIONS["base_port"].as< uint16_t >() + helper_.replica_num_;
         }
 
-        void get_prometheus_metrics(const Pistache::Rest::Request&, Pistache::Http::ResponseWriter response) {
-            response.send(Pistache::Http::Code::Ok,
-                          sisl::MetricsFarm::getInstance().report(sisl::ReportFormat::kTextFormat));
+        void get_prometheus_metrics(httplib::Request const&, httplib::Response& response) {
+            response.status = 200;
+            response.set_content(sisl::MetricsFarm::getInstance().report(sisl::ReportFormat::TEXT_FORMAT),
+                                 "text/plain");
         }
 
         void start_http_server() {
-            std::vector< iomgr::http_route > routes = {
-                {Pistache::Http::Method::Get, "/metrics",
-                 Pistache::Rest::Routes::bind(&TestReplApplication::get_prometheus_metrics, this)},
+            std::vector< sisl::http_route > routes = {
+                {sisl::http_method::Get, "/metrics",
+                 [this](httplib::Request const& req, httplib::Response& res) { get_prometheus_metrics(req, res); }},
             };
 
             auto http_server = ioenvironment.get_http_server();
@@ -268,9 +269,6 @@ public:
             }
         }
 
-        int tmp_argc = 1;
-        folly_ = std::make_unique< folly::Init >(&tmp_argc, &argv_, true);
-
         LOGINFO("Starting HomeObject replica={}", replica_num_);
         app = std::make_shared< TestReplApplication >(*this);
     }
@@ -323,10 +321,25 @@ public:
         return homeobj_;
     }
 
+    // Single source of truth for tearing down homeobj_/the HomeStore singleton. Every caller that
+    // drops its shared_ptr to the HomeObject (fixture's _obj_inst, homeobj_ here, etc.) must route
+    // through this so home_store::s_instance never survives, half torn-down, into the next
+    // build_new_homeobject()/restart() call. The safe_instance() check still runs after reset() in
+    // case homeobj_ was null or HSHomeObject::shutdown() never reached homestore cleanup.
+    void shutdown_homeobject() {
+        if (homeobj_) {
+            homeobj_->shutdown();
+            homeobj_.reset();
+        }
+        if (homestore::home_store::safe_instance()) {
+            homestore::home_store::instance()->shutdown();
+            homestore::home_store::reset_instance();
+        }
+    }
+
     void delete_homeobject() {
         LOGINFO("Clearing Homeobject replica={}", replica_num_);
-        homeobj_->shutdown();
-        homeobj_.reset();
+        shutdown_homeobject();
         remove_test_files();
     }
 
@@ -336,8 +349,7 @@ public:
 
         if (shutdown_delay_secs > 0) { std::this_thread::sleep_for(std::chrono::seconds(shutdown_delay_secs)); }
         LOGINFO("Stopping homeobject after {} secs, replica={}", shutdown_delay_secs, replica_num_);
-        homeobj_->shutdown();
-        homeobj_.reset();
+        shutdown_homeobject();
         if (restart_delay_secs > 0) { std::this_thread::sleep_for(std::chrono::seconds(restart_delay_secs)); }
         LOGINFO("Starting homeobject after {} secs, replica={}", restart_delay_secs, replica_num_);
         auto const ndevices = SISL_OPTIONS["num_devs"].as< uint32_t >();
@@ -383,7 +395,10 @@ public:
     std::string name() const { return name_; }
     std::string test_name() const { return test_name_; }
 
-    void teardown() { sisl::GrpcAsyncClientWorker::shutdown_all(); }
+    void teardown() {
+        sisl::GrpcAsyncClientWorker::shutdown_all();
+        shutdown_homeobject();
+    }
 
     void sync() { ipc_data_->sync(sync_point_num++, total_replicas_nums_); }
 
@@ -519,7 +534,6 @@ private:
     boost::process::group proc_grp_;
     std::unique_ptr< bip::shared_memory_object > shm_;
     std::unique_ptr< bip::mapped_region > region_;
-    std::unique_ptr< folly::Init > folly_;
     std::map< peer_id_t, uint32_t > members_;
     peer_id_t my_replica_id_;
     IPCData* ipc_data_;

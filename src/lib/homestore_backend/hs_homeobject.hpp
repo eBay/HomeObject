@@ -2,11 +2,14 @@
 
 #include <memory>
 #include <mutex>
+#include <optional>
+#include <system_error>
+#include <sisl/async/task.hpp>
 
 #include <homestore/homestore.hpp>
 #include <homestore/index/index_table.hpp>
 #include <homestore/superblk_handler.hpp>
-#include <homestore/replication/repl_dev.h>
+#include <homestore/replication/repl_dev.hpp>
 
 #include "heap_chunk_selector.h"
 #include "lib/homeobject_impl.hpp"
@@ -41,8 +44,11 @@ class HttpManager;
 
 static constexpr uint64_t io_align{512};
 PGError toPgError(homestore::ReplServiceError const&);
+PGError toPgError(std::error_condition const&);
 BlobError toBlobError(homestore::ReplServiceError const&);
+BlobError toBlobError(std::error_condition const&);
 ShardError toShardError(homestore::ReplServiceError const&);
+ShardError toShardError(std::error_condition const&);
 ENUM(PGState, uint8_t, ALIVE = 0, DESTROYED);
 
 class HSHomeObject : public HomeObjectImpl {
@@ -313,7 +319,7 @@ public:
 
     public:
         std::unique_ptr< homestore::CPContext > on_switchover_cp(homestore::CP* cur_cp, homestore::CP* new_cp) override;
-        folly::Future< bool > cp_flush(homestore::CP* cp) override;
+        sisl::async::task< bool > cp_flush(homestore::CP* cp) override;
         void cp_cleanup(homestore::CP* cp) override;
         int cp_progress_percent() override;
 
@@ -369,7 +375,7 @@ public:
         };
 
         homestore::superblk< pg_info_superblk > pg_sb_;
-        shared< homestore::ReplDev > repl_dev_;
+        shared< homestore::repl_dev > repl_dev_;
         std::shared_ptr< BlobIndexTable > index_table_;
         PGMetrics metrics_;
         HSHomeObject& home_obj_;
@@ -382,9 +388,9 @@ public:
         mutable homestore::superblk< snapshot_rcvr_info_superblk > snp_rcvr_info_sb_;
         mutable homestore::superblk< snapshot_rcvr_shard_list_superblk > snp_rcvr_shard_list_sb_;
 
-        HS_PG(PGInfo info, shared< homestore::ReplDev > rdev, shared< BlobIndexTable > index_table,
+        HS_PG(PGInfo info, shared< homestore::repl_dev > rdev, shared< BlobIndexTable > index_table,
               std::shared_ptr< const std::vector< homestore::chunk_num_t > > pg_chunk_ids, HSHomeObject& home_obj);
-        HS_PG(homestore::superblk< pg_info_superblk >&& sb, shared< homestore::ReplDev > rdev, HSHomeObject& home_obj);
+        HS_PG(homestore::superblk< pg_info_superblk >&& sb, shared< homestore::repl_dev > rdev, HSHomeObject& home_obj);
         ~HS_PG() override = default;
 
         static PGInfo pg_info_from_sb(homestore::superblk< pg_info_superblk > const& sb);
@@ -556,7 +562,7 @@ public:
     struct BlobInfo {
         shard_id_t shard_id;
         blob_id_t blob_id;
-        homestore::MultiBlkId pbas;
+        homestore::multi_blk_id pbas;
     };
 
     enum class BlobState : uint8_t {
@@ -565,7 +571,7 @@ public:
         ALL = 2,
     };
 
-    inline const static homestore::MultiBlkId tombstone_pbas{0, 0, 0};
+    inline const static homestore::multi_blk_id tombstone_pbas{0, 0, 0};
     inline const static std::string delete_marker_blob_data{"HOMEOBJECT_BLOB_DELETE_MARKER"};
 
     // ask followers to scrub
@@ -599,9 +605,10 @@ public:
     private:
         PG* get_pg_metadata() const;
         objId expected_next_obj_id() const;
-        BlobManager::AsyncResult< blob_read_result > load_blob_data(const BlobInfo& blob_info);
+        BlobManager::AsyncResult< blob_read_result > load_blob_data(BlobInfo blob_info);
+        BlobManager::AsyncResult< blob_read_result > load_prefetched_blob(BlobInfo info, Clock::time_point blob_start);
         BlobManager::AsyncResult< blob_read_result > load_blob_data_with_blkid(shard_id_t shard_id, blob_id_t blob_id,
-                                                                               homestore::MultiBlkId blkid);
+                                                                               homestore::multi_blk_id blkid);
         bool prefetch_blobs_snapshot_data();
         void pack_resync_message(sisl::io_blob_safe& dest_blob, SyncMessageType type);
 
@@ -649,7 +656,7 @@ public:
 
         HSHomeObject& home_obj_;
         uint64_t snp_start_lsn_;
-        shared< homestore::ReplDev > repl_dev_;
+        shared< homestore::repl_dev > repl_dev_;
         uint64_t max_batch_size_;
         std::unique_ptr< DonerSnapshotMetrics > metrics_;
         bool stopped_{false};
@@ -671,7 +678,7 @@ public:
         constexpr static shard_id_t invalid_shard_id = 0;
         constexpr static shard_id_t shard_list_end_marker = ULLONG_MAX;
 
-        SnapshotReceiveHandler(HSHomeObject& home_obj, shared< homestore::ReplDev > repl_dev);
+        SnapshotReceiveHandler(HSHomeObject& home_obj, shared< homestore::repl_dev > repl_dev);
 
         int process_pg_snapshot_data(ResyncPGMetaData const& pg_meta);
         int process_shard_snapshot_data(ResyncShardMetaData const& shard_meta);
@@ -761,11 +768,11 @@ public:
         };
 
         HSHomeObject& home_obj_;
-        const shared< homestore::ReplDev > repl_dev_;
+        const shared< homestore::repl_dev > repl_dev_;
 
         std::shared_ptr< SnapshotContext > ctx_;
         std::unique_ptr< ReceiverSnapshotMetrics > metrics_;
-        folly::Future< bool > cp_fut;
+        std::optional< sisl::async::task< bool > > cp_fut;
 
         // Update the snp_info superblock
         void update_snp_info_sb(bool init = false);
@@ -778,28 +785,32 @@ private:
     shared< GCManager > gc_mgr_;
     shared< ScrubManager > scrub_mgr_;
     unique< HttpManager > http_mgr_;
+    // Shared by GCManager and ScrubManager: one pinned worker reactor for thread timers.
+    iomgr::IOReactor* bg_timer_reactor_{nullptr};
+
+    void pin_bg_timer_reactor();
 
     static constexpr size_t max_zpad_bufs = _data_block_size / io_align;
     std::array< sisl::io_blob_safe, max_zpad_bufs > zpad_bufs_; // Zero padded buffers for blob payload.
 
-    static homestore::ReplicationService& hs_repl_service() { return homestore::hs()->repl_service(); }
+    static homestore::replication_service& hs_repl_service() { return homestore::hs()->repl_service(); }
 
     // blob related
-    BlobManager::AsyncResult< Blob > _get_blob_data(const shared< homestore::ReplDev >& repl_dev, shard_id_t shard_id,
+    BlobManager::AsyncResult< Blob > _get_blob_data(const shared< homestore::repl_dev >& repl_dev, shard_id_t shard_id,
                                                     blob_id_t blob_id, uint64_t req_offset, uint64_t req_len,
-                                                    const homestore::MultiBlkId& blkid, trace_id_t tid,
+                                                    const homestore::multi_blk_id& blkid, trace_id_t tid,
                                                     bool allow_skip_verify = false) const;
 
-    BlobManager::AsyncResult< Blob > _get_blob_data_partial(const shared< homestore::ReplDev >& repl_dev,
+    BlobManager::AsyncResult< Blob > _get_blob_data_partial(const shared< homestore::repl_dev >& repl_dev,
                                                             shard_id_t shard_id, blob_id_t blob_id, uint64_t req_offset,
-                                                            uint64_t req_len, const homestore::MultiBlkId& blkid,
+                                                            uint64_t req_len, const homestore::multi_blk_id& blkid,
                                                             trace_id_t tid) const;
 
     // create pg related
-    static PGManager::NullAsyncResult do_create_pg(cshared< homestore::ReplDev > repl_dev, PGInfo&& pg_info,
+    static PGManager::NullAsyncResult do_create_pg(cshared< homestore::repl_dev > repl_dev, PGInfo&& pg_info,
                                                    trace_id_t tid = 0);
-    folly::Expected< HSHomeObject::HS_PG*, PGError > local_create_pg(shared< homestore::ReplDev > repl_dev,
-                                                                     PGInfo pg_info, trace_id_t tid = 0);
+    std::expected< HSHomeObject::HS_PG*, PGError > local_create_pg(shared< homestore::repl_dev > repl_dev,
+                                                                   PGInfo pg_info, trace_id_t tid = 0);
     static std::string serialize_pg_info(const PGInfo& info);
     static PGInfo deserialize_pg_info(const unsigned char* pg_info_str, size_t size);
     void add_pg_to_map(unique< HS_PG > hs_pg);
@@ -815,7 +826,7 @@ private:
 
     // recover part
     void register_homestore_metablk_callback();
-    void on_pg_meta_blk_found(sisl::byte_view const& buf, void* meta_cookie);
+    void on_pg_meta_blk_found(sisl::byte_view const& buf, homestore::meta_blk* mblk);
     void on_shard_meta_blk_found(homestore::meta_blk* mblk, sisl::byte_view buf);
     void on_shard_meta_blk_recover_completed(bool success);
     void write_migrated_shard_metablks();
@@ -864,7 +875,7 @@ public:
      * @param repl_dev The replication device.
      * @param hs_ctx The replication request context.
      */
-    void on_create_pg_message_commit(int64_t lsn, sisl::blob const& header, shared< homestore::ReplDev > repl_dev,
+    void on_create_pg_message_commit(int64_t lsn, sisl::blob const& header, shared< homestore::repl_dev > repl_dev,
                                      cintrusive< homestore::repl_req_ctx >& hs_ctx);
 
     /**
@@ -945,7 +956,7 @@ public:
      * @param repl_dev The replication device.
      * @param hs_ctx The replication request context.
      */
-    void on_shard_message_commit(int64_t lsn, sisl::blob const& header, shared< homestore::ReplDev > repl_dev,
+    void on_shard_message_commit(int64_t lsn, sisl::blob const& header, shared< homestore::repl_dev > repl_dev,
                                  cintrusive< homestore::repl_req_ctx >& hs_ctx);
 
     bool on_shard_message_pre_commit(int64_t lsn, sisl::blob const& header, sisl::blob const& key,
@@ -1012,6 +1023,8 @@ public:
     cshared< GCManager > gc_manager() const { return gc_mgr_; }
     cshared< ScrubManager > scrub_manager() const { return scrub_mgr_; }
 
+    iomgr::IOReactor* bg_timer_reactor() const { return bg_timer_reactor_; }
+
     /**
      * @brief Reconciles the leaders for all PGs or a specific PG identified by pg_id.
      *
@@ -1048,11 +1061,11 @@ public:
     void on_blob_message_rollback(int64_t lsn, sisl::blob const& header, sisl::blob const& key,
                                   cintrusive< homestore::repl_req_ctx >& hs_ctx);
     void on_blob_put_commit(int64_t lsn, sisl::blob const& header, sisl::blob const& key,
-                            const homestore::MultiBlkId& pbas, cintrusive< homestore::repl_req_ctx >& hs_ctx);
+                            const homestore::multi_blk_id& pbas, cintrusive< homestore::repl_req_ctx >& hs_ctx);
     void on_blob_del_commit(int64_t lsn, sisl::blob const& header, sisl::blob const& key,
                             cintrusive< homestore::repl_req_ctx >& hs_ctx);
     bool local_add_blob_info(pg_id_t pg_id, BlobInfo const& blob_info, trace_id_t tid = 0);
-    homestore::ReplResult< homestore::blk_alloc_hints >
+    homestore::result< homestore::blk_alloc_hints >
     blob_put_get_blk_alloc_hints(sisl::blob const& header, cintrusive< homestore::repl_req_ctx >& ctx);
     void compute_blob_payload_hash(BlobHeader::HashAlgorithm algorithm, const uint8_t* blob_bytes, size_t blob_size,
                                    uint8_t* hash_bytes, size_t hash_len) const;
@@ -1093,7 +1106,7 @@ private:
     std::pair< bool, homestore::btree_status_t > add_to_index_table(shared< BlobIndexTable > index_table,
                                                                     const BlobInfo& blob_info);
 
-    BlobManager::Result< homestore::MultiBlkId >
+    BlobManager::Result< homestore::multi_blk_id >
     get_blob_from_index_table(shared< BlobIndexTable > index_table, shard_id_t shard_id, blob_id_t blob_id) const;
 
     void print_btree_index(pg_id_t pg_id) const;
@@ -1160,11 +1173,11 @@ private:
 
     // only leader will call incr and decr pending request num
     void incr_pending_request_num() const {
-        uint64_t now = pending_request_num.fetch_add(1);
+        [[maybe_unused]] uint64_t now = pending_request_num.fetch_add(1);
         LOGT("inc pending req, was {}", now);
     }
     void decr_pending_request_num() const {
-        uint64_t now = pending_request_num.fetch_sub(1);
+        [[maybe_unused]] uint64_t now = pending_request_num.fetch_sub(1);
         LOGT("desc pending req, was {}", now);
         DEBUG_ASSERT(now > 0, "pending == 0 ");
     }

@@ -7,7 +7,7 @@ PGManager::NullAsyncResult MemoryHomeObject::_create_pg(PGInfo&& pg_info, std::s
     auto lg = std::scoped_lock(_pg_lock);
     auto [it1, _] = _pg_map.try_emplace(pg_info.id, std::make_unique< PG >(pg_info));
     RELEASE_ASSERT(_pg_map.end() != it1, "Unknown map insert error!");
-    return folly::makeSemiFuture< PGManager::NullResult >(folly::Unit());
+    co_return std::monostate{};
 }
 
 PGManager::NullAsyncResult MemoryHomeObject::_replace_member(pg_id_t id, std::string& task_id,
@@ -17,12 +17,11 @@ PGManager::NullAsyncResult MemoryHomeObject::_replace_member(pg_id_t id, std::st
     (void)new_member;
     (void)commit_quorum;
     (void)tid;
+    (void)task_id;
     auto lg = std::shared_lock(_pg_lock);
     auto it = _pg_map.find(id);
-    if (_pg_map.end() == it) {
-        return folly::makeSemiFuture< PGManager::NullResult >(folly::makeUnexpected(PGError::UNKNOWN_PG));
-    }
-    return folly::makeSemiFuture< PGManager::NullResult >(folly::makeUnexpected(PGError::UNSUPPORTED_OP));
+    if (_pg_map.end() == it) { co_return std::unexpected(PGError::UNKNOWN_PG); }
+    co_return std::unexpected(PGError::UNSUPPORTED_OP);
 }
 
 PGReplaceMemberStatus MemoryHomeObject::_get_replace_member_status(pg_id_t id, std::string& task_id,
@@ -84,12 +83,14 @@ void MemoryHomeObject::_destroy_pg(pg_id_t pg_id) {
 }
 
 PGManager::NullResult MemoryHomeObject::_exit_pg(uuid_t group_id, peer_id_t peer_id, trace_id_t trace_id) {
+    (void)peer_id;
+    (void)trace_id;
     auto lg = std::unique_lock(_pg_lock);
     auto iter = std::find_if(_pg_map.begin(), _pg_map.end(), [group_id](const auto& entry) {
         return entry.second->pg_info_.replica_set_uuid == group_id;
     });
     if (iter != _pg_map.end()) { _pg_map.erase(iter); }
-    return folly::Unit();
+    return std::monostate{};
 }
 
 PGManager::NullAsyncResult MemoryHomeObject::_flip_learner_flag(pg_id_t pg_id, peer_id_t const& member_id,
@@ -100,7 +101,7 @@ PGManager::NullAsyncResult MemoryHomeObject::_flip_learner_flag(pg_id_t pg_id, p
     (void)is_learner;
     (void)commit_quorum;
     (void)trace_id;
-    return folly::makeSemiFuture< PGManager::NullResult >(folly::makeUnexpected(PGError::UNSUPPORTED_OP));
+    co_return std::unexpected(PGError::UNSUPPORTED_OP);
 }
 
 PGManager::NullAsyncResult MemoryHomeObject::_remove_member(pg_id_t pg_id, peer_id_t const& member_id,
@@ -109,7 +110,7 @@ PGManager::NullAsyncResult MemoryHomeObject::_remove_member(pg_id_t pg_id, peer_
     (void)member_id;
     (void)commit_quorum;
     (void)trace_id;
-    return folly::makeSemiFuture< PGManager::NullResult >(folly::makeUnexpected(PGError::UNSUPPORTED_OP));
+    co_return std::unexpected(PGError::UNSUPPORTED_OP);
 }
 
 PGManager::NullAsyncResult MemoryHomeObject::_clean_replace_member_task(pg_id_t pg_id, std::string& task_id,
@@ -118,13 +119,13 @@ PGManager::NullAsyncResult MemoryHomeObject::_clean_replace_member_task(pg_id_t 
     (void)task_id;
     (void)commit_quorum;
     (void)trace_id;
-    return folly::makeSemiFuture< PGManager::NullResult >(folly::makeUnexpected(PGError::UNSUPPORTED_OP));
+    co_return std::unexpected(PGError::UNSUPPORTED_OP);
 }
 
 PGManager::Result< std::vector< replace_member_task > >
 MemoryHomeObject::_list_all_replace_member_tasks(trace_id_t trace_id) {
     (void)trace_id;
-    return folly::makeUnexpected(PGError::UNSUPPORTED_OP);
+    return std::unexpected(PGError::UNSUPPORTED_OP);
 }
 
 } // namespace homeobject

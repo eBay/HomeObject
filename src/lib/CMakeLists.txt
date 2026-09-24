@@ -16,6 +16,10 @@ target_link_libraries(${PROJECT_NAME}_core
 list(GET sisl_INCLUDE_DIRS 0 SISL_TOP_INCLUDE)
 include ("${SISL_TOP_INCLUDE}/../cmake/settings_gen.cmake")
 
-add_subdirectory(homestore_backend)
+option(HOMEOBJECT_MEMORY_ONLY "Build memory backend only (skip homestore_backend)" OFF)
+
 add_subdirectory(memory_backend)
+if (NOT HOMEOBJECT_MEMORY_ONLY)
+    add_subdirectory(homestore_backend)
+endif()
 add_subdirectory(tests)

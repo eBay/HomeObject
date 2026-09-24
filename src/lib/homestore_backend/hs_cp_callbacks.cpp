@@ -15,6 +15,7 @@
  *********************************************************************************/
 #include <vector>
 #include <homestore/homestore.hpp>
+#include <sisl/async/task.hpp>
 #include "hs_homeobject.hpp"
 
 using homestore::CP;
@@ -29,7 +30,7 @@ std::unique_ptr< CPContext > HSHomeObject::MyCPCallbacks::on_switchover_cp(CP* c
 
 // when cp_flush is called, it means that all the dirty candidates are already in the dirty list.
 // new dirty candidates will arrive on next cp's context.
-folly::Future< bool > HSHomeObject::MyCPCallbacks::cp_flush(CP* cp) {
+sisl::async::task< bool > HSHomeObject::MyCPCallbacks::cp_flush(CP* cp) {
     std::vector< HSHomeObject::HS_PG* > dirty_pg_list;
     dirty_pg_list.reserve(home_obj_._pg_map.size());
 
@@ -75,7 +76,7 @@ folly::Future< bool > HSHomeObject::MyCPCallbacks::cp_flush(CP* cp) {
         }
     }
 
-    return folly::makeFuture< bool >(true);
+    co_return true;
 }
 
 void HSHomeObject::MyCPCallbacks::cp_cleanup(CP* cp) {}

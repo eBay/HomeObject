@@ -1,3 +1,5 @@
+#include <sisl/async/coro.hpp>
+#include <sisl/async/when_all.hpp>
 #include "homeobj_fixture.hpp"
 
 TEST_F(HomeObjectFixture, BasicGC) {
@@ -136,7 +138,8 @@ TEST_F(HomeObjectFixture, BasicGC) {
 
                     if (0 == EXVchunk->get_defrag_nblks()) {
                         // some unexpect async write or free happens, increase defrag num to trigger gc again.
-                        homestore::data_service().async_free_blk(homestore::MultiBlkId(0, 1, chunk_id));
+                        sisl::async::detach(
+                            homestore::data_service().async_free_blk(homestore::multi_blk_id(0, 1, chunk_id)));
                     }
 
                     all_deleted_blobs_have_been_gc = false;
@@ -268,7 +271,8 @@ TEST_F(HomeObjectFixture, BasicGC) {
 
                     if (0 == EXVchunk->get_defrag_nblks()) {
                         // some unexpect async write or free happens, increase defrag num to trigger gc again.
-                        homestore::data_service().async_free_blk(homestore::MultiBlkId(0, 1, chunk_id));
+                        sisl::async::detach(
+                            homestore::data_service().async_free_blk(homestore::multi_blk_id(0, 1, chunk_id)));
                     }
 
                     LOGINFO("pg_id={}, chunk_id={}, available_blk={}, total_blk={}, not empty, waiting for gc", pg_id,
@@ -385,16 +389,17 @@ TEST_F(HomeObjectFixture, HandlingNoSpaceLeft) {
                 ASSERT_TRUE(vchunk);
                 auto available_blk_num = vchunk->available_blks();
 
-                homestore::MultiBlkId all_remaining_blk;
+                homestore::multi_blk_id all_remaining_blk;
                 homestore::blk_alloc_hints hints;
                 hints.chunk_id_hint = chunk;
 
                 // allocate all the remaining blocks, so that there is no space left on this chunk
-                const auto status = data_service.alloc_blks(available_blk_num * blk_size, hints, all_remaining_blk);
+                auto alloc_res = data_service.alloc_blks(available_blk_num * blk_size, hints);
 
                 LOGINFO("Set chunk {} to no_space_left, total_blks={}, available_blks={}, used_blks={}", chunk,
                         vchunk->get_total_blks(), vchunk->available_blks(), vchunk->get_used_blks());
-                ASSERT_TRUE(status == homestore::BlkAllocStatus::SUCCESS);
+                ASSERT_TRUE(alloc_res.has_value());
+                all_remaining_blk = std::move(*alloc_res);
                 ASSERT_TRUE(vchunk->available_blks() == 0);
             }
         });
@@ -505,7 +510,7 @@ void HomeObjectFixture::EmergentGC(bool with_crash_recovery) {
 
     // do not seal the last shard and trigger gc mannually to simulate emergent gc
     auto gc_mgr = _obj_inst->gc_manager();
-    std::vector< folly::SemiFuture< bool > > futs;
+    std::vector< sisl::async::task< bool > > futs;
 
     if (with_crash_recovery) {
         const auto egc_thread_count_per_pdev = HS_BACKEND_DYNAMIC_CONFIG(reserved_chunk_num_per_pdev_for_egc);
@@ -533,15 +538,10 @@ void HomeObjectFixture::EmergentGC(bool with_crash_recovery) {
     }
 
     // wait for all egc completed
-    folly::collectAllUnsafe(futs)
-        .thenValue([](auto&& results) {
-            for (auto const& ok : results) {
-                ASSERT_TRUE(ok.hasValue());
-                // all egc task should be completed.
-                ASSERT_TRUE(ok.value());
-            }
-        })
-        .get();
+    auto __results = sisl::async::sync_get(sisl::async::when_all(std::move(futs)));
+    for (auto const& ok : __results) {
+        ASSERT_TRUE(ok);
+    }
 
     futs.clear();
 
@@ -570,15 +570,10 @@ void HomeObjectFixture::EmergentGC(bool with_crash_recovery) {
         }
 
         // wait for all egc completed
-        folly::collectAllUnsafe(futs)
-            .thenValue([](auto&& results) {
-                for (auto const& ok : results) {
-                    ASSERT_TRUE(ok.hasValue());
-                    // all egc task should be completed.
-                    ASSERT_TRUE(ok.value());
-                }
-            })
-            .get();
+        auto recovery_results = sisl::async::sync_get(sisl::async::when_all(std::move(futs)));
+        for (auto const& ok : recovery_results) {
+            ASSERT_TRUE(ok);
+        }
 
         futs.clear();
     }
@@ -706,15 +701,10 @@ void HomeObjectFixture::EmergentGC(bool with_crash_recovery) {
     }
 
     // wait for all egc completed
-    folly::collectAllUnsafe(futs)
-        .thenValue([](auto&& results) {
-            for (auto const& ok : results) {
-                ASSERT_TRUE(ok.hasValue());
-                // all egc task should be completed
-                ASSERT_TRUE(ok.value());
-            }
-        })
-        .get();
+    auto final_results = sisl::async::sync_get(sisl::async::when_all(std::move(futs)));
+    for (auto const& ok : final_results) {
+        ASSERT_TRUE(ok);
+    }
 
     futs.clear();
 
@@ -794,7 +784,7 @@ TEST_F(HomeObjectFixture, GCTaskPbaChunkCheck) {
     chunk_id_t cur_chunk = get_current_chunk();
 
     // Case 1: gc succeeds when all blob pbas match move_from_chunk.
-    ASSERT_TRUE(gc_mgr->submit_gc_task(task_priority::emergent, cur_chunk).get())
+    ASSERT_TRUE(sisl::async::sync_get(gc_mgr->submit_gc_task(task_priority::emergent, cur_chunk)))
         << "emergent gc should succeed when all blob pbas match move_from_chunk";
 
     cur_chunk = get_current_chunk();
@@ -804,13 +794,13 @@ TEST_F(HomeObjectFixture, GCTaskPbaChunkCheck) {
     BlobRouteValue existing_value;
 
     BlobRouteKey index_key{BlobRoute{shard.id, 0 /* blob_id */}};
-    BlobRouteValue wrong_value{homestore::MultiBlkId{0, 1, std::numeric_limits< chunk_id_t >::max()}};
+    BlobRouteValue wrong_value{homestore::multi_blk_id{0, 1, std::numeric_limits< chunk_id_t >::max()}};
     homestore::BtreeSinglePutRequest inject_req{&index_key, &wrong_value, homestore::btree_put_type::UPDATE,
                                                 &existing_value};
     ASSERT_EQ(hs_pg->index_table_->put(inject_req), homestore::btree_status_t::success)
         << "failed to inject wrong pba into pg index table";
 
-    ASSERT_FALSE(gc_mgr->submit_gc_task(task_priority::emergent, cur_chunk).get())
+    ASSERT_FALSE(sisl::async::sync_get(gc_mgr->submit_gc_task(task_priority::emergent, cur_chunk)))
         << "emergent gc should fail when a blob's pba chunk_id does not match move_from_chunk";
 
     // Case 3: gc succeeds again after restoring the correct pba.
@@ -819,7 +809,7 @@ TEST_F(HomeObjectFixture, GCTaskPbaChunkCheck) {
     ASSERT_EQ(hs_pg->index_table_->put(restore_req), homestore::btree_status_t::success)
         << "failed to restore correct pba into pg index table";
 
-    ASSERT_TRUE(gc_mgr->submit_gc_task(task_priority::emergent, cur_chunk).get())
+    ASSERT_TRUE(sisl::async::sync_get(gc_mgr->submit_gc_task(task_priority::emergent, cur_chunk)))
         << "emergent gc should succeed after restoring correct blob pba";
 
     seal_shard(shard.id);
@@ -828,7 +818,7 @@ TEST_F(HomeObjectFixture, GCTaskPbaChunkCheck) {
     del_blob(pg_id, shard.id, 1);
 
     // the same check for normal gc task.
-    ASSERT_TRUE(gc_mgr->submit_gc_task(task_priority::normal, cur_chunk).get())
+    ASSERT_TRUE(sisl::async::sync_get(gc_mgr->submit_gc_task(task_priority::normal, cur_chunk)))
         << "normal gc should succeed when all blob pbas match move_from_chunk";
     cur_chunk = get_current_chunk();
 
@@ -837,7 +827,7 @@ TEST_F(HomeObjectFixture, GCTaskPbaChunkCheck) {
 
     del_blob(pg_id, shard.id, 2);
 
-    ASSERT_FALSE(gc_mgr->submit_gc_task(task_priority::normal, cur_chunk).get())
+    ASSERT_FALSE(sisl::async::sync_get(gc_mgr->submit_gc_task(task_priority::normal, cur_chunk)))
         << "normal gc should fail when a blob's pba chunk_id does not match move_from_chunk";
 
     homestore::BtreeSinglePutRequest new_restore_req{&index_key, &existing_value, homestore::btree_put_type::UPDATE,
@@ -845,7 +835,7 @@ TEST_F(HomeObjectFixture, GCTaskPbaChunkCheck) {
     ASSERT_EQ(hs_pg->index_table_->put(new_restore_req), homestore::btree_status_t::success)
         << "failed to restore correct pba into pg index table";
 
-    ASSERT_TRUE(gc_mgr->submit_gc_task(task_priority::normal, cur_chunk).get())
+    ASSERT_TRUE(sisl::async::sync_get(gc_mgr->submit_gc_task(task_priority::normal, cur_chunk)))
         << "normal gc should succeed after restoring correct blob pba";
 }
 
@@ -936,7 +926,7 @@ TEST_F(HomeObjectFixture, StalePChunkRouteAfterGC) {
         // Flip 1: in SEAL_SHARD1 commit — spin until CREATE_SHARD2 log is in the log store before
         // release_chunk runs. Explicit guarantee that the race window actually exists.
         m_fc.inject_callback_flip< void, int64_t >(
-            "wait_create_shard_in_log", {dont_care}, freq,
+            "wait_create_shard_in_log", std::array< flip::FlipCondition, 1 >{dont_care}, freq,
             std::function< void(int64_t) >([&, repl_dev](int64_t seal_lsn) {
                 while (repl_dev->get_last_append_lsn() <= seal_lsn) {
                     std::this_thread::sleep_for(std::chrono::milliseconds(5));
@@ -948,8 +938,8 @@ TEST_F(HomeObjectFixture, StalePChunkRouteAfterGC) {
         // Flip 2: in CREATE_SHARD2 commit — pause before local_create_shard so GC can run in the race window.
         // NOTE: do NOT spin inside a commit callback (commit_ext runs on the iomgr I/O thread;
         // spinning there blocks log-append processing and causes deadlock in single-threaded executors).
-        m_fc.inject_callback_flip< void >("pause_create_shard_commit", {dont_care}, freq,
-                                          std::function< void() >([&]() {
+        m_fc.inject_callback_flip< void >("pause_create_shard_commit", std::array< flip::FlipCondition, 1 >{dont_care},
+                                          freq, std::function< void() >([&]() {
                                               LOGI("[StalePChunkRouteAfterGC] pausing CREATE_SHARD commit");
                                               std::unique_lock< std::mutex > lk(repro1_mtx);
                                               repro1_blocked.store(true);
@@ -967,9 +957,9 @@ TEST_F(HomeObjectFixture, StalePChunkRouteAfterGC) {
     shard_id_t shard2_id = INVALID_UINT64_ID;
     run_on_pg_leader(pg_id, [&]() {
         auto tid = generateRandomTraceId();
-        auto sealed = _obj_inst->shard_manager()->seal_shard(shard1.id, tid).get();
+        auto sealed = sisl::async::sync_get(_obj_inst->shard_manager()->seal_shard(shard1.id, tid));
         RELEASE_ASSERT(!!sealed, "failed to seal shard1");
-        auto created = _obj_inst->shard_manager()->create_shard(pg_id, 64 * Mi, "shard2", tid).get();
+        auto created = sisl::async::sync_get(_obj_inst->shard_manager()->create_shard(pg_id, 64 * Mi, "shard2", tid));
         RELEASE_ASSERT(!!created, "failed to create shard2");
         g_helper->set_uint64_id(created.value().id);
         LOGINFO("[StalePChunkRouteAfterGC] leader sealed shard1=0x{:x} and created shard2=0x{:x}", shard1.id,
@@ -999,7 +989,7 @@ TEST_F(HomeObjectFixture, StalePChunkRouteAfterGC) {
 
         // Normal GC: chunk has garbage from deleted blobs (gc_garbage_rate_threshold=0 in the CTest entry).
         auto fut = _obj_inst->gc_manager()->submit_gc_task(task_priority::normal, pchunk_A.value());
-        bool gc_ok = std::move(fut).get();
+        bool gc_ok = sisl::async::sync_get(std::move(fut));
         ASSERT_TRUE(gc_ok) << "normal GC on pchunk=" << pchunk_A.value() << " failed";
 
         // release the gate: alloc_blks runs and resolves live pchunk B.
@@ -1011,7 +1001,7 @@ TEST_F(HomeObjectFixture, StalePChunkRouteAfterGC) {
     }
 
     // wait for shard2 to be created locally on every member.
-    while (!_obj_inst->shard_manager()->get_shard(shard2_id, 0).get()) {
+    while (!sisl::async::sync_get(_obj_inst->shard_manager()->get_shard(shard2_id, 0))) {
         std::this_thread::sleep_for(std::chrono::milliseconds(200));
     }
 
@@ -1073,13 +1063,14 @@ TEST_F(HomeObjectFixture, StalePChunkRouteAfterGC) {
     g_helper->sync();
 
     run_on_pg_leader(pg_id, [&]() {
-        auto sealed2 = _obj_inst->shard_manager()->seal_shard(shard2_id, generateRandomTraceId()).get();
+        auto sealed2 =
+            sisl::async::sync_get(_obj_inst->shard_manager()->seal_shard(shard2_id, generateRandomTraceId()));
         RELEASE_ASSERT(!!sealed2, "failed to seal shard2");
         LOGINFO("[StalePChunkRouteAfterGC] leader sealed shard2=0x{:x}", shard2_id);
     });
 
     while (true) {
-        auto s2 = _obj_inst->shard_manager()->get_shard(shard2_id, 0).get();
+        auto s2 = sisl::async::sync_get(_obj_inst->shard_manager()->get_shard(shard2_id, 0));
         if (s2 && s2.value().state == ShardInfo::State::SEALED) break;
         std::this_thread::sleep_for(std::chrono::milliseconds(200));
     }
@@ -1148,7 +1139,7 @@ TEST_F(HomeObjectFixture, StaleBlobRouteAfterSealAndGC) {
         freq.set_count(3); // 3 replicas all call callback_flip; count must be >= num_replicas
         freq.set_percent(100);
         m_fc.inject_callback_flip< void >(
-            "pause_seal_commit", {dont_care}, freq, std::function< void() >([&]() {
+            "pause_seal_commit", std::array< flip::FlipCondition, 1 >{dont_care}, freq, std::function< void() >([&]() {
                 LOGI("[StaleBlobRouteAfterSealAndGC] pausing SEAL commit BEFORE state update");
                 std::unique_lock< std::mutex > lk(repro2_mtx);
                 repro2_blocked.store(true);
@@ -1169,8 +1160,8 @@ TEST_F(HomeObjectFixture, StaleBlobRouteAfterSealAndGC) {
         auto tid = generateRandomTraceId();
         bool seal_ok = false;
         std::thread seal_thread([&]() {
-            auto r = std::move(_obj_inst->shard_manager()->seal_shard(shard1.id, tid)).get();
-            seal_ok = r.hasValue();
+            auto r = sisl::async::sync_get(std::move(_obj_inst->shard_manager()->seal_shard(shard1.id, tid)));
+            seal_ok = (bool)r;
         });
 
         // 2. Wait until commit is paused (shard state is still OPEN).
@@ -1192,10 +1183,9 @@ TEST_F(HomeObjectFixture, StaleBlobRouteAfterSealAndGC) {
         bool blob_rejected = false;
         std::thread blob_thread([&]() {
             auto blob = build_blob(num_blobs_per_shard);
-            auto b = std::move(_obj_inst->_put_blob(shard1, std::move(blob), tid)).get();
-            blob_rejected = !b.hasValue();
-            LOGINFO("[StaleBlobRouteAfterSealAndGC] leader: _put_blob result: {}",
-                    b.hasValue() ? "admitted" : "rejected");
+            auto b = sisl::async::sync_get(std::move(_obj_inst->_put_blob(shard1, std::move(blob), tid)));
+            blob_rejected = !(bool)b;
+            LOGINFO("[StaleBlobRouteAfterSealAndGC] leader: _put_blob result: {}", (bool)b ? "admitted" : "rejected");
         });
 
         // 4. Release the gate: state = SEALED, seal commit returns with sealed_lsn = lsn_seal.
@@ -1243,7 +1233,7 @@ TEST_F(HomeObjectFixture, StaleBlobRouteAfterSealAndGC) {
 
     auto gc_mgr = _obj_inst->gc_manager();
     auto gc_fut = gc_mgr->submit_gc_task(task_priority::normal, chunk_id);
-    bool gc_ok = std::move(gc_fut).get();
+    bool gc_ok = sisl::async::sync_get(std::move(gc_fut));
     ASSERT_TRUE(gc_ok) << "GC task failed on pchunk=" << chunk_id;
 
     g_helper->sync();
@@ -1278,7 +1268,7 @@ TEST_F(HomeObjectFixture, StaleBlobRouteAfterSealAndGC) {
     ASSERT_NE(index_table, nullptr) << "Failed to get index table for pg=" << pg_id;
     for (blob_id_t blob_id = remaining_start; blob_id < num_blobs_per_shard; ++blob_id) {
         auto pbas_result = _obj_inst->get_blob_from_index_table(index_table, shard1.id, blob_id);
-        ASSERT_TRUE(pbas_result.hasValue()) << "Failed to get blob pchunk for blob_id=" << blob_id << " after GC";
+        ASSERT_TRUE((bool)pbas_result) << "Failed to get blob pchunk for blob_id=" << blob_id << " after GC";
         ASSERT_EQ(pbas_result.value().chunk_num(), p_chunk_id_after_gc)
             << "Blob pchunk mismatch: blob_id=" << blob_id << " expected pchunk=" << p_chunk_id_after_gc
             << " actual=" << pbas_result.value().chunk_num();
