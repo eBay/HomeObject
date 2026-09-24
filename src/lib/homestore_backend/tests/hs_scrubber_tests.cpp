@@ -1,5 +1,7 @@
+#include <sisl/async/coro.hpp>
+#include <sisl/async/when_all.hpp>
 #include "homeobj_fixture.hpp"
-#include <homestore/blk.h>
+#include <homestore/blk.hpp>
 #include <homestore/btree/btree_req.hpp>
 #include <homestore/btree/btree_kv.hpp>
 #include <random>
@@ -57,28 +59,24 @@ static void corrupt_blob_data(shared< homestore::IndexTable< BlobRouteKey, BlobR
     data_sgs.size = total_size;
     data_sgs.iovs.emplace_back(iovec{.iov_base = iomanager.iobuf_alloc(blk_size, total_size), .iov_len = total_size});
 
-    data_service.async_read(pbas, data_sgs, total_size)
-        .thenValue([&](auto&& err) {
-            if (err) {
-                LOGE("Failed to read blob data, blob_id={}, err={}", blob_id, err.message());
-                iomanager.iobuf_free(reinterpret_cast< uint8_t* >(data_sgs.iovs[0].iov_base));
-                throw std::runtime_error(fmt::format("Failed to read blob data: {}", err.message()));
-            }
+    auto err = sisl::async::sync_get(data_service.async_read(pbas, data_sgs, total_size));
+    if (!err) {
+        LOGE("Failed to read blob data, blob_id={}, err={}", blob_id, err.error().message());
+        iomanager.iobuf_free(reinterpret_cast< uint8_t* >(data_sgs.iovs[0].iov_base));
+        throw std::runtime_error(fmt::format("Failed to read blob data: {}", err.error().message()));
+    }
 
-            auto* data_ptr = reinterpret_cast< uint8_t* >(data_sgs.iovs[0].iov_base);
-            for (size_t i = 0; i < data_sgs.iovs[0].iov_len / 2; i++) {
-                data_ptr[i] ^= 0xFF; // Flip first half of data
-            }
+    auto* data_ptr = reinterpret_cast< uint8_t* >(data_sgs.iovs[0].iov_base);
+    for (size_t i = 0; i < data_sgs.iovs[0].iov_len / 2; i++) {
+        data_ptr[i] ^= 0xFF; // Flip first half of data
+    }
 
-            return data_service.async_write(data_sgs, pbas).thenValue([data_sgs = std::move(data_sgs)](auto&& err) {
-                iomanager.iobuf_free(reinterpret_cast< uint8_t* >(data_sgs.iovs[0].iov_base));
-                ASSERT_FALSE(err) << "Failed to write corrupted blob data";
-            });
-        })
-        .get();
+    err = sisl::async::sync_get(data_service.async_write(data_sgs, pbas));
+    iomanager.iobuf_free(reinterpret_cast< uint8_t* >(data_sgs.iovs[0].iov_base));
+    ASSERT_TRUE(err) << "Failed to write corrupted blob data";
 }
 
-// Helper function to make a blob inconsistent (valid but different hash)
+// Keep the blob locally valid but change its payload hash vs peers (header-only flips look corrupted).
 static void make_blob_inconsistent(shared< homestore::IndexTable< BlobRouteKey, BlobRouteValue > > pg_index_table,
                                    shard_id_t shard_id, blob_id_t blob_id, HSHomeObject* obj_inst) {
     auto& data_service = homestore::data_service();
@@ -97,47 +95,33 @@ static void make_blob_inconsistent(shared< homestore::IndexTable< BlobRouteKey, 
     data_sgs.size = total_size;
     data_sgs.iovs.emplace_back(iovec{.iov_base = iomanager.iobuf_alloc(blk_size, total_size), .iov_len = total_size});
 
-    data_service.async_read(pbas, data_sgs, total_size)
-        .thenValue([&](auto&& err) {
-            if (err) {
-                LOGE("Failed to read blob data, blob_id={}, err={}", blob_id, err.message());
-                iomanager.iobuf_free(reinterpret_cast< uint8_t* >(data_sgs.iovs[0].iov_base));
-                throw std::runtime_error(fmt::format("Failed to read blob data: {}", err.message()));
-            }
+    auto err = sisl::async::sync_get(data_service.async_read(pbas, data_sgs, total_size));
+    if (!err) {
+        LOGE("Failed to read blob data, blob_id={}, err={}", blob_id, err.error().message());
+        iomanager.iobuf_free(reinterpret_cast< uint8_t* >(data_sgs.iovs[0].iov_base));
+        throw std::runtime_error(fmt::format("Failed to read blob data: {}", err.error().message()));
+    }
 
-            // Modify blob data and recompute valid hash
-            uint8_t* read_buf = r_cast< uint8_t* >(data_sgs.iovs[0].iov_base);
-            auto header = r_cast< BlobHeader* >(read_buf);
-            uint8_t* blob_bytes = read_buf + header->data_offset;
+    auto* data_ptr = reinterpret_cast< uint8_t* >(data_sgs.iovs[0].iov_base);
+    auto* header = reinterpret_cast< BlobHeader* >(data_ptr);
+    ASSERT_TRUE(header->valid()) << "Blob header must be valid before making it inconsistent";
+    ASSERT_GE(header->blob_size, 16u) << "Blob payload too small to flip bytes";
+    ASSERT_EQ(header->data_offset, HSHomeObject::_data_block_size)
+        << "Unexpected blob data_offset; payload would overlap header";
 
-            std::mt19937 rng{std::random_device{}()};
-            std::uniform_int_distribution< int > dist(0, 255);
+    auto* payload = data_ptr + header->data_offset;
+    for (size_t i = 0; i < 16; ++i) {
+        payload[i] ^= 0xAA;
+    }
 
-            for (size_t i = 0; i < header->blob_size / 2; i++) {
-                blob_bytes[i] ^= static_cast< uint8_t >(dist(rng));
-            }
+    obj_inst->compute_blob_payload_hash(header->hash_algorithm, payload, header->blob_size, header->hash,
+                                        BlobHeader::blob_max_hash_len);
+    header->seal();
+    ASSERT_TRUE(header->valid()) << "Blob header must remain valid after resealing";
 
-            uint8_t computed_hash[BlobHeader::blob_max_hash_len]{};
-            obj_inst->compute_blob_payload_hash(header->hash_algorithm, blob_bytes, header->blob_size, computed_hash,
-                                                BlobHeader::blob_max_hash_len);
-
-            std::memcpy(header->hash, computed_hash, BlobHeader::blob_max_hash_len);
-            std::memset(header->header_hash, 0, BlobHeader::blob_max_hash_len);
-            uint32_t computed_header_hash = crc32_ieee(0, (uint8_t*)header, sizeof(BlobHeader));
-            std::memcpy(header->header_hash, &computed_header_hash, sizeof(uint32_t));
-
-            if (!obj_inst->verify_blob(data_sgs.iovs[0].iov_base, header->shard_id, header->blob_id)) {
-                LOGE("Blob verification failed after modification, blob_id={}", blob_id);
-                iomanager.iobuf_free(reinterpret_cast< uint8_t* >(data_sgs.iovs[0].iov_base));
-                throw std::runtime_error(fmt::format("Blob verification failed for blob_id={}", blob_id));
-            }
-
-            return data_service.async_write(data_sgs, pbas).thenValue([data_sgs = std::move(data_sgs)](auto&& err) {
-                iomanager.iobuf_free(reinterpret_cast< uint8_t* >(data_sgs.iovs[0].iov_base));
-                ASSERT_FALSE(err) << "Failed to write inconsistent blob data";
-            });
-        })
-        .get();
+    err = sisl::async::sync_get(data_service.async_write(data_sgs, pbas));
+    iomanager.iobuf_free(reinterpret_cast< uint8_t* >(data_sgs.iovs[0].iov_base));
+    ASSERT_TRUE(err) << "Failed to write inconsistent blob data";
 }
 
 // Helper function to verify missing blobs in scrub report
@@ -391,7 +375,8 @@ TEST_F(HomeObjectFixture, BasicScrubTest) {
         EXPECT_TRUE(inconsistent_blobs.size() == 1)
             << "Inconsistent blob should be reported in deep scrub report for one of the followers";
         const auto it = inconsistent_blobs.find(BlobRoute{blob_op_shard_id, inconsistent_blob_id});
-        EXPECT_TRUE(it != inconsistent_blobs.end())
+        // ASSERT: EXPECT would continue and dereference end() iterator → UB / segfault in map::count.
+        ASSERT_TRUE(it != inconsistent_blobs.end())
             << "The inconsistent blob should be reported in deep scrub report for blob_id=" << inconsistent_blob_id;
         auto& inconsistent_blob_peers = it->second;
 
@@ -793,12 +778,13 @@ TEST_F(HomeObjectFixture, CancelScrubTaskTest) {
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
         scrub_mgr->cancel_scrub_task(pg_id);
         LOGINFO("Cancelled scrub task for pg={}", pg_id);
-        auto scrub_report = std::move(scrub_future).get();
+        auto scrub_report = sisl::async::sync_get(std::move(scrub_future));
         LOGINFO("Scrub task cancelled, report: {}", scrub_report ? "present" : "null");
 
         // The critical invariant: cancel must clear in_scrubbing so that a subsequent
         // submit_scrub_task is accepted. A null return here means the state was not cleaned up.
-        auto followup_report = scrub_mgr->submit_scrub_task(pg_id, true, SCRUB_TRIGGER_TYPE::MANUALLY).get();
+        auto followup_report =
+            sisl::async::sync_get(scrub_mgr->submit_scrub_task(pg_id, true, SCRUB_TRIGGER_TYPE::MANUALLY));
         EXPECT_NE(followup_report, nullptr) << "A new scrub task should be accepted after cancellation; "
                                                "null means in_scrubbing was not cleared";
         scrub_mgr->cancel_scrub_task(pg_id);
@@ -831,7 +817,7 @@ TEST_F(HomeObjectFixture, ConcurrentScrubsOnMultiplePGsTest) {
     auto scrub_mgr = _obj_inst->scrub_manager();
 
     // Submit scrub tasks for all PGs concurrently
-    std::vector< std::pair< pg_id_t, folly::SemiFuture< std::shared_ptr< ScrubManager::ShallowScrubReport > > > >
+    std::vector< std::pair< pg_id_t, sisl::async::task< std::shared_ptr< ScrubManager::ShallowScrubReport > > > >
         scrub_futures;
 
     for (const auto& pg_id : pg_ids) {
@@ -844,7 +830,7 @@ TEST_F(HomeObjectFixture, ConcurrentScrubsOnMultiplePGsTest) {
 
     // Wait for all scrub tasks to complete and verify each report is clean
     for (auto& [pg_id, future] : scrub_futures) {
-        auto report = std::move(future).get();
+        auto report = sisl::async::sync_get(std::move(future));
         ASSERT_NE(report, nullptr) << "Scrub report should not be null for pg=" << pg_id;
 
         auto deep_report = std::dynamic_pointer_cast< ScrubManager::DeepScrubReport >(report);
@@ -932,8 +918,8 @@ TEST_F(HomeObjectFixture, ReconcileScrubReportTest) {
 #ifdef _PRERELEASE
         set_callback_flip(
             "delete_missing_blob_through_raft", std::function< void() >([this, missing_blob_to_delete, shard_id]() {
-                auto ret =
-                    _obj_inst->blob_manager()->del(shard_id, missing_blob_to_delete, generateRandomTraceId()).get();
+                auto ret = sisl::async::sync_get(
+                    _obj_inst->blob_manager()->del(shard_id, missing_blob_to_delete, generateRandomTraceId()));
                 if (!ret) {
                     FAIL() << "Blob deletion via raft failed for shard=" << shard_id
                            << " blob=" << missing_blob_to_delete << ", error=" << fmt::format("{}", ret.error());
@@ -1011,7 +997,7 @@ TEST_F(HomeObjectFixture, AddRemovePGScrubTest) {
 
     // Now delete the PG - this should cancel any running scrub and remove superblock
     _obj_inst->pg_manager()->destroy_pg(pg_id);
-    auto report = scrub_mgr->submit_scrub_task(pg_id, false, SCRUB_TRIGGER_TYPE::MANUALLY).get();
+    auto report = sisl::async::sync_get(scrub_mgr->submit_scrub_task(pg_id, false, SCRUB_TRIGGER_TYPE::MANUALLY));
     ASSERT_EQ(report, nullptr) << "Scrub report should be null after PG deletion";
     LOGINFO("Scrub task for deleted pg={} returned null report as expected", pg_id);
 

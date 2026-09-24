@@ -23,18 +23,18 @@ public:
     PGScrubContext(uint64_t task_id, const HSHomeObject::HS_PG* hs_pg);
     ~PGScrubContext() = default;
 
-    folly::Future< bool > scrub_meta_batch(std::shared_ptr< ScrubManager::MetaScrubReport > scrub_report,
-                                           shard_id_t start_shard_id, shard_id_t end_shard_id, blob_id_t last_blob_id,
-                                           int64_t scrub_lsn,
-                                           std::map< shard_id_t, uint32_t >& shard_blob_count_in_batch);
+    sisl::async::task< bool > scrub_meta_batch(std::shared_ptr< ScrubManager::MetaScrubReport > scrub_report,
+                                               shard_id_t start_shard_id, shard_id_t end_shard_id,
+                                               blob_id_t last_blob_id, int64_t scrub_lsn,
+                                               std::map< shard_id_t, uint32_t >& shard_blob_count_in_batch);
 
-    folly::Future< bool > scrub_blob_batch(std::shared_ptr< ScrubManager::ShallowScrubReport > scrub_report,
-                                           shard_id_t start_shard_id, shard_id_t end_shard_id, blob_id_t last_blob_id,
-                                           int64_t scrub_lsn, bool is_deep_scrub);
+    sisl::async::task< bool > scrub_blob_batch(std::shared_ptr< ScrubManager::ShallowScrubReport > scrub_report,
+                                               shard_id_t start_shard_id, shard_id_t end_shard_id,
+                                               blob_id_t last_blob_id, int64_t scrub_lsn, bool is_deep_scrub);
 
     void reconcile_scrub_report(std::shared_ptr< ScrubManager::ShallowScrubReport > scrub_report);
 
-    folly::Future< bool > check_existence_in_peer(peer_id_t peer_id, BlobRoute blob, bool check_blob);
+    sisl::async::task< bool > check_existence_in_peer(peer_id_t peer_id, BlobRoute blob, bool check_blob);
 
     void handle_scrub_req_resp(std::shared_ptr< ScrubManager::scrub_result > result);
     uint64_t random_req_id() const;
@@ -49,9 +49,7 @@ public:
 
         for (auto& [peer_id, peer_ctx] : m_active_batch) {
             std::lock_guard lock(peer_ctx->mutex);
-            if (!peer_ctx->promise.isFulfilled()) {
-                peer_ctx->promise.setException(folly::make_exception_wrapper< std::runtime_error >("scrub cancelled"));
-            }
+            if (peer_ctx->promise && !peer_ctx->promise->await_ready()) { peer_ctx->promise->complete(nullptr); }
         }
         SCRUBLOGI(pg_id, task_id, "scrub task is cancelled");
     }
@@ -67,18 +65,17 @@ private:
         std::shared_ptr< range_scrub_result > batch_scrub_result;
         uint8_t retry_count{0};
         std::chrono::steady_clock::time_point last_sent_at{std::chrono::steady_clock::now()};
-        folly::Promise< std::shared_ptr< range_scrub_result > > promise;
+        std::shared_ptr< sisl::async::value_awaitable< std::shared_ptr< range_scrub_result > > > promise;
         mutable std::mutex mutex;
 
-        // Initialize promise to a fulfilled sentinel so that cancel() and check_scrub_timeouts()
-        // can safely call isFulfilled() / setException() before the first reset() is called.
+        // Initialize promise to a completed sentinel so that cancel() and check_scrub_timeouts()
+        // can safely call await_ready() / complete() before the first reset() is called.
         PeerBatchScrubCtx() {
-            auto [p, f] = folly::makePromiseContract< std::shared_ptr< range_scrub_result > >();
-            promise = std::move(p);
-            promise.setValue(nullptr);
+            promise = std::make_shared< sisl::async::value_awaitable< std::shared_ptr< range_scrub_result > > >();
+            promise->complete(nullptr);
         }
 
-        folly::Future< std::shared_ptr< range_scrub_result > >
+        std::shared_ptr< sisl::async::value_awaitable< std::shared_ptr< range_scrub_result > > >
         reset(scrub_req req, std::shared_ptr< range_scrub_result > init_batch_scrub_result,
               const std::atomic_bool& cancelled) {
             std::lock_guard lock(mutex);
@@ -86,12 +83,9 @@ private:
             batch_scrub_result = std::move(init_batch_scrub_result);
             retry_count = 0;
             last_sent_at = std::chrono::steady_clock::now();
-            auto [p, f] = folly::makePromiseContract< std::shared_ptr< range_scrub_result > >();
-            promise = std::move(p);
-            if (cancelled.load()) {
-                promise.setException(folly::make_exception_wrapper< std::runtime_error >("scrub cancelled"));
-            }
-            return std::move(f).via(folly::getGlobalIOExecutor());
+            promise = std::make_shared< sisl::async::value_awaitable< std::shared_ptr< range_scrub_result > > >();
+            if (cancelled.load()) { promise->complete(nullptr); }
+            return promise;
         }
     };
 
@@ -121,16 +115,18 @@ ScrubManager::~ScrubManager() { stop(); }
 
 void ScrubManager::check_scrub_timeouts() {
     // TODO: make timeout and max_retries configurable
-    static constexpr auto timeout = std::chrono::seconds{10};
-    static constexpr uint8_t max_retries = 5;
+    constexpr auto timeout = std::chrono::seconds{10};
+    constexpr uint8_t max_retries = 5;
 
-    for (auto const& [pg_id, scrub_ctx] : m_pg_scrub_ctx_map) {
-        if (scrub_ctx->cancelled.load()) { continue; }
+    m_pg_scrub_ctx_map.visit_all([&, timeout, max_retries](auto const& entry) {
+        auto const& pg_id = entry.first;
+        auto const& scrub_ctx = entry.second;
+        if (scrub_ctx->cancelled.load()) { return; }
         const auto task_id = scrub_ctx->task_id;
         // m_active_batch keys are fixed after construction, iteration without lock is safe.
         for (auto const& [peer_id, peer_batch_scrub_ctx] : scrub_ctx->m_active_batch) {
             std::unique_lock lock(peer_batch_scrub_ctx->mutex);
-            if (peer_batch_scrub_ctx->promise.isFulfilled()) {
+            if (!peer_batch_scrub_ctx->promise || peer_batch_scrub_ctx->promise->await_ready()) {
                 SCRUBLOGD(pg_id, task_id, "batch scrub for peer {} is not active, skipping timeout check", peer_id);
                 continue;
             }
@@ -155,49 +151,54 @@ void ScrubManager::check_scrub_timeouts() {
             lock.unlock();
             scrub_ctx->send_req_to_peer(next_req, peer_id);
         }
-    }
+    });
 }
 
 void ScrubManager::scan_pg_for_scrub() {
-    for (auto const& [pg_id, _] : m_pg_scrub_sb_map) {
+    bool submitted = false;
+    m_pg_scrub_sb_map.visit_all([this, &submitted](auto const& entry) {
+        if (submitted) { return; }
+        const auto pg_id = entry.first;
         if (is_eligible_for_deep_scrub(pg_id)) {
             LOGINFOMOD(scrubmgr, "pg={} is eligible for deep scrub, submit scrub task", pg_id);
-            submit_scrub_task(pg_id, true)
-                .via(folly::getGlobalIOExecutor())
-                .thenValue([this, pg_id](std::shared_ptr< ShallowScrubReport > report) {
-                    if (!report) {
-                        LOGERRORMOD(scrubmgr, "deep scrub failed for pg={}", pg_id);
-                        return;
-                    }
-                    LOGINFOMOD(scrubmgr, "deep scrub is completed for pg={}", pg_id);
-                    auto deep_report = std::dynamic_pointer_cast< DeepScrubReport >(report);
-                    if (!deep_report) {
-                        LOGERRORMOD(scrubmgr, "report for deep scrub cannot be casted to DeepScrubReport for pg={}",
-                                    pg_id);
-                        return;
-                    }
-                    handle_deep_pg_scrub_report(std::move(deep_report));
-                });
+            sisl::async::detach_then(submit_scrub_task(pg_id, true),
+                                     [this, pg_id](std::shared_ptr< ShallowScrubReport > report) {
+                                         if (!report) {
+                                             LOGERRORMOD(scrubmgr, "deep scrub failed for pg={}", pg_id);
+                                             return;
+                                         }
+                                         LOGINFOMOD(scrubmgr, "deep scrub is completed for pg={}", pg_id);
+                                         auto deep_report = std::dynamic_pointer_cast< DeepScrubReport >(report);
+                                         if (!deep_report) {
+                                             LOGERRORMOD(scrubmgr,
+                                                         "report for deep scrub cannot be casted to DeepScrubReport "
+                                                         "for pg={}",
+                                                         pg_id);
+                                             return;
+                                         }
+                                         handle_deep_pg_scrub_report(std::move(deep_report));
+                                     });
+            submitted = true;
             return;
         }
 
         if (is_eligible_for_shallow_scrub(pg_id)) {
             LOGINFOMOD(scrubmgr, "pg={} is eligible for shallow scrub, submit scrub task", pg_id);
-            submit_scrub_task(pg_id, false)
-                .via(folly::getGlobalIOExecutor())
-                .thenValue([this, pg_id](std::shared_ptr< ShallowScrubReport > report) {
-                    if (!report) {
-                        LOGERRORMOD(scrubmgr, "shallow scrub failed for pg={}", pg_id);
-                        return;
-                    }
-                    LOGINFOMOD(scrubmgr, "shallow scrub is completed for pg={}", pg_id);
-                    handle_shallow_pg_scrub_report(std::move(report));
-                });
+            sisl::async::detach_then(submit_scrub_task(pg_id, false),
+                                     [this, pg_id](std::shared_ptr< ShallowScrubReport > report) {
+                                         if (!report) {
+                                             LOGERRORMOD(scrubmgr, "shallow scrub failed for pg={}", pg_id);
+                                             return;
+                                         }
+                                         LOGINFOMOD(scrubmgr, "shallow scrub is completed for pg={}", pg_id);
+                                         handle_shallow_pg_scrub_report(std::move(report));
+                                     });
+            submitted = true;
             return;
         }
 
         LOGDEBUGMOD(scrubmgr, "pg={} is not eligible for any scrubbing", pg_id);
-    }
+    });
 }
 
 void ScrubManager::handle_shallow_pg_scrub_report(std::shared_ptr< ShallowScrubReport > report) {
@@ -235,9 +236,9 @@ void ScrubManager::start() {
     // TODO :: make thread count configurable, thread number is the most concurrent scrub tasks that can be handled
     // concurrently. Too many concurrent scrub tasks may bring too much pressure to the node
     const auto most_concurrent_scrub_task_num = 2;
-    m_scrub_executor = std::make_shared< folly::IOThreadPoolExecutor >(most_concurrent_scrub_task_num);
+    m_scrub_executor = std::make_shared< boost::asio::thread_pool >(most_concurrent_scrub_task_num);
     for (int i = 0; i < most_concurrent_scrub_task_num; ++i) {
-        m_scrub_executor->add([this]() {
+        boost::asio::post(*m_scrub_executor, [this]() {
             while (true) {
                 // if no available scrub task, it will be blocked here.
                 auto pop_result = m_scrub_task_queue.pop();
@@ -259,10 +260,11 @@ void ScrubManager::start() {
     const auto most_concurrent_scrub_req_num = 2;
     // we don't set priority for req as that of task, only control the concurrency to not bring too much io/cpu pressure
     // to this node.
-    m_scrub_req_executor = std::make_shared< folly::IOThreadPoolExecutor >(most_concurrent_scrub_req_num);
+    m_scrub_req_executor = std::make_shared< boost::asio::thread_pool >(most_concurrent_scrub_req_num);
 
-    iomanager.run_on_wait(iomgr::reactor_regex::random_worker, [&]() {
-        m_scrub_timer_fiber = iomanager.iofiber_self();
+    auto* reactor = m_hs_home_object->bg_timer_reactor();
+    RELEASE_ASSERT(reactor, "bg timer reactor is not started");
+    iomanager.run_on_wait(reactor, [&]() {
         // TODO: make the interval configurable, for now set it to 60 seconds
         m_scrub_timer_hdl = iomanager.schedule_thread_timer(60ull * 1000 * 1000 * 1000, true, nullptr /*cookie*/,
                                                             [this](void*) { scan_pg_for_scrub(); });
@@ -275,43 +277,33 @@ void ScrubManager::start() {
 
 void ScrubManager::stop() {
     LOGINFOMOD(scrubmgr, "stop scrub scheduler timer");
-    if (m_scrub_timer_fiber) {
-        iomanager.run_on_wait(m_scrub_timer_fiber, [&]() {
+    if (auto* reactor = m_hs_home_object->bg_timer_reactor(); reactor != nullptr) {
+        iomanager.run_on_wait(reactor, [&]() {
             if (m_scrub_timer_hdl != iomgr::null_timer_handle) {
                 iomanager.cancel_timer(m_scrub_timer_hdl, true);
                 m_scrub_timer_hdl = iomgr::null_timer_handle;
             }
-
             if (m_retry_timer_hdl != iomgr::null_timer_handle) {
                 iomanager.cancel_timer(m_retry_timer_hdl, true);
                 m_retry_timer_hdl = iomgr::null_timer_handle;
             }
         });
-        m_scrub_timer_fiber = nullptr;
     }
 
     // cancel all the running scrub tasks and clear the scrub task queue.
     // TODO:: add a stopped flag to avoid adding new scrub task if stopped.
     if (!m_scrub_task_queue.is_closed()) { m_scrub_task_queue.close(); }
-    for (auto& [_, pg_scrub_ctx] : m_pg_scrub_ctx_map) {
-        pg_scrub_ctx->cancel();
-    }
+    m_pg_scrub_ctx_map.visit_all([](auto const& entry) { entry.second->cancel(); });
 
-    if (m_scrub_executor) {
-        m_scrub_executor->stop();
-        m_scrub_executor.reset();
-    }
-    if (m_scrub_req_executor) {
-        m_scrub_req_executor->stop();
-        m_scrub_req_executor.reset();
-    }
+    if (m_scrub_executor) { m_scrub_executor.reset(); }
+    if (m_scrub_req_executor) { m_scrub_req_executor.reset(); }
     LOGINFOMOD(scrubmgr, "scrub manager stopped!");
 }
 
 void ScrubManager::add_scrub_req(std::shared_ptr< scrub_req > req) {
     LOGDEBUGMOD(scrubmgr, "receive scrub req: {}", req->to_string());
     if (m_scrub_req_executor) {
-        m_scrub_req_executor->add([this, req = std::move(req)]() { handle_scrub_req(req); });
+        boost::asio::post(*m_scrub_req_executor, [this, req = std::move(req)]() { handle_scrub_req(req); });
         return;
     }
 
@@ -319,13 +311,13 @@ void ScrubManager::add_scrub_req(std::shared_ptr< scrub_req > req) {
 }
 
 void ScrubManager::handle_scrub_req_resp(const pg_id_t pg_id, std::shared_ptr< scrub_result > result) {
-    auto pg_scrub_ctx_it = m_pg_scrub_ctx_map.find(pg_id);
-    if (pg_scrub_ctx_it == m_pg_scrub_ctx_map.end()) {
+    std::shared_ptr< PGScrubContext > scrub_ctx;
+    if (!m_pg_scrub_ctx_map.cvisit(pg_id, [&](auto const& entry) { scrub_ctx = entry.second; })) {
         LOGERRORMOD(scrubmgr, "cannot find scrub context for pg_id={}, fail to add scrub result!", pg_id);
         return;
     }
 
-    pg_scrub_ctx_it->second->handle_scrub_req_resp(std::move(result));
+    scrub_ctx->handle_scrub_req_resp(std::move(result));
 }
 
 void ScrubManager::handle_scrub_req(std::shared_ptr< scrub_req > req) {
@@ -388,12 +380,12 @@ void ScrubManager::handle_scrub_req(std::shared_ptr< scrub_req > req) {
     sisl::io_blob_list_t blob_list;
     blob_list.emplace_back(flatbuffer.data(), flatbuffer.size(), false);
     // no need to retry, leader will handle retries
-    pg_repl_dev->data_request_unidirectional(remote_peer_id, HSHomeObject::PUSH_SCRUB_RESULT, blob_list)
-        .via(folly::getGlobalIOExecutor())
-        .thenValue([pg_id, remote_peer_id, flatbuffer = std::move(flatbuffer), scrub_type](auto&& response) {
-            if (response.hasError()) {
+    sisl::async::detach_then(
+        pg_repl_dev->data_request_unidirectional(remote_peer_id, HSHomeObject::PUSH_SCRUB_RESULT, blob_list),
+        [pg_id, remote_peer_id, flatbuffer = std::move(flatbuffer), scrub_type](auto&& response) {
+            if (!response) {
                 LOGERRORMOD(scrubmgr, "failed to send scrub result to peer {} in pg {}, scrub_type:{}, error={}",
-                            remote_peer_id, pg_id, scrub_type, response.error());
+                            remote_peer_id, pg_id, scrub_type, response.error().message());
                 return;
             }
 
@@ -402,7 +394,7 @@ void ScrubManager::handle_scrub_req(std::shared_ptr< scrub_req > req) {
         });
 }
 
-bool ScrubManager::wait_for_scrub_lsn_commit(shared< homestore::ReplDev > repl_dev, int64_t scrub_lsn) {
+bool ScrubManager::wait_for_scrub_lsn_commit(shared< homestore::repl_dev > repl_dev, int64_t scrub_lsn) {
     if (!repl_dev) {
         LOGERRORMOD(scrubmgr, "repl_dev is null, cannot wait for scrub lsn commit!");
         return false;
@@ -546,59 +538,58 @@ std::shared_ptr< ScrubManager::scrub_result > ScrubManager::local_scrub_blob(std
     // deep scrub: read and check blobs.
     auto& data_service = homestore::data_service();
     const auto blk_size = data_service.get_blk_size();
-    std::vector< folly::Future< folly::Unit > > futs;
+    std::vector< sisl::async::task< bool > > futs;
 
-    for (const auto& [k, v] : out) {
-        auto pba = v.pbas();
+    auto scrub_one_blob = [this, &data_service, blk_size,
+                           blob_scrub_result](shard_id_t shard_id, blob_id_t blob_id,
+                                              homestore::multi_blk_id pba) -> sisl::async::task< bool > {
         auto total_size = pba.blk_count() * blk_size;
         sisl::sg_list data_sgs;
         data_sgs.size = total_size;
         data_sgs.iovs.emplace_back(
             iovec{.iov_base = iomanager.iobuf_alloc(blk_size, total_size), .iov_len = total_size});
 
-        const auto& shard_id = k.key().shard;
-        const auto& blob_id = k.key().blob;
+        auto err = co_await data_service.async_read(pba, data_sgs, total_size);
+        auto blob = data_sgs.iovs[0].iov_base;
+        struct buffer_free_guard {
+            uint8_t* buf;
+            ~buffer_free_guard() { iomanager.iobuf_free(buf); }
+        } guard{reinterpret_cast< uint8_t* >(blob)};
 
-        futs.emplace_back(std::move(
-            data_service.async_read(pba, data_sgs, total_size)
-                .thenValue([this, shard_id, blob_id, data_sgs = std::move(data_sgs), blob_scrub_result](auto&& err) {
-                    auto blob = data_sgs.iovs[0].iov_base;
-                    struct buffer_free_guard {
-                        uint8_t* buf;
-                        ~buffer_free_guard() { iomanager.iobuf_free(buf); }
-                    } guard{reinterpret_cast< uint8_t* >(blob)};
+        ScrubManager::scrub_result_entry entry{shard_id, blob_id, ScrubStatus::NONE};
 
-                    ScrubManager::scrub_result_entry entry{shard_id, blob_id, ScrubStatus::NONE};
+        if (!err) {
+            LOGERRORMOD(scrubmgr, "Failed to read blob for deep scrub, shard_id={}, blob_id={}, error={}", shard_id,
+                        blob_id, err.error().message());
+            entry.status_or_hash = ScrubStatus::IO_ERROR;
+        } else {
+            const auto blob_verify_succeed = m_hs_home_object->verify_blob(blob, shard_id, blob_id, true);
+            if (!blob_verify_succeed) {
+                // note that, if gc kicks in, the pba might be overwritten and lead to verification
+                // failure.
 
-                    if (err) {
-                        LOGERRORMOD(scrubmgr, "Failed to read blob for deep scrub, shard_id={}, blob_id={}, error={}",
-                                    shard_id, blob_id, err.message());
-                        entry.status_or_hash = ScrubStatus::IO_ERROR;
-                    } else {
-                        const auto blob_verify_succeed = m_hs_home_object->verify_blob(blob, shard_id, blob_id, true);
-                        if (!blob_verify_succeed) {
-                            // note that, if gc kicks in, the pba might be overwritten and lead to verification
-                            // failure.
+                // FIXME:: handle this case by query and read the blob again.
+                LOGERRORMOD(scrubmgr, "Blob verification failed for deep scrub, shard_id={}, blob_id={}", shard_id,
+                            blob_id);
+                entry.status_or_hash = ScrubStatus::MISMATCH;
+            } else {
+                // we only calculate crc64 for data part.
+                const auto* header = reinterpret_cast< const HSHomeObject::BlobHeader* >(blob);
+                const auto* blob_data = reinterpret_cast< const uint8_t* >(blob) + header->data_offset;
+                entry.status_or_hash = compute_crc64(blob_data, header->blob_size);
+            }
+        }
 
-                            // FIXME:: handle this case by query and read the blob again.
-                            LOGERRORMOD(scrubmgr, "Blob verification failed for deep scrub, shard_id={}, blob_id={}",
-                                        shard_id, blob_id);
-                            entry.status_or_hash = ScrubStatus::MISMATCH;
-                        } else {
-                            // we only calculate crc64 for data part.
-                            const auto* header = reinterpret_cast< const HSHomeObject::BlobHeader* >(blob);
-                            const auto* blob_data = reinterpret_cast< const uint8_t* >(blob) + header->data_offset;
-                            entry.status_or_hash = compute_crc64(blob_data, header->blob_size);
-                        }
-                    }
+        LOGDEBUGMOD(scrubmgr, "add entry to blob scrub result: shard_id={}, blob_id={}", entry.shard_id, entry.blob_id);
+        blob_scrub_result->add_entry(entry);
+        co_return true;
+    };
 
-                    LOGDEBUGMOD(scrubmgr, "add entry to blob scrub result: shard_id={}, blob_id={}", entry.shard_id,
-                                entry.blob_id);
-                    blob_scrub_result->add_entry(entry);
-                })));
+    for (const auto& [k, v] : out) {
+        futs.emplace_back(scrub_one_blob(k.key().shard, k.key().blob, v.pbas()));
     }
 
-    folly::collectAllUnsafe(futs).wait();
+    sisl::async::sync_get(sisl::async::when_all(std::move(futs)));
 
     LOGDEBUGMOD(scrubmgr, "pg_id={}, req_id={}, deep blob scrub completed, found {} blobs in range [{},{}] to [{},{})",
                 pg_id, req_id, out.size(), req->start_shard_id, req->start_blob_id, req->end_shard_id,
@@ -754,30 +745,29 @@ std::shared_ptr< ScrubManager::scrub_result > ScrubManager::local_scrub_meta(std
     return meta_scrub_result;
 }
 
-folly::SemiFuture< std::shared_ptr< ScrubManager::ShallowScrubReport > >
+sisl::async::task< std::shared_ptr< ScrubManager::ShallowScrubReport > >
 ScrubManager::submit_scrub_task(const pg_id_t& pg_id, const bool is_deep, SCRUB_TRIGGER_TYPE trigger_type) {
     LOGINFOMOD(scrubmgr, "submit a scrub task for pg={}, deep_scrub={}, trigger_type={}", pg_id, is_deep, trigger_type);
 
     // Check if a scrub task is already running for this PG.
     // Note: There's still a small race window between this check and task execution in handle_pg_scrub_task,
     // but the in_scrubbing CAS below provides the final guard. This check prevents unnecessary work.
-    auto it = m_pg_scrub_ctx_map.find(pg_id);
-    if (it != m_pg_scrub_ctx_map.end()) {
+    if (m_pg_scrub_ctx_map.cvisit(pg_id, [](auto const&) {})) {
         LOGWARNMOD(scrubmgr, "a scrub task is already running for pg={}, no need to submit another one!", pg_id);
-        return folly::makeSemiFuture(std::shared_ptr< ScrubManager::ShallowScrubReport >(nullptr));
+        co_return nullptr;
     }
 
-    const auto ps_scrub_super_blk_it = m_pg_scrub_sb_map.find(pg_id);
-    if (ps_scrub_super_blk_it == m_pg_scrub_sb_map.end()) {
+    std::shared_ptr< homestore::superblk< pg_scrub_superblk > > pg_scrub_sb;
+    if (!m_pg_scrub_sb_map.cvisit(pg_id, [&](auto const& entry) { pg_scrub_sb = entry.second; })) {
         LOGERRORMOD(scrubmgr, "cannot find scrub superblk for pg={}, fail to submit scrub task!", pg_id);
-        return folly::makeSemiFuture(std::shared_ptr< ScrubManager::ShallowScrubReport >(nullptr));
+        co_return nullptr;
     }
 
     // Get the PG and check its state
     const auto hs_pg = m_hs_home_object->get_hs_pg(pg_id);
     if (!hs_pg) {
         LOGERRORMOD(scrubmgr, "cannot find hs_pg for pg={}, fail to submit scrub task!", pg_id);
-        return folly::makeSemiFuture(std::shared_ptr< ScrubManager::ShallowScrubReport >(nullptr));
+        co_return nullptr;
     }
 
     // Check if pg_state is HEALTHY (state must be 0)
@@ -785,7 +775,7 @@ ScrubManager::submit_scrub_task(const pg_id_t& pg_id, const bool is_deep, SCRUB_
     if (current_state != 0) {
         LOGWARNMOD(scrubmgr, "pg={} is not in HEALTHY state (current_state={}), cannot submit scrub task!", pg_id,
                    current_state);
-        return folly::makeSemiFuture(std::shared_ptr< ScrubManager::ShallowScrubReport >(nullptr));
+        co_return nullptr;
     }
 
     // TODO:: use PGStateMask::SCRUBBING state to replace the in_scrubbing flag after cm supports
@@ -794,31 +784,30 @@ ScrubManager::submit_scrub_task(const pg_id_t& pg_id, const bool is_deep, SCRUB_
     bool expected = false;
     if (!hs_pg->in_scrubbing.compare_exchange_strong(expected, true)) {
         LOGWARNMOD(scrubmgr, "pg={} scrub submission already in-flight, skip!", pg_id);
-        return folly::makeSemiFuture(std::shared_ptr< ScrubManager::ShallowScrubReport >(nullptr));
+        co_return nullptr;
     }
 
-    const auto& pg_scrub_sb = *(ps_scrub_super_blk_it->second);
     const auto last_scrub_time =
-        is_deep ? pg_scrub_sb->last_deep_scrub_timestamp : pg_scrub_sb->last_shallow_scrub_timestamp;
+        is_deep ? (*pg_scrub_sb)->last_deep_scrub_timestamp : (*pg_scrub_sb)->last_shallow_scrub_timestamp;
 
-    auto [promise, future] = folly::makePromiseContract< std::shared_ptr< ShallowScrubReport > >();
-    ScrubManager::scrub_task task(last_scrub_time, pg_id, is_deep, trigger_type, std::move(promise));
+    auto promise = std::make_shared< sisl::async::value_awaitable< std::shared_ptr< ShallowScrubReport > > >();
+    ScrubManager::scrub_task task(last_scrub_time, pg_id, is_deep, trigger_type, promise);
     if (!m_scrub_task_queue.push(std::move(task))) {
         // Queue is closed (scrub manager is stopped); roll back in_scrubbing so future submissions are not blocked.
         hs_pg->in_scrubbing.store(false);
         LOGWARNMOD(scrubmgr, "pg={} scrub task queue is closed/stopped, skip!", pg_id);
-        return folly::makeSemiFuture(std::shared_ptr< ScrubManager::ShallowScrubReport >(nullptr));
+        co_return nullptr;
     }
-    return std::move(future);
+    co_return co_await sisl::async::await_value(promise);
 }
 
 void ScrubManager::cancel_scrub_task(const pg_id_t& pg_id) {
-    auto it = m_pg_scrub_ctx_map.find(pg_id);
-    if (it == m_pg_scrub_ctx_map.end()) {
+    std::shared_ptr< PGScrubContext > scrub_ctx;
+    if (!m_pg_scrub_ctx_map.cvisit(pg_id, [&](auto const& entry) { scrub_ctx = entry.second; })) {
         LOGWARNMOD(scrubmgr, "no running scrub task for pg={}, no need to cancel!", pg_id);
         return;
     }
-    it->second->cancel();
+    scrub_ctx->cancel();
     LOGINFOMOD(scrubmgr, "cancel scrub task for pg={}", pg_id);
 }
 
@@ -836,7 +825,7 @@ void ScrubManager::handle_pg_scrub_task(scrub_task task) {
 
     struct scrub_task_guard {
         HSHomeObject* home_obj;
-        folly::ConcurrentHashMap< pg_id_t, std::shared_ptr< PGScrubContext > >& pg_scrub_ctx_map;
+        boost::concurrent_flat_map< pg_id_t, std::shared_ptr< PGScrubContext > >& pg_scrub_ctx_map;
         scrub_task& task;
         std::shared_ptr< ShallowScrubReport >& scrub_report;
         const pg_id_t& pg_id;
@@ -847,7 +836,7 @@ void ScrubManager::handle_pg_scrub_task(scrub_task task) {
             // completed scrub that legitimately found no issues (e.g. an empty PG).
             const bool was_cancelled = scrub_ctx && scrub_ctx->cancelled.load();
             pg_scrub_ctx_map.erase(pg_id);
-            task.scrub_report_promise->setValue(was_cancelled ? nullptr : scrub_report);
+            task.scrub_report_promise->complete(was_cancelled ? nullptr : scrub_report);
             auto hs_pg = home_obj->get_hs_pg(pg_id);
             if (hs_pg) {
                 hs_pg->in_scrubbing.store(false);
@@ -865,10 +854,10 @@ void ScrubManager::handle_pg_scrub_task(scrub_task task) {
         return;
     }
 
-    auto [ctx_it, happened] = m_pg_scrub_ctx_map.try_emplace(pg_id, std::make_shared< PGScrubContext >(task_id, hs_pg));
+    auto scrub_ctx = std::make_shared< PGScrubContext >(task_id, hs_pg);
+    const bool happened = m_pg_scrub_ctx_map.try_emplace(pg_id, scrub_ctx);
     RELEASE_ASSERT(happened,
                    "pg={} should not have a running scrub task since we set in_scrubbing in submit_scrub_task", pg_id);
-    auto& scrub_ctx = ctx_it->second;
     guard.scrub_ctx = scrub_ctx; // Allow the guard to detect cancellation at teardown
 
     // this is the last committed shard_id. we cannot get shard_sequence_num here since some of the shard might be
@@ -893,10 +882,9 @@ void ScrubManager::handle_pg_scrub_task(scrub_task task) {
         }
 
         std::map< shard_id_t, uint32_t > shard_blob_count_in_batch;
-        if (!scrub_ctx
-                 ->scrub_meta_batch(pg_scrub_report, start_shard_id, last_committed_shard_id, last_committed_blob_id,
-                                    scrub_lsn, shard_blob_count_in_batch)
-                 .get()) {
+        if (!sisl::async::sync_get(scrub_ctx->scrub_meta_batch(pg_scrub_report, start_shard_id, last_committed_shard_id,
+                                                               last_committed_blob_id, scrub_lsn,
+                                                               shard_blob_count_in_batch))) {
             SCRUBLOGE(pg_id, task_id, "meta scrub failed for batch in range: {} to {}, scrub_lsn={}", start_shard_id,
                       last_committed_shard_id, scrub_lsn);
             return;
@@ -932,10 +920,9 @@ void ScrubManager::handle_pg_scrub_task(scrub_task task) {
             auto blob_count = it->second;
             if (total_blob_count_in_batch + blob_count >= max_scrub_batch_size) {
                 // scrub current batch
-                if (!scrub_ctx
-                         ->scrub_blob_batch(pg_scrub_report, start_shard_id, end_shard_id, last_committed_blob_id,
-                                            scrub_lsn, is_deep_scrub)
-                         .get()) {
+                if (!sisl::async::sync_get(scrub_ctx->scrub_blob_batch(pg_scrub_report, start_shard_id, end_shard_id,
+                                                                       last_committed_blob_id, scrub_lsn,
+                                                                       is_deep_scrub))) {
                     SCRUBLOGE(pg_id, task_id, "{} blob scrub failed for shard range: {} to {}, scrub_lsn={}",
                               is_deep_scrub ? "deep" : "shallow", start_shard_id, end_shard_id, scrub_lsn);
                     return;
@@ -951,10 +938,8 @@ void ScrubManager::handle_pg_scrub_task(scrub_task task) {
         }
 
         // scrub last batch
-        if (!scrub_ctx
-                 ->scrub_blob_batch(pg_scrub_report, start_shard_id, end_shard_id, last_committed_blob_id, scrub_lsn,
-                                    is_deep_scrub)
-                 .get()) {
+        if (!sisl::async::sync_get(scrub_ctx->scrub_blob_batch(pg_scrub_report, start_shard_id, end_shard_id,
+                                                               last_committed_blob_id, scrub_lsn, is_deep_scrub))) {
             SCRUBLOGE(pg_id, task_id, "{} blob scrub batch failed for shard range: {} to {}, scrub_lsn={}",
                       is_deep_scrub ? "deep" : "shallow", start_shard_id, end_shard_id, scrub_lsn);
             return;
@@ -998,15 +983,13 @@ void ScrubManager::remove_pg(const pg_id_t pg_id) {
     cancel_scrub_task(pg_id);
     m_pg_scrub_ctx_map.erase(pg_id);
 
-    auto it = m_pg_scrub_sb_map.find(pg_id);
-    if (it == m_pg_scrub_sb_map.end()) {
+    if (!m_pg_scrub_sb_map.visit(pg_id, [](auto& entry) { entry.second->destroy(); })) {
         LOGINFOMOD(scrubmgr, "no scrub superblock found for pg={}, no need to remove", pg_id);
         return;
     }
 
     LOGINFOMOD(scrubmgr, "removed pg={} in scrub manager!", pg_id);
-    it->second->destroy();
-    m_pg_scrub_sb_map.erase(it);
+    m_pg_scrub_sb_map.erase(pg_id);
 }
 
 // this function is called in meta_service thread context
@@ -1014,7 +997,7 @@ void ScrubManager::on_pg_scrub_meta_blk_found(
     sisl::byte_view const& buf, void* meta_cookie,
     std::vector< homestore::superblk< pg_scrub_superblk > >& stale_pg_scrub_sbs) {
     auto sb = std::make_shared< homestore::superblk< pg_scrub_superblk > >();
-    (*sb).load(buf, meta_cookie);
+    (*sb).load(buf, r_cast< homestore::meta_blk* >(meta_cookie));
     const auto pg_id = (*sb)->pg_id;
 
     auto hs_pg = m_hs_home_object->get_hs_pg(pg_id);
@@ -1036,40 +1019,40 @@ void ScrubManager::save_scrub_superblk(const pg_id_t pg_id, const bool is_deep_s
     const auto current_time =
         std::chrono::duration_cast< std::chrono::seconds >(std::chrono::system_clock::now().time_since_epoch()).count();
 
-    auto it = m_pg_scrub_sb_map.find(pg_id);
-    if (it == m_pg_scrub_sb_map.end()) {
-        // Create new superblock for this PG
-        auto sb = std::make_shared< homestore::superblk< pg_scrub_superblk > >(pg_scrub_meta_name);
-        (*sb).create(sizeof(pg_scrub_superblk));
-        (*sb)->pg_id = pg_id;
-        (*sb)->last_deep_scrub_timestamp = current_time;
-        (*sb)->last_shallow_scrub_timestamp = current_time;
-        (*sb).write();
-        m_pg_scrub_sb_map.emplace(pg_id, std::move(sb));
-        return;
-    }
-
-    if (force_update) {
-        // Update existing superblock
-        if (is_deep_scrub) {
-            (*(it->second))->last_deep_scrub_timestamp = current_time;
+    const bool found = m_pg_scrub_sb_map.visit(pg_id, [&](auto& entry) {
+        if (force_update) {
+            // Update existing superblock
+            if (is_deep_scrub) {
+                (*(entry.second))->last_deep_scrub_timestamp = current_time;
+            } else {
+                (*(entry.second))->last_shallow_scrub_timestamp = current_time;
+            }
+            (*(entry.second)).write();
         } else {
-            (*(it->second))->last_shallow_scrub_timestamp = current_time;
+            LOGINFOMOD(scrubmgr, "skip updating scrub superblock for pg={} since there is no scrub progress update",
+                       pg_id);
         }
-        (*(it->second)).write();
-    } else {
-        LOGINFOMOD(scrubmgr, "skip updating scrub superblock for pg={} since there is no scrub progress update", pg_id);
-    }
+    });
+    if (found) { return; }
+
+    // Create new superblock for this PG
+    auto sb = std::make_shared< homestore::superblk< pg_scrub_superblk > >(pg_scrub_meta_name);
+    (*sb).create(sizeof(pg_scrub_superblk));
+    (*sb)->pg_id = pg_id;
+    (*sb)->last_deep_scrub_timestamp = current_time;
+    (*sb)->last_shallow_scrub_timestamp = current_time;
+    (*sb).write();
+    m_pg_scrub_sb_map.emplace(pg_id, std::move(sb));
 }
 
 std::optional< ScrubManager::pg_scrub_superblk > ScrubManager::get_scrub_superblk(const pg_id_t pg_id) const {
-    auto it = m_pg_scrub_sb_map.find(pg_id);
-    if (it == m_pg_scrub_sb_map.end()) {
+    std::optional< ScrubManager::pg_scrub_superblk > result;
+    if (!m_pg_scrub_sb_map.cvisit(pg_id, [&](auto const& entry) { result = *(*(entry.second)); })) {
         LOGWARNMOD(scrubmgr, "scrub superblk not found for pg {}", pg_id);
         return std::nullopt;
     }
 
-    return *(*(it->second));
+    return result;
 }
 
 ScrubManager::PGScrubContext::PGScrubContext(uint64_t task_id, const HSHomeObject::HS_PG* hs_pg) :
@@ -1098,7 +1081,7 @@ void ScrubManager::PGScrubContext::handle_scrub_req_resp(std::shared_ptr< ScrubM
     std::unique_lock lock(peer_batch_scrub_ctx->mutex);
 
     // Drop silently if the promise was already fulfilled by another path (timeout, prior response).
-    if (peer_batch_scrub_ctx->promise.isFulfilled()) {
+    if (!peer_batch_scrub_ctx->promise || peer_batch_scrub_ctx->promise->await_ready()) {
         SCRUBLOGD(pg_id, task_id, "promise already fulfilled for peer {}, dropping result req_id={}",
                   result->issuer_peer_id, result->req_id);
         return;
@@ -1161,7 +1144,7 @@ void ScrubManager::PGScrubContext::handle_scrub_req_resp(std::shared_ptr< ScrubM
     // This peer has finished its share of the batch range.
     SCRUBLOGD(pg_id, task_id, "peer {} completed batch, batch_scrub_result entries={}", result->issuer_peer_id,
               peer_batch_scrub_result->results.size());
-    peer_batch_scrub_ctx->promise.setValue(peer_batch_scrub_result);
+    peer_batch_scrub_ctx->promise->complete(peer_batch_scrub_result);
 }
 
 void ScrubManager::PGScrubContext::send_req_to_peer(const ScrubManager::scrub_req& req, const peer_id_t& peer_id) {
@@ -1180,13 +1163,13 @@ void ScrubManager::PGScrubContext::send_req_to_peer(const ScrubManager::scrub_re
     sisl::io_blob_list_t blob_list;
     blob_list.emplace_back(flatbuffer.data(), flatbuffer.size(), false);
 
-    repl_dev->data_request_unidirectional(peer_id, HSHomeObject::PUSH_SCRUB_REQ, blob_list)
-        .via(folly::getGlobalIOExecutor())
-        .thenValue([pg_id, peer_id, task_id = this->task_id, flatbuffer = std::move(flatbuffer), req_id = req.req_id,
-                    scrub_type = req.scrub_type](auto&& response) {
-            if (response.hasError()) {
+    sisl::async::detach_then(
+        repl_dev->data_request_unidirectional(peer_id, HSHomeObject::PUSH_SCRUB_REQ, blob_list),
+        [pg_id, peer_id, task_id = this->task_id, flatbuffer = std::move(flatbuffer), req_id = req.req_id,
+         scrub_type = req.scrub_type](auto&& response) {
+            if (!response) {
                 SCRUBLOGE(pg_id, task_id, "failed to send scrub req to peer {}, req_id={}, error={}, scrub_type={}",
-                          peer_id, req_id, response.error(), scrub_type);
+                          peer_id, req_id, response.error().message(), scrub_type);
             } else {
                 SCRUBLOGD(pg_id, task_id, "successfully sent scrub req to peer {}, req_id={}, scrub_type={}", peer_id,
                           req_id, scrub_type);
@@ -1194,79 +1177,70 @@ void ScrubManager::PGScrubContext::send_req_to_peer(const ScrubManager::scrub_re
         });
 }
 
-folly::Future< bool > ScrubManager::PGScrubContext::scrub_meta_batch(
+sisl::async::task< bool > ScrubManager::PGScrubContext::scrub_meta_batch(
     std::shared_ptr< ScrubManager::MetaScrubReport > scrub_report, shard_id_t start_shard_id, shard_id_t end_shard_id,
     blob_id_t last_blob_id, int64_t scrub_lsn, std::map< shard_id_t, uint32_t >& shard_blob_count_in_batch) {
     const auto pg_id = hs_pg->pg_id();
     SCRUBLOGD(pg_id, task_id, "start scrubbing meta for shard range: {} to {}, last_blob_id={}, scrub_lsn={}",
               start_shard_id, end_shard_id, last_blob_id, scrub_lsn);
 
-    // Reset each peer's ctx for this batch round and collect futures.
-    std::vector< folly::Future< std::shared_ptr< ScrubManager::range_scrub_result > > > futs;
+    // Reset each peer's ctx for this batch round and collect awaitables.
+    std::vector< sisl::async::task< std::shared_ptr< ScrubManager::range_scrub_result > > > futs;
     for (auto& [peer_id, ctx] : m_active_batch) {
         auto req = scrub_req(pg_id, random_req_id(), scrub_lsn, start_shard_id, 0, end_shard_id, last_blob_id,
                              SCRUB_TYPE::META, hs_pg->home_obj_.our_uuid());
         auto batch_scrub_result = std::make_shared< range_scrub_result >(start_shard_id, 0, end_shard_id, last_blob_id,
                                                                          SCRUB_TYPE::META, peer_id);
-        futs.emplace_back(ctx->reset(req, batch_scrub_result, cancelled));
+        futs.emplace_back(sisl::async::await_value(ctx->reset(req, batch_scrub_result, cancelled)));
         send_req_to_peer(req, peer_id);
     }
 
-    return folly::collectAllUnsafe(futs).thenValue(
-        [this, pg_id, scrub_report, &shard_blob_count_in_batch](
-            std::vector< folly::Try< std::shared_ptr< range_scrub_result > > > results) -> bool {
-            // Aggregate results into peer_scrub_result_map.
-            std::map< peer_id_t, std::shared_ptr< range_scrub_result > > peer_scrub_result_map;
-            for (auto& r : results) {
-                if (r.hasException()) {
-                    SCRUBLOGE(pg_id, task_id, "scrub meta batch is failed, error={}", r.exception().what());
-                    return false;
-                }
-                auto range_result = r.value();
-                if (!range_result) {
-                    SCRUBLOGE(pg_id, task_id, "scrub meta batch is failed, receive nullptr scrub result");
-                    return false;
-                }
-                peer_scrub_result_map[range_result->peer_id] = range_result;
-                SCRUBLOGD(pg_id, task_id, "complete meta range scrub: {}", range_result->to_string());
-            }
+    auto results = co_await sisl::async::when_all(std::move(futs));
 
-            // Consolidate peer_scrub_result_map into shard_blob_count_in_batch.
-            std::map< shard_id_t, std::pair< size_t /*occurrence count*/, uint32_t /*max blob count*/ > >
-                shard_count_map;
-            for (const auto& [peer_id_key, range_result] : peer_scrub_result_map) {
-                for (const auto& [route, status_or_hash] : range_result->results) {
-                    shard_count_map[route.shard].first++;
-                    // blob count: route.blob holds the blob count in this shard; take the max across peers.
-                    const auto blob_count = shard_count_map[route.shard].second;
-                    shard_count_map[route.shard].second = std::max(blob_count, static_cast< uint32_t >(route.blob));
-                }
-            }
+    // Aggregate results into peer_scrub_result_map.
+    std::map< peer_id_t, std::shared_ptr< range_scrub_result > > peer_scrub_result_map;
+    for (auto& range_result : results) {
+        if (!range_result) {
+            SCRUBLOGE(pg_id, task_id, "scrub meta batch is failed, receive nullptr scrub result");
+            co_return false;
+        }
+        peer_scrub_result_map[range_result->peer_id] = range_result;
+        SCRUBLOGD(pg_id, task_id, "complete meta range scrub: {}", range_result->to_string());
+    }
 
-            for (const auto& [shard_id, count_pair] : shard_count_map) {
-                // shard_id=0 is a pg meta result, not a real shard — skip in blob scrub phase.
-                if (!shard_id) continue;
+    // Consolidate peer_scrub_result_map into shard_blob_count_in_batch.
+    std::map< shard_id_t, std::pair< size_t /*occurrence count*/, uint32_t /*max blob count*/ > > shard_count_map;
+    for (const auto& [peer_id_key, range_result] : peer_scrub_result_map) {
+        for (const auto& [route, status_or_hash] : range_result->results) {
+            shard_count_map[route.shard].first++;
+            // blob count: route.blob holds the blob count in this shard; take the max across peers.
+            const auto blob_count = shard_count_map[route.shard].second;
+            shard_count_map[route.shard].second = std::max(blob_count, static_cast< uint32_t >(route.blob));
+        }
+    }
 
-                if (count_pair.first == peer_scrub_result_map.size()) {
-                    // all peers have this shard; empty shards get a minimum blob count of 1.
-                    shard_blob_count_in_batch[shard_id] = std::max(count_pair.second, uint32_t{1});
-                } else {
-                    RELEASE_ASSERT(
-                        count_pair.first < peer_scrub_result_map.size(),
-                        "the occurrence count of shard_id {} should not be larger than peer count, but it is {}",
-                        shard_id, count_pair.first);
-                    // Not all peers have this shard: mark as missing; force single-blob-batch in blob scrub phase.
-                    shard_blob_count_in_batch[shard_id] = UINT32_MAX;
-                }
-            }
+    for (const auto& [shard_id, count_pair] : shard_count_map) {
+        // shard_id=0 is a pg meta result, not a real shard — skip in blob scrub phase.
+        if (!shard_id) continue;
 
-            // Consolidate peer_scrub_result_map into scrub_report.
-            scrub_report->merge(peer_scrub_result_map);
-            return true;
-        });
+        if (count_pair.first == peer_scrub_result_map.size()) {
+            // all peers have this shard; empty shards get a minimum blob count of 1.
+            shard_blob_count_in_batch[shard_id] = std::max(count_pair.second, uint32_t{1});
+        } else {
+            RELEASE_ASSERT(count_pair.first < peer_scrub_result_map.size(),
+                           "the occurrence count of shard_id {} should not be larger than peer count, but it is {}",
+                           shard_id, count_pair.first);
+            // Not all peers have this shard: mark as missing; force single-blob-batch in blob scrub phase.
+            shard_blob_count_in_batch[shard_id] = UINT32_MAX;
+        }
+    }
+
+    // Consolidate peer_scrub_result_map into scrub_report.
+    scrub_report->merge(peer_scrub_result_map);
+    co_return true;
 }
 
-folly::Future< bool >
+sisl::async::task< bool >
 ScrubManager::PGScrubContext::scrub_blob_batch(std::shared_ptr< ScrubManager::ShallowScrubReport > scrub_report,
                                                shard_id_t start_shard_id, shard_id_t end_shard_id,
                                                blob_id_t last_blob_id, int64_t scrub_lsn, bool is_deep_scrub) {
@@ -1277,40 +1251,33 @@ ScrubManager::PGScrubContext::scrub_blob_batch(std::shared_ptr< ScrubManager::Sh
               "start scrubbing blob for shard range: {} to {}, last_blob_id={}, scrub_lsn={}, scrub_type={}",
               start_shard_id, end_shard_id, last_blob_id, scrub_lsn, scrub_type);
 
-    // Reset each peer's ctx for this batch round and collect futures.
-    std::vector< folly::Future< std::shared_ptr< ScrubManager::range_scrub_result > > > futs;
+    // Reset each peer's ctx for this batch round and collect awaitables.
+    std::vector< sisl::async::task< std::shared_ptr< ScrubManager::range_scrub_result > > > futs;
     for (auto& [peer_id, ctx] : m_active_batch) {
         auto req = scrub_req(pg_id, random_req_id(), scrub_lsn, start_shard_id, 0, end_shard_id, last_blob_id,
                              scrub_type, hs_pg->home_obj_.our_uuid());
         auto batch_scrub_result =
             std::make_shared< range_scrub_result >(start_shard_id, 0, end_shard_id, last_blob_id, scrub_type, peer_id);
-        futs.emplace_back(ctx->reset(req, batch_scrub_result, cancelled));
+        futs.emplace_back(sisl::async::await_value(ctx->reset(req, batch_scrub_result, cancelled)));
         send_req_to_peer(req, peer_id);
     }
 
-    return folly::collectAllUnsafe(futs).thenValue(
-        [this, pg_id,
-         scrub_report](std::vector< folly::Try< std::shared_ptr< range_scrub_result > > > results) -> bool {
-            // Aggregate results into peer_scrub_result_map.
-            std::map< peer_id_t, std::shared_ptr< range_scrub_result > > peer_scrub_result_map;
-            for (auto& r : results) {
-                if (r.hasException()) {
-                    SCRUBLOGE(pg_id, task_id, "scrub blob batch is failed, error={}", r.exception().what());
-                    return false;
-                }
-                auto range_result = r.value();
-                if (!range_result) {
-                    SCRUBLOGE(pg_id, task_id, "scrub blob batch is failed, receive nullptr scrub result");
-                    return false;
-                }
-                peer_scrub_result_map.emplace(range_result->peer_id, range_result);
-                SCRUBLOGD(pg_id, task_id, "complete blob range scrub: {}", range_result->to_string());
-            }
+    auto results = co_await sisl::async::when_all(std::move(futs));
 
-            // Consolidate peer_scrub_result_map into scrub_report.
-            scrub_report->merge(peer_scrub_result_map);
-            return true;
-        });
+    // Aggregate results into peer_scrub_result_map.
+    std::map< peer_id_t, std::shared_ptr< range_scrub_result > > peer_scrub_result_map;
+    for (auto& range_result : results) {
+        if (!range_result) {
+            SCRUBLOGE(pg_id, task_id, "scrub blob batch is failed, receive nullptr scrub result");
+            co_return false;
+        }
+        peer_scrub_result_map.emplace(range_result->peer_id, range_result);
+        SCRUBLOGD(pg_id, task_id, "complete blob range scrub: {}", range_result->to_string());
+    }
+
+    // Consolidate peer_scrub_result_map into scrub_report.
+    scrub_report->merge(peer_scrub_result_map);
+    co_return true;
 }
 
 void ScrubManager::PGScrubContext::reconcile_scrub_report(std::shared_ptr< ShallowScrubReport > scrub_report) {
@@ -1336,67 +1303,60 @@ void ScrubManager::PGScrubContext::reconcile_scrub_report(std::shared_ptr< Shall
             return;
         }
 
-        std::vector< folly::Future< folly::Unit > > reconcile_futs;
+        std::vector< sisl::async::task< std::monostate > > reconcile_futs;
+
+        auto reconcile_one = [this, pg_id, &scrub_report](peer_id_t peer_id, BlobRoute blob,
+                                                          bool check_blob) -> sisl::async::task< std::monostate > {
+            try {
+                const bool exists = co_await check_existence_in_peer(peer_id, blob, check_blob);
+                if (!exists) {
+                    if (check_blob) {
+                        SCRUBLOGD(pg_id, task_id,
+                                  "reconcile check: shard_id={}, blob_id={} confirmed absent on peer {}, "
+                                  "removing from existence-tracking set",
+                                  blob.shard, blob.blob, peer_id);
+                        scrub_report->remove_blob_existence_from_peer(blob, peer_id);
+                    } else {
+                        SCRUBLOGD(pg_id, task_id,
+                                  "reconcile check: shard {} confirmed absent on peer {}, removing from "
+                                  "existence-tracking set",
+                                  blob.shard, peer_id);
+                        scrub_report->remove_shard_existence_from_peer(blob.shard, peer_id);
+                    }
+                } else if (check_blob) {
+                    SCRUBLOGD(pg_id, task_id,
+                              "reconcile check: shard_id={}, blob_id={} still present on peer {}, no change",
+                              blob.shard, blob.blob, peer_id);
+                } else {
+                    SCRUBLOGD(pg_id, task_id, "reconcile check: shard {} still present on peer {}, no change",
+                              blob.shard, peer_id);
+                }
+            } catch (const std::exception& e) {
+                if (check_blob) {
+                    SCRUBLOGE(pg_id, task_id,
+                              "failed to check blob existence in peer {}, shard_id={}, blob_id={}, error: {}", peer_id,
+                              blob.shard, blob.blob, e.what());
+                } else {
+                    SCRUBLOGE(pg_id, task_id, "failed to check shard existence in peer {}, shard {}, error: {}",
+                              peer_id, blob.shard, e.what());
+                }
+            }
+            co_return std::monostate{};
+        };
 
         for (const auto& [shard_id, peer_set] : missing_shards) {
             for (const auto& peer_id : peer_set) {
-                reconcile_futs.emplace_back(std::move(
-                    check_existence_in_peer(peer_id, {shard_id, 0}, false /* check blob */)
-                        .thenTry([this, pg_id, peer_id, shard_id, &scrub_report](folly::Try< bool > result) {
-                            if (result.hasException()) {
-                                SCRUBLOGE(pg_id, task_id,
-                                          "failed to check shard existence in peer {}, shard {}, error: {}", peer_id,
-                                          shard_id, result.exception().what());
-                                return;
-                            }
-
-                            const auto& exists = result.value();
-                            if (!exists) {
-                                SCRUBLOGD(pg_id, task_id,
-                                          "reconcile check: shard {} confirmed absent on peer {}, removing from "
-                                          "existence-tracking set",
-                                          shard_id, peer_id);
-                                scrub_report->remove_shard_existence_from_peer(shard_id, peer_id);
-                            } else {
-                                SCRUBLOGD(pg_id, task_id,
-                                          "reconcile check: shard {} still present on peer {}, no change", shard_id,
-                                          peer_id);
-                            }
-                        })));
+                reconcile_futs.emplace_back(reconcile_one(peer_id, {shard_id, 0}, false /* check blob */));
             }
         }
 
         for (const auto& [blob_route, peer_set] : missing_blobs) {
             for (const auto& peer_id : peer_set) {
-                reconcile_futs.emplace_back(std::move(
-                    check_existence_in_peer(peer_id, blob_route, true /* check blob */)
-                        .thenTry([this, pg_id, peer_id, blob_route, &scrub_report](folly::Try< bool > result) {
-                            if (result.hasException()) {
-                                SCRUBLOGE(
-                                    pg_id, task_id,
-                                    "failed to check blob existence in peer {}, shard_id={}, blob_id={}, error: {}",
-                                    peer_id, blob_route.shard, blob_route.blob, result.exception().what());
-                                return;
-                            }
-
-                            const auto& exists = result.value();
-                            if (!exists) {
-                                SCRUBLOGD(pg_id, task_id,
-                                          "reconcile check: shard_id={}, blob_id={} confirmed absent on peer {}, "
-                                          "removing from existence-tracking set",
-                                          blob_route.shard, blob_route.blob, peer_id);
-                                scrub_report->remove_blob_existence_from_peer(blob_route, peer_id);
-                            } else {
-                                SCRUBLOGD(
-                                    pg_id, task_id,
-                                    "reconcile check: shard_id={}, blob_id={} still present on peer {}, no change",
-                                    blob_route.shard, blob_route.blob, peer_id);
-                            }
-                        })));
+                reconcile_futs.emplace_back(reconcile_one(peer_id, blob_route, true /* check blob */));
             }
         }
 
-        folly::collectAllUnsafe(reconcile_futs).wait();
+        sisl::async::sync_get(sisl::async::when_all(std::move(reconcile_futs)));
     }
 
     const auto remaining_missing_shards = scrub_report->get_missing_shard_ids().size();
@@ -1411,16 +1371,12 @@ void ScrubManager::PGScrubContext::reconcile_scrub_report(std::shared_ptr< Shall
     }
 }
 
-folly::Future< bool > ScrubManager::PGScrubContext::check_existence_in_peer(peer_id_t peer_id, BlobRoute blob,
-                                                                            bool check_blob) {
-    auto [promise, future] = folly::makePromiseContract< bool >();
+sisl::async::task< bool > ScrubManager::PGScrubContext::check_existence_in_peer(peer_id_t peer_id, BlobRoute blob,
+                                                                                bool check_blob) {
     const auto pg_id = hs_pg->pg_id();
 
     auto repl_dev = hs_pg->repl_dev_;
-    if (!repl_dev) {
-        promise.setException(folly::make_exception_wrapper< std::runtime_error >("repl dev is not available"));
-        return std::move(future).via(folly::getGlobalIOExecutor());
-    }
+    if (!repl_dev) { throw std::runtime_error("repl dev is not available"); }
 
     ScrubManager::scrub_req check_blob_req;
     check_blob_req.start_shard_id = blob.shard;
@@ -1434,34 +1390,25 @@ folly::Future< bool > ScrubManager::PGScrubContext::check_existence_in_peer(peer
     const auto check_type_str = check_blob ? "blob" : "shard";
 
     // this is a bidirectional request, no need to add a req_id.
-    repl_dev->data_request_bidirectional(peer_id, HSHomeObject::PUSH_SCRUB_REQ, blob_list)
-        .via(folly::getGlobalIOExecutor())
-        .thenValue([pg_id, peer_id, task_id = this->task_id, blob, check_type_str, flatbuffer = std::move(flatbuffer),
-                    promise = std::move(promise)](auto&& response) mutable {
-            if (response.hasError()) {
-                SCRUBLOGE(pg_id, task_id, "failed to check {} existence in peer {}, blob {}, error code: {}",
-                          check_type_str, peer_id, blob, static_cast< int >(response.error()));
-                promise.setException(
-                    folly::make_exception_wrapper< std::runtime_error >("rpc bidirectional request failed"));
-            } else {
-                const auto& resp_blob = response.value().response_blob();
-                if (resp_blob.size() != sizeof(bool)) {
-                    SCRUBLOGE(pg_id, task_id,
-                              "invalid response for {} existence check from peer {}, blob {}, response size={}",
-                              check_type_str, peer_id, blob, resp_blob.size());
-                    promise.setException(
-                        folly::make_exception_wrapper< std::runtime_error >("invalid response for existence check"));
-                } else {
-                    const bool exists = *reinterpret_cast< const bool* >(resp_blob.cbytes());
-                    SCRUBLOGD(pg_id, task_id,
-                              "successfully checked {} existence in peer {}, shard_id={}, blob_id={}, exists={}",
-                              check_type_str, peer_id, blob.shard, blob.blob, exists);
-                    promise.setValue(exists);
-                }
-            }
-        });
+    auto response = co_await repl_dev->data_request_bidirectional(peer_id, HSHomeObject::PUSH_SCRUB_REQ, blob_list);
 
-    return std::move(future).via(folly::getGlobalIOExecutor());
+    if (!response) {
+        SCRUBLOGE(pg_id, task_id, "failed to check {} existence in peer {}, blob {}, error code: {}", check_type_str,
+                  peer_id, blob, response.error().message());
+        throw std::runtime_error("rpc bidirectional request failed");
+    }
+
+    const auto& resp_blob = response.value().response_blob();
+    if (resp_blob.size() != sizeof(bool)) {
+        SCRUBLOGE(pg_id, task_id, "invalid response for {} existence check from peer {}, blob {}, response size={}",
+                  check_type_str, peer_id, blob, resp_blob.size());
+        throw std::runtime_error("invalid response for existence check");
+    }
+
+    const bool exists = *reinterpret_cast< const bool* >(resp_blob.cbytes());
+    SCRUBLOGD(pg_id, task_id, "successfully checked {} existence in peer {}, shard_id={}, blob_id={}, exists={}",
+              check_type_str, peer_id, blob.shard, blob.blob, exists);
+    co_return exists;
 }
 
 uint64_t ScrubManager::PGScrubContext::random_req_id() const {

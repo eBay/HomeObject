@@ -97,7 +97,7 @@ struct formatter< homeobject::device_info_t > {
     }
 
     template < typename FormatContext >
-    auto format(homeobject::device_info_t const& device, FormatContext& ctx) {
+    auto format(homeobject::device_info_t const& device, FormatContext& ctx) const {
         std::string type;
         switch (device.type) {
         case homeobject::DevType::HDD:

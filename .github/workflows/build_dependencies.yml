@@ -27,6 +27,14 @@ on:
         required: false
         type: string
         default: 'False'
+      compiler:
+        required: false
+        type: string
+        default: 'gcc'
+      conan-channel:
+        required: false
+        type: string
+        default: 'dev'
   workflow_dispatch:
     inputs:
       platform:
@@ -64,7 +72,9 @@ on:
       tooling:
         required: false
         type: choice
-          - 'Sanitize'
+        options:
+          - 'AddressSanitize'
+          - 'ThreadSanitize'
           - 'Coverage'
           - 'None'
         default: 'None'
@@ -76,6 +86,16 @@ on:
           - 'True'
           - 'False'
         default: 'True'
+      compiler:
+        required: false
+        type: choice
+        options:
+          - gcc
+        default: gcc
+      conan-channel:
+        required: false
+        type: string
+        default: 'dev'
 
 jobs:
   BuildHomeObjectDeps:
@@ -95,30 +115,51 @@ jobs:
       if: ${{ inputs.testing == 'False' }}
 
     - name: Setup Conan
-      uses: ebay/sisl/.github/actions/setup_conan2@stable/v13.x
+      uses: ebay/sisl/.github/actions/setup_conan2@dev/v14.x
       with:
         platform: ${{ inputs.platform }}
+        compiler: ${{ inputs.compiler }}
       if: ${{ inputs.testing == 'True' || steps.restore-cache.outputs.cache-hit != 'true' }}
 
     - name: Load HomeObject Cache
       id: restore-cache
-      uses: eBay/sisl/.github/actions/load_conan2@stable/v13.x
+      uses: eBay/sisl/.github/actions/load_conan2@dev/v14.x
       with:
         testing: ${{ inputs.testing }}
         key_prefix: HomeObjectDeps-${{ inputs.platform }}-${{ inputs.build-type }}-${{ inputs.malloc-impl }}-${{ inputs.prerelease }}
 
-    - name: Load Sisl Cache
-      uses: eBay/sisl/.github/actions/load_conan2@stable/v13.x
+    - name: Retrieve Dependencies Sisl
+      uses: actions/checkout@v4
       with:
-        load_any: 'True'
-        key_prefix: SislDeps13-${{ inputs.platform }}-${{ inputs.build-type }}-${{ inputs.malloc-impl }}
+        repository: eBay/sisl
+        path: import/sisl
+        ref: dev/v14.x
+      if: ${{ inputs.testing == 'True' || steps.restore-cache.outputs.cache-hit != 'true' }}
+
+    - name: Load Sisl Cache
+      uses: eBay/sisl/.github/actions/load_conan2@dev/v14.x
+      with:
+        testing: 'False'
+        path: import/sisl
+        key_prefix: SislDeps14-${{ inputs.platform }}-${{ inputs.build-type }}-${{ inputs.malloc-impl }}-${{ inputs.compiler }}
+        fail_on_cache_miss: true
+      if: ${{ inputs.testing == 'True' || steps.restore-cache.outputs.cache-hit != 'true' }}
+
+    - name: Retrieve Dependencies IOMgr
+      uses: actions/checkout@v4
+      with:
+        repository: eBay/iomanager
+        path: import/iomgr
+        ref: dev/v13.x
       if: ${{ inputs.testing == 'True' || steps.restore-cache.outputs.cache-hit != 'true' }}
 
     - name: Load IOMgr Cache
-      uses: eBay/sisl/.github/actions/load_conan2@stable/v13.x
+      uses: eBay/sisl/.github/actions/load_conan2@dev/v14.x
       with:
-        load_any: 'True'
-        key_prefix: IOMgrDeps-${{ inputs.platform }}-${{ inputs.build-type }}-${{ inputs.malloc-impl }}-${{ inputs.prerelease }}
+        testing: 'False'
+        path: import/iomgr
+        key_prefix: IOMgrDeps-${{ inputs.platform }}-${{ inputs.build-type }}-${{ inputs.malloc-impl }}-${{ inputs.compiler }}
+        fail_on_cache_miss: true
       if: ${{ inputs.testing == 'True' || steps.restore-cache.outputs.cache-hit != 'true' }}
 
     - name: Retrieve Dependencies NuRaftMesg
@@ -126,11 +167,11 @@ jobs:
       with:
         repository: eBay/nuraft_mesg
         path: import/nuraft_mesg
-        ref: stable/v4.x
+        ref: dev/v5.x
       if: ${{ inputs.testing == 'True' || steps.restore-cache.outputs.cache-hit != 'true' }}
 
     - name: Load NuRaftMesg Cache
-      uses: eBay/sisl/.github/actions/load_conan2@stable/v13.x
+      uses: eBay/sisl/.github/actions/load_conan2@dev/v14.x
       with:
         testing: 'False'
         path: import/nuraft_mesg
@@ -143,25 +184,41 @@ jobs:
       with:
         repository: eBay/HomeStore
         path: import/homestore
-        ref: stable/v7.x
+        ref: dev/v8.x
       if: ${{ inputs.testing == 'True' || steps.restore-cache.outputs.cache-hit != 'true' }}
 
     - name: Load HomeStore Cache
-      uses: eBay/sisl/.github/actions/load_conan2@stable/v13.x
+      uses: eBay/sisl/.github/actions/load_conan2@dev/v14.x
       with:
         testing: 'False'
         path: import/homestore
-        key_prefix: HomestoreDeps-${{ inputs.platform }}-${{ inputs.build-type }}-${{ inputs.malloc-impl }}-${{ inputs.prerelease }}
+        key_prefix: HomestoreDeps-${{ inputs.platform }}-${{ inputs.build-type }}-${{ inputs.malloc-impl }}
         fail_on_cache_miss: true
       if: ${{ inputs.testing == 'True' || steps.restore-cache.outputs.cache-hit != 'true' }}
-
 
     - name: Export Recipes
       run: |
         sudo apt-get install -y python3-pyelftools libaio-dev
         python -m pip install pyelftools
-        conan export import/homestore
-        conan export import/nuraft_mesg
+        sudo rm -rf $ANDROID_HOME
+
+        pushd import/sisl
+        ./prepare_v2.sh
+        conan export --user oss --channel ${{ inputs.conan-channel }} .
+        popd
+
+        pushd import/iomgr
+        conan export --user oss --channel ${{ inputs.conan-channel }} .
+        popd
+
+        pushd import/nuraft_mesg
+        ./prepare_v2.sh
+        conan export --user oss --channel ${{ inputs.conan-channel }} .
+        popd
+
+        pushd import/homestore
+        conan export --user oss --channel ${{ inputs.conan-channel }} .
+        popd
       if: ${{ inputs.testing == 'True' || steps.restore-cache.outputs.cache-hit != 'true' }}
 
     - name: Build Cache
@@ -170,11 +227,9 @@ jobs:
         echo "Disk space usage"
         sudo df -h
         sudo ls -l /tmp
-        sudo rm -rf $ANDROID_HOME
         echo "Disk space usage after cleanup"
         sudo df -h
         conan install \
-            -c tools.build:skip_test=True \
             ${pre} \
             -o sisl/*:malloc_impl=${{ inputs.malloc-impl }} \
             -o iomgr/*:testing=off \
@@ -184,31 +239,35 @@ jobs:
             --format=json \
             --build missing \
             . > ~/build.json
-        conan list --graph ~/build.json --graph-binaries=build --format=json > ~/pkglist.json
+        conan list --graph ~/build.json --graph-binaries=build,cache --format=json > ~/pkglist.json
       if: ${{ steps.restore-cache.outputs.cache-hit != 'true' }}
 
     - name: Save Conan Cache
-      uses: eBay/sisl/.github/actions/store_conan2@stable/v13.x
+      uses: eBay/sisl/.github/actions/store_conan2@dev/v14.x
       with:
         key_prefix: HomeObjectDeps-${{ inputs.platform }}-${{ inputs.build-type }}-${{ inputs.malloc-impl }}-${{ inputs.prerelease }}
       if: ${{ github.event_name != 'pull_request' && steps.restore-cache.outputs.cache-hit != 'true' }}
 
     - name: Reload Sisl Cache
-      uses: eBay/sisl/.github/actions/load_conan2@stable/v13.x
+      uses: eBay/sisl/.github/actions/load_conan2@dev/v14.x
       with:
-        load_any: 'True'
-        key_prefix: SislDeps13-${{ inputs.platform }}-${{ inputs.build-type }}-${{ inputs.malloc-impl }}
+        testing: 'False'
+        path: import/sisl
+        key_prefix: SislDeps14-${{ inputs.platform }}-${{ inputs.build-type }}-${{ inputs.malloc-impl }}-${{ inputs.compiler }}
+        fail_on_cache_miss: true
       if: ${{ inputs.testing == 'True' && github.event_name != 'pull_request' && steps.restore-cache.outputs.cache-hit != 'true' }}
 
     - name: Reload IOMgr Cache
-      uses: eBay/sisl/.github/actions/load_conan2@stable/v13.x
+      uses: eBay/sisl/.github/actions/load_conan2@dev/v14.x
       with:
-        load_any: 'True'
-        key_prefix: IOMgrDeps-${{ inputs.platform }}-${{ inputs.build-type }}-${{ inputs.malloc-impl }}-${{ inputs.prerelease }}
+        testing: 'False'
+        path: import/iomgr
+        key_prefix: IOMgrDeps-${{ inputs.platform }}-${{ inputs.build-type }}-${{ inputs.malloc-impl }}-${{ inputs.compiler }}
+        fail_on_cache_miss: true
       if: ${{ inputs.testing == 'True' && github.event_name != 'pull_request' && steps.restore-cache.outputs.cache-hit != 'true' }}
 
     - name: Reload NuRaftMesg Cache
-      uses: eBay/sisl/.github/actions/load_conan2@stable/v13.x
+      uses: eBay/sisl/.github/actions/load_conan2@dev/v14.x
       with:
         testing: 'False'
         path: import/nuraft_mesg
@@ -217,17 +276,19 @@ jobs:
       if: ${{ inputs.testing == 'True' && github.event_name != 'pull_request' && steps.restore-cache.outputs.cache-hit != 'true' }}
 
     - name: Reload HomeStore Cache
-      uses: eBay/sisl/.github/actions/load_conan2@stable/v13.x
+      uses: eBay/sisl/.github/actions/load_conan2@dev/v14.x
       with:
         testing: 'False'
         path: import/homestore
-        key_prefix: HomestoreDeps-${{ inputs.platform }}-${{ inputs.build-type }}-${{ inputs.malloc-impl }}-${{ inputs.prerelease }}
+        key_prefix: HomestoreDeps-${{ inputs.platform }}-${{ inputs.build-type }}-${{ inputs.malloc-impl }}
         fail_on_cache_miss: true
       if: ${{ inputs.testing == 'True' && github.event_name != 'pull_request' && steps.restore-cache.outputs.cache-hit != 'true' }}
 
     - name: Create and Test Package
       run: |
-        sanitize=$([[ "${{ inputs.tooling }}" == "Sanitize" ]] && echo "True" || echo "False")
+        if [[ "${{ inputs.tooling }}" == "AddressSanitize" ]]; then sanitize="address"
+        elif [[ "${{ inputs.tooling }}" == "ThreadSanitize" ]]; then sanitize="thread"
+        else sanitize="False"; fi
         pre=$([[ "${{ inputs.build-type }}" != "Debug" ]] && echo "-o iomgr/*:prerelease=${{ inputs.prerelease }}" || echo "")
         conan create \
             ${pre} \
@@ -236,6 +297,7 @@ jobs:
             -o homestore/*:testing=off \
             -o homeobject/*:sanitize=${sanitize} \
             -s:h build_type=${{ inputs.build-type }} \
+            ${{ inputs.conan-channel != '' && format('--user oss --channel {0}', inputs.conan-channel) || '' }} \
             --build missing \
             .
       if: ${{ inputs.testing == 'True' && inputs.tooling != 'Coverage' }}

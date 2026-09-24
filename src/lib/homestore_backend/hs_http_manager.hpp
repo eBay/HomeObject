@@ -13,13 +13,23 @@
  * specific language governing permissions and limitations under the License.
  *
  *********************************************************************************/
-#include <iomgr/io_environment.hpp>
-#include <iomgr/http_server.hpp>
+#pragma once
 
-#include <folly/futures/Future.h>
-#include <folly/container/EvictingCacheMap.h>
+#include <iomgr/io_environment.hpp>
+#include <sisl/http/http_server.hpp>
+#include <httplib/httplib.h>
+
+#include <sisl/async/task.hpp>
+#include <sisl/async/coro.hpp>
+#include <sisl/async/when_all.hpp>
+#include <sisl/fds/lru_map.hpp>
 #include <chrono>
 #include <atomic>
+#include <mutex>
+#include <shared_mutex>
+#include <optional>
+#include <string>
+#include <nlohmann/json.hpp>
 
 namespace homeobject {
 class HSHomeObject;
@@ -29,33 +39,33 @@ public:
     HttpManager(HSHomeObject& ho);
 
 private:
-    void get_obj_life(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response);
-    void get_malloc_stats(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response);
-    void reconcile_leader(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response);
-    void yield_leadership_to_follower(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response);
-    void trigger_snapshot_creation(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response);
-    void get_pg(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response);
-    void get_pg_chunks(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response);
-    void dump_chunk(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response);
-    void dump_shard(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response);
-    void get_shard(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response);
-    void flip_learner_flag(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response);
-    void remove_member(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response);
-    void clean_replace_member_task(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response);
-    void list_pg_replace_member_task(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response);
-    void reconcile_membership(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response);
-    void get_pg_quorum(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response);
-    void exit_pg(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response);
-    void trigger_gc(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response);
-    void get_gc_job_status(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response);
-    folly::Future< folly::Unit > trigger_gc_for_pg(uint16_t pg_id, const std::string& job_id);
+    void get_obj_life(httplib::Request const& request, httplib::Response& response);
+    void get_malloc_stats(httplib::Request const& request, httplib::Response& response);
+    void reconcile_leader(httplib::Request const& request, httplib::Response& response);
+    void yield_leadership_to_follower(httplib::Request const& request, httplib::Response& response);
+    void trigger_snapshot_creation(httplib::Request const& request, httplib::Response& response);
+    void get_pg(httplib::Request const& request, httplib::Response& response);
+    void get_pg_chunks(httplib::Request const& request, httplib::Response& response);
+    void dump_chunk(httplib::Request const& request, httplib::Response& response);
+    void dump_shard(httplib::Request const& request, httplib::Response& response);
+    void get_shard(httplib::Request const& request, httplib::Response& response);
+    void flip_learner_flag(httplib::Request const& request, httplib::Response& response);
+    void remove_member(httplib::Request const& request, httplib::Response& response);
+    void clean_replace_member_task(httplib::Request const& request, httplib::Response& response);
+    void list_pg_replace_member_task(httplib::Request const& request, httplib::Response& response);
+    void reconcile_membership(httplib::Request const& request, httplib::Response& response);
+    void get_pg_quorum(httplib::Request const& request, httplib::Response& response);
+    void exit_pg(httplib::Request const& request, httplib::Response& response);
+    void trigger_gc(httplib::Request const& request, httplib::Response& response);
+    void get_gc_job_status(httplib::Request const& request, httplib::Response& response);
+    sisl::async::task< std::monostate > trigger_gc_for_pg(uint16_t pg_id, const std::string& job_id);
     void get_job_status(const std::string& job_id, nlohmann::json& result);
-    void trigger_pg_scrub(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response);
-    void get_scrub_job_status(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response);
-    void cancel_scrub_job(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response);
+    void trigger_pg_scrub(httplib::Request const& request, httplib::Response& response);
+    void get_scrub_job_status(httplib::Request const& request, httplib::Response& response);
+    void cancel_scrub_job(httplib::Request const& request, httplib::Response& response);
 
 #ifdef _PRERELEASE
-    void crash_system(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response);
+    void crash_system(httplib::Request const& request, httplib::Response& response);
 #endif
 
 private:
@@ -134,9 +144,9 @@ private:
     std::shared_mutex gc_job_mutex_;
     std::shared_mutex scrub_job_mutex_;
 
-    // we don`t have an external DB to store the job status, so we only keep the status of the lastest 100 jobs for
-    // query. or, we can evict the job after it is completed after a timeout period.
-    folly::EvictingCacheMap< std::string, std::shared_ptr< GCJobInfo > > gc_jobs_map_{100};
-    folly::EvictingCacheMap< std::string, std::shared_ptr< ScrubJobInfo > > scrub_jobs_map_{100};
+    // Keep status of the latest 100 jobs for query (formerly folly EvictingCacheMap).
+    // get() does NOT refresh LRU — only set() promotes; matches write-ordered eviction.
+    sisl::LruMap< std::string, std::shared_ptr< GCJobInfo > > gc_jobs_map_{100};
+    sisl::LruMap< std::string, std::shared_ptr< ScrubJobInfo > > scrub_jobs_map_{100};
 };
 } // namespace homeobject

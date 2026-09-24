@@ -1,6 +1,7 @@
 #include <boost/uuid/random_generator.hpp>
-#include <folly/init/Init.h>
 #include <ostream>
+
+#include <sisl/async/coro.hpp>
 
 #include "fixture_app.hpp"
 
@@ -14,7 +15,7 @@ SISL_OPTION_GROUP(
 
 SISL_LOGGING_INIT(HOMEOBJECT_LOG_MODS)
 
-#define test_options logging, homeobject, config, test_home_object
+#define test_options logging, config, test_home_object
 
 SISL_OPTIONS_ENABLE(test_options)
 
@@ -47,35 +48,32 @@ void TestFixture::SetUp() {
 
     auto tid = homeobject::generateRandomTraceId();
     LOGDEBUG("Setup Pg, trace_id={}", tid);
-    EXPECT_TRUE(homeobj_->pg_manager()->create_pg(std::move(info), tid).get());
+    EXPECT_TRUE(sisl::async::sync_get(homeobj_->pg_manager()->create_pg(std::move(info), tid)));
 
     LOGDEBUG("Setup Shards, trace_id={}", tid);
-    auto s_e = homeobj_->shard_manager()->create_shard(_pg_id, Mi, "shard meta", tid).get();
+    auto s_e = sisl::async::sync_get(homeobj_->shard_manager()->create_shard(_pg_id, Mi, "shard meta", tid));
     ASSERT_TRUE(!!s_e);
-    s_e.then([this](auto&& i) { _shard_1 = std::move(i); });
+    _shard_1 = std::move(*s_e);
 
-    s_e = homeobj_->shard_manager()->create_shard(_pg_id, Mi, "shard meta", tid).get();
+    s_e = sisl::async::sync_get(homeobj_->shard_manager()->create_shard(_pg_id, Mi, "shard meta", tid));
     ASSERT_TRUE(!!s_e);
-    s_e.then([this](auto&& i) { _shard_2 = std::move(i); });
+    _shard_2 = std::move(*s_e);
 
     LOGDEBUG("Get on empty Shard={}, trace_id={}", _shard_1.id, tid);
-    auto g_e = homeobj_->blob_manager()->get(_shard_1.id, 0, 0, 0, tid).get();
+    auto g_e = sisl::async::sync_get(homeobj_->blob_manager()->get(_shard_1.id, 0, 0, 0, tid));
     ASSERT_FALSE(g_e);
     EXPECT_EQ(homeobject::BlobErrorCode::UNKNOWN_BLOB, g_e.error().getCode());
 
     LOGDEBUG("Insert Blob to={}, trace_id={}", _shard_1.id, tid);
-    auto o_e = homeobj_->blob_manager()
-                   ->put(_shard_1.id, homeobject::Blob{sisl::io_blob_safe(4 * Ki, 512u), "test_blob", 4 * Mi}, tid)
-                   .get();
+    auto o_e = sisl::async::sync_get(homeobj_->blob_manager()->put(
+        _shard_1.id, homeobject::Blob{sisl::io_blob_safe(4 * Ki, 512u), "test_blob", 4 * Mi}, tid));
     EXPECT_TRUE(!!o_e);
-    o_e.then([this](auto&& b) mutable { _blob_id = std::move(b); });
+    _blob_id = std::move(*o_e);
 
-    g_e = homeobj_->blob_manager()->get(_shard_1.id, _blob_id, 0, 0, tid).get();
+    g_e = sisl::async::sync_get(homeobj_->blob_manager()->get(_shard_1.id, _blob_id, 0, 0, tid));
     EXPECT_TRUE(!!g_e);
-    g_e.then([](auto&& blob) {
-        EXPECT_STREQ(blob.user_key.c_str(), "test_blob");
-        EXPECT_EQ(blob.object_off, 4 * Mi);
-    });
+    EXPECT_STREQ(g_e->user_key.c_str(), "test_blob");
+    EXPECT_EQ(g_e->object_off, 4 * Mi);
 
     // cover the memory version of get_stats
     // homestore version has a dedicated test for this.
@@ -100,7 +98,5 @@ int main(int argc, char* argv[]) {
     SISL_OPTIONS_LOAD(parsed_argc, argv, test_options);
     sisl::logging::SetLogger(std::string(argv[0]));
     sisl::logging::SetLogPattern("[%D %T%z] [%^%L%$] [%t] %v");
-    parsed_argc = 1;
-    auto f = ::folly::Init(&parsed_argc, &argv, true);
     return RUN_ALL_TESTS();
 }

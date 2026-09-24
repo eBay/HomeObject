@@ -87,8 +87,8 @@ TEST_F(HomeObjectFixture, SealShard) {
 
         // expect to create shard failed
         run_on_pg_leader(pg_id, [&]() {
-            auto s = _obj_inst->shard_manager()->create_shard(pg_id, 64 * Mi, "shard meta").get();
-            ASSERT_TRUE(s.hasError());
+            auto s = sisl::async::sync_get(_obj_inst->shard_manager()->create_shard(pg_id, 64 * Mi, "shard meta"));
+            ASSERT_TRUE(!s);
             ASSERT_EQ(ShardErrorCode::NO_SPACE_LEFT, s.error().getCode());
         });
 
@@ -150,7 +150,7 @@ TEST_F(HomeObjectFixture, ShardManagerRecovery) {
     // restart again to verify the shards has expected states.
     restart();
 
-    auto s = _obj_inst->shard_manager()->get_shard(shard_id).get();
+    auto s = sisl::async::sync_get(_obj_inst->shard_manager()->get_shard(shard_id));
     ASSERT_TRUE(!!s);
 
     EXPECT_EQ(ShardInfo::State::SEALED, s.value().state);
@@ -211,7 +211,7 @@ TEST_F(HomeObjectFixture, SealShardWithRestart) {
 
     auto shard_info = create_shard(pg_id, 64 * Mi, "shard meta");
     auto shard_id = shard_info.id;
-    auto s = _obj_inst->shard_manager()->get_shard(shard_id).get();
+    auto s = sisl::async::sync_get(_obj_inst->shard_manager()->get_shard(shard_id));
     ASSERT_TRUE(!!s);
 
     LOGINFO("Got shard {}", shard_id);
@@ -228,7 +228,8 @@ TEST_F(HomeObjectFixture, SealShardWithRestart) {
     LOGINFO("Sealed shard {}", shard_id);
 
     run_on_pg_leader(pg_id, [this, shard_id]() {
-        auto b = _obj_inst->blob_manager()->put(shard_id, Blob{sisl::io_blob_safe(512u, 512u), "test_blob", 0ul}).get();
+        auto b = sisl::async::sync_get(
+            _obj_inst->blob_manager()->put(shard_id, Blob{sisl::io_blob_safe(512u, 512u), "test_blob", 0ul}));
         ASSERT_TRUE(!b);
         ASSERT_EQ(b.error().getCode(), BlobErrorCode::SEALED_SHARD);
         LOGINFO("Put blob {}", b.error());
@@ -238,7 +239,7 @@ TEST_F(HomeObjectFixture, SealShardWithRestart) {
     restart();
 
     // Verify shard is sealed.
-    s = _obj_inst->shard_manager()->get_shard(shard_id).get();
+    s = sisl::async::sync_get(_obj_inst->shard_manager()->get_shard(shard_id));
     ASSERT_TRUE(!!s);
 
     LOGINFO("After restart shard {}", shard_id);
@@ -248,7 +249,8 @@ TEST_F(HomeObjectFixture, SealShardWithRestart) {
     EXPECT_EQ(shard_info.state, ShardInfo::State::SEALED);
 
     run_on_pg_leader(pg_id, [this, shard_id]() {
-        auto b = _obj_inst->blob_manager()->put(shard_id, Blob{sisl::io_blob_safe(512u, 512u), "test_blob", 0ul}).get();
+        auto b = sisl::async::sync_get(
+            _obj_inst->blob_manager()->put(shard_id, Blob{sisl::io_blob_safe(512u, 512u), "test_blob", 0ul}));
         ASSERT_TRUE(!b);
         ASSERT_EQ(b.error().getCode(), BlobErrorCode::SEALED_SHARD);
         LOGINFO("Put blob {}", b.error());
@@ -277,14 +279,14 @@ TEST_F(HomeObjectFixture, CreateShardOnDiskLostMemeber) {
         restart(0, 0, 1);
 
         auto tid = generateRandomTraceId();
-        auto s = _obj_inst->shard_manager()->seal_shard(pg_shard_id_map[degrade_pg_id], tid).get();
-        ASSERT_TRUE(s.hasError()) << "degraded pg on error member should return seal shard fail, pg_id "
-                                  << degrade_pg_id << "shard_id " << pg_shard_id_map[degrade_pg_id]
-                                  << " replica number " << g_helper->replica_num();
+        auto s = sisl::async::sync_get(_obj_inst->shard_manager()->seal_shard(pg_shard_id_map[degrade_pg_id], tid));
+        ASSERT_TRUE(!s) << "degraded pg on error member should return seal shard fail, pg_id " << degrade_pg_id
+                        << "shard_id " << pg_shard_id_map[degrade_pg_id] << " replica number "
+                        << g_helper->replica_num();
         tid = generateRandomTraceId();
-        s = _obj_inst->shard_manager()->create_shard(degrade_pg_id, 64 * Mi, "shard meta", tid).get();
-        ASSERT_TRUE(s.hasError()) << "degraded pg on error member should return create shard fail, pg_id "
-                                  << degrade_pg_id << " replica number " << g_helper->replica_num();
+        s = sisl::async::sync_get(_obj_inst->shard_manager()->create_shard(degrade_pg_id, 64 * Mi, "shard meta", tid));
+        ASSERT_TRUE(!s) << "degraded pg on error member should return create shard fail, pg_id " << degrade_pg_id
+                        << " replica number " << g_helper->replica_num();
     } else {
         restart();
         sleep(10);
@@ -434,7 +436,7 @@ TEST_F(HomeObjectFixture, ShardVersionMigrationRecovery) {
     // Verify all shards are still functional
     LOGINFO("Verifying shard functionality...");
     for (size_t i = 0; i < shard_ids.size(); ++i) {
-        auto s = _obj_inst->shard_manager()->get_shard(shard_ids[i]).get();
+        auto s = sisl::async::sync_get(_obj_inst->shard_manager()->get_shard(shard_ids[i]));
         ASSERT_TRUE(!!s) << "Shard " << i << " should be accessible";
         EXPECT_EQ(shard_ids[i], s.value().id);
         EXPECT_EQ(ShardInfo::State::OPEN, s.value().state);

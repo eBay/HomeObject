@@ -178,7 +178,7 @@ TEST_F(HomeObjectFixture, PGBlobIterator) {
                 auto blob_data = b->data()->Data();
                 auto blob_header = r_cast< HSHomeObject::BlobHeader const* >(blob_data);
                 ASSERT_TRUE(blob_header->valid());
-                auto g = _obj_inst->blob_manager()->get(shard->info.id, b->blob_id(), 0, 0).get();
+                auto g = sisl::async::sync_get(_obj_inst->blob_manager()->get(shard->info.id, b->blob_id(), 0, 0));
                 ASSERT_TRUE(!!g);
                 auto result = std::move(g.value());
                 EXPECT_EQ(result.body.size(), blob_header->blob_size);
@@ -313,7 +313,7 @@ TEST_F(HomeObjectFixture, PGBlobIteratorGCMoveDetection) {
     // Get shard_2's blob_1 pbas — its blob header has shard_2_id, so verify_blob against shard_1_id will fail.
     auto index_table = _obj_inst->get_index_table(pg_id);
     auto shard_2_blob_pbas = _obj_inst->get_blob_from_index_table(index_table, shard_2_id, 1 /* blob_id */);
-    ASSERT_TRUE(shard_2_blob_pbas.hasValue());
+    ASSERT_TRUE((bool)shard_2_blob_pbas);
     ASSERT_NE(shard_2_blob_pbas.value(), correct_pbas);
 
     // Inject stale pbas (simulating GC moved blob_0 to a new location already reflected in the
@@ -375,7 +375,7 @@ TEST_F(HomeObjectFixture, PGBlobIteratorGCTombstoneDetection) {
     // Get shard_2's blob_1 pbas to inject as a stale blkid for blob_0 in shard_1.
     auto index_table = _obj_inst->get_index_table(pg_id);
     auto shard_2_blob_pbas = _obj_inst->get_blob_from_index_table(index_table, shard_2_id, 1 /* blob_id */);
-    ASSERT_TRUE(shard_2_blob_pbas.hasValue());
+    ASSERT_TRUE((bool)shard_2_blob_pbas);
 
     // Inject stale pbas and tombstone blob_0 so the index lookup returns UNKNOWN_BLOB.
     // Flow: read from shard_2's location → verify_blob fails (shard_id mismatch) →
@@ -484,8 +484,8 @@ TEST_F(HomeObjectFixture, SnapshotReceiveHandler) {
     ASSERT_TRUE(pg != nullptr);
     PGStats stats;
     ASSERT_TRUE(_obj_inst->pg_manager()->get_stats(pg_id, stats));
-    auto r_dev = homestore::HomeStore::instance()->repl_service().get_repl_dev(stats.replica_set_uuid);
-    ASSERT_TRUE(r_dev.hasValue());
+    auto r_dev = homestore::hs()->repl_service().get_repl_dev(stats.replica_set_uuid);
+    ASSERT_TRUE((bool)r_dev);
 
     auto handler = std::make_unique< homeobject::HSHomeObject::SnapshotReceiveHandler >(*_obj_inst, r_dev.value());
     handler->reset_context_and_metrics(snp_lsn, pg_id);
@@ -508,10 +508,9 @@ TEST_F(HomeObjectFixture, SnapshotReceiveHandler) {
     for (uint64_t i = 1; i <= num_shards_per_pg; i++) {
         shard_ids.push_back(i);
     }
-    auto pg_entry =
-        CreateResyncPGMetaDataDirect(builder, pg_id, &uuid, pg->pg_info_.size, pg->pg_info_.expected_member_num,
-                                     pg->pg_info_.chunk_size, blob_seq_num, num_shards_per_pg, &members, &shard_ids,
-                                     blob_seq_num /* total_blobs_to_transfer */);
+    auto pg_entry = CreateResyncPGMetaDataDirect(
+        builder, pg_id, &uuid, pg->pg_info_.size, pg->pg_info_.expected_member_num, pg->pg_info_.chunk_size,
+        blob_seq_num, num_shards_per_pg, &members, &shard_ids, blob_seq_num /* total_blobs_to_transfer */);
     builder.Finish(pg_entry);
     auto pg_meta = GetResyncPGMetaData(builder.GetBufferPointer());
     auto ret = handler->process_pg_snapshot_data(*pg_meta);
@@ -562,7 +561,7 @@ TEST_F(HomeObjectFixture, SnapshotReceiveHandler) {
         ASSERT_EQ(handler->get_next_shard(),
                   i == num_shards_per_pg ? HSHomeObject::SnapshotReceiveHandler::shard_list_end_marker : i + 1);
 
-        auto res = _obj_inst->shard_manager()->get_shard(shard.id).get();
+        auto res = sisl::async::sync_get(_obj_inst->shard_manager()->get_shard(shard.id));
         ASSERT_TRUE(!!res);
         auto shard_res = std::move(res.value());
         ASSERT_EQ(shard_res.id, shard.id);
@@ -672,7 +671,8 @@ TEST_F(HomeObjectFixture, SnapshotReceiveHandler) {
                         builder, retry_blob_id, static_cast< uint8_t >(ResyncBlobState::NORMAL), &retry_data));
                     blob_map[retry_blob_id] = std::make_tuple< Blob, bool >(std::move(retry_blob), false);
                 }
-                builder.Finish(CreateResyncBlobDataBatchDirect(builder, &retry_blob_entries, j == num_batches_per_shard));
+                builder.Finish(
+                    CreateResyncBlobDataBatchDirect(builder, &retry_blob_entries, j == num_batches_per_shard));
                 auto retry_blob_batch = GetResyncBlobDataBatch(builder.GetBufferPointer());
                 ASSERT_EQ(handler->process_blobs_snapshot_data(*retry_blob_batch, j, j == num_batches_per_shard), 0);
             } else {
@@ -692,7 +692,7 @@ TEST_F(HomeObjectFixture, SnapshotReceiveHandler) {
             auto& blob = std::get< 0 >(b.second);
             auto is_corrupted = std::get< 1 >(b.second);
 
-            auto result = _obj_inst->blob_manager()->get(shard.id, blob_id, 0, blob.body.size()).get();
+            auto result = sisl::async::sync_get(_obj_inst->blob_manager()->get(shard.id, blob_id, 0, blob.body.size()));
             if (is_corrupted) {
                 ASSERT_FALSE(!!result);
             } else {
@@ -743,8 +743,8 @@ TEST_F(HomeObjectFixture, SnapshotReceiveHandlerAllocatorResyncAfterCrash) {
     ASSERT_NE(pg, nullptr);
     PGStats stats;
     ASSERT_TRUE(_obj_inst->pg_manager()->get_stats(pg_id, stats));
-    auto r_dev = homestore::HomeStore::instance()->repl_service().get_repl_dev(stats.replica_set_uuid);
-    ASSERT_TRUE(r_dev.hasValue());
+    auto r_dev = homestore::hs()->repl_service().get_repl_dev(stats.replica_set_uuid);
+    ASSERT_TRUE((bool)r_dev);
 
     auto handler = std::make_unique< homeobject::HSHomeObject::SnapshotReceiveHandler >(*_obj_inst, r_dev.value());
     handler->reset_context_and_metrics(snp_lsn, pg_id);
@@ -759,10 +759,9 @@ TEST_F(HomeObjectFixture, SnapshotReceiveHandlerAllocatorResyncAfterCrash) {
         members.push_back(CreateMemberDirect(builder, &id, member.name.c_str(), priority));
     }
     std::vector< uint64_t > shard_ids = {1};
-    auto pg_entry = CreateResyncPGMetaDataDirect(builder, pg_id, &uuid, pg->pg_info_.size,
-                                                 pg->pg_info_.expected_member_num, pg->pg_info_.chunk_size,
-                                                 num_blobs_total /*blob_seq_num*/, 1 /*shard_seq_num*/, &members,
-                                                 &shard_ids);
+    auto pg_entry = CreateResyncPGMetaDataDirect(
+        builder, pg_id, &uuid, pg->pg_info_.size, pg->pg_info_.expected_member_num, pg->pg_info_.chunk_size,
+        num_blobs_total /*blob_seq_num*/, 1 /*shard_seq_num*/, &members, &shard_ids);
     builder.Finish(pg_entry);
     ASSERT_EQ(handler->process_pg_snapshot_data(*GetResyncPGMetaData(builder.GetBufferPointer())), 0);
     builder.Reset();
@@ -816,7 +815,8 @@ TEST_F(HomeObjectFixture, SnapshotReceiveHandlerAllocatorResyncAfterCrash) {
         uint64_t total_bytes{0};
         for (blob_id_t blob_id = start_blob_id; blob_id < end_blob_id; blob_id++) {
             auto blob = build_blob(blob_id);
-            total_bytes += sisl::round_up(sizeof(HSHomeObject::BlobHeader), _obj_inst->_data_block_size) + blob.body.size();
+            total_bytes +=
+                sisl::round_up(sizeof(HSHomeObject::BlobHeader), _obj_inst->_data_block_size) + blob.body.size();
         }
         return total_bytes;
     };
@@ -836,11 +836,11 @@ TEST_F(HomeObjectFixture, SnapshotReceiveHandlerAllocatorResyncAfterCrash) {
 
     // Confirm only the partial set is readable and indexed
     for (blob_id_t blob_id = 0; blob_id < num_blobs_partial; blob_id++) {
-        auto result = _obj_inst->blob_manager()->get(shard_id, blob_id, 0, 0).get();
+        auto result = sisl::async::sync_get(_obj_inst->blob_manager()->get(shard_id, blob_id, 0, 0));
         ASSERT_TRUE(!!result) << "blob_id=" << blob_id << " should be readable after partial delivery";
     }
     for (blob_id_t blob_id = num_blobs_partial; blob_id < num_blobs_total; blob_id++) {
-        auto result = _obj_inst->blob_manager()->get(shard_id, blob_id, 0, 0).get();
+        auto result = sisl::async::sync_get(_obj_inst->blob_manager()->get(shard_id, blob_id, 0, 0));
         ASSERT_FALSE(!!result) << "blob_id=" << blob_id << " should NOT exist before full delivery";
     }
 
@@ -848,10 +848,10 @@ TEST_F(HomeObjectFixture, SnapshotReceiveHandlerAllocatorResyncAfterCrash) {
     // protect during re-delivery so new blobs don't overwrite them.
     auto index_table = _obj_inst->get_hs_pg(pg_id)->index_table_;
     ASSERT_NE(index_table, nullptr);
-    std::vector< homestore::MultiBlkId > partial_blk_ids;
+    std::vector< homestore::multi_blk_id > partial_blk_ids;
     for (blob_id_t blob_id = 0; blob_id < num_blobs_partial; blob_id++) {
         auto res = _obj_inst->get_blob_from_index_table(index_table, shard_id, blob_id);
-        ASSERT_TRUE(res.hasValue()) << "blob_id=" << blob_id << " must be in index after partial delivery";
+        ASSERT_TRUE((bool)res) << "blob_id=" << blob_id << " must be in index after partial delivery";
         partial_blk_ids.push_back(res.value());
     }
 
@@ -911,12 +911,12 @@ TEST_F(HomeObjectFixture, SnapshotReceiveHandlerAllocatorResyncAfterCrash) {
     // ---- Verify no overlap: a fresh alloc must land ABOVE all blobs (partial + new) ----
     // Core safety check: without the fix, alloc_blks() returns blk 0 (watermark stayed 0),
     // overlapping the data written for blobs 0..num_blobs_partial-1 in the first delivery.
-    homestore::MultiBlkId new_blk_id;
+    homestore::multi_blk_id new_blk_id;
     homestore::blk_alloc_hints hints;
     hints.chunk_id_hint = *p_chunk_id;
-    auto alloc_status =
-        homestore::data_service().alloc_blks(homestore::data_service().get_blk_size(), hints, new_blk_id);
-    ASSERT_EQ(alloc_status, homestore::BlkAllocStatus::SUCCESS);
+    auto alloc_res = homestore::data_service().alloc_blks(homestore::data_service().get_blk_size(), hints);
+    ASSERT_TRUE(alloc_res.has_value());
+    new_blk_id = std::move(*alloc_res);
 
     for (const auto& existing_blk : partial_blk_ids) {
         auto existing_end = existing_blk.blk_num() + existing_blk.blk_count();
@@ -924,14 +924,14 @@ TEST_F(HomeObjectFixture, SnapshotReceiveHandlerAllocatorResyncAfterCrash) {
             << "new allocation at blk " << new_blk_id.blk_num() << " must not overlap partial blob at blks ["
             << existing_blk.blk_num() << ", " << existing_end << ")";
     }
-    homestore::data_service().async_free_blk(new_blk_id).get();
+    sisl::async::sync_get(homestore::data_service().async_free_blk(new_blk_id));
 
     // ---- Verify all blobs are readable with correct content ----
     // Blobs 0..num_blobs_partial-1: must retain the data from the first delivery (not overwritten
     // by the new-blob allocations in the second delivery).
     // Blobs num_blobs_partial..num_blobs_total-1: must be readable as newly written.
     for (blob_id_t blob_id = 0; blob_id < num_blobs_total; blob_id++) {
-        auto result = _obj_inst->blob_manager()->get(shard_id, blob_id, 0, 0).get();
+        auto result = sisl::async::sync_get(_obj_inst->blob_manager()->get(shard_id, blob_id, 0, 0));
         ASSERT_TRUE(!!result) << "blob_id=" << blob_id << " must be readable after full delivery";
         auto expected = build_blob(blob_id);
         ASSERT_EQ(result->body.size(), expected.body.size());

@@ -21,5 +21,4 @@ target_link_libraries(memory_test
     ${COMMON_TEST_DEPS}
     -rdynamic
 )
-add_test(NAME MemoryTestCPU COMMAND memory_test -csv error --executor cpu --num_iters 20000)
-add_test(NAME MemoryTestIO COMMAND memory_test -csv error --executor io --num_iters 20000)
+add_test(NAME MemoryTest COMMAND memory_test -csv error --num_iters 20000)

@@ -1,7 +1,6 @@
 #include <latch>
 #include <optional>
 #include <spdlog/fmt/bin_to_hex.h>
-#include <folly/Uri.h>
 
 #include <homestore/homestore.hpp>
 #include <homestore/checkpoint/cp_mgr.hpp>
@@ -9,6 +8,7 @@
 #include <homestore/replication_service.hpp>
 #include <homestore/index_service.hpp>
 #include <iomgr/io_environment.hpp>
+#include <iomgr/drive.hpp>
 #include <sisl/version.hpp>
 
 #include <homeobject/homeobject.hpp>
@@ -51,7 +51,7 @@ extern std::shared_ptr< HomeObject > init_homeobject(std::weak_ptr< HomeObjectAp
 }
 
 // repl application to init homestore
-class HSReplApplication : public homestore::ReplApplication {
+class HSReplApplication : public homestore::repl_application {
 public:
     HSReplApplication(homestore::repl_impl_type impl_type, bool need_timeline_consistency, HSHomeObject* home_object,
                       std::weak_ptr< HomeObjectApplication > ho_application) :
@@ -68,7 +68,7 @@ public:
 
     bool need_timeline_consistency() const override { return _need_timeline_consistency; }
 
-    std::shared_ptr< homestore::ReplDevListener > create_repl_dev_listener(homestore::group_id_t group_id) override {
+    std::shared_ptr< homestore::repl_dev_listener > create_repl_dev_listener(homestore::group_id_t group_id) override {
         std::scoped_lock lock_guard(_repl_sm_map_lock);
         auto [it, inserted] = _repl_sm_map.emplace(group_id, nullptr);
         if (inserted) { it->second = std::make_shared< ReplicationStateMachine >(_home_object); }
@@ -90,22 +90,33 @@ public:
 
     std::pair< std::string, uint16_t > lookup_peer(homestore::replica_id_t uuid) const override {
         std::string endpoint;
-        // for folly::uri to parse correctly, we need to add "http://" prefix
-        static std::string const uri_prefix{"http://"};
         if (auto app = _ho_application.lock(); app) {
-            endpoint = fmt::format("{}{}", uri_prefix, app->lookup_peer(uuid));
+            endpoint = app->lookup_peer(uuid);
         } else {
             LOGW("HomeObjectApplication lifetime unexpected! Shutdown in progress?");
             return {};
         }
 
+        // Hand-parse host:port (formerly folly::Uri). Strip optional http(s)://, split on last ':'.
+        std::string_view ep{endpoint};
+        if (ep.starts_with("http://")) {
+            ep.remove_prefix(7);
+        } else if (ep.starts_with("https://")) {
+            ep.remove_prefix(8);
+        }
+
         std::pair< std::string, uint16_t > host_port;
+        auto const colon = ep.rfind(':');
+        if (colon == std::string_view::npos) {
+            LOGE("can't extract host:port from uuid {}, endpoint={}", to_string(uuid), endpoint);
+            return {};
+        }
+        host_port.first = std::string{ep.substr(0, colon)};
         try {
-            folly::Uri uri(endpoint);
-            host_port.first = uri.host();
-            host_port.second = uri.port();
-        } catch (std::runtime_error const& e) {
-            LOGE("can't extract host from uuid {}, endpoint={}; error={}", to_string(uuid), endpoint, e.what());
+            host_port.second = static_cast< uint16_t >(std::stoul(std::string{ep.substr(colon + 1)}));
+        } catch (std::exception const& e) {
+            LOGE("can't extract port from uuid {}, endpoint={}; error={}", to_string(uuid), endpoint, e.what());
+            return {};
         }
         return host_port;
     }
@@ -139,7 +150,7 @@ private:
 uint64_t HSHomeObject::_hs_chunk_size = HS_CHUNK_SIZE;
 
 DevType HSHomeObject::get_device_type(string const& devname) {
-    const iomgr::drive_type dtype = iomgr::DriveInterface::get_drive_type(devname);
+    const iomgr::drive_type dtype = iomgr::type_of(devname);
     if (dtype == iomgr::drive_type::block_hdd || dtype == iomgr::drive_type::file_on_hdd) { return DevType::HDD; }
     if (dtype == iomgr::drive_type::file_on_nvme || dtype == iomgr::drive_type::block_nvme) { return DevType::NVME; }
     return DevType::UNSUPPORTED;
@@ -149,9 +160,8 @@ void HSHomeObject::init_homestore() {
     auto app = _application.lock();
     RELEASE_ASSERT(app, "HomeObjectApplication lifetime unexpected!");
 
-    LOGI("Starting iomgr with {} threads, spdk={}", app->threads(), false);
-    ioenvironment.with_iomgr(iomgr::iomgr_params{.num_threads = app->threads(), .is_spdk = app->spdk_mode()})
-        .with_http_server();
+    LOGI("Starting iomgr with {} threads", app->threads());
+    ioenvironment.with_iomgr(iomgr::iomgr_params{.num_threads = app->threads()}).with_http_server();
 
     http_mgr_ = std::make_unique< HttpManager >(*this);
 
@@ -192,7 +202,7 @@ void HSHomeObject::init_homestore() {
     uint64_t max_snapshot_batch_size_in_bytes = HS_BACKEND_DYNAMIC_CONFIG(max_snapshot_batch_size_mb) * Mi;
     RELEASE_ASSERT(max_snapshot_batch_size_in_bytes <= INT_MAX, "snapshot size is larger than the grpc limit");
     bool need_format =
-        HomeStore::instance()
+        home_store::instance()
             ->with_index_service(std::make_unique< BlobIndexServiceCallbacks >(this))
             .with_repl_data_service(repl_app, chunk_selector_)
             .start(hs_input_params{.devices = device_info,
@@ -288,7 +298,7 @@ void HSHomeObject::init_homestore() {
             LOGI("  vdev [{}]: dev_type={} size_pct={:.1f}%", svc_name(svc), params.dev_type, params.size_pct);
         }
 
-        HomeStore::instance()->format_and_start(std::move(format_opts));
+        home_store::instance()->format_and_start(std::move(format_opts));
     } else {
         RELEASE_ASSERT(!_our_id.is_nil(), "No SvcId read after HomeStore recovery!");
         auto const new_id = app->discover_svcid(_our_id);
@@ -306,7 +316,11 @@ void HSHomeObject::init_homestore() {
     }
 
     // when reaching here, all the logs before dc_lsn have been replayed. we can start gc now.
-    if (HS_BACKEND_DYNAMIC_CONFIG(enable_gc)) {
+    auto const enable_gc = HS_BACKEND_DYNAMIC_CONFIG(enable_gc);
+    auto const enable_scrubber = HS_BACKEND_DYNAMIC_CONFIG(enable_scrubber);
+    if (enable_gc || enable_scrubber) { pin_bg_timer_reactor(); }
+
+    if (enable_gc) {
         LOGI("Starting GC manager");
         gc_mgr_->start();
     } else {
@@ -314,7 +328,7 @@ void HSHomeObject::init_homestore() {
     }
 
     // start scrubber
-    if (HS_BACKEND_DYNAMIC_CONFIG(enable_scrubber)) {
+    if (enable_scrubber) {
         LOGI("Starting scrub manager");
         scrub_mgr_->start();
     } else {
@@ -330,7 +344,7 @@ void HSHomeObject::on_replica_restart() {
         homestore::meta_service().register_handler(
             _pg_meta_name,
             [this](homestore::meta_blk* mblk, sisl::byte_view buf, size_t size) {
-                on_pg_meta_blk_found(std::move(buf), voidptr_cast(mblk));
+                on_pg_meta_blk_found(std::move(buf), mblk);
             },
             nullptr, true);
 
@@ -471,8 +485,8 @@ void HSHomeObject::init_timer_thread() {
 void HSHomeObject::init_cp() {
     using namespace homestore;
     // Register to CP for flush dirty buffers;
-    HomeStore::instance()->cp_mgr().register_consumer(cp_consumer_t::HS_CLIENT,
-                                                      std::move(std::make_unique< MyCPCallbacks >(*this)));
+    home_store::instance()->cp_mgr().register_consumer(cp_consumer_t::HS_CLIENT,
+                                                       std::move(std::make_unique< MyCPCallbacks >(*this)));
 }
 
 // void HSHomeObject::trigger_timed_events() { persist_pg_sb(); }
@@ -480,7 +494,7 @@ void HSHomeObject::init_cp() {
 void HSHomeObject::register_homestore_metablk_callback() {
     // register some callbacks for metadata recovery;
     using namespace homestore;
-    HomeStore::instance()->meta_service().register_handler(
+    home_store::instance()->meta_service().register_handler(
         _svc_meta_name,
         [this](homestore::meta_blk* mblk, sisl::byte_view buf, size_t size) {
             auto svc_sb = homestore::superblk< svc_info_superblk_t >(_svc_meta_name);
@@ -492,6 +506,18 @@ void HSHomeObject::register_homestore_metablk_callback() {
 }
 
 HSHomeObject::~HSHomeObject() { LOGI("HSHomeObject: Executing destruct procedure"); }
+
+void HSHomeObject::pin_bg_timer_reactor() {
+    if (bg_timer_reactor_) { return; }
+
+    // Pin GC/Scrub timers to one existing worker reactor. Do NOT create_reactor() a user reactor:
+    // late user reactors get every all_io/global iodev attached via on_reactor_start, and devices
+    // with an empty cb then crash in on_user_iodev_notification (std::bad_function_call).
+    iomanager.run_on_wait(iomgr::reactor_regex::random_worker,
+                          [this]() { bg_timer_reactor_ = iomanager.this_reactor(); });
+    RELEASE_ASSERT(bg_timer_reactor_, "failed to pin HomeObject background timer reactor");
+    LOGI("HomeObject background timers pinned to worker reactor");
+}
 
 void HSHomeObject::shutdown() {
     if (is_shutting_down()) {
@@ -526,8 +552,8 @@ void HSHomeObject::shutdown() {
     if (scrub_mgr_) scrub_mgr_->stop();
 
     LOGI("start shutting down HomeStore");
-    homestore::HomeStore::instance()->shutdown();
-    homestore::HomeStore::reset_instance();
+    homestore::home_store::instance()->shutdown();
+    homestore::home_store::reset_instance();
     gc_mgr_.reset();
     scrub_mgr_.reset();
     iomanager.stop();

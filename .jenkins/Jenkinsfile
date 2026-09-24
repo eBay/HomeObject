@@ -42,7 +42,7 @@ pipeline {
                     VER = sh(script: "grep -m 1 ' version =' conanfile.py | awk '{print \$3}' | tr -d '\n' | tr -d '\"'", returnStdout: true)
                     CONAN_CHANNEL = sh(script: "echo ${BRANCH_NAME} | sed -E 's,(\\w+-?\\d*)/.*,\\1,' | sed -E 's,-,_,' | tr -d '\n'", returnStdout: true)
                     TAG = "${VER}@${CONAN_USER}/${CONAN_CHANNEL}"
-                    CONAN_FLAGS="--name ${PROJECT} --user ${CONAN_USER} --channel ${CONAN_CHANNEL}"
+                    CONAN_FLAGS="-s:h compiler.cppstd=23 --name ${PROJECT} --user ${CONAN_USER} --channel ${CONAN_CHANNEL}"
                     slackSend color: '#0063D1', channel: '#sds-ci', message: "*${PROJECT}/${TAG}* is building."
                 }
             }
@@ -53,14 +53,14 @@ pipeline {
             steps {
                 script {
                     TAG = "${VER}@"
-                    CONAN_FLAGS="--name ${PROJECT}"
+                    CONAN_FLAGS="-s:h compiler.cppstd=23 --name ${PROJECT}"
                 }
             }
         }
 
         stage("Compile") {
             steps {
-                sh "conan create ${BUILD_MISSING} -s:h build_type=Debug -o ${PROJECT}/*:sanitize=True ${CONAN_FLAGS} . ; \
+                sh "conan create ${BUILD_MISSING} -s:h build_type=Debug -o ${PROJECT}/*:sanitize=address ${CONAN_FLAGS} . ; \
                     conan create ${BUILD_MISSING} -s:h build_type=Debug ${CONAN_FLAGS} . ; \
                     conan create ${BUILD_MISSING} -s:h build_type=RelWithDebInfo -o sisl/*:malloc_impl=tcmalloc ${CONAN_FLAGS} . ; \
                     "

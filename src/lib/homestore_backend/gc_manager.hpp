@@ -4,24 +4,21 @@
 
 #include <fmt/format.h>
 
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wmaybe-uninitialized"
-#include <folly/concurrency/ConcurrentHashMap.h>
-#pragma GCC diagnostic pop
-#include <folly/executors/IOThreadPoolExecutor.h>
-#include <folly/MPMCQueue.h>
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wuninitialized"
-#pragma GCC diagnostic ignored "-Wmaybe-uninitialized"
-#include <folly/futures/Future.h>
-#pragma GCC diagnostic pop
+#include <boost/unordered/concurrent_flat_map.hpp>
+#include <boost/asio.hpp>
 
 #include <sisl/utility/enum.hpp>
 #include <sisl/logging/logging.h>
+#include <sisl/async/task.hpp>
+#include <sisl/async/coro.hpp>
+#include <sisl/async/value_awaitable.hpp>
+#include <sisl/async/when_all.hpp>
+#include <sisl/fds/bounded_mpmc_queue.hpp>
+
 #include <iomgr/iomgr.hpp>
 
 #include <homestore/homestore.hpp>
-#include <homestore/blk.h>
+#include <homestore/blk.hpp>
 #include <homestore/index/index_table.hpp>
 
 #include "heap_chunk_selector.h"
@@ -155,14 +152,10 @@ public:
 
                 // Backlog / pressure snapshot gauges. Values refreshed once per scan cycle by
                 // GCManager::scan_chunks_for_gc; worst-case staleness = gc_scan_interval_sec.
-                REGISTER_GAUGE(pending_gc_bytes,
-                               "Total reclaimable garbage bytes in PG-owned chunks on this pdev");
-                REGISTER_GAUGE(eligible_gc_bytes,
-                               "Reclaimable bytes currently eligible for normal GC on this pdev");
-                REGISTER_GAUGE(eligible_gc_chunk_count,
-                               "Chunks currently eligible for normal GC on this pdev");
-                REGISTER_GAUGE(pending_normal_gc_task_count,
-                               "Normal-priority GC tasks queued or running on this pdev");
+                REGISTER_GAUGE(pending_gc_bytes, "Total reclaimable garbage bytes in PG-owned chunks on this pdev");
+                REGISTER_GAUGE(eligible_gc_bytes, "Reclaimable bytes currently eligible for normal GC on this pdev");
+                REGISTER_GAUGE(eligible_gc_chunk_count, "Chunks currently eligible for normal GC on this pdev");
+                REGISTER_GAUGE(pending_normal_gc_task_count, "Normal-priority GC tasks queued or running on this pdev");
 
                 // Distribution of the pending backlog by garbage-ratio bucket. We register 10
                 // gauges under a single Prometheus metric name (`pending_gc_chunks_ratio`),
@@ -179,18 +172,16 @@ public:
                 // shape. Prometheus text output is unaffected — it uses HELP (unchanged across
                 // registrations) and disambiguates series by labels.
                 static constexpr std::array< const char*, 10 > kRatioBucketLabels = {
-                    "00-10", "10-20", "20-30", "30-40", "40-50",
-                    "50-60", "60-70", "70-80", "80-90", "90-100"};
+                    "00-10", "10-20", "20-30", "30-40", "40-50", "50-60", "60-70", "70-80", "80-90", "90-100"};
                 for (size_t i = 0; i < kRatioBucketLabels.size(); ++i) {
                     const auto lo = i * 10;
                     const auto hi = (i + 1) * 10;
-                    const auto desc = fmt::format(
-                        "Snapshot count of pending chunks with garbage ratio in ({}, {}]% "
-                        "(bucket={})",
-                        lo, hi, kRatioBucketLabels[i]);
-                    ratio_bucket_indices_[i] = m_impl_ptr->register_gauge(
-                        "pending_gc_chunks_ratio", desc, "" /* report_name */,
-                        sisl::metric_label{"bucket", kRatioBucketLabels[i]});
+                    const auto desc = fmt::format("Snapshot count of pending chunks with garbage ratio in ({}, {}]% "
+                                                  "(bucket={})",
+                                                  lo, hi, kRatioBucketLabels[i]);
+                    ratio_bucket_indices_[i] =
+                        m_impl_ptr->register_gauge("pending_gc_chunks_ratio", desc, "" /* report_name */,
+                                                   sisl::metric_label{"bucket", kRatioBucketLabels[i]});
                 }
 
                 register_me_to_farm();
@@ -230,9 +221,8 @@ public:
                 // Bypass GAUGE_UPDATE for the same reason as bucket registration: we need to
                 // address 10 distinct gauge indices that share one metric name.
                 for (size_t i = 0; i < ratio_bucket_indices_.size(); ++i) {
-                    m_impl_ptr->gauge_update(
-                        ratio_bucket_indices_[i],
-                        static_cast< int64_t >(gc_actor_.get_pending_ratio_bucket(i)));
+                    m_impl_ptr->gauge_update(ratio_bucket_indices_[i],
+                                             static_cast< int64_t >(gc_actor_.get_pending_ratio_bucket(i)));
                 }
             }
 
@@ -268,8 +258,8 @@ public:
         struct gc_task_guard {
         public:
             gc_task_guard(uint8_t priority, pg_id_t pg_id, chunk_id_t move_from_chunk, chunk_id_t move_to_chunk,
-                          chunk_id_t vchunk_id, uint64_t task_id, folly::Promise< bool >& task,
-                          pdev_gc_actor* gc_actor) :
+                          chunk_id_t vchunk_id, uint64_t task_id,
+                          std::shared_ptr< sisl::async::value_awaitable< bool > > task, pdev_gc_actor* gc_actor) :
                     priority(priority),
                     pg_id(pg_id),
                     move_from_chunk(move_from_chunk),
@@ -295,13 +285,14 @@ public:
             chunk_id_t move_to_chunk;
             chunk_id_t vchunk_id;
             uint64_t task_id;
-            folly::Promise< bool >& task;
+            std::shared_ptr< sisl::async::value_awaitable< bool > > task;
             pdev_gc_actor* m_gc_actor;
         };
 
     public:
         void add_reserved_chunk(homestore::superblk< GCManager::gc_reserved_chunk_superblk > reserved_chunk_sb);
-        folly::SemiFuture< bool > add_gc_task(uint8_t priority, chunk_id_t move_from_chunk);
+        std::shared_ptr< sisl::async::value_awaitable< bool > > add_gc_task(uint8_t priority,
+                                                                            chunk_id_t move_from_chunk);
         void handle_recovered_gc_task(homestore::superblk< GCManager::gc_task_superblk >& gc_task_sb);
         void start();
         void stop();
@@ -315,12 +306,8 @@ public:
 
         // Snapshot readers used by pdev_gc_metrics::on_gather. Return the last value published
         // by GCManager::scan_chunks_for_gc for this pdev; 0 before the first scan completes.
-        uint64_t get_pending_gc_bytes() const {
-            return m_pending_gc_bytes.load(std::memory_order_relaxed);
-        }
-        uint64_t get_eligible_gc_bytes() const {
-            return m_eligible_gc_bytes.load(std::memory_order_relaxed);
-        }
+        uint64_t get_pending_gc_bytes() const { return m_pending_gc_bytes.load(std::memory_order_relaxed); }
+        uint64_t get_eligible_gc_bytes() const { return m_eligible_gc_bytes.load(std::memory_order_relaxed); }
         uint32_t get_eligible_gc_chunk_count() const {
             return m_eligible_gc_chunk_count.load(std::memory_order_relaxed);
         }
@@ -332,8 +319,7 @@ public:
         // the totals locally over all chunks on this pdev, then hand them in via one call so the
         // metrics stay internally consistent within a scan cycle. Between-gauge drift is bounded
         // by one scan interval; individual scalars are aligned and therefore torn-read safe.
-        void publish_scan_snapshot(uint64_t pending_bytes, uint64_t eligible_bytes,
-                                   uint32_t eligible_chunks,
+        void publish_scan_snapshot(uint64_t pending_bytes, uint64_t eligible_bytes, uint32_t eligible_chunks,
                                    const std::array< uint32_t, 10 >& ratio_buckets) {
             m_pending_gc_bytes.store(pending_bytes, std::memory_order_relaxed);
             m_eligible_gc_bytes.store(eligible_bytes, std::memory_order_relaxed);
@@ -344,8 +330,8 @@ public:
         }
 
     private:
-        void process_gc_task(chunk_id_t move_from_chunk, uint8_t priority, folly::Promise< bool > task,
-                             const uint64_t task_id);
+        void process_gc_task(chunk_id_t move_from_chunk, uint8_t priority,
+                             std::shared_ptr< sisl::async::value_awaitable< bool > > task, const uint64_t task_id);
 
         // this should be called only after gc_task meta blk is persisted. it will update the pg index table according
         // to the gc index table. return the move_to_chunk to chunkselector and put move_from_chunk to reserved chunk
@@ -359,7 +345,7 @@ public:
         // tombstone in the pg index table
         // return true if the data copy is successful, false otherwise.
         bool copy_valid_data(chunk_id_t move_from_chunk, chunk_id_t move_to_chunk,
-                             folly::ConcurrentHashMap< BlobRouteByChunk, BlobRouteValue >& copied_blobs,
+                             boost::concurrent_flat_map< BlobRouteByChunk, BlobRouteValue >& copied_blobs,
                              const uint8_t priority, const uint64_t task_id);
 
         // before we select a reserved chunk and start gc, we need:
@@ -379,7 +365,7 @@ public:
             const uint64_t task_id);
 
         bool check_blob_consistency(
-            folly::ConcurrentHashMap< BlobRouteByChunk, BlobRouteValue > const& copied_blobs,
+            boost::concurrent_flat_map< BlobRouteByChunk, BlobRouteValue > const& copied_blobs,
             std::vector< std::pair< BlobRouteByChunkKey, BlobRouteValue > > const& valid_blob_indexes,
             const uint64_t task_id, const pg_id_t pg_id);
 
@@ -392,7 +378,7 @@ public:
         friend class gc_task_guard;
         uint32_t m_pdev_id;
         std::shared_ptr< HeapChunkSelector > m_chunk_selector;
-        folly::MPMCQueue< chunk_id_t > m_reserved_chunk_queue;
+        sisl::BoundedMPMCQueue< chunk_id_t > m_reserved_chunk_queue;
         std::shared_ptr< GCBlobIndexTable > m_index_table;
         HSHomeObject* m_hs_home_object{nullptr};
         bool m_enable_read_verify;
@@ -402,8 +388,8 @@ public:
         // which is 30M/s. A block is 4K, so gc can read/write 30M/s / 4K = 7680 blocks per second.
         RateLimiter m_rate_limiter{HS_BACKEND_DYNAMIC_CONFIG(max_read_write_block_count_per_second)};
 
-        std::shared_ptr< folly::IOThreadPoolExecutor > m_gc_executor;
-        std::shared_ptr< folly::IOThreadPoolExecutor > m_egc_executor;
+        std::shared_ptr< boost::asio::thread_pool > m_gc_executor;
+        std::shared_ptr< boost::asio::thread_pool > m_egc_executor;
         std::atomic_bool m_is_stopped{true};
         // Tracks normal-priority GC tasks that are queued or actively running in m_gc_executor.
         // Incremented in add_gc_task after a task is enqueued; decremented in on_gc_task_completed.
@@ -437,7 +423,7 @@ public:
      * @return the future to wait for the task to be completed. false means gc task fails.
      * TODO:: add error code as the returned value to indicate the reason of failure.
      */
-    folly::SemiFuture< bool > submit_gc_task(task_priority priority, chunk_id_t chunk_id);
+    sisl::async::task< bool > submit_gc_task(task_priority priority, chunk_id_t chunk_id);
 
     /**
      * try to create a new gc actor for a pdev
@@ -447,11 +433,6 @@ public:
      */
     std::shared_ptr< pdev_gc_actor >
     try_create_pdev_gc_actor(uint32_t pdev_id, const homestore::superblk< GCManager::gc_actor_superblk >& gc_actor_sb);
-
-    // Returns the garbage ratio percentage [0.0, 100.0] for the given chunk if it is a valid GC candidate,
-    // or 0.0 if the chunk is not eligible (wrong state, no defrag blks, no pg, or pg not gc-able).
-    // Uses floating-point arithmetic to avoid truncation for chunks with very few defrag blocks.
-    float get_chunk_gc_ratio(chunk_id_t chunk_id);
 
     // One-shot snapshot of chunk state relevant to GC decisions. Populated with a single
     // ExtendedVChunk lookup so scan_chunks_for_gc can compute both submission decisions AND
@@ -491,9 +472,8 @@ private:
 
 private:
     std::shared_ptr< HeapChunkSelector > m_chunk_selector;
-    folly::ConcurrentHashMap< uint32_t, std::shared_ptr< pdev_gc_actor > > m_pdev_gc_actors;
+    boost::concurrent_flat_map< uint32_t, std::shared_ptr< pdev_gc_actor > > m_pdev_gc_actors;
     iomgr::timer_handle_t m_gc_timer_hdl{iomgr::null_timer_handle};
-    iomgr::io_fiber_t m_gc_timer_fiber{nullptr};
     HSHomeObject* m_hs_home_object{nullptr};
     std::list< homestore::superblk< GCManager::gc_task_superblk > > m_recovered_gc_tasks;
     std::unordered_map< pg_id_t, atomic_uint64_t > m_pending_gc_task_num_per_pg;

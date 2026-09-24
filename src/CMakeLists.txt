@@ -5,7 +5,10 @@ include_directories (BEFORE include/)
 include_directories (AFTER .)
 
 find_package(Threads QUIET REQUIRED)
-find_package(homestore QUIET REQUIRED)
+find_package(sisl QUIET REQUIRED)
+if (NOT HOMEOBJECT_MEMORY_ONLY)
+    find_package(homestore QUIET REQUIRED)
+endif()
 
 list(APPEND COMMON_DEPS sisl::sisl)
 

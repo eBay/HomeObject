@@ -4,6 +4,7 @@
 #include <functional>
 
 #include <boost/functional/hash.hpp>
+#include <fmt/format.h>
 
 #include "homeobject_impl.hpp"
 
@@ -33,6 +34,19 @@ struct BlobRouteByChunk {
 };
 #pragma pack()
 
+// ADL hash_value for boost::hash / concurrent_flat_map (must live in the type's namespace).
+inline std::size_t hash_value(BlobRoute const& r) noexcept {
+    return boost::hash_value(std::make_pair(r.shard, r.blob));
+}
+
+inline std::size_t hash_value(BlobRouteByChunk const& r) noexcept {
+    std::size_t seed = 0;
+    boost::hash_combine(seed, r.chunk);
+    boost::hash_combine(seed, r.shard);
+    boost::hash_combine(seed, r.blob);
+    return seed;
+}
+
 } // namespace homeobject
 
 namespace fmt {
@@ -44,9 +58,9 @@ struct formatter< homeobject::BlobRouteByChunk > {
     }
 
     template < typename FormatContext >
-    auto format(homeobject::BlobRouteByChunk const& r, FormatContext& ctx) {
-        return fmt::v10::format_to(ctx.out(), "{:04x}:{:04x}:{:012x}:{:016x}", r.chunk,
-                                   (r.shard >> homeobject::shard_width), (r.shard & homeobject::shard_mask), r.blob);
+    auto format(homeobject::BlobRouteByChunk const& r, FormatContext& ctx) const {
+        return fmt::format_to(ctx.out(), "{:04x}:{:04x}:{:012x}:{:016x}", r.chunk, (r.shard >> homeobject::shard_width),
+                              (r.shard & homeobject::shard_mask), r.blob);
     }
 };
 
@@ -58,9 +72,9 @@ struct formatter< homeobject::BlobRoute > {
     }
 
     template < typename FormatContext >
-    auto format(homeobject::BlobRoute const& r, FormatContext& ctx) {
-        return fmt::v10::format_to(ctx.out(), "{:04x}:{:012x}:{:016x}", (r.shard >> homeobject::shard_width),
-                                   (r.shard & homeobject::shard_mask), r.blob);
+    auto format(homeobject::BlobRoute const& r, FormatContext& ctx) const {
+        return fmt::format_to(ctx.out(), "{:04x}:{:012x}:{:016x}", (r.shard >> homeobject::shard_width),
+                              (r.shard & homeobject::shard_mask), r.blob);
     }
 };
 
@@ -68,18 +82,24 @@ struct formatter< homeobject::BlobRoute > {
 
 template <>
 struct std::hash< homeobject::BlobRoute > {
-    std::size_t operator()(homeobject::BlobRoute const& r) const noexcept {
-        return boost::hash_value< homeobject::blob_id_t >(std::make_pair(r.shard, r.blob));
-    }
+    std::size_t operator()(homeobject::BlobRoute const& r) const noexcept { return homeobject::hash_value(r); }
 };
 
 template <>
 struct std::hash< homeobject::BlobRouteByChunk > {
-    std::size_t operator()(homeobject::BlobRouteByChunk const& r) const noexcept {
-        std::size_t seed = 0;
-        boost::hash_combine(seed, r.chunk);
-        boost::hash_combine(seed, r.shard);
-        boost::hash_combine(seed, r.blob);
-        return seed;
-    }
+    std::size_t operator()(homeobject::BlobRouteByChunk const& r) const noexcept { return homeobject::hash_value(r); }
 };
+
+// Explicit boost::hash specializations — required by boost::concurrent_flat_map's default Hash
+// (ADL hash_value is not reliably found with this Boost/container_hash version).
+namespace boost {
+template <>
+struct hash< homeobject::BlobRoute > {
+    std::size_t operator()(homeobject::BlobRoute const& r) const noexcept { return homeobject::hash_value(r); }
+};
+
+template <>
+struct hash< homeobject::BlobRouteByChunk > {
+    std::size_t operator()(homeobject::BlobRouteByChunk const& r) const noexcept { return homeobject::hash_value(r); }
+};
+} // namespace boost

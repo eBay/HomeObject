@@ -2,8 +2,6 @@
 
 #include <sisl/options/options.h>
 #include <sisl/logging/logging.h>
-#include <folly/init/Init.h>
-
 #include <memory>
 
 #include "homeobject/common.hpp"
@@ -379,6 +377,5 @@ int main(int argc, char* argv[]) {
     sisl::logging::SetLogger(std::string(argv[0]));
     spdlog::set_pattern("[%D %T.%e] [%n] [%^%l%$] [%t] %v");
     parsed_argc = 1;
-    auto f = ::folly::Init(&parsed_argc, &argv, true);
     return RUN_ALL_TESTS();
 }

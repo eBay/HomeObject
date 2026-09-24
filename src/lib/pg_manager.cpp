@@ -16,8 +16,8 @@ PGManager::NullAsyncResult HomeObjectImpl::create_pg(PGInfo&& pg_info, trace_id_
         if (member.priority > 0) saw_leader = true;
         peers.insert(member.id);
     }
-    if (!saw_ourself || !saw_leader) { return folly::makeUnexpected(PGError::INVALID_ARG); }
-    return _create_pg(std::move(pg_info), peers, tid);
+    if (!saw_ourself || !saw_leader) { co_return std::unexpected(PGError::INVALID_ARG); }
+    co_return co_await _create_pg(std::move(pg_info), peers, tid);
 }
 
 PGManager::NullAsyncResult HomeObjectImpl::replace_member(pg_id_t id, std::string& task_id, peer_id_t const& old_member,
@@ -28,10 +28,10 @@ PGManager::NullAsyncResult HomeObjectImpl::replace_member(pg_id_t id, std::strin
     if (old_member == new_member.id) {
         LOGW("rejecting identical replacement SvcId [{}]! task_id [{}] trace_id [{}]", to_string(old_member), task_id,
              tid);
-        return folly::makeUnexpected(PGError::INVALID_ARG);
+        co_return std::unexpected(PGError::INVALID_ARG);
     }
 
-    return _replace_member(id, task_id, old_member, new_member, commit_quorum, tid);
+    co_return co_await _replace_member(id, task_id, old_member, new_member, commit_quorum, tid);
 }
 
 PGReplaceMemberStatus HomeObjectImpl::get_replace_member_status(pg_id_t id, std::string& task_id,
@@ -50,17 +50,17 @@ PGManager::NullResult HomeObjectImpl::exit_pg(uuid_t group_id, peer_id_t peer_id
 
 PGManager::NullAsyncResult HomeObjectImpl::flip_learner_flag(pg_id_t pg_id, peer_id_t const& member_id, bool is_learner,
                                                              uint32_t commit_quorum, trace_id_t trace_id) {
-    return _flip_learner_flag(pg_id, member_id, is_learner, commit_quorum, trace_id);
+    co_return co_await _flip_learner_flag(pg_id, member_id, is_learner, commit_quorum, trace_id);
 }
 
 PGManager::NullAsyncResult HomeObjectImpl::remove_member(pg_id_t pg_id, peer_id_t const& member_id,
                                                          uint32_t commit_quorum, trace_id_t trace_id) {
-    return _remove_member(pg_id, member_id, commit_quorum, trace_id);
+    co_return co_await _remove_member(pg_id, member_id, commit_quorum, trace_id);
 }
 
 PGManager::NullAsyncResult HomeObjectImpl::clean_replace_member_task(pg_id_t pg_id, std::string& task_id,
                                                                      uint32_t commit_quorum, trace_id_t trace_id) {
-    return _clean_replace_member_task(pg_id, task_id, commit_quorum, trace_id);
+    co_return co_await _clean_replace_member_task(pg_id, task_id, commit_quorum, trace_id);
 }
 
 PGManager::Result< std::vector< replace_member_task > >

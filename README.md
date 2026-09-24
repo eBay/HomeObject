@@ -44,30 +44,17 @@ management and scheduling of Pgs is the concern of the Application.
 
 ## Build
 
+HomeObject 5.x requires **C++23**, **Conan 2**, **sisl ^14.9**, and **homestore ^8.3**. Public async APIs use `sisl::async::task` (coroutines) and `std::expected`; Folly and Pistache are not used.
+
 ### System Pre-requisites
 * CMake 3.13 or later
-* conan 1.x (`pipx install conan~=1`)
+* conan 2.x (`pipx install conan`)
+* A C++23 toolchain (GCC/Clang)
 * libaio-dev (assuming Ubuntu)
 * uuid-dev (assuming Ubuntu)
 
 ### Dependencies
-* SISL
-```
-$ git clone https://github.com/eBay/sisl
-$ cd sisl & ./prepare.sh && conan export . oss/master
-```
-
-* IOManager
-```
-$ git clone https://github.com/eBay/iomanager
-$ cd iomanager & ./prepare.sh && conan export . oss/master
-```
-
-* HomeStore
-```
-$ git clone https://github.com/eBay/homestore
-$ cd homestore && conan export . oss/master
-```
+Build upstream packages in order (sisl → iomgr → nuraft_mesg → homestore), using `@oss/dev` when aligning with this tree. From sisl, run `./prepare_v2.sh` then `conan create` / `conan export` as upstream docs describe.
 
 ### Compilation
 ```
@@ -75,12 +62,18 @@ $ mkdir build
 $ cd build
 
 # Install all dependencies
-$ conan install --build missing <path_to_homeobject>
+$ conan install --build=missing <path_to_homeobject>
 
 # Build and Test
 $ conan build <path_to_homeobject>
 ```
 
+For memory-backend-only development: `-o homeobject/*:with_homestore=False` (sets `HOMEOBJECT_MEMORY_ONLY`).
+
+### Downstream API migration (4.x → 5.x)
+* `AsyncResult` is a coroutine (`sisl::async::task`); drive it with `co_await`, `sisl::async::sync_get` (non-reactor threads only), or `detach` / `detach_then`.
+* `Result` is `std::expected`: use `if (!r)` instead of `hasError()`; errors via `std::unexpected(...)`.
+* `NullResult` success value is `std::monostate`, not `folly::Unit`.
 ## Contributing to This Project
 We welcome contributions. If you find any bugs, potential flaws and edge cases, improvements, new feature suggestions or
 discussions, please submit issues or pull requests.
