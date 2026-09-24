@@ -47,7 +47,7 @@ SISL_OPTION_GROUP(
      "true or false"));
 
 SISL_LOGGING_INIT(homeobject)
-#define test_options logging, config, homeobject, test_homeobject_repl_common
+#define test_options logging, config, test_homeobject_repl_common
 SISL_OPTIONS_ENABLE(test_options)
 
 std::unique_ptr< test_common::HSReplTestHelper > g_helper;

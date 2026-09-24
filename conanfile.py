@@ -5,12 +5,12 @@ from conan.tools.cmake import CMakeToolchain, CMakeDeps, CMake
 from conan.tools.files import copy
 from os.path import join
 
-required_conan_version = ">=1.60.0"
+required_conan_version = ">=2.0"
 
 
 class HomeObjectConan(ConanFile):
     name = "homeobject"
-    version = "4.3.4"
+    version = "5.0.0"
 
     homepage = "https://github.com/eBay/HomeObject"
     description = "Blob Store built on HomeStore"
@@ -24,7 +24,7 @@ class HomeObjectConan(ConanFile):
         "shared": ['True', 'False'],
         "fPIC": ['True', 'False'],
         "coverage": ['True', 'False'],
-        "sanitize": ['True', 'False'],
+        "sanitize": ['address', 'thread', 'False'],
     }
 
     default_options = {
@@ -50,12 +50,12 @@ class HomeObjectConan(ConanFile):
         self.test_requires("gtest/[^1.17]")
 
     def requirements(self):
-        self.requires("sisl/[^13.2]", transitive_headers=True)
-        self.requires("homestore/[^7.5.12]")
+        self.requires("sisl/[^14.9]@oss/dev", transitive_headers=True)
+        self.requires("homestore/[^8.3]@oss/dev", transitive_headers=True)
 
     def validate(self):
         if self.info.settings.compiler.cppstd:
-            check_min_cppstd(self, 20)
+            check_min_cppstd(self, 23)
 
     def layout(self):
         self.folders.source = "."

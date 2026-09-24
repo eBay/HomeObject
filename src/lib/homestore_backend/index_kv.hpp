@@ -98,7 +98,7 @@ public:
 class BlobRouteValue : public homestore::BtreeValue {
 public:
     BlobRouteValue() = default;
-    BlobRouteValue(const homestore::MultiBlkId& pbas) : pbas_(pbas) {}
+    BlobRouteValue(const homestore::multi_blk_id& pbas) : pbas_(pbas) {}
     BlobRouteValue(const BlobRouteValue& other) : homestore::BtreeValue() { pbas_ = other.pbas_; };
     BlobRouteValue(const sisl::blob& b, bool copy) : homestore::BtreeValue() { deserialize(b, copy); }
     BlobRouteValue(const homestore::BtreeValue& other) : BlobRouteValue(other.serialize(), true) {}
@@ -110,12 +110,12 @@ public:
     }
 
     sisl::blob serialize() const override {
-        auto& pba = const_cast< homestore::MultiBlkId& >(pbas_);
+        auto& pba = const_cast< homestore::multi_blk_id& >(pbas_);
         return pba.serialize();
     }
 
     uint32_t serialized_size() const override { return pbas_.serialized_size(); }
-    static uint32_t get_fixed_size() { return homestore::MultiBlkId::expected_serialized_size(1 /* num_pieces */); }
+    static uint32_t get_fixed_size() { return homestore::multi_blk_id::expected_serialized_size(1 /* num_pieces */); }
 
     void deserialize(const sisl::blob& b, bool copy) override { pbas_.deserialize(b, copy); }
     std::string to_string() const override { return fmt::format("{}", pbas_.to_string()); }
@@ -124,10 +124,10 @@ public:
         return os;
     }
 
-    homestore::MultiBlkId pbas() const { return pbas_; }
+    homestore::multi_blk_id pbas() const { return pbas_; }
 
 private:
-    homestore::MultiBlkId pbas_;
+    homestore::multi_blk_id pbas_;
 };
 
 } // namespace homeobject
@@ -141,8 +141,8 @@ struct formatter< homeobject::BlobRouteKey > {
     }
 
     template < typename FormatContext >
-    auto format(homeobject::BlobRouteKey const& r, FormatContext& ctx) {
-        return fmt::v10::format_to(ctx.out(), "{}", r.key());
+    auto format(homeobject::BlobRouteKey const& r, FormatContext& ctx) const {
+        return fmt::format_to(ctx.out(), "{}", r.key());
     }
 };
 
@@ -154,8 +154,8 @@ struct formatter< homeobject::BlobRouteByChunkKey > {
     }
 
     template < typename FormatContext >
-    auto format(homeobject::BlobRouteByChunkKey const& r, FormatContext& ctx) {
-        return fmt::v10::format_to(ctx.out(), "{}", r.key());
+    auto format(homeobject::BlobRouteByChunkKey const& r, FormatContext& ctx) const {
+        return fmt::format_to(ctx.out(), "{}", r.key());
     }
 };
 } // namespace fmt

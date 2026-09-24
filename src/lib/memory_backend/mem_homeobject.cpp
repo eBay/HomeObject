@@ -15,9 +15,7 @@ MemoryHomeObject::MemoryHomeObject(std::weak_ptr< HomeObjectApplication >&& appl
 void MemoryHomeObject::shutdown() { LOGI("MemoryHomeObject: Executing shutdown procedure"); }
 
 ShardIndex::~ShardIndex() {
-    for (auto it = btree_.begin(); it != btree_.end(); ++it) {
-        delete it->second.blob_;
-    }
+    btree_.visit_all([](auto& p) { delete p.second.blob_; });
 }
 
 } // namespace homeobject

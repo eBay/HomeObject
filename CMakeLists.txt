@@ -1,7 +1,11 @@
 cmake_minimum_required (VERSION 3.11)
 project (homeobject LANGUAGES CXX)
 
-set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD 23)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+# sisl v14 removed cast-shorthand macros; restore until call sites are expanded.
+add_compile_options(-include ${CMAKE_CURRENT_SOURCE_DIR}/cmake/sisl_cast_compat.hpp)
 
 if (NOT DEFINED CMAKE_BUILD_TYPE)
     set (CMAKE_BUILD_TYPE "Debug")

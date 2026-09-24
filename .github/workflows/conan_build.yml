@@ -4,10 +4,10 @@ on:
   workflow_dispatch:
   push:
     branches:
-      - stable/v4.x
+      - dev/v5.x
   pull_request:
     branches:
-      - stable/v4.x
+      - dev/v5.x
 
 jobs:
   Build:

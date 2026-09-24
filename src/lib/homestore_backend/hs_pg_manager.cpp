@@ -1,3 +1,6 @@
+#include <sisl/async/task.hpp>
+#include <sisl/async/coro.hpp>
+#include <system_error>
 #include "hs_backend_config.hpp"
 
 #include <boost/uuid/random_generator.hpp>
@@ -61,6 +64,13 @@ PGError toPgError(ReplServiceError const& e) {
     }
 }
 
+PGError toPgError(std::error_condition const& e) {
+    if (e.category() == homestore::repl_error_category_inst()) {
+        return toPgError(static_cast< ReplServiceError >(e.value()));
+    }
+    return PGError::UNKNOWN;
+}
+
 PGReplaceMemberTaskStatus toPGReplaceMemberTaskStatus(ReplaceMemberStatus const& status) {
     switch (status) {
     case ReplaceMemberStatus::COMPLETED:
@@ -78,7 +88,7 @@ PGReplaceMemberTaskStatus toPGReplaceMemberTaskStatus(ReplaceMemberStatus const&
     }
 }
 
-[[maybe_unused]] static homestore::ReplDev& pg_repl_dev(PG const& pg) {
+[[maybe_unused]] static homestore::repl_dev& pg_repl_dev(PG const& pg) {
     return *(static_cast< HSHomeObject::HS_PG const& >(pg).repl_dev_);
 }
 
@@ -86,7 +96,7 @@ PGManager::NullAsyncResult HSHomeObject::_create_pg(PGInfo&& pg_info, std::set< 
                                                     trace_id_t tid) {
     if (is_shutting_down()) {
         LOGI("service is being shut down");
-        return folly::makeUnexpected(PGError::SHUTTING_DOWN);
+        co_return std::unexpected(PGError::SHUTTING_DOWN);
     }
     incr_pending_request_num();
 
@@ -97,72 +107,62 @@ PGManager::NullAsyncResult HSHomeObject::_create_pg(PGInfo&& pg_info, std::set< 
             LOGW("PG already exists with different info! pg={}, pg_info={}, hs_pg_info={}", pg_id, pg_info.to_string(),
                  hs_pg->pg_info_.to_string());
             decr_pending_request_num();
-            return folly::makeUnexpected(PGError::INVALID_ARG);
+            co_return std::unexpected(PGError::INVALID_ARG);
         }
         LOGW("PG already exists! pg={}", pg_id);
         decr_pending_request_num();
-        return folly::Unit();
+        co_return std::monostate{};
     }
 
     const auto chunk_size = chunk_selector()->get_chunk_size();
     if (pg_info.size < chunk_size) {
         LOGW("Not support to create PG which pg_size={} < chunk_size={}", pg_info.size, chunk_size);
         decr_pending_request_num();
-        return folly::makeUnexpected(PGError::INVALID_ARG);
+        co_return std::unexpected(PGError::INVALID_ARG);
     }
 
     auto const num_chunk = chunk_selector()->select_chunks_for_pg(pg_id, pg_info.size);
     if (!num_chunk.has_value()) {
         LOGW("Failed to select chunks for pg={}", pg_id);
         decr_pending_request_num();
-        return folly::makeUnexpected(PGError::NO_SPACE_LEFT);
+        co_return std::unexpected(PGError::NO_SPACE_LEFT);
     }
     if (pg_info.expected_member_num == 0) { pg_info.expected_member_num = pg_info.members.size(); }
     pg_info.chunk_size = chunk_size;
     pg_info.replica_set_uuid = boost::uuids::random_generator()();
     const auto repl_dev_group_id = pg_info.replica_set_uuid;
-    return hs_repl_service()
-        .create_repl_dev(pg_info.replica_set_uuid, peers)
-        .via(executor_)
-        .thenValue([this, pg_info = std::move(pg_info), tid](auto&& v) mutable -> PGManager::NullAsyncResult {
+
+    auto v = co_await hs_repl_service().create_repl_dev(pg_info.replica_set_uuid, peers);
 #ifdef _PRERELEASE
-            if (iomgr_flip::instance()->test_flip("create_pg_create_repl_dev_error")) {
-                LOGW("Simulating create repl dev error in creating pg");
-                v = folly::makeUnexpected(ReplServiceError::FAILED);
-            }
+    if (iomgr_flip::instance()->test_flip("create_pg_create_repl_dev_error")) {
+        LOGW("Simulating create repl dev error in creating pg");
+        v = std::unexpected(make_error_condition(ReplServiceError::FAILED));
+    }
 #endif
 
-            if (v.hasError()) { return folly::makeUnexpected(toPgError(v.error())); }
-            // we will write a PGHeader across the raft group and when it is committed
-            // all raft members will create PGinfo and index table for this PG.
+    if (!v) {
+        bool res = chunk_selector_->return_pg_chunks_to_dev_heap(pg_id);
+        RELEASE_ASSERT(res, "Failed to return pg={} chunks to dev_heap", pg_id);
+        auto e = co_await hs_repl_service().remove_repl_dev(repl_dev_group_id);
+        if (!e) { LOGW("Failed to remove repl device which group_id={}, error={}", repl_dev_group_id, e.error()); }
+        decr_pending_request_num();
+        co_return std::unexpected(toPgError(v.error()));
+    }
 
-            // FIXME:https://github.com/eBay/HomeObject/pull/136#discussion_r1470504271
-            return do_create_pg(v.value(), std::move(pg_info), tid);
-        })
-        .thenValue([this, pg_id, repl_dev_group_id, tid](auto&& r) -> PGManager::NullAsyncResult {
-            // reclaim resources if failed to create pg
-            if (r.hasError()) {
-                bool res = chunk_selector_->return_pg_chunks_to_dev_heap(pg_id);
-                RELEASE_ASSERT(res, "Failed to return pg={} chunks to dev_heap", pg_id);
-                // no matter if create repl dev successfully, remove it.
-                // if don't have repl dev, it will return ReplServiceError::SERVER_NOT_FOUND
-                return hs_repl_service()
-                    .remove_repl_dev(repl_dev_group_id)
-                    .deferValue([r, repl_dev_group_id, this](auto&& e) -> PGManager::NullAsyncResult {
-                        if (e != ReplServiceError::OK) {
-                            LOGW("Failed to remove repl device which group_id={}, error={}", repl_dev_group_id, e);
-                        }
-                        decr_pending_request_num();
-                        // still return the original error
-                        return folly::makeUnexpected(r.error());
-                    });
-            }
-            decr_pending_request_num();
-            return folly::Unit();
-        });
+    auto r = co_await do_create_pg(v.value(), std::move(pg_info), tid);
+    if (!r) {
+        bool res = chunk_selector_->return_pg_chunks_to_dev_heap(pg_id);
+        RELEASE_ASSERT(res, "Failed to return pg={} chunks to dev_heap", pg_id);
+        auto e = co_await hs_repl_service().remove_repl_dev(repl_dev_group_id);
+        if (!e) { LOGW("Failed to remove repl device which group_id={}, error={}", repl_dev_group_id, e.error()); }
+        decr_pending_request_num();
+        co_return std::unexpected(r.error());
+    }
+    decr_pending_request_num();
+    co_return std::monostate{};
 }
 
-PGManager::NullAsyncResult HSHomeObject::do_create_pg(cshared< homestore::ReplDev > repl_dev, PGInfo&& pg_info,
+PGManager::NullAsyncResult HSHomeObject::do_create_pg(cshared< homestore::repl_dev > repl_dev, PGInfo&& pg_info,
                                                       trace_id_t tid) {
     auto serailized_pg_info = serialize_pg_info(pg_info);
     auto info_size = serailized_pg_info.size();
@@ -177,20 +177,19 @@ PGManager::NullAsyncResult HSHomeObject::do_create_pg(cshared< homestore::ReplDe
 #ifdef _PRERELEASE
     if (iomgr_flip::instance()->test_flip("create_pg_raft_message_error")) {
         LOGW("Simulating raft message error in creating pg");
-        return folly::makeUnexpected(PGError::UNKNOWN);
+        co_return std::unexpected(PGError::UNKNOWN);
     }
 #endif
 
     // replicate this create pg message to all raft members of this group
-    repl_dev->async_alloc_write(req->header_buf(), sisl::blob{}, sisl::sg_list{}, req, false /* part_of_batch */, tid);
-    return req->result().deferValue([req](auto const& e) -> PGManager::NullAsyncResult {
-        if (!e) { return folly::makeUnexpected(e.error()); }
-        return folly::Unit();
-    });
+    repl_dev->async_alloc_write(req->header_buf(), sisl::blob{}, sisl::sg_list{}, req, nullptr, tid);
+    auto e = co_await req->result();
+    if (!e) { co_return std::unexpected(e.error()); }
+    co_return std::monostate{};
 }
 
-folly::Expected< HSHomeObject::HS_PG*, PGError > HSHomeObject::local_create_pg(shared< ReplDev > repl_dev,
-                                                                               PGInfo pg_info, trace_id_t tid) {
+std::expected< HSHomeObject::HS_PG*, PGError > HSHomeObject::local_create_pg(shared< repl_dev > repl_dev,
+                                                                             PGInfo pg_info, trace_id_t tid) {
     auto pg_id = pg_info.id;
     if (auto hs_pg = get_hs_pg(pg_id); hs_pg) {
         // pg info may have changed due to replace_member, so we just log pg info here
@@ -203,19 +202,19 @@ folly::Expected< HSHomeObject::HS_PG*, PGError > HSHomeObject::local_create_pg(s
     if (pg_info.chunk_size != local_chunk_size) {
         LOGE("Chunk sizes are inconsistent, leader_chunk_size={}, local_chunk_size={}, trace_id={}", pg_info.chunk_size,
              local_chunk_size, tid);
-        return folly::makeUnexpected< PGError >(PGError::UNKNOWN);
+        return std::unexpected< PGError >(PGError::UNKNOWN);
     }
 
     // select chunks for pg
     auto const num_chunk = chunk_selector()->select_chunks_for_pg(pg_id, pg_info.size);
     if (!num_chunk.has_value()) {
         LOGW("Failed to select chunks for pg={}, trace_id={}", pg_id, tid);
-        return folly::makeUnexpected(PGError::NO_SPACE_LEFT);
+        return std::unexpected(PGError::NO_SPACE_LEFT);
     }
     auto chunk_ids = chunk_selector()->get_pg_chunks(pg_id);
     if (chunk_ids == nullptr) {
         LOGW("Failed to get pg chunks, pg={}, trace_id={}", pg_id, tid);
-        return folly::makeUnexpected(PGError::NO_SPACE_LEFT);
+        return std::unexpected(PGError::NO_SPACE_LEFT);
     }
 
     // create index table and pg
@@ -244,7 +243,7 @@ folly::Expected< HSHomeObject::HS_PG*, PGError > HSHomeObject::local_create_pg(s
 }
 
 void HSHomeObject::on_create_pg_message_commit(int64_t lsn, sisl::blob const& header,
-                                               shared< homestore::ReplDev > repl_dev,
+                                               shared< homestore::repl_dev > repl_dev,
                                                cintrusive< homestore::repl_req_ctx >& hs_ctx) {
     repl_result_ctx< PGManager::NullResult >* ctx{nullptr};
     if (hs_ctx && hs_ctx->is_proposer()) {
@@ -257,7 +256,7 @@ void HSHomeObject::on_create_pg_message_commit(int64_t lsn, sisl::blob const& he
     if (msg_header->corrupted()) {
         LOGE("create PG message header is corrupted , lsn={}; header={}, trace_id={}", lsn, msg_header->to_string(),
              tid);
-        if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(PGError::CRC_MISMATCH)); }
+        if (ctx) { ctx->set_err(PGError::CRC_MISMATCH); }
         return;
     }
 
@@ -267,17 +266,17 @@ void HSHomeObject::on_create_pg_message_commit(int64_t lsn, sisl::blob const& he
     if (crc32_ieee(init_crc32, serailized_pg_info_buf, serailized_pg_info_size) != msg_header->payload_crc) {
         // header & value is inconsistent;
         LOGE("create PG message header is inconsistent with value, lsn={}, trace_id={}", lsn, tid);
-        if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(PGError::CRC_MISMATCH)); }
+        if (ctx) { ctx->set_err(PGError::CRC_MISMATCH); }
         return;
     }
 
     auto pg_info = deserialize_pg_info(serailized_pg_info_buf, serailized_pg_info_size);
     auto ret = local_create_pg(std::move(repl_dev), pg_info);
     if (ctx) {
-        if (ret.hasError()) {
-            ctx->promise_.setValue(folly::makeUnexpected(ret.error()));
+        if (!ret) {
+            ctx->set_err(ret.error());
         } else {
-            ctx->promise_.setValue(folly::Unit());
+            ctx->set_ok();
         }
     }
 }
@@ -291,21 +290,21 @@ PGManager::NullAsyncResult HSHomeObject::_replace_member(pg_id_t pg_id, std::str
                                                          uint32_t commit_quorum, trace_id_t tid) {
     if (is_shutting_down()) {
         LOGI("service is being shut down, trace_id={}", tid);
-        return folly::makeUnexpected(PGError::SHUTTING_DOWN);
+        co_return std::unexpected(PGError::SHUTTING_DOWN);
     }
     incr_pending_request_num();
 
     auto hs_pg = get_hs_pg(pg_id);
     if (hs_pg == nullptr) {
         decr_pending_request_num();
-        return folly::makeUnexpected(PGError::UNKNOWN_PG);
+        co_return std::unexpected(PGError::UNKNOWN_PG);
     }
 
     auto& repl_dev = pg_repl_dev(*hs_pg);
     if (!repl_dev.is_leader() && commit_quorum == 0) {
         // Only leader can replace a member
         decr_pending_request_num();
-        return folly::makeUnexpected(PGError::NOT_LEADER);
+        co_return std::unexpected(PGError::NOT_LEADER);
     }
     auto group_id = repl_dev.group_id();
 
@@ -316,14 +315,10 @@ PGManager::NullAsyncResult HSHomeObject::_replace_member(pg_id_t pg_id, std::str
     out_replica.id = old_member_id;
     replica_member_info in_replica = to_replica_member_info(new_member);
 
-    return hs_repl_service()
-        .replace_member(group_id, task_id, out_replica, in_replica, commit_quorum, tid)
-        .via(executor_)
-        .thenValue([this](auto&& v) mutable -> PGManager::NullAsyncResult {
-            decr_pending_request_num();
-            if (v.hasError()) { return folly::makeUnexpected(toPgError(v.error())); }
-            return folly::Unit();
-        });
+    auto v = co_await hs_repl_service().replace_member(group_id, task_id, out_replica, in_replica, commit_quorum, tid);
+    decr_pending_request_num();
+    if (!v) { co_return std::unexpected(toPgError(v.error())); }
+    co_return std::monostate{};
 }
 
 PGMember HSHomeObject::to_pg_member(const replica_member_info& replica_info) const {
@@ -555,21 +550,21 @@ PGManager::NullAsyncResult HSHomeObject::_flip_learner_flag(pg_id_t pg_id, peer_
                                                             uint32_t commit_quorum, trace_id_t tid) {
     if (is_shutting_down()) {
         LOGI("service is being shut down, trace_id={}", tid);
-        return folly::makeUnexpected(PGError::SHUTTING_DOWN);
+        co_return std::unexpected(PGError::SHUTTING_DOWN);
     }
     incr_pending_request_num();
 
     auto hs_pg = get_hs_pg(pg_id);
     if (hs_pg == nullptr) {
         decr_pending_request_num();
-        return folly::makeUnexpected(PGError::UNKNOWN_PG);
+        co_return std::unexpected(PGError::UNKNOWN_PG);
     }
 
     auto& repl_dev = pg_repl_dev(*hs_pg);
     if (!repl_dev.is_leader() && commit_quorum == 0) {
         // Only leader can replace a member
         decr_pending_request_num();
-        return folly::makeUnexpected(PGError::NOT_LEADER);
+        co_return std::unexpected(PGError::NOT_LEADER);
     }
     auto group_id = repl_dev.group_id();
 
@@ -579,94 +574,81 @@ PGManager::NullAsyncResult HSHomeObject::_flip_learner_flag(pg_id_t pg_id, peer_
     replica_member_info replica;
     replica.id = member_id;
 
-    return hs_repl_service()
-        .flip_learner_flag(group_id, replica, is_learner, commit_quorum, true, tid)
-        .via(executor_)
-        .thenValue([this](auto&& v) mutable -> PGManager::NullAsyncResult {
-            decr_pending_request_num();
-            if (v.hasError()) { return folly::makeUnexpected(toPgError(v.error())); }
-            LOGI("PG flip learner flag done");
-            return folly::Unit();
-        });
+    auto v = co_await hs_repl_service().flip_learner_flag(group_id, replica, is_learner, commit_quorum, true, tid);
+    decr_pending_request_num();
+    if (!v) { co_return std::unexpected(toPgError(v.error())); }
+    co_return std::monostate{};
 }
 
 PGManager::NullAsyncResult HSHomeObject::_remove_member(pg_id_t pg_id, peer_id_t const& member_id,
                                                         uint32_t commit_quorum, trace_id_t tid) {
     if (is_shutting_down()) {
         LOGI("service is being shut down, trace_id={}", tid);
-        return folly::makeUnexpected(PGError::SHUTTING_DOWN);
+        co_return std::unexpected(PGError::SHUTTING_DOWN);
     }
     incr_pending_request_num();
 
     auto hs_pg = get_hs_pg(pg_id);
     if (hs_pg == nullptr) {
         decr_pending_request_num();
-        return folly::makeUnexpected(PGError::UNKNOWN_PG);
+        co_return std::unexpected(PGError::UNKNOWN_PG);
     }
 
     auto& repl_dev = pg_repl_dev(*hs_pg);
     if (!repl_dev.is_leader() && commit_quorum == 0) {
         // Only leader can replace a member
         decr_pending_request_num();
-        return folly::makeUnexpected(PGError::NOT_LEADER);
+        co_return std::unexpected(PGError::NOT_LEADER);
     }
     auto group_id = repl_dev.group_id();
 
     LOGI("PG remove member, pg_id={}, member={} trace_id={}", pg_id, boost::uuids::to_string(member_id), tid);
-    return hs_repl_service()
-        .remove_member(group_id, member_id, commit_quorum, tid)
-        .via(executor_)
-        .thenValue([this](auto&& v) mutable -> PGManager::NullAsyncResult {
-            decr_pending_request_num();
-            if (v.hasError()) { return folly::makeUnexpected(toPgError(v.error())); }
-            return folly::Unit();
-        });
+    auto v = co_await hs_repl_service().remove_member(group_id, member_id, commit_quorum, true, tid);
+    decr_pending_request_num();
+    if (!v) { co_return std::unexpected(toPgError(v.error())); }
+    co_return std::monostate{};
 }
 
 PGManager::NullAsyncResult HSHomeObject::_clean_replace_member_task(pg_id_t pg_id, std::string& task_id,
                                                                     uint32_t commit_quorum, trace_id_t tid) {
     if (is_shutting_down()) {
         LOGI("service is being shut down, trace_id={}", tid);
-        return folly::makeUnexpected(PGError::SHUTTING_DOWN);
+        co_return std::unexpected(PGError::SHUTTING_DOWN);
     }
     incr_pending_request_num();
 
     auto hs_pg = get_hs_pg(pg_id);
     if (hs_pg == nullptr) {
         decr_pending_request_num();
-        return folly::makeUnexpected(PGError::UNKNOWN_PG);
+        co_return std::unexpected(PGError::UNKNOWN_PG);
     }
 
     auto& repl_dev = pg_repl_dev(*hs_pg);
     if (!repl_dev.is_leader() && commit_quorum == 0) {
         // Only leader can replace a member
         decr_pending_request_num();
-        return folly::makeUnexpected(PGError::NOT_LEADER);
+        co_return std::unexpected(PGError::NOT_LEADER);
     }
     auto group_id = repl_dev.group_id();
 
     LOGI("PG clean replace member task, pg={}, task={} trace_id={}", pg_id, task_id, tid);
-    return hs_repl_service()
-        .clean_replace_member_task(group_id, task_id, commit_quorum, tid)
-        .via(executor_)
-        .thenValue([this](auto&& v) mutable -> PGManager::NullAsyncResult {
-            decr_pending_request_num();
-            if (v.hasError()) { return folly::makeUnexpected(toPgError(v.error())); }
-            return folly::Unit();
-        });
+    auto v = co_await hs_repl_service().clean_replace_member_task(group_id, task_id, commit_quorum, tid);
+    decr_pending_request_num();
+    if (!v) { co_return std::unexpected(toPgError(v.error())); }
+    co_return std::monostate{};
 }
 
 PGManager::Result< std::vector< replace_member_task > > HSHomeObject::_list_all_replace_member_tasks(trace_id_t tid) {
     if (is_shutting_down()) {
         LOGI("service is being shut down, trace_id={}", tid);
-        return folly::makeUnexpected(PGError::SHUTTING_DOWN);
+        return std::unexpected(PGError::SHUTTING_DOWN);
     }
     incr_pending_request_num();
     auto ret = hs_repl_service().list_replace_member_tasks();
-    if (ret.hasError()) {
+    if (!ret) {
         LOGE("Failed to list replace member tasks, error={}", ret.error());
         decr_pending_request_num();
-        return folly::makeUnexpected(toPgError(ret.error()));
+        return std::unexpected(toPgError(ret.error()));
     }
 
     // Convert homestore::replace_member_task to homeobject::replace_member_task
@@ -743,21 +725,21 @@ bool HSHomeObject::pg_destroy(pg_id_t pg_id, bool need_to_pause_pg_state_machine
 PGManager::NullResult HSHomeObject::_exit_pg(uuid_t group_id, peer_id_t peer_id, trace_id_t tid) {
     if (group_id == boost::uuids::nil_uuid()) {
         LOGI("group_id is nil, nothing to exit, trace_id={}", tid);
-        return folly::makeUnexpected(PGError::INVALID_ARG);
+        return std::unexpected(PGError::INVALID_ARG);
     }
 
     // mark pg as destoryed and then permanent_destroy will call destory_pg to reclaim pg resource.
     auto ret = hs_repl_service().destroy_repl_dev(group_id);
-    if (ret == ReplServiceError::SERVER_NOT_FOUND) {
-        LOGW("repl dev not found, ignore, group_id={}, trace_id={}", group_id, tid);
-        return folly::Unit();
-    }
-    if (ret != ReplServiceError::OK) {
-        LOGE("Failed to destroy repl dev for group_id={}, error={}, trace_id={}", group_id, ret, tid);
-        return folly::makeUnexpected(toPgError(ret));
+    if (!ret) {
+        if (ret.error() == ReplServiceError::SERVER_NOT_FOUND) {
+            LOGW("repl dev not found, ignore, group_id={}, trace_id={}", group_id, tid);
+            return std::monostate();
+        }
+        LOGE("Failed to destroy repl dev for group_id={}, error={}, trace_id={}", group_id, ret.error().message(), tid);
+        return std::unexpected(toPgError(ret.error()));
     }
 
-    return folly::Unit();
+    return std::monostate();
 }
 
 bool HSHomeObject::pause_pg_state_machine(pg_id_t pg_id) {
@@ -832,7 +814,7 @@ void HSHomeObject::destroy_pg_index_table(pg_id_t pg_id) {
         auto uuid_str = boost::uuids::to_string(index_table->uuid());
         index_table_pg_map_.erase(uuid_str);
         hs()->index_service().remove_index_table(index_table);
-        index_table->destroy();
+        sisl::async::detach(index_table->destroy());
         LOGD("pg={} index table is destroyed", pg_id);
     } else {
         LOGD("pg={} index table is not found, skip destroy", pg_id);
@@ -848,7 +830,7 @@ void HSHomeObject::destroy_pg_superblk(pg_id_t pg_id) {
         RELEASE_ASSERT(success, "Failed to trigger CP flush");
         LOGI("CP Flush triggered by pg_destroy completed, pg={}", pg_id);
     };
-    on_complete(std::move(fut).get());
+    on_complete(sisl::async::sync_get(std::move(fut)));
 
     {
         auto lg = std::scoped_lock(_pg_lock);
@@ -926,15 +908,15 @@ PGInfo HSHomeObject::deserialize_pg_info(const unsigned char* json_str, size_t s
     return pg_info;
 }
 
-void HSHomeObject::on_pg_meta_blk_found(sisl::byte_view const& buf, void* meta_cookie) {
+void HSHomeObject::on_pg_meta_blk_found(sisl::byte_view const& buf, homestore::meta_blk* mblk) {
     LOGI("on_pg_meta_blk_found is called")
     homestore::superblk< pg_info_superblk > pg_sb(_pg_meta_name);
-    pg_sb.load(buf, meta_cookie);
+    pg_sb.load(buf, mblk);
     const auto pg_id = pg_sb->id;
-    shared< homestore::ReplDev > rdev;
+    shared< homestore::repl_dev > rdev;
 
     auto v = hs_repl_service().get_repl_dev(pg_sb->replica_set_uuid);
-    if (v.hasError()) {
+    if (!v) {
         // We have a pg_super_blk but cannot find the corresponding repl_dev. This happens when repl_dev
         // is marked as destroyed (m_rd_sb->destroy_pending = 0x1) in raft_repl_dev::leave(), but a crash
         // occurs before pg_destroy is called.
@@ -995,7 +977,7 @@ PGInfo HSHomeObject::HS_PG::pg_info_from_sb(homestore::superblk< pg_info_superbl
     return pginfo;
 }
 
-HSHomeObject::HS_PG::HS_PG(PGInfo info, shared< homestore::ReplDev > rdev, shared< BlobIndexTable > index_table,
+HSHomeObject::HS_PG::HS_PG(PGInfo info, shared< homestore::repl_dev > rdev, shared< BlobIndexTable > index_table,
                            std::shared_ptr< const std::vector< chunk_num_t > > pg_chunk_ids, HSHomeObject& home_obj) :
         PG{std::move(info)},
         pg_sb_{_pg_meta_name},
@@ -1041,7 +1023,7 @@ HSHomeObject::HS_PG::HS_PG(PGInfo info, shared< homestore::ReplDev > rdev, share
     register_data_rpc_handlers();
 }
 
-HSHomeObject::HS_PG::HS_PG(superblk< pg_info_superblk >&& sb, shared< ReplDev > rdev, HSHomeObject& home_obj) :
+HSHomeObject::HS_PG::HS_PG(superblk< pg_info_superblk >&& sb, shared< repl_dev > rdev, HSHomeObject& home_obj) :
         PG{pg_info_from_sb(sb)},
         pg_sb_{std::move(sb)},
         repl_dev_{std::move(rdev)},
@@ -1391,7 +1373,7 @@ void HSHomeObject::on_create_pg_message_rollback(int64_t lsn, sisl::blob const& 
 
     if (msg_header->corrupted()) {
         LOGE("create PG message header is corrupted , lsn={}, header={}", lsn, msg_header->to_string());
-        if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(PGError::CRC_MISMATCH)); }
+        if (ctx) { ctx->set_err(PGError::CRC_MISMATCH); }
         return;
     }
 
@@ -1401,7 +1383,7 @@ void HSHomeObject::on_create_pg_message_rollback(int64_t lsn, sisl::blob const& 
     if (crc32_ieee(init_crc32, serailized_pg_info_buf, serailized_pg_info_size) != msg_header->payload_crc) {
         // header & value is inconsistent;
         LOGE("create PG message header is inconsistent with value, lsn={}", lsn);
-        if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(PGError::CRC_MISMATCH)); }
+        if (ctx) { ctx->set_err(PGError::CRC_MISMATCH); }
         return;
     }
 
@@ -1409,7 +1391,7 @@ void HSHomeObject::on_create_pg_message_rollback(int64_t lsn, sisl::blob const& 
     case ReplicationMessageType::CREATE_PG_MSG: {
         // TODO:: add rollback logic for create pg rollback if necessary
         LOGI("lsn={}, msg_type={}, pg={}, create pg is rollbacked", lsn, msg_header->msg_type, msg_header->pg_id);
-        if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(PGError::ROLL_BACK)); }
+        if (ctx) { ctx->set_err(PGError::ROLL_BACK); }
         break;
     }
     default: {
