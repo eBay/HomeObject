@@ -18,50 +18,64 @@ on:
       tooling:
         required: true
         type: string
+      compiler:
+        required: false
+        type: string
+        default: 'gcc'
+      conan-channel:
+        required: false
+        type: string
+        default: 'dev'
 
 jobs:
   SislDeps:
-    uses: ebay/sisl/.github/workflows/build_dependencies.yml@stable/v13.x
+    uses: ebay/sisl/.github/workflows/build_dependencies.yml@dev/v14.x
     with:
-      branch: stable/v13.x
+      branch: dev/v14.x
       platform: ${{ inputs.platform }}
       build-type: ${{ inputs.build-type }}
       malloc-impl: ${{ inputs.malloc-impl }}
+      compiler: ${{ inputs.compiler }}
+      conan-channel: ${{ inputs.conan-channel }}
       tooling: None
     if: ${{ github.event_name != 'pull_request' }}
 
   NuraftMesgDeps:
     needs: SislDeps
-    uses: eBay/nuraft_mesg/.github/workflows/build_dependencies.yml@stable/v4.x
+    uses: eBay/nuraft_mesg/.github/workflows/build_dependencies.yml@dev/v5.x
     with:
-      branch: stable/v4.x
+      branch: dev/v5.x
       platform: ${{ inputs.platform }}
       build-type: ${{ inputs.build-type }}
       malloc-impl: ${{ inputs.malloc-impl }}
+      compiler: ${{ inputs.compiler }}
+      conan-channel: ${{ inputs.conan-channel }}
       tooling: None
     if: ${{ github.event_name != 'pull_request' }}
 
   IOMgrDeps:
     needs: [SislDeps]
-    uses: eBay/iomanager/.github/workflows/build_dependencies.yml@stable/v12.x
+    uses: eBay/iomanager/.github/workflows/build_dependencies.yml@dev/v13.x
     with:
-      branch: stable/v12.x
+      branch: dev/v13.x
       platform: ${{ inputs.platform }}
       build-type: ${{ inputs.build-type }}
       malloc-impl: ${{ inputs.malloc-impl }}
-      prerelease: ${{ inputs.prerelease }}
+      compiler: ${{ inputs.compiler }}
+      conan-channel: ${{ inputs.conan-channel }}
       tooling: None
     if: ${{ github.event_name != 'pull_request' }}
 
   HomeStoreDeps:
     needs: [IOMgrDeps, NuraftMesgDeps]
-    uses: eBay/homestore/.github/workflows/build_dependencies.yml@stable/v7.x
+    uses: eBay/homestore/.github/workflows/build_dependencies.yml@dev/v8.x
     with:
-      branch: stable/v7.x
+      branch: dev/v8.x
       platform: ${{ inputs.platform }}
       build-type: ${{ inputs.build-type }}
       malloc-impl: ${{ inputs.malloc-impl }}
-      prerelease: ${{ inputs.prerelease }}
+      compiler: ${{ inputs.compiler }}
+      conan-channel: ${{ inputs.conan-channel }}
       tooling: None
     if: ${{ github.event_name != 'pull_request' }}
 

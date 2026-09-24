@@ -3,21 +3,22 @@
 #include <atomic>
 #include <cstdint>
 
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wuninitialized"
-#pragma GCC diagnostic ignored "-Wmaybe-uninitialized"
-#include <folly/futures/Future.h>
-#include <folly/concurrency/ConcurrentHashMap.h>
-#include <folly/executors/IOThreadPoolExecutor.h>
-#include <folly/MPMCQueue.h>
-#pragma GCC diagnostic pop
+#include <boost/unordered/concurrent_flat_map.hpp>
+#include <boost/asio.hpp>
+
+#include <sisl/async/task.hpp>
+#include <sisl/async/coro.hpp>
+#include <sisl/async/value_awaitable.hpp>
+#include <sisl/async/when_all.hpp>
+#include <sisl/fds/mcmp_priority_queue.hpp>
 
 #include <iomgr/iomgr.hpp>
-#include "homeobject/common.hpp"
-#include <homestore/blk.h>
+
+#include <homestore/blk.hpp>
 #include <homestore/superblk_handler.hpp>
+
+#include "homeobject/common.hpp"
 #include "lib/blob_route.hpp"
-#include "MPMCPriorityQueue.hpp"
 #include "generated/scrub_common_generated.h"
 #include "generated/scrub_req_generated.h"
 #include "generated/scrub_result_generated.h"
@@ -265,7 +266,7 @@ public:
     void start();
     void stop();
 
-    folly::SemiFuture< std::shared_ptr< ShallowScrubReport > >
+    sisl::async::task< std::shared_ptr< ShallowScrubReport > >
     submit_scrub_task(const pg_id_t& pg_id, const bool is_deep,
                       SCRUB_TRIGGER_TYPE trigger_type = SCRUB_TRIGGER_TYPE::PERIODICALLY);
 
@@ -297,18 +298,19 @@ private:
 
     struct scrub_task {
         scrub_task(uint64_t last_scrub_time, pg_id_t pg_id, bool is_deep_scrub, SCRUB_TRIGGER_TYPE trigger_type,
-                   folly::Promise< std::shared_ptr< ShallowScrubReport > > promise) :
+                   std::shared_ptr< sisl::async::value_awaitable< std::shared_ptr< ShallowScrubReport > > > promise) :
                 task_id{scrub_task_id.fetch_add(1)},
                 last_scrub_time{last_scrub_time},
                 pg_id{pg_id},
                 is_deep_scrub{is_deep_scrub},
                 triggered{trigger_type},
-                scrub_report_promise{
-                    std::make_shared< folly::Promise< std::shared_ptr< ShallowScrubReport > > >(std::move(promise))} {}
+                scrub_report_promise{promise} {}
 
         ~scrub_task() {
-            if (scrub_report_promise && !scrub_report_promise->isFulfilled()) {
-                scrub_report_promise->setValue(nullptr);
+            // Safety net for tasks that never reach scrub_task_guard (e.g. queue closed on push).
+            // Successful paths complete via scrub_task_guard; await_ready() makes this a no-op then.
+            if (scrub_report_promise && !scrub_report_promise->await_ready()) {
+                scrub_report_promise->complete(nullptr);
             }
         }
 
@@ -322,7 +324,7 @@ private:
         pg_id_t pg_id;
         bool is_deep_scrub;
         SCRUB_TRIGGER_TYPE triggered;
-        std::shared_ptr< folly::Promise< std::shared_ptr< ShallowScrubReport > > > scrub_report_promise;
+        std::shared_ptr< sisl::async::value_awaitable< std::shared_ptr< ShallowScrubReport > > > scrub_report_promise;
 
         bool operator==(const scrub_task& other) const noexcept { return task_id == other.task_id; }
 
@@ -360,20 +362,19 @@ private:
     void handle_deep_pg_scrub_report(std::shared_ptr< DeepScrubReport > report);
     void handle_shallow_pg_scrub_report(std::shared_ptr< ShallowScrubReport > report);
     void handle_scrub_req(std::shared_ptr< scrub_req > req);
-    bool wait_for_scrub_lsn_commit(shared< homestore::ReplDev > repl_dev, int64_t scrub_lsn);
+    bool wait_for_scrub_lsn_commit(shared< homestore::repl_dev > repl_dev, int64_t scrub_lsn);
     uint64_t compute_crc64(const void* data, size_t len, uint64_t crc = 0) const;
     void check_scrub_timeouts();
 
     iomgr::timer_handle_t m_scrub_timer_hdl{iomgr::null_timer_handle};
     iomgr::timer_handle_t m_retry_timer_hdl{iomgr::null_timer_handle};
-    iomgr::io_fiber_t m_scrub_timer_fiber{nullptr};
     HSHomeObject* m_hs_home_object{nullptr};
-    MPMCPriorityQueue< scrub_task > m_scrub_task_queue;
-    std::shared_ptr< folly::IOThreadPoolExecutor > m_scrub_executor;
-    folly::ConcurrentHashMap< pg_id_t, std::shared_ptr< PGScrubContext > > m_pg_scrub_ctx_map;
-    folly::ConcurrentHashMap< pg_id_t, std::shared_ptr< homestore::superblk< pg_scrub_superblk > > > m_pg_scrub_sb_map;
-
-    std::shared_ptr< folly::IOThreadPoolExecutor > m_scrub_req_executor;
+    sisl::MPMCPriorityQueue< scrub_task > m_scrub_task_queue;
+    std::shared_ptr< boost::asio::thread_pool > m_scrub_executor;
+    std::shared_ptr< boost::asio::thread_pool > m_scrub_req_executor;
+    boost::concurrent_flat_map< pg_id_t, std::shared_ptr< PGScrubContext > > m_pg_scrub_ctx_map;
+    boost::concurrent_flat_map< pg_id_t, std::shared_ptr< homestore::superblk< pg_scrub_superblk > > >
+        m_pg_scrub_sb_map;
 };
 } // namespace homeobject
 

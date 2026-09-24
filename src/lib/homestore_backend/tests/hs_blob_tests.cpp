@@ -76,7 +76,7 @@ TEST_F(HomeObjectFixture, BasicPutGetDelBlobWithRestart) {
             for (const auto& shard_id : shard_vec) {
                 for (uint64_t k = 0; k < num_blobs_per_shard; k++) {
                     auto tid = generateRandomTraceId();
-                    auto g = _obj_inst->blob_manager()->del(shard_id, blob_id, tid).get();
+                    auto g = sisl::async::sync_get(_obj_inst->blob_manager()->del(shard_id, blob_id, tid));
                     ASSERT_TRUE(g);
                     LOGINFO("delete blob shard {} blob {}, trace_id={}", shard_id, blob_id, tid);
                     blob_id++;
@@ -92,7 +92,7 @@ TEST_F(HomeObjectFixture, BasicPutGetDelBlobWithRestart) {
         for (; blob_id != pg_blob_id[pg_id];) {
             for (const auto& shard_id : shard_vec) {
                 for (uint64_t k = 0; k < num_blobs_per_shard; k++) {
-                    auto g = _obj_inst->blob_manager()->get(shard_id, blob_id).get();
+                    auto g = sisl::async::sync_get(_obj_inst->blob_manager()->get(shard_id, blob_id));
                     ASSERT_TRUE(!g);
                     blob_id++;
                 }
@@ -125,7 +125,7 @@ TEST_F(HomeObjectFixture, BasicPutGetDelBlobWithRestart) {
         for (; blob_id != pg_blob_id[pg_id];) {
             for (const auto& shard_id : shard_vec) {
                 for (uint64_t k = 0; k < num_blobs_per_shard; k++) {
-                    auto g = _obj_inst->blob_manager()->get(shard_id, blob_id).get();
+                    auto g = sisl::async::sync_get(_obj_inst->blob_manager()->get(shard_id, blob_id));
                     ASSERT_TRUE(!g);
                     blob_id++;
                 }
@@ -275,7 +275,7 @@ TEST_F(HomeObjectFixture, BasicPutGetDelBlobWithDiskBack) {
             for (const auto& shard_id : shard_vec) {
                 for (uint64_t k = 0; k < num_blobs_per_shard; k++) {
                     auto tid = generateRandomTraceId();
-                    auto g = _obj_inst->blob_manager()->del(shard_id, blob_id, tid).get();
+                    auto g = sisl::async::sync_get(_obj_inst->blob_manager()->del(shard_id, blob_id, tid));
                     ASSERT_TRUE(g);
                     LOGINFO("delete blob shard {} blob {}, trace_id={}", shard_id, blob_id, tid);
                     blob_id++;
@@ -291,7 +291,7 @@ TEST_F(HomeObjectFixture, BasicPutGetDelBlobWithDiskBack) {
         for (; blob_id != pg_blob_id[pg_id];) {
             for (const auto& shard_id : shard_vec) {
                 for (uint64_t k = 0; k < num_blobs_per_shard; k++) {
-                    auto g = _obj_inst->blob_manager()->get(shard_id, blob_id).get();
+                    auto g = sisl::async::sync_get(_obj_inst->blob_manager()->get(shard_id, blob_id));
                     ASSERT_TRUE(!g);
                     blob_id++;
                 }
@@ -326,7 +326,7 @@ TEST_F(HomeObjectFixture, BasicPutGetDelBlobWithDiskBack) {
         for (; blob_id != pg_blob_id[pg_id];) {
             for (const auto& shard_id : shard_vec) {
                 for (uint64_t k = 0; k < num_blobs_per_shard; k++) {
-                    auto g = _obj_inst->blob_manager()->get(shard_id, blob_id).get();
+                    auto g = sisl::async::sync_get(_obj_inst->blob_manager()->get(shard_id, blob_id));
                     ASSERT_TRUE(!g);
                     blob_id++;
                 }
@@ -389,10 +389,10 @@ TEST_F(HomeObjectFixture, BasicPutGetDelOnAllPGWithDiskLost) {
                      current_blob_id, tid);
                 auto blob = build_blob(current_blob_id);
                 len = blob.body.size();
-                auto g = _obj_inst->blob_manager()->get(shard_id, current_blob_id, off, len, false, tid).get();
-                ASSERT_TRUE(g.hasError())
-                    << "degraded pg on error member should return get blob fail, shard_id " << shard_id << " blob_id "
-                    << current_blob_id << " replica number " << g_helper->replica_num();
+                auto g = sisl::async::sync_get(
+                    _obj_inst->blob_manager()->get(shard_id, current_blob_id, off, len, false, tid));
+                ASSERT_TRUE(!g) << "degraded pg on error member should return get blob fail, shard_id " << shard_id
+                                << " blob_id " << current_blob_id << " replica number " << g_helper->replica_num();
                 current_blob_id++;
             }
         }
@@ -406,10 +406,9 @@ TEST_F(HomeObjectFixture, BasicPutGetDelOnAllPGWithDiskLost) {
                  put_shard_id, current_blob_id, put_blob.body.size(),
                  hex_bytes(put_blob.body.cbytes(), std::min(10u, put_blob.body.size())), tid);
 
-        auto b = _obj_inst->blob_manager()->put(put_shard_id, std::move(put_blob), tid).get();
-        ASSERT_TRUE(b.hasError()) << "degraded pg on error member should return put blob fail, shard_id "
-                                  << put_shard_id << " blob_id " << current_blob_id << " replica number "
-                                  << g_helper->replica_num();
+        auto b = sisl::async::sync_get(_obj_inst->blob_manager()->put(put_shard_id, std::move(put_blob), tid));
+        ASSERT_TRUE(!b) << "degraded pg on error member should return put blob fail, shard_id " << put_shard_id
+                        << " blob_id " << current_blob_id << " replica number " << g_helper->replica_num();
 
         blob_id_t delete_blob_id{0};
         auto delete_shard_id = pg_shard_id_vec[degrade_pg_id].back();
@@ -419,10 +418,9 @@ TEST_F(HomeObjectFixture, BasicPutGetDelOnAllPGWithDiskLost) {
                  delete_shard_id, delete_blob_id, delete_blob.body.size(),
                  hex_bytes(delete_blob.body.cbytes(), std::min(10u, delete_blob.body.size())), tid);
 
-        auto d = _obj_inst->blob_manager()->del(delete_shard_id, delete_blob_id, tid).get();
-        ASSERT_TRUE(d.hasError()) << "degraded pg on error member should return delete blob fail, shard_id "
-                                  << delete_shard_id << " blob_id " << delete_blob_id << " replica number "
-                                  << g_helper->replica_num();
+        auto d = sisl::async::sync_get(_obj_inst->blob_manager()->del(delete_shard_id, delete_blob_id, tid));
+        ASSERT_TRUE(!d) << "degraded pg on error member should return delete blob fail, shard_id " << delete_shard_id
+                        << " blob_id " << delete_blob_id << " replica number " << g_helper->replica_num();
     } else {
         restart();
         sleep(10);

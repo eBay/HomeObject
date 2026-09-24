@@ -135,8 +135,6 @@ protected:
     /// Our SvcId retrieval and SvcId->IP mapping
     std::weak_ptr< HomeObjectApplication > _application;
 
-    folly::Executor::KeepAlive<> executor_;
-
     ///
     mutable std::shared_mutex _pg_lock;
     std::map< pg_id_t, unique< PG > > _pg_map;
@@ -145,8 +143,7 @@ protected:
     std::map< shard_id_t, ShardIterator > _shard_map;
     ///
 
-    auto _defer() const { return folly::makeSemiFuture().via(executor_); }
-    folly::Future< ShardManager::Result< ShardInfo > > _get_shard(shard_id_t id, trace_id_t tid) const;
+    ShardManager::Result< ShardInfo > _get_shard(shard_id_t id, trace_id_t tid) const;
 
 public:
     explicit HomeObjectImpl(std::weak_ptr< HomeObjectApplication >&& application);

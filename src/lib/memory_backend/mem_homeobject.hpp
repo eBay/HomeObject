@@ -3,10 +3,8 @@
 #include <atomic>
 #include <utility>
 
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wmaybe-uninitialized"
-#include <folly/concurrency/ConcurrentHashMap.h>
-#pragma GCC diagnostic pop
+#include <boost/unordered/concurrent_flat_map.hpp>
+
 #include "lib/homeobject_impl.hpp"
 #include "lib/blob_route.hpp"
 
@@ -25,13 +23,13 @@ struct BlobExt {
 };
 
 struct ShardIndex {
-    folly::ConcurrentHashMap< BlobRoute, BlobExt > btree_;
+    boost::concurrent_flat_map< BlobRoute, BlobExt, std::hash< BlobRoute > > btree_;
     ~ShardIndex();
 };
 
 class MemoryHomeObject : public HomeObjectImpl {
     /// Simulates the Shard=>Chunk mapping in IndexSvc
-    using index_svc = folly::ConcurrentHashMap< shard_id_t, std::unique_ptr< ShardIndex > >;
+    using index_svc = boost::concurrent_flat_map< shard_id_t, std::unique_ptr< ShardIndex > >;
     index_svc index_;
     ///
 
@@ -73,8 +71,6 @@ class MemoryHomeObject : public HomeObjectImpl {
                                                           trace_id_t trace_id) override;
     PGManager::Result< std::vector< replace_member_task > >
     _list_all_replace_member_tasks(trace_id_t trace_id) override;
-
-    ShardIndex& _find_index(shard_id_t) const;
 
 public:
     MemoryHomeObject(std::weak_ptr< HomeObjectApplication >&& application);
