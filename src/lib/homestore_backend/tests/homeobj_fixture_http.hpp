@@ -1,47 +1,61 @@
 #pragma once
 
-#include <pistache/client.h>
-#include <pistache/http.h>
-#include <pistache/net.h>
+#include <httplib/httplib.h>
+#include <chrono>
+#include <string>
 
+namespace homeobject {
+
+// Thin synchronous httplib client (formerly Pistache Experimental::Client).
 class HttpHelper {
 public:
-    HttpHelper(const std::string& host, uint16_t port) {
-        auto opts = Pistache::Http::Experimental::Client::options().threads(1).maxConnectionsPerHost(8);
-        client_.init(opts);
-        server_addr_ = "http://" + host + ":" + std::to_string(port);
+    struct Response {
+        int status{0};
+        std::string body;
+
+        int code() const { return status; }
+        std::string const& body_str() const { return body; }
+    };
+
+    HttpHelper(const std::string& host, uint16_t port) : client_{host, static_cast< int >(port)} {
+        client_.set_connection_timeout(5, 0);
+        client_.set_read_timeout(30, 0);
     }
 
-    ~HttpHelper() { client_.shutdown(); }
+    ~HttpHelper() = default;
 
-    Pistache::Http::Response get(const std::string& resource) {
-        auto resp = client_.get(server_addr_ + resource).send();
-        Pistache::Http::Response response;
-        resp.then([&](Pistache::Http::Response r) { response = r; }, Pistache::Async::Throw);
-        Pistache::Async::Barrier< Pistache::Http::Response > barrier(resp);
-        barrier.wait();
+    Response get(const std::string& resource) {
+        Response response;
+        auto res = client_.Get(resource);
+        if (res) {
+            response.status = res->status;
+            response.body = res->body;
+        }
         return response;
     }
 
-    Pistache::Http::Response post(const std::string& resource, const std::string& body) {
-        auto resp = client_.post(server_addr_ + resource).body(body).send();
-        Pistache::Http::Response response;
-        resp.then([&](Pistache::Http::Response r) { response = r; }, Pistache::Async::Throw);
-        Pistache::Async::Barrier< Pistache::Http::Response > barrier(resp);
-        barrier.wait();
+    Response post(const std::string& resource, const std::string& body) {
+        Response response;
+        auto res = client_.Post(resource, body, "application/json");
+        if (res) {
+            response.status = res->status;
+            response.body = res->body;
+        }
         return response;
     }
 
-    Pistache::Http::Response del(const std::string& resource, const std::string& body) {
-        auto resp = client_.del(server_addr_ + resource).body(body).send();
-        Pistache::Http::Response response;
-        resp.then([&](Pistache::Http::Response r) { response = r; }, Pistache::Async::Throw);
-        Pistache::Async::Barrier< Pistache::Http::Response > barrier(resp);
-        barrier.wait();
+    Response del(const std::string& resource, const std::string& body) {
+        Response response;
+        auto res = client_.Delete(resource, body, "application/json");
+        if (res) {
+            response.status = res->status;
+            response.body = res->body;
+        }
         return response;
     }
 
 private:
-    Pistache::Http::Experimental::Client client_;
-    std::string server_addr_;
+    httplib::Client client_;
 };
+
+} // namespace homeobject

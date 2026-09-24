@@ -1,13 +1,12 @@
 #pragma once
 
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wuninitialized"
-#pragma GCC diagnostic ignored "-Wmaybe-uninitialized"
-#include <folly/futures/Future.h>
-#pragma GCC diagnostic pop
-#include <homestore/replication/repl_dev.h>
-#include <homestore/replication/repl_decls.h>
-#include <homestore/blk.h>
+#include <boost/container/small_vector.hpp>
+#include <sisl/async/task.hpp>
+#include <sisl/async/coro.hpp>
+#include <sisl/async/value_awaitable.hpp>
+#include <homestore/replication/repl_dev.hpp>
+#include <homestore/replication/repl_decls.hpp>
+#include <homestore/blk.hpp>
 #include "hs_homeobject.hpp"
 #include "replication_message.hpp"
 
@@ -22,7 +21,7 @@ struct ho_repl_ctx : public homestore::repl_req_ctx {
     sisl::io_blob_safe key_buf_;
 
     // Data bufs corresponding to data_sgs_. Since data_sgs are raw pointers, we need to keep the data bufs alive
-    folly::small_vector< sisl::io_blob_safe, 3 > data_bufs_;
+    boost::container::small_vector< sisl::io_blob_safe, 3 > data_bufs_;
     sisl::sg_list data_sgs_;
 
     ho_repl_ctx(uint32_t hdr_extn_size, uint32_t key_size = 0) : homestore::repl_req_ctx{} {
@@ -75,7 +74,7 @@ struct ho_repl_ctx : public homestore::repl_req_ctx {
 
 template < typename T >
 struct repl_result_ctx : public ho_repl_ctx {
-    folly::Promise< T > promise_;
+    sisl::async::value_awaitable< T > done_;
 
     template < typename... Args >
     static intrusive< repl_result_ctx< T > > make(Args&&... args) {
@@ -83,10 +82,15 @@ struct repl_result_ctx : public ho_repl_ctx {
     }
 
     repl_result_ctx(uint32_t hdr_extn_size, uint32_t key_size = 0) : ho_repl_ctx{hdr_extn_size, key_size} {}
-    folly::SemiFuture< T > result() { return promise_.getSemiFuture(); }
+
+    sisl::async::task< T > result() { co_return co_await sisl::async::await_value_ref(done_); }
+
+    void set_ok() { done_.complete(T{std::monostate{}}); } // NullResult only
+    void set_ok(typename T::value_type v) { done_.complete(T{std::move(v)}); }
+    void set_err(typename T::error_type e) { done_.complete(T{std::unexpected(std::move(e))}); }
 };
 
-class ReplicationStateMachine : public homestore::ReplDevListener {
+class ReplicationStateMachine : public homestore::repl_dev_listener {
 public:
     explicit ReplicationStateMachine(HSHomeObject* home_object) : home_object_(home_object) {}
 
@@ -104,74 +108,26 @@ public:
     /// @param ctx - Context passed as part of the replica_set::write() api
     ///
     void on_commit(int64_t lsn, sisl::blob const& header, sisl::blob const& key,
-                   std::vector< homestore::MultiBlkId > const& blkids,
+                   std::vector< homestore::multi_blk_id > const& blkids,
                    cintrusive< homestore::repl_req_ctx >& ctx) override;
 
     /// @brief Called when the log entry has been received by the replica dev.
-    ///
-    /// On recovery, this is called from a random worker thread before the raft server is started. It is
-    /// guaranteed to be serialized in log index order.
-    ///
-    /// On the leader, this is called from the same thread that replica_set::write() was called.
-    ///
-    /// On the follower, this is called when the follower has received the log entry. It is guaranteed to be serialized
-    /// in log sequence order.
-    ///
-    /// NOTE: Listener can choose to ignore this pre commit, however, typical use case of maintaining this is in-case
-    /// replica set needs to support strong consistent reads and follower needs to ignore any keys which are not being
-    /// currently in pre-commit, but yet to be committed.
-    ///
-    /// @param lsn - The log sequence number
-
-    /// @param header - Header originally passed with replica_set::write() api
-    /// @param key - Key originally passed with replica_set::write() api
-    /// @param ctx - User contenxt passed as part of the replica_set::write() api
     bool on_pre_commit(int64_t lsn, const sisl::blob& header, const sisl::blob& key,
                        cintrusive< homestore::repl_req_ctx >& ctx) override;
 
     /// @brief Called when the log entry has been rolled back by the replica set.
-    ///
-    /// This function is called on followers only when the log entry is going to be overwritten. This function is called
-    /// from a random worker thread, but is guaranteed to be serialized.
-    ///
-    /// For each log index, it is guaranteed that either on_commit() or on_rollback() is called but not both.
-    ///
-    /// NOTE: Listener should do the free any resources created as part of pre-commit.
-    ///
-    /// @param lsn - The log sequence number getting rolled back
-    /// @param header - Header originally passed with replica_set::write() api
-    /// @param key - Key originally passed with replica_set::write() api
-    /// @param ctx - User contenxt passed as part of the replica_set::write() api
     void on_rollback(int64_t lsn, const sisl::blob& header, const sisl::blob& key,
                      cintrusive< homestore::repl_req_ctx >& ctx) override;
 
     /// @brief Called when the raft service is created after restart.
-    ///
-    /// homeobject should recover all the necessary components to serve log replay/commit requests.
     void on_restart() override;
 
     /// @brief Called when the async_alloc_write call failed to initiate replication
-    ///
-    /// Called only on the node which called async_alloc_write
-    ///
-    ///
-    /// NOTE: Listener should do the free any resources created as part of pre-commit.
-    ///
-    /// @param header - Header originally passed with ReplDev::async_alloc_write() api
-    /// @param key - Key originally passed with ReplDev::async_alloc_write() api
-    /// @param ctx - Context passed as part of the ReplDev::async_alloc_write() api
     void on_error(ReplServiceError error, const sisl::blob& header, const sisl::blob& key,
                   cintrusive< repl_req_ctx >& ctx);
 
     /// @brief Called when replication module is trying to allocate a block to write the value
-    ///
-    /// This function can be called both on leader and follower when it is trying to allocate a block to write the
-    /// value. Caller is expected to provide hints for allocation based on the header supplied as part of original
-    /// write. In cases where caller don't care about the hints can return default blk_alloc_hints.
-    ///
-    /// @param header Header originally passed with repl_dev::write() api on the leader
-    /// @return Expected to return blk_alloc_hints for this write
-    homestore::ReplResult< homestore::blk_alloc_hints >
+    homestore::result< homestore::blk_alloc_hints >
     get_blk_alloc_hints(sisl::blob const& header, uint32_t data_size,
                         cintrusive< homestore::repl_req_ctx >& hs_ctx) override;
 
@@ -194,7 +150,7 @@ public:
     void on_remove_member(const homestore::replica_id_t& member, trace_id_t tid) override;
 
     // Snapshot related functions
-    homestore::AsyncReplResult<> create_snapshot(std::shared_ptr< homestore::snapshot_context > context) override;
+    homestore::async_status create_snapshot(std::shared_ptr< homestore::snapshot_context > context) override;
     bool apply_snapshot(std::shared_ptr< homestore::snapshot_context > context) override;
     std::shared_ptr< homestore::snapshot_context > last_snapshot() override;
     int read_snapshot_obj(std::shared_ptr< homestore::snapshot_context > context,
@@ -204,48 +160,26 @@ public:
     void free_user_snp_ctx(void*& user_snp_ctx) override;
 
     /// @brief ask upper layer to decide which data should be returned.
-    // @param header - header of the log entry.
-    // @param blkid - original blkid of the log entry
-    // @param sgs - sgs to be filled with data
-    // @param lsn - lsn of the log entry
-    folly::Future< std::error_code > on_fetch_data(const int64_t lsn, const sisl::blob& header,
-                                                   const homestore::MultiBlkId& local_blk_id,
-                                                   sisl::sg_list& sgs) override;
+    sisl::async::task< iomgr::io_result > on_fetch_data(const int64_t lsn, const sisl::blob& header,
+                                                        const homestore::multi_blk_id& local_blk_id,
+                                                        sisl::sg_list& sgs) override;
 
     /// @brief ask upper layer to handle no_space_left event
-    // @param lsn - on which repl_lsn no_space_left happened
-    // @param header - on which header no_space_left happened when trying to allocate blk
     void on_no_space_left(homestore::repl_lsn_t lsn, sisl::blob const& header) override;
 
     /// @brief Called when the config log entry has been rolled backed.
-    ///
-    /// This function is called on followers only when the log entry is going to be overwritten. This function is called
-    /// from a random worker thread, but is guaranteed to be serialized.
-    ///
-    /// For each config log index, it is guaranteed that either on_config_commit() or on_config_rollback() is called but
-    /// not both.
-    /// @param lsn - The log sequence number of the rollbacked config log entry
     void on_config_rollback(int64_t lsn) override;
 
     /// @brief periodically called to notify the lastest committed lsn to the listener.
-    /// NOTE: this callback will block the thread of flushing the latest committed lsn into repl_dev superblk as DC_LSN,
-    /// pls take care if there is any heavy or blocking operation in this callback.
-    ///
-    /// @param lsn - The lasted committed log sequence number so far
-    ///
     void notify_committed_lsn(int64_t lsn) override;
 
     /// @brief this is called after all the logs are replayed but before joining raft group.
-    /// @param group_id - the group , where all the logs are replayed but not join raft group
-    ///
     void on_log_replay_done(const homestore::group_id_t& group_id) override;
 
     /// @brief  this is called when this node becomes leader for the group
-    /// @param group_id - the group , where all the logs are replayed but not join raft group
     virtual void on_become_leader(const homestore::group_id_t& group_id) override;
 
     /// @brief  this is called when this node becomes follower for the group
-    /// @param group_id - the group , where all the logs are replayed but not join raft group
     virtual void on_become_follower(const homestore::group_id_t& group_id) override;
 
 private:
@@ -277,7 +211,7 @@ private:
 
     std::pair< homestore::repl_lsn_t, homestore::chunk_num_t > get_no_space_left_error_info() const;
 
-    void handle_no_space_left(homestore ::repl_lsn_t lsn, homestore ::chunk_num_t chunk_id);
+    void handle_no_space_left(homestore::repl_lsn_t lsn, homestore::chunk_num_t chunk_id);
 };
 
 } // namespace homeobject

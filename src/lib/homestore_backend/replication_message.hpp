@@ -5,14 +5,14 @@
 #include <sisl/utility/enum.hpp>
 #include <sisl/fds/utils.hpp>
 
-#include <homestore/crc.h>
+#include <homestore/crc.hpp>
 
 namespace homeobject {
 
-VENUM(ReplicationMessageType, uint16_t, CREATE_PG_MSG = 0, CREATE_SHARD_MSG = 1, SEAL_SHARD_MSG = 2, PUT_BLOB_MSG = 3,
-      DEL_BLOB_MSG = 4, UNKNOWN_MSG = 5);
-VENUM(SyncMessageType, uint16_t, PG_META = 0, SHARD_META = 1, SHARD_BATCH = 2, LAST_MSG = 3);
-VENUM(ResyncBlobState, uint8_t, NORMAL = 0, DELETED = 1, CORRUPTED = 2);
+ENUM(ReplicationMessageType, uint16_t, CREATE_PG_MSG = 0, CREATE_SHARD_MSG = 1, SEAL_SHARD_MSG = 2, PUT_BLOB_MSG = 3,
+     DEL_BLOB_MSG = 4, UNKNOWN_MSG = 5);
+ENUM(SyncMessageType, uint16_t, PG_META = 0, SHARD_META = 1, SHARD_BATCH = 2, LAST_MSG = 3);
+ENUM(ResyncBlobState, uint8_t, NORMAL = 0, DELETED = 1, CORRUPTED = 2);
 
 // magic num comes from the first 8 bytes of 'echo homeobject_replication | md5sum'
 static constexpr uint64_t HOMEOBJECT_REPLICATION_MAGIC = 0x11153ca24efc8d34;

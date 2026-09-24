@@ -8,7 +8,7 @@ TEST_F(HomeObjectFixture, PGStatsTest) {
     create_pg(pg_id);
     auto shard_info = create_shard(pg_id, 64 * Mi, "shard meta");
     auto shard_id = shard_info.id;
-    auto s = _obj_inst->shard_manager()->get_shard(shard_id).get();
+    auto s = sisl::async::sync_get(_obj_inst->shard_manager()->get_shard(shard_id));
     ASSERT_TRUE(!!s);
     LOGINFO("Got shard {}", shard_info.id);
     shard_info = s.value();
@@ -28,7 +28,7 @@ TEST_F(HomeObjectFixture, PGStatsTest) {
     // create a 2nd shard
     auto shard_info2 = create_shard(pg_id, 64 * Mi, "shard meta");
     auto shard_id2 = shard_info2.id;
-    auto s2 = _obj_inst->shard_manager()->get_shard(shard_id2).get();
+    auto s2 = sisl::async::sync_get(_obj_inst->shard_manager()->get_shard(shard_id2));
     ASSERT_TRUE(!!s2);
     LOGINFO("Got shard {}", shard_id2);
 
@@ -63,8 +63,8 @@ TEST_F(HomeObjectFixture, PGExceedSpaceTest) {
                 info.members.insert(homeobject::PGMember{member.first, name + std::to_string(member.second), 0});
             }
         }
-        auto p = _obj_inst->pg_manager()->create_pg(std::move(info)).get();
-        ASSERT_TRUE(p.hasError());
+        auto p = sisl::async::sync_get(_obj_inst->pg_manager()->create_pg(std::move(info)));
+        ASSERT_TRUE(!p);
         PGError error = p.error();
         ASSERT_EQ(PGError::NO_SPACE_LEFT, error);
     } else {
@@ -102,8 +102,8 @@ TEST_F(HomeObjectFixture, PGSizeLessThanChunkTest) {
                 info.members.insert(homeobject::PGMember{member.first, name + std::to_string(member.second), 0});
             }
         }
-        auto p = _obj_inst->pg_manager()->create_pg(std::move(info)).get();
-        ASSERT_TRUE(p.hasError());
+        auto p = sisl::async::sync_get(_obj_inst->pg_manager()->create_pg(std::move(info)));
+        ASSERT_TRUE(!p);
         PGError error = p.error();
         ASSERT_EQ(PGError::INVALID_ARG, error);
     } else {
@@ -247,7 +247,7 @@ TEST_F(HomeObjectFixture, PGRecoveryWithDiskLostTest) {
     //     pg_blob_id[i] = 0;
     //     auto shard_info = create_shard(i, 64 * Mi);
     //     auto shard_id = shard_info.id;
-    //     auto s = _obj_inst->shard_manager()->get_shard(shard_id).get();
+    //     auto s = sisl::async::sync_get(_obj_inst->shard_manager()->get_shard(shard_id));
     //     ASSERT_TRUE(!!s);
     //     pg_shard_id_vec[i].emplace_back(shard_id);
     //     LOGINFO("Created shard {} on pg={}", shard_info.id, i);
@@ -313,7 +313,7 @@ TEST_F(HomeObjectFixture, DuplicateCreatePG) {
                     homeobject::PGMember{member.first, g_helper->name() + std::to_string(member.second), 0});
             }
         }
-        auto p = _obj_inst->pg_manager()->create_pg(std::move(info)).get();
+        auto p = sisl::async::sync_get(_obj_inst->pg_manager()->create_pg(std::move(info)));
         ASSERT_FALSE(p);
         ASSERT_EQ(PGError::INVALID_ARG, p.error());
     }
@@ -332,7 +332,7 @@ TEST_F(HomeObjectFixture, DuplicateCreatePG) {
                 info.members.insert(homeobject::PGMember{uuid, g_helper->name() + std::to_string(member.second), 0});
             }
         }
-        auto p = _obj_inst->pg_manager()->create_pg(std::move(info)).get();
+        auto p = sisl::async::sync_get(_obj_inst->pg_manager()->create_pg(std::move(info)));
         ASSERT_FALSE(p);
         ASSERT_EQ(PGError::INVALID_ARG, p.error());
     }
@@ -352,7 +352,7 @@ TEST_F(HomeObjectFixture, DuplicateCreatePG) {
                     homeobject::PGMember{member.first, g_helper->name() + std::to_string(member.second), 0});
             }
         }
-        auto p = _obj_inst->pg_manager()->create_pg(std::move(info)).get();
+        auto p = sisl::async::sync_get(_obj_inst->pg_manager()->create_pg(std::move(info)));
         ASSERT_FALSE(p);
         ASSERT_EQ(PGError::INVALID_ARG, p.error());
     }
@@ -384,7 +384,7 @@ TEST_F(HomeObjectFixture, CreatePGFailed) {
                     info.members.insert(homeobject::PGMember{member.first, name + std::to_string(member.second), 0});
                 }
             }
-            auto p = _obj_inst->pg_manager()->create_pg(std::move(info)).get();
+            auto p = sisl::async::sync_get(_obj_inst->pg_manager()->create_pg(std::move(info)));
             ASSERT_FALSE(p);
             ASSERT_EQ(PGError::UNKNOWN, p.error());
 
@@ -395,7 +395,8 @@ TEST_F(HomeObjectFixture, CreatePGFailed) {
             // wait for repl gc.
             std::this_thread::sleep_for(std::chrono::seconds(70));
             int num_repl = 0;
-            _obj_inst->hs_repl_service().iterate_repl_devs([&num_repl](cshared< homestore::ReplDev >&) { num_repl++; });
+            _obj_inst->hs_repl_service().iterate_repl_devs(
+                [&num_repl](cshared< homestore::repl_dev >&) { num_repl++; });
             LOGINFO("Failed to create pg={} at leader, times {}， num_repl {}", pg_id, i, num_repl);
             ASSERT_EQ(0, num_repl);
 
@@ -437,7 +438,7 @@ TEST_F(HomeObjectFixture, PGRefreshStatisticsTest) {
     create_pg(pg_id);
     auto shard_info = create_shard(pg_id, 64 * Mi, "shard meta");
     auto shard_id = shard_info.id;
-    auto s = _obj_inst->shard_manager()->get_shard(shard_id).get();
+    auto s = sisl::async::sync_get(_obj_inst->shard_manager()->get_shard(shard_id));
     ASSERT_TRUE(!!s);
     LOGINFO("Created shard {}", shard_info.id);
 
@@ -557,7 +558,7 @@ TEST_F(HomeObjectFixture, DestroyPgResourceCleansUpTest) {
     // Each replica destroys its local repl_dev. This marks destroy_pending=1 on the repl_dev
     // superblk
     auto ret = HSHomeObject::hs_repl_service().destroy_repl_dev(group_id);
-    ASSERT_TRUE(ret == homestore::ReplServiceError::OK || ret == homestore::ReplServiceError::SERVER_NOT_FOUND);
+    ASSERT_TRUE(ret || ret.error() == homestore::ReplServiceError::SERVER_NOT_FOUND);
 
     // for a destroyed repl_dev, the related pg resource should be reclaimed.
     restart();

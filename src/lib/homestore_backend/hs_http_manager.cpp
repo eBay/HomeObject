@@ -1,3 +1,8 @@
+#include <httplib/httplib.h>
+#include <sisl/http/http_server.hpp>
+#include <sisl/async/task.hpp>
+#include <sisl/async/coro.hpp>
+#include <sisl/async/when_all.hpp>
 /*********************************************************************************
  * Modifications Copyright 2017-2019 eBay Inc.
  *
@@ -41,63 +46,63 @@ std::string format_iso8601_time(const std::chrono::system_clock::time_point& tp)
 } // anonymous namespace
 
 HttpManager::HttpManager(HSHomeObject& ho) : ho_(ho) {
-    using namespace Pistache;
-    using namespace Pistache::Rest;
-
     LOGINFO("Setting up HomeObject HTTP routes");
 
-    std::vector< iomgr::http_route > routes = {
-        {Pistache::Http::Method::Get, "/api/v1/getObjLife",
-         Pistache::Rest::Routes::bind(&HttpManager::get_obj_life, this)},
-        {Pistache::Http::Method::Get, "/api/v1/mallocStats",
-         Pistache::Rest::Routes::bind(&HttpManager::get_malloc_stats, this)},
-        {Pistache::Http::Method::Post, "/api/v1/reconcile_leader",
-         Pistache::Rest::Routes::bind(&HttpManager::reconcile_leader, this)},
-        {Pistache::Http::Method::Post, "/api/v1/yield_leadership_to_follower",
-         Pistache::Rest::Routes::bind(&HttpManager::yield_leadership_to_follower, this)},
-        {Pistache::Http::Method::Get, "/api/v1/pg_quorum",
-         Pistache::Rest::Routes::bind(&HttpManager::get_pg_quorum, this)},
-        {Pistache::Http::Method::Post, "/api/v1/flip_learner",
-         Pistache::Rest::Routes::bind(&HttpManager::flip_learner_flag, this)},
-        {Pistache::Http::Method::Delete, "/api/v1/member",
-         Pistache::Rest::Routes::bind(&HttpManager::remove_member, this)},
-        {Pistache::Http::Method::Delete, "/api/v1/pg_replacemember_task",
-         Pistache::Rest::Routes::bind(&HttpManager::clean_replace_member_task, this)},
-        {Pistache::Http::Method::Get, "/api/v1/pg_replacemember_tasks",
-         Pistache::Rest::Routes::bind(&HttpManager::list_pg_replace_member_task, this)},
-        {Pistache::Http::Method::Post, "/api/v1/reconcile_membership",
-         Pistache::Rest::Routes::bind(&HttpManager::reconcile_membership, this)},
-        {Pistache::Http::Method::Delete, "/api/v1/pg", Pistache::Rest::Routes::bind(&HttpManager::exit_pg, this)},
-        {Pistache::Http::Method::Post, "/api/v1/trigger_snapshot_creation",
-         Pistache::Rest::Routes::bind(&HttpManager::trigger_snapshot_creation, this)},
+    std::vector< sisl::http_route > routes = {
+        {sisl::http_method::Get, "/api/v1/getObjLife",
+         [this](httplib::Request const& req, httplib::Response& res) { get_obj_life(req, res); }},
+        {sisl::http_method::Get, "/api/v1/mallocStats",
+         [this](httplib::Request const& req, httplib::Response& res) { get_malloc_stats(req, res); }},
+        {sisl::http_method::Post, "/api/v1/reconcile_leader",
+         [this](httplib::Request const& req, httplib::Response& res) { reconcile_leader(req, res); }},
+        {sisl::http_method::Post, "/api/v1/yield_leadership_to_follower",
+         [this](httplib::Request const& req, httplib::Response& res) { yield_leadership_to_follower(req, res); }},
+        {sisl::http_method::Get, "/api/v1/pg_quorum",
+         [this](httplib::Request const& req, httplib::Response& res) { get_pg_quorum(req, res); }},
+        {sisl::http_method::Post, "/api/v1/flip_learner",
+         [this](httplib::Request const& req, httplib::Response& res) { flip_learner_flag(req, res); }},
+        {sisl::http_method::Delete, "/api/v1/member",
+         [this](httplib::Request const& req, httplib::Response& res) { remove_member(req, res); }},
+        {sisl::http_method::Delete, "/api/v1/pg_replacemember_task",
+         [this](httplib::Request const& req, httplib::Response& res) { clean_replace_member_task(req, res); }},
+        {sisl::http_method::Get, "/api/v1/pg_replacemember_tasks",
+         [this](httplib::Request const& req, httplib::Response& res) { list_pg_replace_member_task(req, res); }},
+        {sisl::http_method::Post, "/api/v1/reconcile_membership",
+         [this](httplib::Request const& req, httplib::Response& res) { reconcile_membership(req, res); }},
+        {sisl::http_method::Delete, "/api/v1/pg",
+         [this](httplib::Request const& req, httplib::Response& res) { exit_pg(req, res); }},
+        {sisl::http_method::Post, "/api/v1/trigger_snapshot_creation",
+         [this](httplib::Request const& req, httplib::Response& res) { trigger_snapshot_creation(req, res); }},
 #ifdef _PRERELEASE
-        {Pistache::Http::Method::Post, "/api/v1/crashSystem",
-         Pistache::Rest::Routes::bind(&HttpManager::crash_system, this)},
+        {sisl::http_method::Post, "/api/v1/crashSystem",
+         [this](httplib::Request const& req, httplib::Response& res) { crash_system(req, res); }},
 #endif
-        {Pistache::Http::Method::Get, "/api/v1/pg", Pistache::Rest::Routes::bind(&HttpManager::get_pg, this)},
-        {Pistache::Http::Method::Get, "/api/v1/chunks",
-         Pistache::Rest::Routes::bind(&HttpManager::get_pg_chunks, this)},
-        {Pistache::Http::Method::Get, "/api/v1/shard", Pistache::Rest::Routes::bind(&HttpManager::get_shard, this)},
-        {Pistache::Http::Method::Get, "/api/v1/chunk/dump",
-         Pistache::Rest::Routes::bind(&HttpManager::dump_chunk, this)},
-        {Pistache::Http::Method::Get, "/api/v1/shard/dump",
-         Pistache::Rest::Routes::bind(&HttpManager::dump_shard, this)},
+        {sisl::http_method::Get, "/api/v1/pg",
+         [this](httplib::Request const& req, httplib::Response& res) { get_pg(req, res); }},
+        {sisl::http_method::Get, "/api/v1/chunks",
+         [this](httplib::Request const& req, httplib::Response& res) { get_pg_chunks(req, res); }},
+        {sisl::http_method::Get, "/api/v1/shard",
+         [this](httplib::Request const& req, httplib::Response& res) { get_shard(req, res); }},
+        {sisl::http_method::Get, "/api/v1/chunk/dump",
+         [this](httplib::Request const& req, httplib::Response& res) { dump_chunk(req, res); }},
+        {sisl::http_method::Get, "/api/v1/shard/dump",
+         [this](httplib::Request const& req, httplib::Response& res) { dump_shard(req, res); }},
 
         // we support triggering gc for:
         // 1 all the chunks in all the pg: no input param
         // 2 all the chunks in a specific pg: input param is pg_id
         // 3 a specific chunk: input param is pchunk_id
 
-        {Pistache::Http::Method::Post, "/api/v1/trigger_gc",
-         Pistache::Rest::Routes::bind(&HttpManager::trigger_gc, this)},
-        {Pistache::Http::Method::Get, "/api/v1/gc_job_status",
-         Pistache::Rest::Routes::bind(&HttpManager::get_gc_job_status, this)},
-        {Pistache::Http::Method::Post, "/api/v1/trigger_pg_scrub",
-         Pistache::Rest::Routes::bind(&HttpManager::trigger_pg_scrub, this)},
-        {Pistache::Http::Method::Get, "/api/v1/scrub_job_status",
-         Pistache::Rest::Routes::bind(&HttpManager::get_scrub_job_status, this)},
-        {Pistache::Http::Method::Post, "/api/v1/cancel_scrub_job",
-         Pistache::Rest::Routes::bind(&HttpManager::cancel_scrub_job, this)}};
+        {sisl::http_method::Post, "/api/v1/trigger_gc",
+         [this](httplib::Request const& req, httplib::Response& res) { trigger_gc(req, res); }},
+        {sisl::http_method::Get, "/api/v1/gc_job_status",
+         [this](httplib::Request const& req, httplib::Response& res) { get_gc_job_status(req, res); }},
+        {sisl::http_method::Post, "/api/v1/trigger_pg_scrub",
+         [this](httplib::Request const& req, httplib::Response& res) { trigger_pg_scrub(req, res); }},
+        {sisl::http_method::Get, "/api/v1/scrub_job_status",
+         [this](httplib::Request const& req, httplib::Response& res) { get_scrub_job_status(req, res); }},
+        {sisl::http_method::Post, "/api/v1/cancel_scrub_job",
+         [this](httplib::Request const& req, httplib::Response& res) { cancel_scrub_job(req, res); }}};
 
     auto http_server = ioenvironment.get_http_server();
     if (!http_server) {
@@ -109,40 +114,48 @@ HttpManager::HttpManager(HSHomeObject& ho) : ho_(ho) {
     } catch (std::runtime_error const& e) { LOGERROR("setup routes failed, {}", e.what()); }
 }
 
-void HttpManager::get_obj_life(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response) {
+void HttpManager::get_obj_life(httplib::Request const& request, httplib::Response& response) {
     nlohmann::json j;
     sisl::ObjCounterRegistry::foreach ([&j](const std::string& name, int64_t created, int64_t alive) {
         std::stringstream ss;
         ss << "created=" << created << " alive=" << alive;
         j[name] = ss.str();
     });
-    response.send(Pistache::Http::Code::Ok, j.dump());
+    response.status = 200;
+    response.set_content(j.dump(), "application/json");
 }
 
-void HttpManager::get_malloc_stats(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response) {
-    response.send(Pistache::Http::Code::Ok, sisl::get_malloc_stats_detailed().dump(2));
+void HttpManager::get_malloc_stats(httplib::Request const& request, httplib::Response& response) {
+    response.status = 200;
+    response.set_content(sisl::get_malloc_stats_detailed().dump(2), "application/json");
 }
 
-void HttpManager::reconcile_leader(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response) {
-    const auto pg_id_param = request.query().get("pg_id");
+void HttpManager::reconcile_leader(httplib::Request const& request, httplib::Response& response) {
+    std::optional< std::string > pg_id_param =
+        request.has_param("pg_id") ? std::optional< std::string >{request.get_param_value("pg_id")} : std::nullopt;
     int32_t pg_id = std::stoi(pg_id_param.value_or("-1"));
     LOGINFO("Received reconcile leader request for pg_id {}", pg_id);
     ho_.reconcile_pg_leader(pg_id);
-    response.send(Pistache::Http::Code::Ok, "Reconcile leader request submitted");
+    response.status = 200;
+    response.set_content("Reconcile leader request submitted", "text/plain");
 }
 
-void HttpManager::yield_leadership_to_follower(const Pistache::Rest::Request& request,
-                                               Pistache::Http::ResponseWriter response) {
-    const auto pg_id_param = request.query().get("pg_id");
+void HttpManager::yield_leadership_to_follower(httplib::Request const& request, httplib::Response& response) {
+    std::optional< std::string > pg_id_param =
+        request.has_param("pg_id") ? std::optional< std::string >{request.get_param_value("pg_id")} : std::nullopt;
     int32_t pg_id = std::stoi(pg_id_param.value_or("-1"));
 
-    const auto candidate_param = request.query().get("candidate");
+    std::optional< std::string > candidate_param = request.has_param("candidate")
+        ? std::optional< std::string >{request.get_param_value("candidate")}
+        : std::nullopt;
     if (candidate_param && candidate_param->empty()) {
-        response.send(Pistache::Http::Code::Bad_Request, "candidate must not be empty");
+        response.status = 400;
+        response.set_content("candidate must not be empty", "text/plain");
         return;
     }
     if (candidate_param && pg_id < 0) {
-        response.send(Pistache::Http::Code::Bad_Request, "candidate requires pg_id to be specified");
+        response.status = 400;
+        response.set_content("candidate requires pg_id to be specified", "text/plain");
         return;
     }
 
@@ -153,46 +166,56 @@ void HttpManager::yield_leadership_to_follower(const Pistache::Rest::Request& re
         try {
             candidate = boost::uuids::string_generator()(candidate_str);
         } catch (const std::exception&) {
-            response.send(Pistache::Http::Code::Bad_Request, "Invalid candidate UUID format");
+            response.status = 400;
+            response.set_content("Invalid candidate UUID format", "text/plain");
             return;
         }
         auto hs_pg = ho_.get_hs_pg(static_cast< uint16_t >(pg_id));
         if (!hs_pg) {
-            response.send(Pistache::Http::Code::Not_Found, "pg not found");
+            response.status = 404;
+            response.set_content("pg not found", "text/plain");
             return;
         }
         auto const& members = hs_pg->pg_info_.members;
         if (!std::any_of(members.begin(), members.end(), [&](const auto& m) { return m.id == *candidate; })) {
-            response.send(Pistache::Http::Code::Bad_Request,
-                          fmt::format("candidate {} is not a member of pg {}", candidate_str, pg_id));
+            response.status = 400;
+            response.set_content(fmt::format("candidate {} is not a member of pg {}", candidate_str, pg_id),
+                                 "text/plain");
             return;
         }
     }
 
     LOGINFO("Received yield leadership request for pg_id {} to follower, candidate={}", pg_id, candidate_str);
     ho_.yield_pg_leadership_to_follower(pg_id, candidate);
-    response.send(Pistache::Http::Code::Ok, "Yield leadership request submitted");
+    response.status = 200;
+    response.set_content("Yield leadership request submitted", "text/plain");
 }
 
-void HttpManager::trigger_snapshot_creation(const Pistache::Rest::Request& request,
-                                            Pistache::Http::ResponseWriter response) {
+void HttpManager::trigger_snapshot_creation(httplib::Request const& request, httplib::Response& response) {
     // Extract and validate pg_id parameter (required)
-    const auto pg_id_param = request.query().get("pg_id");
+    std::optional< std::string > pg_id_param =
+        request.has_param("pg_id") ? std::optional< std::string >{request.get_param_value("pg_id")} : std::nullopt;
     if (!pg_id_param) {
-        response.send(Pistache::Http::Code::Bad_Request, "pg_id is required");
+        response.status = 400;
+        response.set_content("pg_id is required", "text/plain");
         return;
     }
     const int32_t pg_id = std::stoi(pg_id_param.value());
 
     // Extract compact_lsn parameter (optional, default: -1 means use current HS status)
-    const auto compact_lsn_param = request.query().get("compact_lsn");
+    std::optional< std::string > compact_lsn_param = request.has_param("compact_lsn")
+        ? std::optional< std::string >{request.get_param_value("compact_lsn")}
+        : std::nullopt;
     const int64_t compact_lsn = std::stoll(compact_lsn_param.value_or("-1"));
 
     // Extract wait_for_commit parameter (optional, default: true)
-    const auto wait_for_commit_param = request.query().get("wait_for_commit");
+    std::optional< std::string > wait_for_commit_param = request.has_param("wait_for_commit")
+        ? std::optional< std::string >{request.get_param_value("wait_for_commit")}
+        : std::nullopt;
     std::string wait_for_commit_mode = wait_for_commit_param.value_or("true");
     if (wait_for_commit_mode != "true" && wait_for_commit_mode != "false") {
-        response.send(Pistache::Http::Code::Bad_Request, "wait_for_commit must be 'true' or 'false'");
+        response.status = 400;
+        response.set_content("wait_for_commit must be 'true' or 'false'", "text/plain");
         return;
     }
     bool wait_for_commit = (wait_for_commit_mode == "true");
@@ -201,19 +224,23 @@ void HttpManager::trigger_snapshot_creation(const Pistache::Rest::Request& reque
             wait_for_commit);
 
     ho_.trigger_snapshot_creation(pg_id, compact_lsn, wait_for_commit);
-    response.send(Pistache::Http::Code::Ok, "Snapshot creation request submitted");
+    response.status = 200;
+    response.set_content("Snapshot creation request submitted", "text/plain");
 }
 
-void HttpManager::get_pg(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response) {
-    auto pg_str = request.query().get("pg_id");
+void HttpManager::get_pg(httplib::Request const& request, httplib::Response& response) {
+    std::optional< std::string > pg_str =
+        request.has_param("pg_id") ? std::optional< std::string >{request.get_param_value("pg_id")} : std::nullopt;
     if (!pg_str) {
-        response.send(Pistache::Http::Code::Bad_Request, "pg_id is required");
+        response.status = 400;
+        response.set_content("pg_id is required", "text/plain");
         return;
     }
     uint16_t pg_id = std::stoul(pg_str.value());
     auto hs_pg = ho_.get_hs_pg(pg_id);
     if (!hs_pg) {
-        response.send(Pistache::Http::Code::Not_Found, "pg not found");
+        response.status = 404;
+        response.set_content("pg not found", "text/plain");
         return;
     }
     auto peers = hs_pg->repl_dev_->get_replication_status();
@@ -233,30 +260,38 @@ void HttpManager::get_pg(const Pistache::Rest::Request& request, Pistache::Http:
         member_json["name"] = member.name;
         json["pg"]["members"].push_back(member_json);
     }
-    response.send(Pistache::Http::Code::Ok, json.dump());
+    response.status = 200;
+    response.set_content(json.dump(), "application/json");
 }
 
-void HttpManager::get_pg_chunks(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response) {
-    auto pg_str = request.query().get("pg_id");
+void HttpManager::get_pg_chunks(httplib::Request const& request, httplib::Response& response) {
+    std::optional< std::string > pg_str =
+        request.has_param("pg_id") ? std::optional< std::string >{request.get_param_value("pg_id")} : std::nullopt;
     if (!pg_str) {
-        response.send(Pistache::Http::Code::Bad_Request, "pg_id is required");
+        response.status = 400;
+        response.set_content("pg_id is required", "text/plain");
         return;
     }
     uint16_t pg_id = std::stoul(pg_str.value());
     auto hs_pg = ho_.get_hs_pg(pg_id);
     if (!hs_pg) {
-        response.send(Pistache::Http::Code::Not_Found, "pg not found");
+        response.status = 404;
+        response.set_content("pg not found", "text/plain");
         return;
     }
     auto json = ho_.chunk_selector()->dump_chunks_info(pg_id);
     json["pg"]["blk_size"] = hs_pg->repl_dev_->get_blk_size();
-    response.send(Pistache::Http::Code::Ok, json.dump());
+    response.status = 200;
+    response.set_content(json.dump(), "application/json");
 }
 
-void HttpManager::get_shard(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response) {
-    auto shard_str = request.query().get("shard_id");
+void HttpManager::get_shard(httplib::Request const& request, httplib::Response& response) {
+    std::optional< std::string > shard_str = request.has_param("shard_id")
+        ? std::optional< std::string >{request.get_param_value("shard_id")}
+        : std::nullopt;
     if (!shard_str) {
-        response.send(Pistache::Http::Code::Bad_Request, "shard_id is required");
+        response.status = 400;
+        response.set_content("shard_id is required", "text/plain");
         return;
     }
     uint64_t shard_id = std::stoull(shard_str.value(), nullptr, 0);
@@ -264,7 +299,8 @@ void HttpManager::get_shard(const Pistache::Rest::Request& request, Pistache::Ht
     j["shard_id"] = shard_id;
     auto chk = ho_.get_shard_v_chunk_id(shard_id);
     if (!chk) {
-        response.send(Pistache::Http::Code::Not_Found, "shard not found");
+        response.status = 404;
+        response.set_content("shard not found", "text/plain");
         return;
     }
     auto pchk = ho_.get_shard_p_chunk_id(shard_id);
@@ -276,15 +312,18 @@ void HttpManager::get_shard(const Pistache::Rest::Request& request, Pistache::Ht
     }
     auto hs_pg = ho_.get_hs_pg(pg_id);
     if (!hs_pg) {
-        response.send(Pistache::Http::Code::Internal_Server_Error, "pg not found");
+        response.status = 500;
+        response.set_content("pg not found", "text/plain");
         return;
     }
-    auto r = ho_.shard_manager()->get_shard(shard_id).get();
-    if (!r) {
-        response.send(Pistache::Http::Code::Internal_Server_Error, "failed to get shard");
+    // Sync in-memory lookup — avoid sync_get(shard_manager()->get_shard) on HTTP thread.
+    auto const* shard = ho_._get_hs_shard(shard_id);
+    if (!shard) {
+        response.status = 500;
+        response.set_content("failed to get shard", "text/plain");
         return;
     }
-    const auto& shard_info = r.value();
+    const auto& shard_info = shard->info;
     j["created_time"] = shard_info.created_time;
     j["last_modified_time"] = shard_info.last_modified_time;
     j["state"] = shard_info.state;
@@ -293,25 +332,32 @@ void HttpManager::get_shard(const Pistache::Rest::Request& request, Pistache::Ht
     j["meta"] = std::string(reinterpret_cast< const char* >(shard_info.meta));
     auto blobs = ho_.get_shard_blobs(shard_id);
     if (!blobs) {
-        response.send(Pistache::Http::Code::Internal_Server_Error, "failed to get shard blobs");
+        response.status = 500;
+        response.set_content("failed to get shard blobs", "text/plain");
         return;
     }
     j["total_blob_count"] = blobs.value().size();
 
-    response.send(Pistache::Http::Code::Ok, j.dump());
+    response.status = 200;
+    response.set_content(j.dump(), "application/json");
 }
 
-void HttpManager::dump_chunk(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response) {
-    auto pg_str = request.query().get("pg_id");
-    auto chunk_str = request.query().get("v_chunk_id");
+void HttpManager::dump_chunk(httplib::Request const& request, httplib::Response& response) {
+    std::optional< std::string > pg_str =
+        request.has_param("pg_id") ? std::optional< std::string >{request.get_param_value("pg_id")} : std::nullopt;
+    std::optional< std::string > chunk_str = request.has_param("v_chunk_id")
+        ? std::optional< std::string >{request.get_param_value("v_chunk_id")}
+        : std::nullopt;
     if (!pg_str || !chunk_str) {
-        response.send(Pistache::Http::Code::Bad_Request, "pg_id and v_chunk_id are required");
+        response.status = 400;
+        response.set_content("pg_id and v_chunk_id are required", "text/plain");
         return;
     }
     uint16_t pg_id = std::stoul(pg_str.value());
     auto hs_pg = ho_.get_hs_pg(pg_id);
     if (!hs_pg) {
-        response.send(Pistache::Http::Code::Not_Found, "pg not found");
+        response.status = 404;
+        response.set_content("pg not found", "text/plain");
         return;
     }
     uint16_t v_chunk_id = std::stoul(chunk_str.value());
@@ -335,13 +381,17 @@ void HttpManager::dump_chunk(const Pistache::Rest::Request& request, Pistache::H
         j["shards"].push_back(shard_json);
     }
     j["total_shard_count"] = shards.size();
-    response.send(Pistache::Http::Code::Ok, j.dump());
+    response.status = 200;
+    response.set_content(j.dump(), "application/json");
 }
 
-void HttpManager::dump_shard(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response) {
-    auto shard_str = request.query().get("shard_id");
+void HttpManager::dump_shard(httplib::Request const& request, httplib::Response& response) {
+    std::optional< std::string > shard_str = request.has_param("shard_id")
+        ? std::optional< std::string >{request.get_param_value("shard_id")}
+        : std::nullopt;
     if (!shard_str) {
-        response.send(Pistache::Http::Code::Bad_Request, "shard_id is required");
+        response.status = 400;
+        response.set_content("shard_id is required", "text/plain");
         return;
     }
     uint64_t shard_id = std::stoull(shard_str.value(), nullptr, 0);
@@ -349,7 +399,8 @@ void HttpManager::dump_shard(const Pistache::Rest::Request& request, Pistache::H
     j["shard_id"] = shard_id;
     auto chk = ho_.get_shard_v_chunk_id(shard_id);
     if (!chk) {
-        response.send(Pistache::Http::Code::Not_Found, "shard not found");
+        response.status = 404;
+        response.set_content("shard not found", "text/plain");
         return;
     }
     j["v_chunk_id"] = chk.value();
@@ -359,12 +410,14 @@ void HttpManager::dump_shard(const Pistache::Rest::Request& request, Pistache::H
         j["v_chunk_state"] = enum_name(vchunk->m_state);
     }
 
-    auto s = ho_.shard_manager()->get_shard(shard_id).get();
-    if (!s) {
-        response.send(Pistache::Http::Code::Internal_Server_Error, "failed to get shard");
+    // Sync in-memory lookup — avoid sync_get(shard_manager()->get_shard) on HTTP thread.
+    auto const* shard = ho_._get_hs_shard(shard_id);
+    if (!shard) {
+        response.status = 500;
+        response.set_content("failed to get shard", "text/plain");
         return;
     }
-    const auto& shard_info = s.value();
+    const auto& shard_info = shard->info;
     j["created_time"] = shard_info.created_time;
     j["last_modified_time"] = shard_info.last_modified_time;
     j["state"] = shard_info.state;
@@ -374,7 +427,8 @@ void HttpManager::dump_shard(const Pistache::Rest::Request& request, Pistache::H
 
     auto r = ho_.get_shard_blobs(shard_id);
     if (!r) {
-        response.send(Pistache::Http::Code::Internal_Server_Error, "failed to get shard blobs");
+        response.status = 500;
+        response.set_content("failed to get shard blobs", "text/plain");
         return;
     }
     for (auto const& blob : r.value()) {
@@ -385,12 +439,13 @@ void HttpManager::dump_shard(const Pistache::Rest::Request& request, Pistache::H
         blob_json["chunk_num"] = blob.pbas.chunk_num();
         j["blobs"].push_back(blob_json);
     }
-    response.send(Pistache::Http::Code::Ok, j.dump());
+    response.status = 200;
+    response.set_content(j.dump(), "application/json");
 }
 
-void HttpManager::flip_learner_flag(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response) {
+void HttpManager::flip_learner_flag(httplib::Request const& request, httplib::Response& response) {
     try {
-        auto body = request.body();
+        auto body = request.body;
         auto j = nlohmann::json::parse(body);
 
         std::string pg_id_str = j.at("pg_id").get< std::string >();
@@ -403,22 +458,29 @@ void HttpManager::flip_learner_flag(const Pistache::Rest::Request& request, Pist
         auto tid = generateRandomTraceId();
         LOGINFO("Flipping learner flag, pg_id={}, member_id={}, learner={}, commit_quorum={}, tid={}", pg_id,
                 boost::uuids::to_string(member_id), learner, commit_quorum, tid);
-        auto result = ho_.flip_learner_flag(pg_id, member_id, learner == "true", commit_quorum, tid).get();
-        if (!result) {
-            LOGI("PG flip learner flag failed, err={}", result.error());
-            response.send(Pistache::Http::Code::Internal_Server_Error,
-                          fmt::format("Failed to flip learner flag, err={}", result.error()));
-            return;
-        }
-        response.send(Pistache::Http::Code::Ok);
+        // ADR: no sync_get on HTTP thread — submit async and return 202 Accepted.
+        bool is_learner = (learner == "true");
+        sisl::async::detach_then(ho_.flip_learner_flag(pg_id, member_id, is_learner, commit_quorum, tid),
+                                 [pg_id, member_id, tid](auto result) {
+                                     if (!result) {
+                                         LOGERROR("PG flip learner flag failed, pg_id={}, member_id={}, err={}, tid={}",
+                                                  pg_id, boost::uuids::to_string(member_id), result.error(), tid);
+                                     }
+                                 });
+        nlohmann::json accepted;
+        accepted["status"] = "accepted";
+        accepted["message"] = "flip_learner request submitted";
+        response.status = 202;
+        response.set_content(accepted.dump(), "application/json");
     } catch (const std::exception& e) {
-        response.send(Pistache::Http::Code::Bad_Request, std::string("Invalid JSON: ") + e.what());
+        response.status = 400;
+        response.set_content(std::string("Invalid JSON: ") + e.what(), "text/plain");
     }
 }
 
-void HttpManager::remove_member(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response) {
+void HttpManager::remove_member(httplib::Request const& request, httplib::Response& response) {
     try {
-        auto body = request.body();
+        auto body = request.body;
         auto j = nlohmann::json::parse(body);
 
         std::string pg_id_str = j.at("pg_id").get< std::string >();
@@ -430,50 +492,61 @@ void HttpManager::remove_member(const Pistache::Rest::Request& request, Pistache
         auto tid = generateRandomTraceId();
         LOGINFO("Remove member, pg_id={}, member_id={}, commit_quorum={}, tid={}", pg_id,
                 boost::uuids::to_string(member_id), commit_quorum, tid);
-        auto result = ho_.remove_member(pg_id, member_id, commit_quorum, tid).get();
-        if (!result) {
-            // Some times remove member may fail with RETRY_REQUEST if the target member is not responding,
-            // in this case return 503 so that the caller can retry later.
-            auto code = result.error() == PGError::RETRY_REQUEST ? Pistache::Http::Code::Service_Unavailable
-                                                                 : Pistache::Http::Code::Internal_Server_Error;
-            response.send(code, fmt::format("Failed to remove member, err={}", result.error()));
-            return;
-        }
-        response.send(Pistache::Http::Code::Ok);
+        // ADR: no sync_get on HTTP thread — submit async and return 202 Accepted.
+        // Errors (including RETRY_REQUEST) are logged; clients should poll membership / retry via a new request.
+        sisl::async::detach_then(ho_.remove_member(pg_id, member_id, commit_quorum, tid),
+                                 [pg_id, member_id, tid](auto result) {
+                                     if (!result) {
+                                         LOGERROR("Remove member failed, pg_id={}, member_id={}, err={}, tid={}", pg_id,
+                                                  boost::uuids::to_string(member_id), result.error(), tid);
+                                     }
+                                 });
+        nlohmann::json accepted;
+        accepted["status"] = "accepted";
+        accepted["message"] = "remove_member request submitted";
+        response.status = 202;
+        response.set_content(accepted.dump(), "application/json");
     } catch (const std::exception& e) {
-        response.send(Pistache::Http::Code::Bad_Request, std::string("Invalid JSON: ") + e.what());
+        response.status = 400;
+        response.set_content(std::string("Invalid JSON: ") + e.what(), "text/plain");
     }
 }
 
-void HttpManager::clean_replace_member_task(const Pistache::Rest::Request& request,
-                                            Pistache::Http::ResponseWriter response) {
+void HttpManager::clean_replace_member_task(httplib::Request const& request, httplib::Response& response) {
     try {
-        auto body = request.body();
+        auto body = request.body;
         auto j = nlohmann::json::parse(body);
 
         std::string pg_id_str = j.at("pg_id").get< std::string >();
         pg_id_t pg_id = std::stoull(pg_id_str);
-        std::string task_id = j.at("task_id").get< std::string >();
+        // Keep task_id alive for the async op (API takes std::string&).
+        auto task_id = std::make_shared< std::string >(j.at("task_id").get< std::string >());
         std::string commit_quorum_str = j.at("commit_quorum").get< std::string >();
         uint32_t commit_quorum = std::stoul(commit_quorum_str);
         auto tid = generateRandomTraceId();
-        LOGINFO("Clean replace member task, pg_id={}, task_id={}, commit_quorum={}, tid={}", pg_id, task_id,
+        LOGINFO("Clean replace member task, pg_id={}, task_id={}, commit_quorum={}, tid={}", pg_id, *task_id,
                 commit_quorum, tid);
-        auto result = ho_.clean_replace_member_task(pg_id, task_id, commit_quorum, tid).get();
-        if (!result) {
-            response.send(Pistache::Http::Code::Internal_Server_Error,
-                          fmt::format("Failed to clean replace member task, err={}", result.error()));
-            return;
-        }
-        response.send(Pistache::Http::Code::Ok);
+        // ADR: no sync_get on HTTP thread — submit async and return 202 Accepted.
+        sisl::async::detach_then(
+            ho_.clean_replace_member_task(pg_id, *task_id, commit_quorum, tid), [pg_id, task_id, tid](auto result) {
+                if (!result) {
+                    LOGERROR("Clean replace member task failed, pg_id={}, task_id={}, err={}, tid={}", pg_id, *task_id,
+                             result.error(), tid);
+                }
+            });
+        nlohmann::json accepted;
+        accepted["status"] = "accepted";
+        accepted["message"] = "clean_replace_member_task request submitted";
+        response.status = 202;
+        response.set_content(accepted.dump(), "application/json");
     } catch (const std::exception& e) {
-        response.send(Pistache::Http::Code::Bad_Request, std::string("Invalid JSON: ") + e.what());
+        response.status = 400;
+        response.set_content(std::string("Invalid JSON: ") + e.what(), "text/plain");
     }
 }
-void HttpManager::reconcile_membership(const Pistache::Rest::Request& request,
-                                       Pistache::Http::ResponseWriter response) {
+void HttpManager::reconcile_membership(httplib::Request const& request, httplib::Response& response) {
     try {
-        auto body = request.body();
+        auto body = request.body;
         auto j = nlohmann::json::parse(body);
 
         std::string pg_id_str = j.at("pg_id").get< std::string >();
@@ -483,8 +556,8 @@ void HttpManager::reconcile_membership(const Pistache::Rest::Request& request,
 
         bool success = ho_.reconcile_membership(pg_id);
         if (!success) {
-            response.send(Pistache::Http::Code::Internal_Server_Error,
-                          fmt::format("Failed to reconcile membership for pg_id={}", pg_id));
+            response.status = 500;
+            response.set_content(fmt::format("Failed to reconcile membership for pg_id={}", pg_id), "text/plain");
             return;
         }
 
@@ -493,19 +566,20 @@ void HttpManager::reconcile_membership(const Pistache::Rest::Request& request,
         result["pg_id"] = pg_id;
         result["message"] = "Membership reconciled successfully";
 
-        response.send(Pistache::Http::Code::Ok, result.dump());
+        response.status = 200;
+        response.set_content(result.dump(), "application/json");
     } catch (const std::exception& e) {
-        response.send(Pistache::Http::Code::Bad_Request, std::string("Invalid JSON: ") + e.what());
+        response.status = 400;
+        response.set_content(std::string("Invalid JSON: ") + e.what(), "text/plain");
     }
 }
 
-void HttpManager::list_pg_replace_member_task(const Pistache::Rest::Request& request,
-                                              Pistache::Http::ResponseWriter response) {
+void HttpManager::list_pg_replace_member_task(httplib::Request const& request, httplib::Response& response) {
     auto tid = generateRandomTraceId();
     auto ret = ho_.list_all_replace_member_tasks(tid);
-    if (ret.hasError()) {
-        response.send(Pistache::Http::Code::Internal_Server_Error,
-                      fmt::format("Failed to list replace member task, err={}", ret.error()));
+    if (!ret) {
+        response.status = 500;
+        response.set_content(fmt::format("Failed to list replace member task, err={}", ret.error()), "text/plain");
         return;
     }
     LOGINFO("list pg replace member tasks, count={}, tid={}", ret.value().size(), tid);
@@ -517,15 +591,18 @@ void HttpManager::list_pg_replace_member_task(const Pistache::Rest::Request& req
         task_j["replica_in"] = to_string(task.replica_in);
         j.push_back(task_j);
     }
-    response.send(Pistache::Http::Code::Ok, j.dump(2));
+    response.status = 200;
+    response.set_content(j.dump(2), "application/json");
 }
 
 // This API is used to get the PG quorum status, typically used by CM to fix its view of the PG status after a pg move
 // failure.
-void HttpManager::get_pg_quorum(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response) {
-    auto pg_id_str{request.query().get("pg_id")};
+void HttpManager::get_pg_quorum(httplib::Request const& request, httplib::Response& response) {
+    std::optional< std::string > pg_id_str =
+        request.has_param("pg_id") ? std::optional< std::string >{request.get_param_value("pg_id")} : std::nullopt;
     if (pg_id_str == std::nullopt) {
-        response.send(Pistache::Http::Code::Bad_Request, "Missing pg_id query parameter");
+        response.status = 400;
+        response.set_content("Missing pg_id query parameter", "text/plain");
         return;
     }
     pg_id_t pg_id = std::stoull(pg_id_str.value());
@@ -545,18 +622,25 @@ void HttpManager::get_pg_quorum(const Pistache::Rest::Request& request, Pistache
             member_j["last_succ_resp_us"] = peer.last_succ_resp_us;
             j["members"].push_back(member_j);
         }
-        response.send(Pistache::Http::Code::Ok, j.dump(2));
+        response.status = 200;
+        response.set_content(j.dump(2), "application/json");
     } else {
-        response.send(Pistache::Http::Code::Internal_Server_Error, fmt::format("Failed to get pg quorum"));
+        response.status = 500;
+        response.set_content(fmt::format("Failed to get pg quorum"), "text/plain");
     }
 }
 
-void HttpManager::exit_pg(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response) {
-    auto group_id_str{request.query().get("group_id")};
-    auto peer_id_str{request.query().get("replica_id")};
+void HttpManager::exit_pg(httplib::Request const& request, httplib::Response& response) {
+    std::optional< std::string > group_id_str = request.has_param("group_id")
+        ? std::optional< std::string >{request.get_param_value("group_id")}
+        : std::nullopt;
+    std::optional< std::string > peer_id_str = request.has_param("replica_id")
+        ? std::optional< std::string >{request.get_param_value("replica_id")}
+        : std::nullopt;
     auto tid = generateRandomTraceId();
     if (group_id_str == std::nullopt || peer_id_str == std::nullopt) {
-        response.send(Pistache::Http::Code::Bad_Request, "Missing group_id or replica_id query parameter");
+        response.status = 400;
+        response.set_content("Missing group_id or replica_id query parameter", "text/plain");
         return;
     }
     uuid_t group_id;
@@ -565,37 +649,43 @@ void HttpManager::exit_pg(const Pistache::Rest::Request& request, Pistache::Http
         group_id = boost::uuids::string_generator()(group_id_str.value());
         peer_id = boost::uuids::string_generator()(peer_id_str.value());
     } catch (const std::runtime_error& e) {
-        response.send(Pistache::Http::Code::Bad_Request, "Invalid group_id or replica_id query parameter");
+        response.status = 400;
+        response.set_content("Invalid group_id or replica_id query parameter", "text/plain");
         return;
     }
     LOGINFO("Exit pg request received for group_id={}, peer_id={}, tid={}", group_id_str.value(), peer_id_str.value(),
             tid);
     auto ret = ho_.exit_pg(group_id, peer_id, tid);
-    if (ret.hasError()) {
-        response.send(Pistache::Http::Code::Internal_Server_Error,
-                      fmt::format("Failed to list replace member task, err={}", ret.error()));
+    if (!ret) {
+        response.status = 500;
+        response.set_content(fmt::format("Failed to list replace member task, err={}", ret.error()), "text/plain");
         return;
     }
-    response.send(Pistache::Http::Code::Ok, "Exit pg request submitted");
+    response.status = 200;
+    response.set_content("Exit pg request submitted", "text/plain");
 }
 
-void HttpManager::trigger_pg_scrub(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response) {
+void HttpManager::trigger_pg_scrub(httplib::Request const& request, httplib::Response& response) {
     auto scrub_mgr = ho_.scrub_manager();
     if (!scrub_mgr) {
-        response.send(Pistache::Http::Code::Internal_Server_Error, "Scrub manager not available");
+        response.status = 500;
+        response.set_content("Scrub manager not available", "text/plain");
         return;
     }
 
     // Get query parameters
-    const auto pg_id_param = request.query().get("pg_id");
-    const auto is_deep_param = request.query().get("deep");
+    std::optional< std::string > pg_id_param =
+        request.has_param("pg_id") ? std::optional< std::string >{request.get_param_value("pg_id")} : std::nullopt;
+    std::optional< std::string > is_deep_param =
+        request.has_param("deep") ? std::optional< std::string >{request.get_param_value("deep")} : std::nullopt;
 
     // Validate pg_id parameter (required)
     if (!pg_id_param || pg_id_param.value().empty()) {
         nlohmann::json error;
         error["error"] = "Missing required parameter: pg_id";
         error["usage"] = "POST /api/v1/trigger_pg_scrub?pg_id=<id>&deep=<true|false>";
-        response.send(Pistache::Http::Code::Bad_Request, error.dump());
+        response.status = 400;
+        response.set_content(error.dump(), "application/json");
         return;
     }
 
@@ -606,7 +696,8 @@ void HttpManager::trigger_pg_scrub(const Pistache::Rest::Request& request, Pista
             nlohmann::json error;
             error["error"] = "pg_id out of range";
             error["pg_id"] = pg_id_param.value();
-            response.send(Pistache::Http::Code::Bad_Request, error.dump());
+            response.status = 400;
+            response.set_content(error.dump(), "application/json");
             return;
         }
         pg_id = static_cast< uint16_t >(val);
@@ -614,13 +705,15 @@ void HttpManager::trigger_pg_scrub(const Pistache::Rest::Request& request, Pista
         nlohmann::json error;
         error["error"] = "Invalid pg_id format: not a number";
         error["pg_id"] = pg_id_param.value();
-        response.send(Pistache::Http::Code::Bad_Request, error.dump());
+        response.status = 400;
+        response.set_content(error.dump(), "application/json");
         return;
     } catch (const std::out_of_range& e) {
         nlohmann::json error;
         error["error"] = "pg_id out of range";
         error["pg_id"] = pg_id_param.value();
-        response.send(Pistache::Http::Code::Bad_Request, error.dump());
+        response.status = 400;
+        response.set_content(error.dump(), "application/json");
         return;
     }
 
@@ -639,7 +732,8 @@ void HttpManager::trigger_pg_scrub(const Pistache::Rest::Request& request, Pista
         nlohmann::json error;
         error["error"] = "PG not found";
         error["pg_id"] = pg_id;
-        response.send(Pistache::Http::Code::Not_Found, error.dump());
+        response.status = 404;
+        response.set_content(error.dump(), "application/json");
         return;
     }
 
@@ -660,12 +754,13 @@ void HttpManager::trigger_pg_scrub(const Pistache::Rest::Request& request, Pista
     result["message"] = "Scrub task submitted, query status using /api/v1/scrub_job_status?job_id=" + job_id;
 
     // Return immediately with HTTP 202 Accepted
-    response.send(Pistache::Http::Code::Accepted, result.dump());
+    response.status = 202;
+    response.set_content(result.dump(), "application/json");
 
     // Submit scrub task (MANUALLY trigger type) - runs asynchronously
-    scrub_mgr->submit_scrub_task(pg_id, is_deep, SCRUB_TRIGGER_TYPE::MANUALLY)
-        .via(&folly::InlineExecutor::instance())
-        .thenValue([job_info, is_deep](std::shared_ptr< ScrubManager::ShallowScrubReport > report) {
+    sisl::async::detach_then(
+        scrub_mgr->submit_scrub_task(pg_id, is_deep, SCRUB_TRIGGER_TYPE::MANUALLY),
+        [job_info, is_deep](std::shared_ptr< ScrubManager::ShallowScrubReport > report) {
             if (!report) {
                 job_info->try_complete(ScrubJobStatus::FAILED, "Scrub task failed or was cancelled");
                 return;
@@ -763,27 +858,29 @@ void HttpManager::trigger_pg_scrub(const Pistache::Rest::Request& request, Pista
 
             // Complete the job with success status and report
             job_info->try_complete(ScrubJobStatus::COMPLETED, "", report_summary);
-        })
-        .thenError([job_info](const folly::exception_wrapper& ew) {
-            job_info->try_complete(ScrubJobStatus::FAILED, ew.what().c_str());
         });
 }
 
-void HttpManager::trigger_gc(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response) {
+void HttpManager::trigger_gc(httplib::Request const& request, httplib::Response& response) {
     auto gc_mgr = ho_.gc_manager();
     if (!gc_mgr) {
-        response.send(Pistache::Http::Code::Internal_Server_Error, "GC manager not available");
+        response.status = 500;
+        response.set_content("GC manager not available", "text/plain");
         return;
     }
 
     auto chunk_selector = ho_.chunk_selector();
     if (!chunk_selector) {
-        response.send(Pistache::Http::Code::Internal_Server_Error, "Chunk selector not available");
+        response.status = 500;
+        response.set_content("Chunk selector not available", "text/plain");
         return;
     }
 
-    const auto chunk_id_param = request.query().get("chunk_id");
-    const auto pg_id_param = request.query().get("pg_id");
+    std::optional< std::string > chunk_id_param = request.has_param("chunk_id")
+        ? std::optional< std::string >{request.get_param_value("chunk_id")}
+        : std::nullopt;
+    std::optional< std::string > pg_id_param =
+        request.has_param("pg_id") ? std::optional< std::string >{request.get_param_value("pg_id")} : std::nullopt;
 
     if (chunk_id_param && !chunk_id_param.value().empty()) {
         // trigger gc for a specific chunk, the chunk_id is pchunk_id, not vchunk_id
@@ -795,7 +892,8 @@ void HttpManager::trigger_gc(const Pistache::Rest::Request& request, Pistache::H
             nlohmann::json error;
             error["chunk_id"] = chunk_id;
             error["error"] = "Chunk not found";
-            response.send(Pistache::Http::Code::Not_Found, error.dump());
+            response.status = 404;
+            response.set_content(error.dump(), "application/json");
             return;
         }
 
@@ -803,7 +901,8 @@ void HttpManager::trigger_gc(const Pistache::Rest::Request& request, Pistache::H
             nlohmann::json error;
             error["chunk_id"] = chunk_id;
             error["error"] = "Chunk belongs to no pg";
-            response.send(Pistache::Http::Code::Not_Found, error.dump());
+            response.status = 404;
+            response.set_content(error.dump(), "application/json");
             return;
         }
 
@@ -817,13 +916,15 @@ void HttpManager::trigger_gc(const Pistache::Rest::Request& request, Pistache::H
 
         if (chunk->m_state == ChunkState::GC) {
             result["message"] = "chunk is already under GC now, this task will not be executed!";
-            response.send(Pistache::Http::Code::Ok, result.dump());
+            response.status = 200;
+            response.set_content(result.dump(), "application/json");
             return;
         }
         result["message"] = "GC triggered for chunk, pls query job status using gc_job_status API";
 
         // return response before starting the GC so that we don't block the client.
-        response.send(Pistache::Http::Code::Accepted, result.dump());
+        response.status = 202;
+        response.set_content(result.dump(), "application/json");
 
         auto job_info = std::make_shared< GCJobInfo >(job_id, pg_id, chunk_id);
         {
@@ -841,13 +942,10 @@ void HttpManager::trigger_gc(const Pistache::Rest::Request& request, Pistache::H
         repl_dev->clear_chunk_req(chunk_id);
         const auto priority = chunk->m_state == ChunkState::INUSE ? task_priority::emergent : task_priority::normal;
 
-        gc_mgr->submit_gc_task(priority, chunk_id)
-            .via(&folly::InlineExecutor::instance())
-            .thenValue([this, job_info, repl_dev](bool res) {
-                job_info->status = res ? GCJobStatus::COMPLETED : GCJobStatus::FAILED;
-                // Resume accepting new requests for this pg
-                repl_dev->resume_accepting_reqs();
-            });
+        sisl::async::detach_then(gc_mgr->submit_gc_task(priority, chunk_id), [this, job_info, repl_dev](bool res) {
+            job_info->status = res ? GCJobStatus::COMPLETED : GCJobStatus::FAILED;
+            repl_dev->resume_accepting_reqs();
+        });
     } else if (pg_id_param && !pg_id_param.value().empty()) {
         // trigger gc for all chunks in a specific pg
         const auto pg_id = std::stoul(pg_id_param.value());
@@ -857,7 +955,8 @@ void HttpManager::trigger_gc(const Pistache::Rest::Request& request, Pistache::H
             nlohmann::json error;
             error["pg_id"] = pg_id;
             error["error"] = "PG not found";
-            response.send(Pistache::Http::Code::Not_Found, error.dump());
+            response.status = 404;
+            response.set_content(error.dump(), "application/json");
             return;
         }
 
@@ -867,7 +966,8 @@ void HttpManager::trigger_gc(const Pistache::Rest::Request& request, Pistache::H
         result["job_id"] = job_id;
         result["message"] = "GC triggered for a single pg, pls query job status using gc_job_status API";
         // return response before starting the GC so that we don't block the client.
-        response.send(Pistache::Http::Code::Accepted, result.dump());
+        response.status = 202;
+        response.set_content(result.dump(), "application/json");
 
         auto job_info = std::make_shared< GCJobInfo >(job_id, pg_id);
         {
@@ -878,7 +978,7 @@ void HttpManager::trigger_gc(const Pistache::Rest::Request& request, Pistache::H
         LOGINFO("GC job {} stopping GC scan timer", job_id);
         gc_mgr->stop_gc_scan_timer();
 
-        trigger_gc_for_pg(pg_id, job_id).thenValue([job_info, gc_mgr, job_id](auto&&) {
+        sisl::async::detach_then(trigger_gc_for_pg(pg_id, job_id), [job_info, gc_mgr, job_id](auto&&) {
             job_info->status = job_info->failed_count ? GCJobStatus::FAILED : GCJobStatus::COMPLETED;
             LOGINFO("GC job {} completed: total={}, success={}, failed={}", job_info->job_id, job_info->total_chunks,
                     job_info->success_count, job_info->failed_count);
@@ -904,25 +1004,27 @@ void HttpManager::trigger_gc(const Pistache::Rest::Request& request, Pistache::H
             LOGINFO("GC job {} no PGs found, marking as completed", job_id);
             job_info->status = GCJobStatus::COMPLETED;
             result["message"] = "No PGs found, GC completed";
-            response.send(Pistache::Http::Code::Ok, result.dump());
+            response.status = 200;
+            response.set_content(result.dump(), "application/json");
             return;
         }
 
         result["message"] = "GC triggered for all chunks, pls query job status using gc_job_status API";
         // return response before starting the GC so that we don't block the client.
-        response.send(Pistache::Http::Code::Accepted, result.dump());
+        response.status = 202;
+        response.set_content(result.dump(), "application/json");
 
         LOGINFO("GC job {} will process {} PGs", job_id, pg_ids.size());
         LOGINFO("GC job {} stopping GC scan timer", job_id);
         gc_mgr->stop_gc_scan_timer();
 
-        std::vector< folly::Future< folly::Unit > > pg_futures;
+        std::vector< sisl::async::task< std::monostate > > pg_futures;
         for (const auto& pg_id : pg_ids) {
             pg_futures.push_back(trigger_gc_for_pg(pg_id, job_id));
         }
 
         // Set job status after all PGs are processed
-        folly::collectAllUnsafe(pg_futures).thenValue([job_info, gc_mgr, job_id](auto&&) {
+        sisl::async::detach_then(sisl::async::when_all(std::move(pg_futures)), [job_info, gc_mgr, job_id](auto&&) {
             job_info->status = job_info->failed_count ? GCJobStatus::FAILED : GCJobStatus::COMPLETED;
             LOGINFO("GC job {} completed: total={}, success={}, failed={}", job_info->job_id, job_info->total_chunks,
                     job_info->success_count, job_info->failed_count);
@@ -974,14 +1076,16 @@ void HttpManager::get_job_status(const std::string& job_id, nlohmann::json& resu
     }
 }
 
-void HttpManager::get_gc_job_status(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response) {
-    auto job_id_param = request.query().get("job_id");
+void HttpManager::get_gc_job_status(httplib::Request const& request, httplib::Response& response) {
+    std::optional< std::string > job_id_param =
+        request.has_param("job_id") ? std::optional< std::string >{request.get_param_value("job_id")} : std::nullopt;
     if (job_id_param && !job_id_param.value().empty()) {
         const auto job_id = job_id_param.value();
         LOGINFO("query job {} status!", job_id);
         nlohmann::json result;
         get_job_status(job_id, result);
-        response.send(Pistache::Http::Code::Ok, result.dump());
+        response.status = 200;
+        response.set_content(result.dump(), "application/json");
         return;
     }
 
@@ -1001,74 +1105,49 @@ void HttpManager::get_gc_job_status(const Pistache::Rest::Request& request, Pist
         result["jobs"].push_back(job_json);
     }
 
-    response.send(Pistache::Http::Code::Ok, result.dump());
+    response.status = 200;
+    response.set_content(result.dump(), "application/json");
 }
 
-folly::Future< folly::Unit > HttpManager::trigger_gc_for_pg(uint16_t pg_id, const std::string& job_id) {
-    auto hs_pg = const_cast< HSHomeObject::HS_PG* >(ho_.get_hs_pg(pg_id));
-    RELEASE_ASSERT(hs_pg, "HS PG {} not found during GC job {}", pg_id, job_id);
-
-    LOGINFO("GC job {} draining pending GC tasks for PG {}", job_id, pg_id);
+sisl::async::task< std::monostate > HttpManager::trigger_gc_for_pg(uint16_t pg_id, const std::string& job_id) {
     auto gc_mgr = ho_.gc_manager();
-    gc_mgr->drain_pg_pending_gc_task(pg_id);
-    auto pg_sb = hs_pg->pg_sb_.get();
-    std::vector< homestore::chunk_num_t > pg_chunks(pg_sb->get_chunk_ids(), pg_sb->get_chunk_ids() + pg_sb->num_chunks);
-
-    LOGINFO("GC job {} processing PG {} with {} chunks", job_id, pg_id, pg_chunks.size());
-    hs_pg->repl_dev_->quiesce_reqs();
-    std::vector< folly::SemiFuture< bool > > gc_task_futures;
-
     std::shared_ptr< GCJobInfo > job_info;
     {
         std::shared_lock lock(gc_job_mutex_);
         job_info = gc_jobs_map_.get(job_id);
     }
+    if (!job_info) { co_return std::monostate{}; }
 
-    auto chunk_selector = ho_.chunk_selector();
+    auto hs_pg = const_cast< HSHomeObject::HS_PG* >(ho_.get_hs_pg(pg_id));
+    if (!hs_pg) { co_return std::monostate{}; }
 
-    for (const auto& chunk_id : pg_chunks) {
+    auto pg_sb = hs_pg->pg_sb_.get();
+    std::vector< sisl::async::task< bool > > gc_task_futures;
+    for (uint32_t i = 0; i < pg_sb->num_chunks; ++i) {
+        auto chunk_id = pg_sb->get_chunk_ids()[i];
+        auto chunk = ho_.chunk_selector()->get_extend_vchunk(chunk_id);
+        if (!chunk || chunk->m_state == ChunkState::GC) { continue; }
         job_info->total_chunks++;
-        // Determine priority based on chunk state (INUSE means has open shard)
-        auto chunk = chunk_selector->get_extend_vchunk(chunk_id);
-        RELEASE_ASSERT(chunk, "Chunk {} not found during GC job {}", chunk_id, job_id);
-        auto priority = chunk->m_state == ChunkState::INUSE ? task_priority::emergent : task_priority::normal;
-
-        // Clear in-memory requests only for emergent priority chunks (chunks with open shards)
-        if (priority == task_priority::emergent) { hs_pg->repl_dev_->clear_chunk_req(chunk_id); }
-
-        // Submit GC task for this chunk
-        auto future = gc_mgr->submit_gc_task(priority, chunk_id);
-        gc_task_futures.push_back(std::move(future));
-        LOGDEBUG("GC job {} for chunk {} in PG {} with priority={}", job_id, chunk_id, pg_id,
-                 (priority == task_priority::emergent) ? "emergent" : "normal");
+        const auto priority = chunk->m_state == ChunkState::INUSE ? task_priority::emergent : task_priority::normal;
+        gc_task_futures.push_back(gc_mgr->submit_gc_task(priority, chunk_id));
     }
 
-    return folly::collectAllUnsafe(gc_task_futures)
-        .thenValue([job_info](auto&& results) {
-            for (auto const& ok : results) {
-                RELEASE_ASSERT(ok.hasValue(), "we never throw any exception when copying data");
-                if (ok.value()) {
-                    job_info->success_count++;
-                } else {
-                    job_info->failed_count++;
-                }
-            }
-        })
-        .thenValue([this, pg_id, job_info](auto&& rets) {
-            LOGINFO("All GC tasks for PG {} have been processed", pg_id);
-            const auto& job_id = job_info->job_id;
+    if (gc_task_futures.empty()) { co_return std::monostate{}; }
 
-            auto hs_pg = const_cast< HSHomeObject::HS_PG* >(ho_.get_hs_pg(pg_id));
-            RELEASE_ASSERT(hs_pg, "HS PG {} not found during GC job {}", pg_id, job_id);
-            // Resume accepting new requests for this pg
-            hs_pg->repl_dev_->resume_accepting_reqs();
-            LOGINFO("GC job {} resumed accepting requests for PG {}", job_id, pg_id);
-        });
+    auto results = co_await sisl::async::when_all(std::move(gc_task_futures));
+    for (auto const& res : results) {
+        if (res) {
+            job_info->success_count++;
+        } else {
+            job_info->failed_count++;
+        }
+    }
+    co_return std::monostate{};
 }
 
-void HttpManager::get_scrub_job_status(const Pistache::Rest::Request& request,
-                                       Pistache::Http::ResponseWriter response) {
-    auto job_id_param = request.query().get("job_id");
+void HttpManager::get_scrub_job_status(httplib::Request const& request, httplib::Response& response) {
+    std::optional< std::string > job_id_param =
+        request.has_param("job_id") ? std::optional< std::string >{request.get_param_value("job_id")} : std::nullopt;
 
     if (job_id_param && !job_id_param.value().empty()) {
         // Query specific job
@@ -1085,12 +1164,14 @@ void HttpManager::get_scrub_job_status(const Pistache::Rest::Request& request,
             nlohmann::json error;
             error["error"] = "Job not found";
             error["job_id"] = job_id;
-            response.send(Pistache::Http::Code::Not_Found, error.dump());
+            response.status = 404;
+            response.set_content(error.dump(), "application/json");
             return;
         }
 
         nlohmann::json result = build_scrub_job_json(job_info);
-        response.send(Pistache::Http::Code::Ok, result.dump());
+        response.status = 200;
+        response.set_content(result.dump(), "application/json");
         return;
     }
 
@@ -1110,7 +1191,8 @@ void HttpManager::get_scrub_job_status(const Pistache::Rest::Request& request,
         result["jobs"].push_back(build_scrub_job_json(job_info));
     }
 
-    response.send(Pistache::Http::Code::Ok, result.dump());
+    response.status = 200;
+    response.set_content(result.dump(), "application/json");
 }
 
 nlohmann::json HttpManager::build_scrub_job_json(const std::shared_ptr< ScrubJobInfo >& job_info) {
@@ -1167,14 +1249,16 @@ nlohmann::json HttpManager::build_scrub_job_json(const std::shared_ptr< ScrubJob
     return result;
 }
 
-void HttpManager::cancel_scrub_job(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response) {
-    auto job_id_param = request.query().get("job_id");
+void HttpManager::cancel_scrub_job(httplib::Request const& request, httplib::Response& response) {
+    std::optional< std::string > job_id_param =
+        request.has_param("job_id") ? std::optional< std::string >{request.get_param_value("job_id")} : std::nullopt;
 
     if (!job_id_param || job_id_param.value().empty()) {
         nlohmann::json error;
         error["error"] = "Missing required parameter: job_id";
         error["usage"] = "POST /api/v1/cancel_scrub_job?job_id=<id>";
-        response.send(Pistache::Http::Code::Bad_Request, error.dump());
+        response.status = 400;
+        response.set_content(error.dump(), "application/json");
         return;
     }
 
@@ -1191,7 +1275,8 @@ void HttpManager::cancel_scrub_job(const Pistache::Rest::Request& request, Pista
         nlohmann::json error;
         error["error"] = "Job not found";
         error["job_id"] = job_id;
-        response.send(Pistache::Http::Code::Not_Found, error.dump());
+        response.status = 404;
+        response.set_content(error.dump(), "application/json");
         return;
     }
 
@@ -1224,7 +1309,8 @@ void HttpManager::cancel_scrub_job(const Pistache::Rest::Request& request, Pista
         result["job_id"] = job_id;
         result["message"] = "Job is not running, cannot cancel";
         result["current_status"] = current_status_str;
-        response.send(Pistache::Http::Code::Bad_Request, result.dump());
+        response.status = 400;
+        response.set_content(result.dump(), "application/json");
         return;
     }
 
@@ -1233,7 +1319,8 @@ void HttpManager::cancel_scrub_job(const Pistache::Rest::Request& request, Pista
     if (!scrub_mgr) {
         nlohmann::json error;
         error["error"] = "Scrub manager not available";
-        response.send(Pistache::Http::Code::Internal_Server_Error, error.dump());
+        response.status = 500;
+        response.set_content(error.dump(), "application/json");
         return;
     }
 
@@ -1246,13 +1333,15 @@ void HttpManager::cancel_scrub_job(const Pistache::Rest::Request& request, Pista
     nlohmann::json result;
     result["job_id"] = job_id;
     result["message"] = "Scrub job cancelled successfully";
-    response.send(Pistache::Http::Code::Ok, result.dump());
+    response.status = 200;
+    response.set_content(result.dump(), "application/json");
 }
 
 #ifdef _PRERELEASE
-void HttpManager::crash_system(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response) {
+void HttpManager::crash_system(httplib::Request const& request, httplib::Response& response) {
     std::string crash_type;
-    const auto _crash_type{request.query().get("type")};
+    const std::optional< std::string > _crash_type =
+        request.has_param("type") ? std::optional< std::string >{request.get_param_value("type")} : std::nullopt;
     if (_crash_type) { crash_type = _crash_type.value(); }
 
     std::string resp = "";
@@ -1264,7 +1353,8 @@ void HttpManager::crash_system(const Pistache::Rest::Request& request, Pistache:
     } else {
         resp = "crash type " + crash_type + " not supported yet";
     }
-    response.send(Pistache::Http::Code::Ok, resp);
+    response.status = 200;
+    response.set_content(resp, "text/plain");
 }
 #endif
 

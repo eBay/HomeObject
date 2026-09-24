@@ -1,4 +1,7 @@
+#include <sisl/async/coro.hpp>
+#include <sisl/async/when_all.hpp>
 #pragma once
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <mutex>
@@ -15,7 +18,6 @@
 #include "bits_generator.hpp"
 #include "hs_repl_test_helper.hpp"
 #include <iomgr/iomgr_config_generated.h>
-#include <iomgr/http_server.hpp>
 #include <sisl/settings/settings.hpp>
 
 SETTINGS_INIT(iomgrcfg::IomgrSettings, iomgr_config);
@@ -85,7 +87,9 @@ public:
         LOGINFO("Stopping homeobject replica={}", g_helper->my_replica_id());
         LOGINFO("Metrics={}", sisl::MetricsFarm::getInstance().get_result_in_json().dump(2));
         _obj_inst.reset();
-        g_helper->homeobj_.reset();
+        // Must shutdown HomeStore (CPManager etc.) — resetting the shared_ptr alone leaves
+        // home_store::s_instance alive until process exit and trips ~CPManager after loggers die.
+        g_helper->shutdown_homeobject();
         sleep(10);
     }
 
@@ -136,7 +140,7 @@ public:
                     info.members.insert(homeobject::PGMember{member.first, name + std::to_string(member.second), 0});
                 }
             }
-            auto p = _obj_inst->pg_manager()->create_pg(std::move(info)).get();
+            auto p = sisl::async::sync_get(_obj_inst->pg_manager()->create_pg(std::move(info)));
             ASSERT_TRUE(p);
             LOGINFO("pg={} is created at leader", pg_id);
         } else {
@@ -164,7 +168,7 @@ public:
                 return id != INVALID_UINT64_ID && shard_exist(id, tid);
             },
             [&]() -> bool {
-                auto s = _obj_inst->shard_manager()->create_shard(pg_id, size_bytes, meta, tid).get();
+                auto s = sisl::async::sync_get(_obj_inst->shard_manager()->create_shard(pg_id, size_bytes, meta, tid));
                 if (!s) {
                     if (is_not_leader_error(s.error())) return false;
                     RELEASE_ASSERT(false, "failed to create shard");
@@ -192,7 +196,7 @@ public:
         RELEASE_ASSERT(local_v_chunkID.has_value(), "failed to get shard v_chunk_id");
         RELEASE_ASSERT(leader_v_chunk_id == local_v_chunkID, "v_chunk_id supposed to be identical");
 
-        auto r = _obj_inst->shard_manager()->get_shard(shard_id, tid).get();
+        auto r = sisl::async::sync_get(_obj_inst->shard_manager()->get_shard(shard_id, tid));
         RELEASE_ASSERT(!!r, "failed to get shard {}", shard_id);
         return r.value();
     }
@@ -200,13 +204,13 @@ public:
     ShardInfo seal_shard(shard_id_t shard_id) {
         g_helper->sync();
         auto tid = generateRandomTraceId();
-        auto r = _obj_inst->shard_manager()->get_shard(shard_id, tid).get();
+        auto r = sisl::async::sync_get(_obj_inst->shard_manager()->get_shard(shard_id, tid));
         if (!r) return {};
         auto pg_id = r.value().placement_group;
 
         std::optional< ShardInfo > sealed_opt;
         auto is_sealed = [&]() -> bool {
-            auto res = _obj_inst->shard_manager()->get_shard(shard_id, tid).get();
+            auto res = sisl::async::sync_get(_obj_inst->shard_manager()->get_shard(shard_id, tid));
             if (res && res.value().state == ShardInfo::State::SEALED) {
                 sealed_opt = res.value();
                 return true;
@@ -216,7 +220,7 @@ public:
 
         run_on_pg_leader_with_retry(pg_id, is_sealed, [&]() -> bool {
             if (is_sealed()) return true; // idempotent: already sealed, sealed_opt captured inside is_sealed
-            auto s = _obj_inst->shard_manager()->seal_shard(shard_id, tid).get();
+            auto s = sisl::async::sync_get(_obj_inst->shard_manager()->seal_shard(shard_id, tid));
             if (!s) {
                 if (is_not_leader_error(s.error())) return false;
                 RELEASE_ASSERT(false, "failed to seal shard");
@@ -232,7 +236,7 @@ public:
     void put_blob(shard_id_t shard_id, Blob&& blob) {
         g_helper->sync();
         auto tid = generateRandomTraceId();
-        auto r = _obj_inst->shard_manager()->get_shard(shard_id, tid).get();
+        auto r = sisl::async::sync_get(_obj_inst->shard_manager()->get_shard(shard_id, tid));
         if (!r) return;
         auto pg_id = r.value().placement_group;
 
@@ -247,7 +251,7 @@ public:
                 return blob_id != INVALID_UINT64_ID && blob_exist(shard_id, blob_id);
             },
             [&]() -> bool {
-                auto b = _obj_inst->blob_manager()->put(shard_id, blob_to_put.clone(), tid).get();
+                auto b = sisl::async::sync_get(_obj_inst->blob_manager()->put(shard_id, blob_to_put.clone(), tid));
                 if (!b) {
                     if (is_not_leader_error(b.error())) return false;
                     RELEASE_ASSERT(false, "failed to put blob");
@@ -309,7 +313,8 @@ public:
                         LOGDEBUG("Put blob pg={} shard {} blob {} size {} data {} trace_id={}", pg_id, shard_id,
                                  blob_id, put_blob.body.size(),
                                  hex_bytes(put_blob.body.cbytes(), std::min(10u, put_blob.body.size())), tid);
-                        auto b = _obj_inst->blob_manager()->put(shard_id, std::move(put_blob), tid).get();
+                        auto b =
+                            sisl::async::sync_get(_obj_inst->blob_manager()->put(shard_id, std::move(put_blob), tid));
                         if (!b) {
                             if (is_not_leader_error(b.error())) return false;
                             RELEASE_ASSERT(false, "Failed to put blob pg={} shard {} error={}", pg_id, shard_id,
@@ -337,7 +342,7 @@ public:
             pg_id, [&] { return !blob_exist(shard_id, blob_id); },
             [&]() -> bool {
                 if (!blob_exist(shard_id, blob_id)) return true; // idempotent: already deleted
-                auto g = _obj_inst->blob_manager()->del(shard_id, blob_id, tid).get();
+                auto g = sisl::async::sync_get(_obj_inst->blob_manager()->del(shard_id, blob_id, tid));
                 if (!g) {
                     if (is_not_leader_error(g.error())) return false;
                     RELEASE_ASSERT(false, "failed to del blob");
@@ -364,7 +369,7 @@ public:
                     for (const auto& blob_id : blob_ids) {
                         if (!blob_exist(shard_id, blob_id)) continue; // already deleted
                         auto tid = generateRandomTraceId();
-                        auto g = _obj_inst->blob_manager()->del(shard_id, blob_id, tid).get();
+                        auto g = sisl::async::sync_get(_obj_inst->blob_manager()->del(shard_id, blob_id, tid));
                         if (!g) {
                             if (is_not_leader_error(g.error())) return false;
                             RELEASE_ASSERT(false, "failed to del blob");
@@ -404,7 +409,7 @@ public:
                     for (auto& [shard_id, blob_id] : blob_order) {
                         if (!blob_exist(shard_id, blob_id)) continue; // already deleted
                         auto tid = generateRandomTraceId();
-                        auto g = _obj_inst->blob_manager()->del(shard_id, blob_id, tid).get();
+                        auto g = sisl::async::sync_get(_obj_inst->blob_manager()->del(shard_id, blob_id, tid));
                         if (!g) {
                             if (is_not_leader_error(g.error())) return false;
                             RELEASE_ASSERT(false, "failed to del blob");
@@ -495,16 +500,14 @@ public:
                         allow_skip_verify = (bool)bool_dist(rnd_engine);
                     }
 
-                    auto g = _obj_inst->blob_manager()
-                                 ->get(shard_id, current_blob_id, off, len, allow_skip_verify, tid)
-                                 .get();
-                    while (wait_when_not_exist && g.hasError() && g.error().code == BlobErrorCode::UNKNOWN_BLOB) {
+                    auto g = sisl::async::sync_get(
+                        _obj_inst->blob_manager()->get(shard_id, current_blob_id, off, len, allow_skip_verify, tid));
+                    while (wait_when_not_exist && !g && g.error().code == BlobErrorCode::UNKNOWN_BLOB) {
                         LOGDEBUG("blob not exist at the moment, waiting for sync, shard {} blob {}", shard_id,
                                  current_blob_id);
                         wait_for_blob(shard_id, current_blob_id);
-                        g = _obj_inst->blob_manager()
-                                ->get(shard_id, current_blob_id, off, len, allow_skip_verify, tid)
-                                .get();
+                        g = sisl::async::sync_get(_obj_inst->blob_manager()->get(shard_id, current_blob_id, off, len,
+                                                                                 allow_skip_verify, tid));
                     }
                     ASSERT_TRUE(!!g) << "get blob fail, shard_id " << shard_id << " blob_id " << current_blob_id
                                      << " replica number " << g_helper->replica_num();
@@ -544,7 +547,7 @@ public:
                     if ((off + len) >= blob.body.size()) { len = blob.body.size() - off; }
                 }
 
-                auto g = _obj_inst->blob_manager()->get(shard_id, blob_id, off, len, tid).get();
+                auto g = sisl::async::sync_get(_obj_inst->blob_manager()->get(shard_id, blob_id, off, len, tid));
                 ASSERT_TRUE(!!g) << "get blob fail, shard_id " << shard_id << " blob_id " << blob_id
                                  << " replica number " << g_helper->replica_num();
                 auto result = std::move(g.value());
@@ -588,7 +591,7 @@ public:
         ASSERT_FALSE(pg_exist(pg_id));
         ASSERT_EQ(_obj_inst->index_table_pg_map_.find(index_table_uuid_str), _obj_inst->index_table_pg_map_.end());
         // check shards
-        auto e = _obj_inst->shard_manager()->list_shards(pg_id).get();
+        auto e = sisl::async::sync_get(_obj_inst->shard_manager()->list_shards(pg_id));
         ASSERT_EQ(e.error().getCode(), ShardErrorCode::UNKNOWN_PG);
         for (const auto& shard_id : shard_id_vec) {
             ASSERT_FALSE(shard_exist(shard_id));
@@ -675,7 +678,7 @@ public:
         }
         run_on_pg_leader(pg_id, [this, pg_id, &task_id, &out_member, &in_member]() {
             std::vector< PGMember > others;
-            for (auto m : g_helper->members_) {
+            for (auto m : g_helper->members()) {
                 if (m.first != out_member.id && m.first != in_member.id) { others.emplace_back(PGMember(m.first, "")); }
             }
             auto result = _obj_inst->get_replace_member_status(pg_id, task_id, out_member, in_member, others, 0);
@@ -721,7 +724,7 @@ public:
 
         run_on_pg_leader(pg_id, [this, pg_id, &task_id, &out_member, &in_member]() {
             std::vector< PGMember > others;
-            for (auto m : g_helper->members_) {
+            for (auto m : g_helper->members()) {
                 if (m.first != out_member.id && m.first != in_member.id) { others.emplace_back(PGMember(m.first, "")); }
             }
             auto result = _obj_inst->get_replace_member_status(pg_id, task_id, out_member, in_member, others, 0);
@@ -755,7 +758,7 @@ public:
 
         // verify task
         auto r = _obj_inst->pg_manager()->list_all_replace_member_tasks(0);
-        RELEASE_ASSERT(r.hasValue(), "Failed to list_all_replace_member_tasks");
+        RELEASE_ASSERT((bool)r, "Failed to list_all_replace_member_tasks");
         const auto& tasks = r.value();
         bool found = std::any_of(tasks.cbegin(), tasks.cend(), [&task_id](const homeobject::replace_member_task& task) {
             return task.task_id == task_id;
@@ -788,7 +791,8 @@ public:
             if (!_obj_inst->pg_manager()->get_stats(pg_id, pg_stats)) return nullptr;
             if (g_helper->my_replica_id() != pg_stats.leader_id) return nullptr;
 
-            auto report = scrub_mgr->submit_scrub_task(pg_id, is_deep, SCRUB_TRIGGER_TYPE::MANUALLY).get();
+            auto report =
+                sisl::async::sync_get(scrub_mgr->submit_scrub_task(pg_id, is_deep, SCRUB_TRIGGER_TYPE::MANUALLY));
             if (report) return report;
 
             // null means the task was cancelled (leader switch); re-check leadership and retry.
@@ -957,12 +961,12 @@ private:
     }
 
     bool shard_exist(shard_id_t id, trace_id_t tid = 0) {
-        auto r = _obj_inst->shard_manager()->get_shard(id, tid).get();
+        auto r = sisl::async::sync_get(_obj_inst->shard_manager()->get_shard(id, tid));
         return !!r;
     }
 
     bool blob_exist(shard_id_t shard_id, blob_id_t blob_id) {
-        auto r = _obj_inst->blob_manager()->get(shard_id, blob_id).get();
+        auto r = sisl::async::sync_get(_obj_inst->blob_manager()->get(shard_id, blob_id));
         return !!r;
     }
 
@@ -974,9 +978,9 @@ private:
         };
 
         if (wait) {
-            on_complete(std::move(fut).get());
+            on_complete(sisl::async::sync_get(std::move(fut)));
         } else {
-            std::move(fut).thenValue(on_complete);
+            sisl::async::detach_then(std::move(fut), on_complete);
         }
     }
 
@@ -1023,7 +1027,7 @@ private:
         flip::FlipFrequency freq;
         freq.set_count(count);
         freq.set_percent(percent);
-        m_fc.inject_noreturn_flip(flip_name, {null_cond}, freq);
+        m_fc.inject_noreturn_flip(flip_name, std::array< flip::FlipCondition, 1 >{null_cond}, freq);
         LOGINFO("Flip {} set", flip_name);
     }
 
@@ -1033,7 +1037,7 @@ private:
         flip::FlipFrequency freq;
         freq.set_count(count);
         freq.set_percent(percent);
-        ASSERT_TRUE(m_fc.inject_retval_flip(flip_name, {cond}, freq, retval));
+        ASSERT_TRUE(m_fc.inject_retval_flip(flip_name, std::array< flip::FlipCondition, 1 >{cond}, freq, retval));
         LOGINFO("Flip {} with returned value set, value={}", flip_name, retval);
     }
 
@@ -1042,7 +1046,7 @@ private:
         flip::FlipFrequency freq;
         freq.set_count(count);
         freq.set_percent(percent);
-        m_fc.inject_delay_flip(flip_name, {null_cond}, freq, delay_usec);
+        m_fc.inject_delay_flip(flip_name, std::array< flip::FlipCondition, 1 >{null_cond}, freq, delay_usec);
         LOGINFO("Flip {} set", flip_name);
     }
 
@@ -1052,7 +1056,7 @@ private:
         flip::FlipFrequency freq;
         freq.set_count(count);
         freq.set_percent(percent);
-        m_fc.inject_callback_flip(flip_name, {null_cond}, freq, callback);
+        m_fc.inject_callback_flip(flip_name, std::array< flip::FlipCondition, 1 >{null_cond}, freq, callback);
         LOGINFO("Flip {} with callback set", flip_name);
     }
 
@@ -1063,7 +1067,8 @@ private:
         flip::FlipFrequency freq;
         freq.set_count(count);
         freq.set_percent(percent);
-        ASSERT_TRUE(m_fc.inject_callback_retval_flip(flip_name, {null_cond}, freq, callback));
+        ASSERT_TRUE(m_fc.inject_callback_retval_flip(flip_name, std::array< flip::FlipCondition, 1 >{null_cond}, freq,
+                                                     callback));
         LOGINFO("Flip {} with callback retval set", flip_name);
     }
 

@@ -4,7 +4,7 @@ on:
   pull_request:
     types: [opened, edited, synchronize]
     branches:
-      - stable/v4.x
+      - dev/v5.x
 
 jobs:
   check-file:
