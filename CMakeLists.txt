@@ -23,6 +23,7 @@ elseif ((DEFINED MEMORY_SANITIZER_ON) AND (${MEMORY_SANITIZER_ON}))
              -fsanitize-address-use-after-scope \
              -fno-sanitize=alignment            \
              -DCDS_ADDRESS_SANITIZER_ENABLED    \
+             -D_PRERELEASE                      \
              -fno-omit-frame-pointer            \
              -fno-optimize-sibling-calls        "
              )
