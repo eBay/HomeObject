@@ -10,7 +10,7 @@ required_conan_version = ">=2.0"
 
 class HomeObjectConan(ConanFile):
     name = "homeobject"
-    version = "5.0.0"
+    version = "5.0.1"
 
     homepage = "https://github.com/eBay/HomeObject"
     description = "Blob Store built on HomeStore"
@@ -25,6 +25,7 @@ class HomeObjectConan(ConanFile):
         "fPIC": ['True', 'False'],
         "coverage": ['True', 'False'],
         "sanitize": ['address', 'thread', 'False'],
+        "prerelease": ['True', 'False'],
     }
 
     default_options = {
@@ -32,6 +33,7 @@ class HomeObjectConan(ConanFile):
         'fPIC': True,
         'coverage': False,
         'sanitize': False,
+        'prerelease': False,
     }
 
     exports_sources = ("CMakeLists.txt", "cmake/*", "src/*", "LICENSE")
@@ -84,15 +86,21 @@ class HomeObjectConan(ConanFile):
         tc.variables["CONAN_CMAKE_SILENT_OUTPUT"] = "ON"
         tc.variables['CMAKE_EXPORT_COMPILE_COMMANDS'] = 'ON'
         tc.variables["CTEST_OUTPUT_ON_FAILURE"] = "ON"
-        tc.variables["MEMORY_SANITIZER_ON"] = "OFF"
+        tc.variables["ADDRESS_SANITIZER_ON"] = "OFF"
+        tc.variables["THREAD_SANITIZER_ON"] = "OFF"
         tc.variables["CODE_COVERAGE"] = "OFF"
         tc.variables["CONAN_PACKAGE_NAME"] = self.name
         tc.variables["CONAN_PACKAGE_VERSION"] = self.version
+        if self.options.prerelease:
+            tc.preprocessor_definitions["_PRERELEASE"] = "1"
         if self.settings.build_type == "Debug":
             if self.options.get_safe("coverage"):
                 tc.variables['CODE_COVERAGE'] = 'ON'
             elif self.options.get_safe("sanitize"):
-                tc.variables['MEMORY_SANITIZER_ON'] = 'ON'
+                if self.options.sanitize == "thread":
+                    tc.variables['THREAD_SANITIZER_ON'] = 'ON'
+                else:
+                    tc.variables['ADDRESS_SANITIZER_ON'] = 'ON'
         tc.generate()
 
         # This generates "boost-config.cmake" and "grpc-config.cmake" etc in self.generators_folder
@@ -128,7 +136,10 @@ class HomeObjectConan(ConanFile):
         if self.settings.os == "Linux":
             self.cpp_info.components["homestore"].system_libs.append("pthread")
             self.cpp_info.components["memory"].system_libs.append("pthread")
-        if self.options.sanitize:
+        if self.options.sanitize == "thread":
+            self.cpp_info.components["memory"].sharedlinkflags.append("-fsanitize=thread")
+            self.cpp_info.components["memory"].exelinkflags.append("-fsanitize=thread")
+        elif self.options.sanitize == "address":
             self.cpp_info.components["memory"].sharedlinkflags.append("-fsanitize=address")
             self.cpp_info.components["memory"].exelinkflags.append("-fsanitize=address")
             self.cpp_info.components["memory"].sharedlinkflags.append("-fsanitize=undefined")
