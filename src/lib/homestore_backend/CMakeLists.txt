@@ -188,6 +188,9 @@ add_test(NAME HomestoreTestScrubber COMMAND homestore_test_scrubber -csv error -
         --override_config nuraft_mesg_config.mesg_factory_config.data_request_deadline_secs:10)
 
 # All tests share disk, port, and shared-memory resources, so run them serially to avoid parallel conflicts.
+# LSAN_OPTIONS=leak_check_at_exit=0: HSHomeObject::shutdown() now runs the leak check itself, right after
+# iomanager.stop() returns (all worker threads already joined), to avoid racing LSan's own at-exit scan
+# against that same teardown (see hs_homeobject.cpp:shutdown()). This disables the redundant, racy automatic scan.
 set_tests_properties(
     HomestoreTestBlob
     HomestoreTestMisc
@@ -200,7 +203,8 @@ set_tests_properties(
     HomestoreTestGC
     HomestoreTestGC_ShardRaceTests
     HomestoreTestScrubber
-    PROPERTIES RUN_SERIAL TRUE)
+    PROPERTIES RUN_SERIAL TRUE
+               ENVIRONMENT "LSAN_OPTIONS=leak_check_at_exit=0")
 
 
 

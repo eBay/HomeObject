@@ -11,6 +11,18 @@
 #include <iomgr/drive.hpp>
 #include <sisl/version.hpp>
 
+#if defined(__SANITIZE_ADDRESS__)
+#define HO_HAS_LSAN 1
+#elif defined(__has_feature)
+#if __has_feature(address_sanitizer)
+#define HO_HAS_LSAN 1
+#endif
+#endif
+
+#if defined(HO_HAS_LSAN)
+#include <sanitizer/lsan_interface.h>
+#endif
+
 #include <homeobject/homeobject.hpp>
 #include "hs_homeobject.hpp"
 #include "heap_chunk_selector.h"
@@ -557,6 +569,17 @@ void HSHomeObject::shutdown() {
     gc_mgr_.reset();
     scrub_mgr_.reset();
     iomanager.stop();
+
+    // Run LSan's leak check here, now that iomanager.stop() has fully joined every worker thread, instead of
+    // relying on its automatic at-exit scan: that scan runs concurrently with the same thread teardown and can
+    // lose a race in the sanitizer runtime's own pipe-based memory-accessibility probe (IsAccessibleMemoryRange),
+    // aborting the process with a "CHECK failed ... write_errno" crash. Doing it here, synchronously after
+    // iomanager.stop() returns, avoids that race while still catching real leaks.
+    // LSAN_OPTIONS=leak_check_at_exit=0 (set for these ctest targets) disables the redundant automatic scan.
+#if defined(HO_HAS_LSAN)
+    __lsan_do_leak_check();
+#endif
+
     LOGI("complete shutting down HomeStore");
 }
 
