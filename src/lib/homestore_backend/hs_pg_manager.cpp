@@ -1182,6 +1182,14 @@ void HSHomeObject::HS_PG::register_data_rpc_handlers() {
     } else {
         LOGW("PUSH_SCRUB_RESULT RPC handler already registered for pg={}", pg_id);
     }
+
+    success =
+        repl_dev_->add_data_rpc_service(PUSH_SCRUB_TIMESTAMP, bind_this(HS_PG::on_scrub_timestamp_push_received, 1));
+    if (success) {
+        LOGI("Successfully registered PUSH_SCRUB_TIMESTAMP RPC handler for pg={}", pg_id);
+    } else {
+        LOGW("PUSH_SCRUB_TIMESTAMP RPC handler already registered for pg={}", pg_id);
+    }
 }
 
 void HSHomeObject::HS_PG::on_scrub_req_received(boost::intrusive_ptr< sisl::GenericRpcData >& rpc_data) {
@@ -1327,6 +1335,37 @@ void HSHomeObject::HS_PG::on_scrub_result_received(boost::intrusive_ptr< sisl::G
         return;
     }
     scrub_mgr->handle_scrub_req_resp(pg_id, scrub_result);
+}
+
+void HSHomeObject::HS_PG::on_scrub_timestamp_push_received(boost::intrusive_ptr< sisl::GenericRpcData >& rpc_data) {
+    const auto pg_id = pg_info_.id;
+    LOGD("Received scrub superblk push for pg={}", pg_id);
+
+    auto const& incoming_buf = rpc_data->request_blob();
+    if (incoming_buf.size() != sizeof(ScrubManager::scrub_timestamp_info)) {
+        LOGW("scrub superblk push received with invalid buffer size for pg={}, size={}", pg_id, incoming_buf.size());
+        rpc_data->send_response();
+        return;
+    }
+
+    ScrubManager::scrub_timestamp_info incoming;
+    std::memcpy(&incoming, incoming_buf.cbytes(), sizeof(incoming));
+
+    auto scrub_mgr = home_obj_.scrub_manager();
+    if (!scrub_mgr) {
+        LOGW("ScrubManager is not initialized in HS_PG::on_scrub_timestamp_push_received for pg={}", pg_id);
+        rpc_data->send_response();
+        return;
+    }
+
+    auto merged =
+        std::make_shared< ScrubManager::scrub_timestamp_info >(scrub_mgr->sync_scrub_timestamp(pg_id, incoming));
+
+    sisl::io_blob_list_t blob_list;
+    blob_list.emplace_back(reinterpret_cast< uint8_t* >(merged.get()),
+                           static_cast< uint32_t >(sizeof(ScrubManager::scrub_timestamp_info)), false);
+    rpc_data->set_comp_cb([merged](boost::intrusive_ptr< sisl::GenericRpcData >&) {});
+    rpc_data->send_response(blob_list);
 }
 
 // NOTE: caller should hold the _pg_lock

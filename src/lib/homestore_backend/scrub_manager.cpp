@@ -230,7 +230,23 @@ bool ScrubManager::is_eligible_for_shallow_scrub(const pg_id_t& pg_id) {
     return false;
 }
 
+void ScrubManager::add_missing_pg_scrub_superblks() {
+    // pgs created before scrub manager tracked scrub superblocks (or that otherwise missed getting one, e.g. a crash
+    // between create_pg and add_pg) won't have an entry in m_pg_scrub_sb_map. Backfill those here.
+    std::vector< pg_id_t > pg_ids;
+    m_hs_home_object->get_pg_ids(pg_ids);
+    for (auto const& pg_id : pg_ids) {
+        if (m_pg_scrub_sb_map.find(pg_id) == m_pg_scrub_sb_map.end()) {
+            LOGINFOMOD(scrubmgr, "pg={} has no scrub superblock, backfilling one", pg_id);
+            add_pg(pg_id);
+        }
+    }
+}
+
 void ScrubManager::start() {
+    // backfill scrub superblocks for any pre-existing pgs that don't have one yet.
+    add_missing_pg_scrub_superblks();
+
     // 1 set scrub task handling threads.
     // TODO :: make thread count configurable, thread number is the most concurrent scrub tasks that can be handled
     // concurrently. Too many concurrent scrub tasks may bring too much pressure to the node
@@ -269,6 +285,10 @@ void ScrubManager::start() {
         // TODO: make the interval configurable, for now set it to 5 seconds
         m_retry_timer_hdl = iomanager.schedule_thread_timer(5ull * 1000 * 1000 * 1000, true, nullptr /*cookie*/,
                                                             [this](void*) { check_scrub_timeouts(); });
+        // TODO: make the interval configurable, for now set it to 30 seconds
+        m_push_scrub_timestamp_timer_hdl =
+            iomanager.schedule_thread_timer(30ull * 1000 * 1000 * 1000, true, nullptr /*cookie*/,
+                                            [this](void*) { push_scrub_timestamp_to_followers(); });
     });
     LOGINFOMOD(scrubmgr, "scrub manager started!");
 }
@@ -285,6 +305,11 @@ void ScrubManager::stop() {
             if (m_retry_timer_hdl != iomgr::null_timer_handle) {
                 iomanager.cancel_timer(m_retry_timer_hdl, true);
                 m_retry_timer_hdl = iomgr::null_timer_handle;
+            }
+
+            if (m_push_scrub_timestamp_timer_hdl != iomgr::null_timer_handle) {
+                iomanager.cancel_timer(m_push_scrub_timestamp_timer_hdl, true);
+                m_push_scrub_timestamp_timer_hdl = iomgr::null_timer_handle;
             }
         });
         m_scrub_timer_fiber = nullptr;
@@ -1070,6 +1095,68 @@ std::optional< ScrubManager::pg_scrub_superblk > ScrubManager::get_scrub_superbl
     }
 
     return *(*(it->second));
+}
+
+ScrubManager::scrub_timestamp_info ScrubManager::sync_scrub_timestamp(const pg_id_t pg_id,
+                                                                      const scrub_timestamp_info& incoming) {
+    auto it = m_pg_scrub_sb_map.find(pg_id);
+    if (it == m_pg_scrub_sb_map.end()) {
+        LOGWARNMOD(scrubmgr, "scrub superblk not found for pg={}, cannot sync scrub superblk", pg_id);
+        return incoming;
+    }
+
+    auto& sb = *(it->second);
+    bool updated = false;
+    if (incoming.last_deep_scrub_timestamp > sb->last_deep_scrub_timestamp) {
+        sb->last_deep_scrub_timestamp = incoming.last_deep_scrub_timestamp;
+        updated = true;
+    }
+    if (incoming.last_shallow_scrub_timestamp > sb->last_shallow_scrub_timestamp) {
+        sb->last_shallow_scrub_timestamp = incoming.last_shallow_scrub_timestamp;
+        updated = true;
+    }
+    if (updated) { sb.write(); }
+
+    return scrub_timestamp_info{sb->last_deep_scrub_timestamp, sb->last_shallow_scrub_timestamp};
+}
+
+void ScrubManager::push_scrub_timestamp_to_followers() {
+    for (auto const& [pg_id, sb] : m_pg_scrub_sb_map) {
+        auto hs_pg = m_hs_home_object->get_hs_pg(pg_id);
+        if (!hs_pg || !hs_pg->repl_dev_ || !hs_pg->repl_dev_->is_leader()) { continue; }
+
+        auto outgoing = std::make_shared< scrub_timestamp_info >(
+            scrub_timestamp_info{(*sb)->last_deep_scrub_timestamp, (*sb)->last_shallow_scrub_timestamp});
+
+        const auto& self_id = m_hs_home_object->our_uuid();
+        for (const auto& member : hs_pg->pg_info_.members) {
+            if (member.id == self_id) continue;
+
+            sisl::io_blob_list_t blob_list;
+            blob_list.emplace_back(reinterpret_cast< uint8_t* >(outgoing.get()), sizeof(scrub_timestamp_info), false);
+
+            hs_pg->repl_dev_->data_request_bidirectional(member.id, HSHomeObject::PUSH_SCRUB_TIMESTAMP, blob_list)
+                .via(folly::getGlobalIOExecutor())
+                .thenValue([this, pg_id, peer_id = member.id, outgoing](auto&& response) {
+                    if (response.hasError()) {
+                        LOGWARNMOD(scrubmgr, "failed to push scrub superblk to peer {} for pg={}, error={}", peer_id,
+                                   pg_id, response.error());
+                        return;
+                    }
+
+                    auto const& resp_blob = response.value().response_blob();
+                    if (resp_blob.size() != sizeof(scrub_timestamp_info)) {
+                        LOGWARNMOD(scrubmgr, "invalid scrub superblk push response from peer {} for pg={}, size={}",
+                                   peer_id, pg_id, resp_blob.size());
+                        return;
+                    }
+
+                    scrub_timestamp_info incoming;
+                    std::memcpy(&incoming, resp_blob.cbytes(), sizeof(incoming));
+                    sync_scrub_timestamp(pg_id, incoming);
+                });
+        }
+    }
 }
 
 ScrubManager::PGScrubContext::PGScrubContext(uint64_t task_id, const HSHomeObject::HS_PG* hs_pg) :

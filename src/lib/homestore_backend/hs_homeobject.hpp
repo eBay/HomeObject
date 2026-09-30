@@ -439,9 +439,11 @@ public:
          * RPC handlers for scrub:
          * 1. on_scrub_req_received: receive the scrub req from leader
          * 2. on_scrub_result_received: receive the scrub result from followers
+         * 3. on_scrub_timestamp_push_received: receive the pushed scrub superblk timestamps from the leader
          */
         void on_scrub_req_received(boost::intrusive_ptr< sisl::GenericRpcData >& rpc_data);
         void on_scrub_result_received(boost::intrusive_ptr< sisl::GenericRpcData >& rpc_data);
+        void on_scrub_timestamp_push_received(boost::intrusive_ptr< sisl::GenericRpcData >& rpc_data);
 
         /**
          * Register data RPC handlers for this PG
@@ -572,6 +574,8 @@ public:
     inline const static std::string PUSH_SCRUB_REQ{"PUSH_SCRUB_REQ"};
     // return scrub result to leader
     inline const static std::string PUSH_SCRUB_RESULT{"PUSH_SCRUB_RESULT"};
+    // sync last_deep_scrub_timestamp/last_shallow_scrub_timestamp between leader and followers
+    inline const static std::string PUSH_SCRUB_TIMESTAMP{"PUSH_SCRUB_TIMESTAMP"};
 
     class PGBlobIterator {
     public:
