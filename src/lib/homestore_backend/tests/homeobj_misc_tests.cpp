@@ -508,10 +508,9 @@ TEST_F(HomeObjectFixture, SnapshotReceiveHandler) {
     for (uint64_t i = 1; i <= num_shards_per_pg; i++) {
         shard_ids.push_back(i);
     }
-    auto pg_entry =
-        CreateResyncPGMetaDataDirect(builder, pg_id, &uuid, pg->pg_info_.size, pg->pg_info_.expected_member_num,
-                                     pg->pg_info_.chunk_size, blob_seq_num, num_shards_per_pg, &members, &shard_ids,
-                                     blob_seq_num /* total_blobs_to_transfer */);
+    auto pg_entry = CreateResyncPGMetaDataDirect(
+        builder, pg_id, &uuid, pg->pg_info_.size, pg->pg_info_.expected_member_num, pg->pg_info_.chunk_size,
+        blob_seq_num, num_shards_per_pg, &members, &shard_ids, blob_seq_num /* total_blobs_to_transfer */);
     builder.Finish(pg_entry);
     auto pg_meta = GetResyncPGMetaData(builder.GetBufferPointer());
     auto ret = handler->process_pg_snapshot_data(*pg_meta);
@@ -672,7 +671,8 @@ TEST_F(HomeObjectFixture, SnapshotReceiveHandler) {
                         builder, retry_blob_id, static_cast< uint8_t >(ResyncBlobState::NORMAL), &retry_data));
                     blob_map[retry_blob_id] = std::make_tuple< Blob, bool >(std::move(retry_blob), false);
                 }
-                builder.Finish(CreateResyncBlobDataBatchDirect(builder, &retry_blob_entries, j == num_batches_per_shard));
+                builder.Finish(
+                    CreateResyncBlobDataBatchDirect(builder, &retry_blob_entries, j == num_batches_per_shard));
                 auto retry_blob_batch = GetResyncBlobDataBatch(builder.GetBufferPointer());
                 ASSERT_EQ(handler->process_blobs_snapshot_data(*retry_blob_batch, j, j == num_batches_per_shard), 0);
             } else {
@@ -759,10 +759,9 @@ TEST_F(HomeObjectFixture, SnapshotReceiveHandlerAllocatorResyncAfterCrash) {
         members.push_back(CreateMemberDirect(builder, &id, member.name.c_str(), priority));
     }
     std::vector< uint64_t > shard_ids = {1};
-    auto pg_entry = CreateResyncPGMetaDataDirect(builder, pg_id, &uuid, pg->pg_info_.size,
-                                                 pg->pg_info_.expected_member_num, pg->pg_info_.chunk_size,
-                                                 num_blobs_total /*blob_seq_num*/, 1 /*shard_seq_num*/, &members,
-                                                 &shard_ids);
+    auto pg_entry = CreateResyncPGMetaDataDirect(
+        builder, pg_id, &uuid, pg->pg_info_.size, pg->pg_info_.expected_member_num, pg->pg_info_.chunk_size,
+        num_blobs_total /*blob_seq_num*/, 1 /*shard_seq_num*/, &members, &shard_ids);
     builder.Finish(pg_entry);
     ASSERT_EQ(handler->process_pg_snapshot_data(*GetResyncPGMetaData(builder.GetBufferPointer())), 0);
     builder.Reset();
@@ -816,7 +815,8 @@ TEST_F(HomeObjectFixture, SnapshotReceiveHandlerAllocatorResyncAfterCrash) {
         uint64_t total_bytes{0};
         for (blob_id_t blob_id = start_blob_id; blob_id < end_blob_id; blob_id++) {
             auto blob = build_blob(blob_id);
-            total_bytes += sisl::round_up(sizeof(HSHomeObject::BlobHeader), _obj_inst->_data_block_size) + blob.body.size();
+            total_bytes +=
+                sisl::round_up(sizeof(HSHomeObject::BlobHeader), _obj_inst->_data_block_size) + blob.body.size();
         }
         return total_bytes;
     };

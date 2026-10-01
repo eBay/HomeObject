@@ -35,8 +35,8 @@ int HSHomeObject::SnapshotReceiveHandler::process_pg_snapshot_data(ResyncPGMetaD
         pg_member.priority = member->priority();
         pg_info.members.insert(pg_member);
     }
-    LOGD("Resync PG membership: pg={}, expected_members={}, members={}", pg_meta.pg_id(),
-         pg_info.expected_member_num, pg_meta.members()->size())
+    LOGD("Resync PG membership: pg={}, expected_members={}, members={}", pg_meta.pg_id(), pg_info.expected_member_num,
+         pg_meta.members()->size())
 
 #ifdef _PRERELEASE
     if (iomgr_flip::instance()->test_flip("snapshot_receiver_pg_error")) {
@@ -105,8 +105,8 @@ int HSHomeObject::SnapshotReceiveHandler::process_shard_snapshot_data(ResyncShar
     }
     ctx_->shard_cursor = shard_meta.shard_id();
     ctx_->cur_batch_num = 0;
-    LOGI("Processed resync shard metadata: pg={}, shard_id=0x{:x}, state={}", shard_meta.pg_id(),
-         shard_meta.shard_id(), shard_meta.state());
+    LOGI("Processed resync shard metadata: pg={}, shard_id=0x{:x}, state={}", shard_meta.pg_id(), shard_meta.shard_id(),
+         shard_meta.state());
     return 0;
 }
 
@@ -267,8 +267,8 @@ int HSHomeObject::SnapshotReceiveHandler::process_blobs_snapshot_data(ResyncBlob
         }
 #endif
         auto blob_id = blob->blob_id();
-        LOGT("Writing resync blob: pg={}, shard_id=0x{:x}, blob={}, blkid={}", ctx_->pg_id, ctx_->shard_cursor,
-             blob_id, blk_id.to_string());
+        LOGT("Writing resync blob: pg={}, shard_id=0x{:x}, blob={}, blkid={}", ctx_->pg_id, ctx_->shard_cursor, blob_id,
+             blk_id.to_string());
 
         // ToDo: limit the max concurrent?
         futs.emplace_back(
@@ -315,9 +315,9 @@ int HSHomeObject::SnapshotReceiveHandler::process_blobs_snapshot_data(ResyncBlob
 
     if (!all_io_submitted || ec != std::error_code{}) {
         if (!all_io_submitted) {
-            LOGE(
-                "Failed to submit complete resync shard batch: pg={}, shard_id=0x{:x}, batch={}, expected_blobs={}, submitted_blobs={}",
-                ctx_->pg_id, ctx_->shard_cursor, batch_num, data_blobs.blob_list()->size(), futs.size());
+            LOGE("Failed to submit complete resync shard batch: pg={}, shard_id=0x{:x}, batch={}, expected_blobs={}, "
+                 "submitted_blobs={}",
+                 ctx_->pg_id, ctx_->shard_cursor, batch_num, data_blobs.blob_list()->size(), futs.size());
         } else {
             LOGE("Failed to write resync shard batch: pg={}, shard_id=0x{:x}, batch={}, error_code={}, error={}",
                  ctx_->pg_id, ctx_->shard_cursor, batch_num, ec.value(), ec.message());

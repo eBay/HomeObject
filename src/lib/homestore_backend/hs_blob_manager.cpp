@@ -14,8 +14,8 @@ SISL_LOGGING_DECL(blobmgr)
 
 #define BLOG(level, trace_id, shard_id, blob_id, msg, ...)                                                             \
     LOG##level##MOD(blobmgr, "[traceID={},shardID=0x{:x},pg={},shard=0x{:x},blob={}] " msg, trace_id, shard_id,        \
-                    (shard_id >> homeobject::shard_width), (shard_id & homeobject::shard_mask), blob_id,               \
-                    ##__VA_ARGS__)
+                    (shard_id >> homeobject::shard_width), (shard_id & homeobject::shard_mask),                        \
+                    blob_id, ##__VA_ARGS__)
 
 #define BLOGT(trace_id, shard_id, blob_id, msg, ...) BLOG(TRACE, trace_id, shard_id, blob_id, msg, ##__VA_ARGS__)
 #define BLOGD(trace_id, shard_id, blob_id, msg, ...) BLOG(DEBUG, trace_id, shard_id, blob_id, msg, ##__VA_ARGS__)

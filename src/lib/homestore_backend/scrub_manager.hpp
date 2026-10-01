@@ -69,6 +69,24 @@ public:
     };
 #pragma pack()
 
+    // wire payload for PUSH_SCRUB_TIMESTAMP: sent by the leader to a follower, and echoed back by the follower with
+    // its own (possibly merged) values.
+#pragma pack(1)
+    struct scrub_timestamp_info {
+        uint64_t last_deep_scrub_timestamp{0};
+        uint64_t last_shallow_scrub_timestamp{0};
+    };
+#pragma pack()
+
+    // pg_scrub_superblk is mutated and persisted from multiple contexts (local scrub completion, the
+    // PUSH_SCRUB_TIMESTAMP RPC handler, and the leader's per-follower response callbacks, possibly concurrently for
+    // the same pg). The mutex guards the read-modify-write-persist sequence on sb.
+    struct PgScrubSbEntry {
+        explicit PgScrubSbEntry(const std::string& sub_name = "") : sb(sub_name) {}
+        homestore::superblk< pg_scrub_superblk > sb;
+        std::mutex mutex;
+    };
+
     // scrub req
     struct scrub_req {
         scrub_req() = default;
@@ -282,6 +300,17 @@ public:
     void save_scrub_superblk(const pg_id_t pg_id, const bool is_deep_scrub, bool force_update = true);
     void add_scrub_req(std::shared_ptr< scrub_req > req);
 
+    // Merges incoming (peer's) scrub superblk timestamps into the local one for pg_id, keeping the newer value for
+    // each field independently, persisting if anything changed, and returning the resulting local values.
+    // Called both by the follower's PUSH_SCRUB_TIMESTAMP RPC handler (incoming = leader's values) and by the leader
+    // itself once a follower's response comes back (incoming = follower's values).
+    scrub_timestamp_info sync_scrub_timestamp(const pg_id_t pg_id, const scrub_timestamp_info& incoming);
+
+    // leader-only: periodically push last_deep_scrub_timestamp/last_shallow_scrub_timestamp to followers of every pg
+    // this node leads, and merge back whatever the followers report as newer. Exposed publicly (in addition to being
+    // called from the periodic timer) so it can be triggered on-demand, e.g. from tests.
+    void push_scrub_timestamp_to_followers();
+
     // local scrub
     std::shared_ptr< scrub_result > local_scrub_blob(std::shared_ptr< scrub_req > req);
     std::shared_ptr< scrub_result > local_scrub_meta(std::shared_ptr< scrub_req > req);
@@ -351,6 +380,7 @@ private:
         }
     };
 
+    void add_missing_pg_scrub_superblks();
     void scan_pg_for_scrub();
     void handle_pg_scrub_task(scrub_task task);
     bool is_eligible_for_deep_scrub(const pg_id_t& pg_id);
@@ -366,12 +396,13 @@ private:
 
     iomgr::timer_handle_t m_scrub_timer_hdl{iomgr::null_timer_handle};
     iomgr::timer_handle_t m_retry_timer_hdl{iomgr::null_timer_handle};
+    iomgr::timer_handle_t m_push_scrub_timestamp_timer_hdl{iomgr::null_timer_handle};
     iomgr::io_fiber_t m_scrub_timer_fiber{nullptr};
     HSHomeObject* m_hs_home_object{nullptr};
     MPMCPriorityQueue< scrub_task > m_scrub_task_queue;
     std::shared_ptr< folly::IOThreadPoolExecutor > m_scrub_executor;
     folly::ConcurrentHashMap< pg_id_t, std::shared_ptr< PGScrubContext > > m_pg_scrub_ctx_map;
-    folly::ConcurrentHashMap< pg_id_t, std::shared_ptr< homestore::superblk< pg_scrub_superblk > > > m_pg_scrub_sb_map;
+    folly::ConcurrentHashMap< pg_id_t, std::shared_ptr< PgScrubSbEntry > > m_pg_scrub_sb_map;
 
     std::shared_ptr< folly::IOThreadPoolExecutor > m_scrub_req_executor;
 };
