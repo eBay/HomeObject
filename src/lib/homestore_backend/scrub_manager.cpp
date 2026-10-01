@@ -822,9 +822,13 @@ ScrubManager::submit_scrub_task(const pg_id_t& pg_id, const bool is_deep, SCRUB_
         return folly::makeSemiFuture(std::shared_ptr< ScrubManager::ShallowScrubReport >(nullptr));
     }
 
-    const auto& pg_scrub_sb = *(ps_scrub_super_blk_it->second);
-    const auto last_scrub_time =
-        is_deep ? pg_scrub_sb->last_deep_scrub_timestamp : pg_scrub_sb->last_shallow_scrub_timestamp;
+    auto& pg_scrub_sb_entry = *(ps_scrub_super_blk_it->second);
+    uint64_t last_scrub_time;
+    {
+        std::lock_guard lock(pg_scrub_sb_entry.mutex);
+        last_scrub_time = is_deep ? pg_scrub_sb_entry.sb->last_deep_scrub_timestamp
+                                  : pg_scrub_sb_entry.sb->last_shallow_scrub_timestamp;
+    }
 
     auto [promise, future] = folly::makePromiseContract< std::shared_ptr< ShallowScrubReport > >();
     ScrubManager::scrub_task task(last_scrub_time, pg_id, is_deep, trigger_type, std::move(promise));
@@ -1030,7 +1034,7 @@ void ScrubManager::remove_pg(const pg_id_t pg_id) {
     }
 
     LOGINFOMOD(scrubmgr, "removed pg={} in scrub manager!", pg_id);
-    it->second->destroy();
+    it->second->sb.destroy();
     m_pg_scrub_sb_map.erase(it);
 }
 
@@ -1038,21 +1042,21 @@ void ScrubManager::remove_pg(const pg_id_t pg_id) {
 void ScrubManager::on_pg_scrub_meta_blk_found(
     sisl::byte_view const& buf, void* meta_cookie,
     std::vector< homestore::superblk< pg_scrub_superblk > >& stale_pg_scrub_sbs) {
-    auto sb = std::make_shared< homestore::superblk< pg_scrub_superblk > >();
-    (*sb).load(buf, meta_cookie);
-    const auto pg_id = (*sb)->pg_id;
+    auto entry = std::make_shared< PgScrubSbEntry >();
+    entry->sb.load(buf, meta_cookie);
+    const auto pg_id = entry->sb->pg_id;
 
     auto hs_pg = m_hs_home_object->get_hs_pg(pg_id);
     if (!hs_pg) {
         // this is a stale pg scrub superblock, we just log and destroy it.
         LOGINFOMOD(scrubmgr, "cannot find pg={}, destroy stale scrub superblock", pg_id);
-        stale_pg_scrub_sbs.emplace_back(std::move(*sb));
+        stale_pg_scrub_sbs.emplace_back(std::move(entry->sb));
         return;
     }
-    const auto last_deep_scrub_time = (*sb)->last_deep_scrub_timestamp;
-    const auto last_shallow_scrub_time = (*sb)->last_shallow_scrub_timestamp;
+    const auto last_deep_scrub_time = entry->sb->last_deep_scrub_timestamp;
+    const auto last_shallow_scrub_time = entry->sb->last_shallow_scrub_timestamp;
 
-    m_pg_scrub_sb_map.emplace(pg_id, std::move(sb));
+    m_pg_scrub_sb_map.emplace(pg_id, std::move(entry));
     LOGINFOMOD(scrubmgr, "loaded scrub superblock for pg={}, last_deep_scrub_time={}, last_shallow_scrub_time={}",
                pg_id, last_deep_scrub_time, last_shallow_scrub_time);
 }
@@ -1064,24 +1068,27 @@ void ScrubManager::save_scrub_superblk(const pg_id_t pg_id, const bool is_deep_s
     auto it = m_pg_scrub_sb_map.find(pg_id);
     if (it == m_pg_scrub_sb_map.end()) {
         // Create new superblock for this PG
-        auto sb = std::make_shared< homestore::superblk< pg_scrub_superblk > >(pg_scrub_meta_name);
-        (*sb).create(sizeof(pg_scrub_superblk));
-        (*sb)->pg_id = pg_id;
-        (*sb)->last_deep_scrub_timestamp = current_time;
-        (*sb)->last_shallow_scrub_timestamp = current_time;
-        (*sb).write();
-        m_pg_scrub_sb_map.emplace(pg_id, std::move(sb));
+        auto entry = std::make_shared< PgScrubSbEntry >(pg_scrub_meta_name);
+        entry->sb.create(sizeof(pg_scrub_superblk));
+        entry->sb->pg_id = pg_id;
+        entry->sb->last_deep_scrub_timestamp = current_time;
+        entry->sb->last_shallow_scrub_timestamp = current_time;
+        entry->sb.write();
+        m_pg_scrub_sb_map.emplace(pg_id, std::move(entry));
         return;
     }
 
     if (force_update) {
-        // Update existing superblock
+        // Update existing superblock. Guard against concurrent mutation/persist from sync_scrub_timestamp (RPC
+        // handler / leader's follower-response callbacks) racing on the same pg's superblk.
+        auto& entry = *(it->second);
+        std::lock_guard lock(entry.mutex);
         if (is_deep_scrub) {
-            (*(it->second))->last_deep_scrub_timestamp = current_time;
+            entry.sb->last_deep_scrub_timestamp = current_time;
         } else {
-            (*(it->second))->last_shallow_scrub_timestamp = current_time;
+            entry.sb->last_shallow_scrub_timestamp = current_time;
         }
-        (*(it->second)).write();
+        entry.sb.write();
     } else {
         LOGINFOMOD(scrubmgr, "skip updating scrub superblock for pg={} since there is no scrub progress update", pg_id);
     }
@@ -1094,7 +1101,8 @@ std::optional< ScrubManager::pg_scrub_superblk > ScrubManager::get_scrub_superbl
         return std::nullopt;
     }
 
-    return *(*(it->second));
+    std::lock_guard lock(it->second->mutex);
+    return *(it->second->sb);
 }
 
 ScrubManager::scrub_timestamp_info ScrubManager::sync_scrub_timestamp(const pg_id_t pg_id,
@@ -1105,7 +1113,12 @@ ScrubManager::scrub_timestamp_info ScrubManager::sync_scrub_timestamp(const pg_i
         return incoming;
     }
 
-    auto& sb = *(it->second);
+    // Can be invoked concurrently for the same pg_id, e.g. once per follower from the leader's
+    // push_scrub_timestamp_to_followers() response callbacks, or by overlapping PUSH_SCRUB_TIMESTAMP RPCs on a
+    // follower. Serialize the compare-update-persist sequence so updates aren't lost or torn.
+    auto& entry = *(it->second);
+    std::lock_guard lock(entry.mutex);
+    auto& sb = entry.sb;
     bool updated = false;
     if (incoming.last_deep_scrub_timestamp > sb->last_deep_scrub_timestamp) {
         sb->last_deep_scrub_timestamp = incoming.last_deep_scrub_timestamp;
@@ -1121,12 +1134,17 @@ ScrubManager::scrub_timestamp_info ScrubManager::sync_scrub_timestamp(const pg_i
 }
 
 void ScrubManager::push_scrub_timestamp_to_followers() {
-    for (auto const& [pg_id, sb] : m_pg_scrub_sb_map) {
+    for (auto const& [pg_id, entry] : m_pg_scrub_sb_map) {
         auto hs_pg = m_hs_home_object->get_hs_pg(pg_id);
         if (!hs_pg || !hs_pg->repl_dev_ || !hs_pg->repl_dev_->is_leader()) { continue; }
 
-        auto outgoing = std::make_shared< scrub_timestamp_info >(
-            scrub_timestamp_info{(*sb)->last_deep_scrub_timestamp, (*sb)->last_shallow_scrub_timestamp});
+        scrub_timestamp_info outgoing_info;
+        {
+            std::lock_guard lock(entry->mutex);
+            outgoing_info =
+                scrub_timestamp_info{entry->sb->last_deep_scrub_timestamp, entry->sb->last_shallow_scrub_timestamp};
+        }
+        auto outgoing = std::make_shared< scrub_timestamp_info >(outgoing_info);
 
         const auto& self_id = m_hs_home_object->our_uuid();
         for (const auto& member : hs_pg->pg_info_.members) {

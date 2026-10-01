@@ -78,6 +78,15 @@ public:
     };
 #pragma pack()
 
+    // pg_scrub_superblk is mutated and persisted from multiple contexts (local scrub completion, the
+    // PUSH_SCRUB_TIMESTAMP RPC handler, and the leader's per-follower response callbacks, possibly concurrently for
+    // the same pg). The mutex guards the read-modify-write-persist sequence on sb.
+    struct PgScrubSbEntry {
+        explicit PgScrubSbEntry(const std::string& sub_name = "") : sb(sub_name) {}
+        homestore::superblk< pg_scrub_superblk > sb;
+        std::mutex mutex;
+    };
+
     // scrub req
     struct scrub_req {
         scrub_req() = default;
@@ -393,7 +402,7 @@ private:
     MPMCPriorityQueue< scrub_task > m_scrub_task_queue;
     std::shared_ptr< folly::IOThreadPoolExecutor > m_scrub_executor;
     folly::ConcurrentHashMap< pg_id_t, std::shared_ptr< PGScrubContext > > m_pg_scrub_ctx_map;
-    folly::ConcurrentHashMap< pg_id_t, std::shared_ptr< homestore::superblk< pg_scrub_superblk > > > m_pg_scrub_sb_map;
+    folly::ConcurrentHashMap< pg_id_t, std::shared_ptr< PgScrubSbEntry > > m_pg_scrub_sb_map;
 
     std::shared_ptr< folly::IOThreadPoolExecutor > m_scrub_req_executor;
 };
