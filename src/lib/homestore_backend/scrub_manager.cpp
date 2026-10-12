@@ -1145,6 +1145,7 @@ void ScrubManager::push_scrub_timestamp_to_followers() {
                 scrub_timestamp_info{entry->sb->last_deep_scrub_timestamp, entry->sb->last_shallow_scrub_timestamp};
         }
         auto outgoing = std::make_shared< scrub_timestamp_info >(outgoing_info);
+        outgoing->seal();
 
         const auto& self_id = m_hs_home_object->our_uuid();
         for (const auto& member : hs_pg->pg_info_.members) {
@@ -1171,6 +1172,11 @@ void ScrubManager::push_scrub_timestamp_to_followers() {
 
                     scrub_timestamp_info incoming;
                     std::memcpy(&incoming, resp_blob.cbytes(), sizeof(incoming));
+                    if (incoming.corrupted()) {
+                        LOGWARNMOD(scrubmgr, "corrupted scrub superblk push response from peer {} for pg={}", peer_id,
+                                   pg_id);
+                        return;
+                    }
                     sync_scrub_timestamp(pg_id, incoming);
                 });
         }

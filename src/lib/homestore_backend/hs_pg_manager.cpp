@@ -1350,6 +1350,11 @@ void HSHomeObject::HS_PG::on_scrub_timestamp_push_received(boost::intrusive_ptr<
 
     ScrubManager::scrub_timestamp_info incoming;
     std::memcpy(&incoming, incoming_buf.cbytes(), sizeof(incoming));
+    if (incoming.corrupted()) {
+        LOGW("scrub superblk push received with corrupted payload for pg={}", pg_id);
+        rpc_data->send_response();
+        return;
+    }
 
     auto scrub_mgr = home_obj_.scrub_manager();
     if (!scrub_mgr) {
@@ -1360,6 +1365,7 @@ void HSHomeObject::HS_PG::on_scrub_timestamp_push_received(boost::intrusive_ptr<
 
     auto merged =
         std::make_shared< ScrubManager::scrub_timestamp_info >(scrub_mgr->sync_scrub_timestamp(pg_id, incoming));
+    merged->seal();
 
     sisl::io_blob_list_t blob_list;
     blob_list.emplace_back(reinterpret_cast< uint8_t* >(merged.get()),

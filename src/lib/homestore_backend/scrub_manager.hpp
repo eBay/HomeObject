@@ -15,6 +15,7 @@
 #include <iomgr/iomgr.hpp>
 #include "homeobject/common.hpp"
 #include <homestore/blk.h>
+#include <homestore/crc.h>
 #include <homestore/superblk_handler.hpp>
 #include "lib/blob_route.hpp"
 #include "MPMCPriorityQueue.hpp"
@@ -73,8 +74,31 @@ public:
     // its own (possibly merged) values.
 #pragma pack(1)
     struct scrub_timestamp_info {
+        static constexpr uint8_t scrub_timestamp_info_version = 0x01;
+
         uint64_t last_deep_scrub_timestamp{0};
         uint64_t last_shallow_scrub_timestamp{0};
+        uint8_t version{scrub_timestamp_info_version};
+        mutable uint32_t crc{0};
+
+        void seal() const {
+            crc = 0;
+            crc = calculate_crc();
+        }
+
+        bool corrupted() const {
+            if (version > scrub_timestamp_info_version) { return true; }
+            auto saved_crc = crc;
+            crc = 0;
+            bool is_corrupted = (saved_crc != calculate_crc());
+            crc = saved_crc;
+            return is_corrupted;
+        }
+
+    private:
+        uint32_t calculate_crc() const {
+            return crc32_ieee(0, reinterpret_cast< const uint8_t* >(this), sizeof(*this));
+        }
     };
 #pragma pack()
 
