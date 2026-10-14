@@ -1134,52 +1134,63 @@ ScrubManager::scrub_timestamp_info ScrubManager::sync_scrub_timestamp(const pg_i
 }
 
 void ScrubManager::push_scrub_timestamp_to_followers() {
-    for (auto const& [pg_id, entry] : m_pg_scrub_sb_map) {
-        auto hs_pg = m_hs_home_object->get_hs_pg(pg_id);
-        if (!hs_pg || !hs_pg->repl_dev_ || !hs_pg->repl_dev_->is_leader()) { continue; }
+    for (auto const& kv : m_pg_scrub_sb_map) {
+        push_scrub_timestamp_to_pg_followers(kv.first);
+    }
+}
 
-        scrub_timestamp_info outgoing_info;
-        {
-            std::lock_guard lock(entry->mutex);
-            outgoing_info =
-                scrub_timestamp_info{entry->sb->last_deep_scrub_timestamp, entry->sb->last_shallow_scrub_timestamp};
-        }
-        auto outgoing = std::make_shared< scrub_timestamp_info >(outgoing_info);
-        outgoing->seal();
+void ScrubManager::push_scrub_timestamp_to_pg_followers(const pg_id_t pg_id) {
+    auto hs_pg = m_hs_home_object->get_hs_pg(pg_id);
+    if (!hs_pg || !hs_pg->repl_dev_ || !hs_pg->repl_dev_->is_leader()) { return; }
 
-        const auto& self_id = m_hs_home_object->our_uuid();
-        for (const auto& member : hs_pg->pg_info_.members) {
-            if (member.id == self_id) continue;
+    auto it = m_pg_scrub_sb_map.find(pg_id);
+    if (it == m_pg_scrub_sb_map.end()) {
+        LOGWARNMOD(scrubmgr, "scrub superblk not found for pg={}, cannot push scrub timestamp", pg_id);
+        return;
+    }
+    auto const& entry = it->second;
 
-            sisl::io_blob_list_t blob_list;
-            blob_list.emplace_back(reinterpret_cast< uint8_t* >(outgoing.get()), sizeof(scrub_timestamp_info), false);
+    scrub_timestamp_info outgoing_info;
+    {
+        std::lock_guard lock(entry->mutex);
+        outgoing_info =
+            scrub_timestamp_info{entry->sb->last_deep_scrub_timestamp, entry->sb->last_shallow_scrub_timestamp};
+    }
+    auto outgoing = std::make_shared< scrub_timestamp_info >(outgoing_info);
+    outgoing->seal();
 
-            hs_pg->repl_dev_->data_request_bidirectional(member.id, HSHomeObject::PUSH_SCRUB_TIMESTAMP, blob_list)
-                .via(folly::getGlobalIOExecutor())
-                .thenValue([this, pg_id, peer_id = member.id, outgoing](auto&& response) {
-                    if (response.hasError()) {
-                        LOGWARNMOD(scrubmgr, "failed to push scrub superblk to peer {} for pg={}, error={}", peer_id,
-                                   pg_id, response.error());
-                        return;
-                    }
+    const auto& self_id = m_hs_home_object->our_uuid();
+    for (const auto& member : hs_pg->pg_info_.members) {
+        if (member.id == self_id) continue;
 
-                    auto const& resp_blob = response.value().response_blob();
-                    if (resp_blob.size() != sizeof(scrub_timestamp_info)) {
-                        LOGWARNMOD(scrubmgr, "invalid scrub superblk push response from peer {} for pg={}, size={}",
-                                   peer_id, pg_id, resp_blob.size());
-                        return;
-                    }
+        sisl::io_blob_list_t blob_list;
+        blob_list.emplace_back(reinterpret_cast< uint8_t* >(outgoing.get()), sizeof(scrub_timestamp_info), false);
 
-                    scrub_timestamp_info incoming;
-                    std::memcpy(&incoming, resp_blob.cbytes(), sizeof(incoming));
-                    if (incoming.corrupted()) {
-                        LOGWARNMOD(scrubmgr, "corrupted scrub superblk push response from peer {} for pg={}", peer_id,
-                                   pg_id);
-                        return;
-                    }
-                    sync_scrub_timestamp(pg_id, incoming);
-                });
-        }
+        hs_pg->repl_dev_->data_request_bidirectional(member.id, HSHomeObject::PUSH_SCRUB_TIMESTAMP, blob_list)
+            .via(folly::getGlobalIOExecutor())
+            .thenValue([this, pg_id, peer_id = member.id, outgoing](auto&& response) {
+                if (response.hasError()) {
+                    LOGWARNMOD(scrubmgr, "failed to push scrub superblk to peer {} for pg={}, error={}", peer_id, pg_id,
+                               response.error());
+                    return;
+                }
+
+                auto const& resp_blob = response.value().response_blob();
+                if (resp_blob.size() != sizeof(scrub_timestamp_info)) {
+                    LOGWARNMOD(scrubmgr, "invalid scrub superblk push response from peer {} for pg={}, size={}",
+                               peer_id, pg_id, resp_blob.size());
+                    return;
+                }
+
+                scrub_timestamp_info incoming;
+                std::memcpy(&incoming, resp_blob.cbytes(), sizeof(incoming));
+                if (incoming.corrupted()) {
+                    LOGWARNMOD(scrubmgr, "corrupted scrub superblk push response from peer {} for pg={}", peer_id,
+                               pg_id);
+                    return;
+                }
+                sync_scrub_timestamp(pg_id, incoming);
+            });
     }
 }
 

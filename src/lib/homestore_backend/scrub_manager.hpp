@@ -324,16 +324,14 @@ public:
     void save_scrub_superblk(const pg_id_t pg_id, const bool is_deep_scrub, bool force_update = true);
     void add_scrub_req(std::shared_ptr< scrub_req > req);
 
+    // same as push_scrub_timestamp_to_followers(), but scoped to a single pg. No-op if this node is not the leader
+    // of pg_id.
+    void push_scrub_timestamp_to_pg_followers(const pg_id_t pg_id);
     // Merges incoming (peer's) scrub superblk timestamps into the local one for pg_id, keeping the newer value for
     // each field independently, persisting if anything changed, and returning the resulting local values.
     // Called both by the follower's PUSH_SCRUB_TIMESTAMP RPC handler (incoming = leader's values) and by the leader
     // itself once a follower's response comes back (incoming = follower's values).
     scrub_timestamp_info sync_scrub_timestamp(const pg_id_t pg_id, const scrub_timestamp_info& incoming);
-
-    // leader-only: periodically push last_deep_scrub_timestamp/last_shallow_scrub_timestamp to followers of every pg
-    // this node leads, and merge back whatever the followers report as newer. Exposed publicly (in addition to being
-    // called from the periodic timer) so it can be triggered on-demand, e.g. from tests.
-    void push_scrub_timestamp_to_followers();
 
     // local scrub
     std::shared_ptr< scrub_result > local_scrub_blob(std::shared_ptr< scrub_req > req);
@@ -417,6 +415,10 @@ private:
     bool wait_for_scrub_lsn_commit(shared< homestore::ReplDev > repl_dev, int64_t scrub_lsn);
     uint64_t compute_crc64(const void* data, size_t len, uint64_t crc = 0) const;
     void check_scrub_timeouts();
+    // leader-only: periodically push last_deep_scrub_timestamp/last_shallow_scrub_timestamp to followers of every pg
+    // this node leads, and merge back whatever the followers report as newer. Exposed publicly (in addition to being
+    // called from the periodic timer) so it can be triggered on-demand, e.g. from tests.
+    void push_scrub_timestamp_to_followers();
 
     iomgr::timer_handle_t m_scrub_timer_hdl{iomgr::null_timer_handle};
     iomgr::timer_handle_t m_retry_timer_hdl{iomgr::null_timer_handle};
