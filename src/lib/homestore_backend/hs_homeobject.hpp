@@ -2,6 +2,7 @@
 
 #include <memory>
 #include <mutex>
+#include <unordered_set>
 
 #include <homestore/homestore.hpp>
 #include <homestore/index/index_table.hpp>
@@ -111,6 +112,9 @@ private:
     // Shard migration info: tracks shards that need migration from v1 to v2 format
     std::vector< shard_id_t > shards_to_migrate_;
     std::vector< pg_id_t > destroyed_stale_pgs_;
+    // pg ids whose create_pg has passed admission but not finished. A CM retry that arrives
+    // in this window must not allocate a second repldev for the same pg.
+    std::unordered_set< pg_id_t > creating_pgs_;
 
 public:
     // Old version shard_info_superblk (v0.02) - for backward compatibility testing and migration

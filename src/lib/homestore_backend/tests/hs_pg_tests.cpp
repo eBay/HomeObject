@@ -1,6 +1,8 @@
 #include "homeobj_fixture.hpp"
 #include <homestore/replication_service.hpp>
 
+#include <future>
+
 TEST_F(HomeObjectFixture, PGStatsTest) {
     LOGINFO("HomeObject replica={} setup completed", g_helper->replica_num());
     //  Create a pg, shard, put blob should succeed.
@@ -359,6 +361,49 @@ TEST_F(HomeObjectFixture, DuplicateCreatePG) {
 }
 
 #ifdef _PRERELEASE
+// First create is held inside _create_pg after creating_pgs_ insert.
+// A duplicate during that window returns RETRY_REQUEST. After first.get() the pg is in _pg_map, so the next
+// duplicate succeeds.
+TEST_F(HomeObjectFixture, CreatePGRetryWhileInflight) {
+    if (0 != g_helper->replica_num()) { return; }
+
+    pg_id_t pg_id{1};
+    std::promise< void > entered;
+    std::promise< void > release;
+    set_callback_flip("simulate_create_pg_delay", [&]() {
+        entered.set_value();
+        release.get_future().wait();
+    });
+
+    auto members = g_helper->members();
+    auto name = g_helper->test_name();
+    auto pg_size = SISL_OPTIONS["chunks_per_pg"].as< uint64_t >() * SISL_OPTIONS["chunk_size"].as< uint64_t >() * Mi;
+    auto make_info = [&]() {
+        auto info = homeobject::PGInfo(pg_id);
+        info.size = pg_size;
+        for (const auto& member : members) {
+            info.members.insert(homeobject::PGMember{member.first, name + std::to_string(member.second),
+                                                     member.second == 0 ? 1 : 0});
+        }
+        return info;
+    };
+
+    auto first =
+        std::async(std::launch::async, [&]() { return _obj_inst->pg_manager()->create_pg(make_info()).get(); });
+    entered.get_future().wait();
+
+    auto retry = _obj_inst->pg_manager()->create_pg(make_info()).get();
+    // Release before any fatal assertion; otherwise ~future of `first` blocks forever.
+    release.set_value();
+    ASSERT_FALSE(retry);
+    ASSERT_EQ(PGError::RETRY_REQUEST, retry.error());
+
+    ASSERT_TRUE(first.get());
+
+    auto again = _obj_inst->pg_manager()->create_pg(make_info()).get();
+    ASSERT_TRUE(again);
+}
+
 TEST_F(HomeObjectFixture, CreatePGFailed) {
     set_basic_flip("create_pg_create_repl_dev_error", 1); // simulate create pg repl dev error
     set_basic_flip("create_pg_raft_message_error", 1);    // simulate create pg raft message error
