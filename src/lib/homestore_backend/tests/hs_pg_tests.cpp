@@ -393,10 +393,11 @@ TEST_F(HomeObjectFixture, CreatePGRetryWhileInflight) {
     entered.get_future().wait();
 
     auto retry = _obj_inst->pg_manager()->create_pg(make_info()).get();
+    // Release before any fatal assertion; otherwise ~future of `first` blocks forever.
+    release.set_value();
     ASSERT_FALSE(retry);
     ASSERT_EQ(PGError::RETRY_REQUEST, retry.error());
 
-    release.set_value();
     ASSERT_TRUE(first.get());
 
     auto again = _obj_inst->pg_manager()->create_pg(make_info()).get();

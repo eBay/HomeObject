@@ -99,7 +99,7 @@ PGManager::NullAsyncResult HSHomeObject::_create_pg(PGInfo&& pg_info, std::set< 
         existing_pg = _get_hs_pg_unlocked(pg_id);
         if (existing_pg == nullptr) {
             if (creating_pgs_.contains(pg_id)) {
-                LOGW("PG create is in progress, retry later, pg={}", pg_id);
+                LOGW("PG create is in progress, retry later, pg={}, trace_id={}", pg_id, tid);
                 decr_pending_request_num();
                 return folly::makeUnexpected(PGError::RETRY_REQUEST);
             }
@@ -108,12 +108,12 @@ PGManager::NullAsyncResult HSHomeObject::_create_pg(PGInfo&& pg_info, std::set< 
     }
     if (existing_pg) {
         if (!pg_info.is_equivalent_to(existing_pg->pg_info_)) {
-            LOGW("PG already exists with different info! pg={}, pg_info={}, hs_pg_info={}", pg_id, pg_info.to_string(),
-                 existing_pg->pg_info_.to_string());
+            LOGW("PG already exists with different info! pg={}, trace_id={}, pg_info={}, hs_pg_info={}", pg_id, tid,
+                 pg_info.to_string(), existing_pg->pg_info_.to_string());
             decr_pending_request_num();
             return folly::makeUnexpected(PGError::INVALID_ARG);
         }
-        LOGW("PG already exists! pg={}", pg_id);
+        LOGW("PG already exists! pg={}, trace_id={}", pg_id, tid);
         decr_pending_request_num();
         return folly::Unit();
     }
@@ -130,7 +130,7 @@ PGManager::NullAsyncResult HSHomeObject::_create_pg(PGInfo&& pg_info, std::set< 
 
     const auto chunk_size = chunk_selector()->get_chunk_size();
     if (pg_info.size < chunk_size) {
-        LOGW("Not support to create PG which pg_size={} < chunk_size={}", pg_info.size, chunk_size);
+        LOGW("Not support to create PG which pg_size={} < chunk_size={}, trace_id={}", pg_info.size, chunk_size, tid);
         finish_creating_pg();
         decr_pending_request_num();
         return folly::makeUnexpected(PGError::INVALID_ARG);
@@ -138,7 +138,7 @@ PGManager::NullAsyncResult HSHomeObject::_create_pg(PGInfo&& pg_info, std::set< 
 
     auto const num_chunk = chunk_selector()->select_chunks_for_pg(pg_id, pg_info.size);
     if (!num_chunk.has_value()) {
-        LOGW("Failed to select chunks for pg={}", pg_id);
+        LOGW("Failed to select chunks for pg={}, trace_id={}", pg_id, tid);
         finish_creating_pg();
         decr_pending_request_num();
         return folly::makeUnexpected(PGError::NO_SPACE_LEFT);
@@ -165,7 +165,7 @@ PGManager::NullAsyncResult HSHomeObject::_create_pg(PGInfo&& pg_info, std::set< 
             // FIXME:https://github.com/eBay/HomeObject/pull/136#discussion_r1470504271
             return do_create_pg(v.value(), std::move(pg_info), tid);
         })
-        .thenValue([this, pg_id, repl_dev_group_id, finish_creating_pg](auto&& r) -> PGManager::NullAsyncResult {
+        .thenValue([this, pg_id, repl_dev_group_id, tid, finish_creating_pg](auto&& r) -> PGManager::NullAsyncResult {
             // reclaim resources if failed to create pg
             if (r.hasError()) {
                 bool res = chunk_selector_->return_pg_chunks_to_dev_heap(pg_id);
@@ -174,10 +174,11 @@ PGManager::NullAsyncResult HSHomeObject::_create_pg(PGInfo&& pg_info, std::set< 
                 // if don't have repl dev, it will return ReplServiceError::SERVER_NOT_FOUND
                 return hs_repl_service()
                     .remove_repl_dev(repl_dev_group_id)
-                    .deferValue([r, repl_dev_group_id, this,
+                    .deferValue([r, repl_dev_group_id, tid, this,
                                  finish_creating_pg](auto&& e) -> PGManager::NullAsyncResult {
                         if (e != ReplServiceError::OK) {
-                            LOGW("Failed to remove repl device which group_id={}, error={}", repl_dev_group_id, e);
+                            LOGW("Failed to remove repl device which group_id={}, error={}, trace_id={}",
+                                 repl_dev_group_id, e, tid);
                         }
                         // Drop the inflight mark only after chunk/repldev cleanup, so a retry cannot
                         // select the same chunks while they are being returned.
