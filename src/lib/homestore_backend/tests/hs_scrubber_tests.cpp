@@ -769,6 +769,90 @@ TEST_F(HomeObjectFixture, ScrubSuperblockPersistenceTest) {
     g_helper->sync();
 }
 
+// Test PUSH_SCRUB_TIMESTAMP sync: the leader periodically pushes its last_deep_scrub_timestamp/
+// last_shallow_scrub_timestamp to followers; whichever side has the newer value for each field wins
+// and propagates to the other side. Exercises both directions: leader newer (follower catches up)
+// and follower newer (leader catches up).
+TEST_F(HomeObjectFixture, ScrubSuperblkPushSyncTest) {
+    const pg_id_t pg_id = 1;
+    create_pg(pg_id);
+    auto scrub_mgr = _obj_inst->scrub_manager();
+
+    g_helper->sync();
+
+    // ===== Leader newer: follower should catch up to the leader's values =====
+    std::this_thread::sleep_for(std::chrono::seconds(2));
+    run_on_pg_leader(pg_id, [&]() {
+        scrub_mgr->save_scrub_superblk(pg_id, true /* is_deep_scrub */, true /* force_update */);
+        scrub_mgr->save_scrub_superblk(pg_id, false /* is_deep_scrub */, true /* force_update */);
+    });
+
+    g_helper->sync();
+
+    uint64_t follower_deep_before = 0;
+    uint64_t follower_shallow_before = 0;
+    run_on_pg_follower(pg_id, [&]() {
+        auto sb = scrub_mgr->get_scrub_superblk(pg_id);
+        ASSERT_TRUE(sb.has_value());
+        follower_deep_before = sb->last_deep_scrub_timestamp;
+        follower_shallow_before = sb->last_shallow_scrub_timestamp;
+    });
+
+    run_on_pg_leader(pg_id, [&]() { scrub_mgr->push_scrub_timestamp_to_followers(); });
+
+    run_on_pg_follower(pg_id, [&]() {
+        auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(15);
+        bool caught_up = false;
+        while (std::chrono::steady_clock::now() < deadline) {
+            auto sb = scrub_mgr->get_scrub_superblk(pg_id);
+            ASSERT_TRUE(sb.has_value());
+            if (sb->last_deep_scrub_timestamp > follower_deep_before &&
+                sb->last_shallow_scrub_timestamp > follower_shallow_before) {
+                caught_up = true;
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        }
+        EXPECT_TRUE(caught_up) << "Follower should catch up to leader's newer scrub superblk timestamps";
+    });
+
+    g_helper->sync();
+
+    // ===== Follower newer: leader should catch up to the follower's values =====
+    std::this_thread::sleep_for(std::chrono::seconds(2));
+    run_on_pg_follower(pg_id, [&]() {
+        scrub_mgr->save_scrub_superblk(pg_id, true /* is_deep_scrub */, true /* force_update */);
+        scrub_mgr->save_scrub_superblk(pg_id, false /* is_deep_scrub */, true /* force_update */);
+    });
+
+    g_helper->sync();
+
+    run_on_pg_leader(pg_id, [&]() {
+        auto before_sb = scrub_mgr->get_scrub_superblk(pg_id);
+        ASSERT_TRUE(before_sb.has_value());
+        const auto leader_deep_before = before_sb->last_deep_scrub_timestamp;
+        const auto leader_shallow_before = before_sb->last_shallow_scrub_timestamp;
+
+        scrub_mgr->push_scrub_timestamp_to_followers();
+
+        auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(15);
+        bool caught_up = false;
+        while (std::chrono::steady_clock::now() < deadline) {
+            auto after_sb = scrub_mgr->get_scrub_superblk(pg_id);
+            ASSERT_TRUE(after_sb.has_value());
+            if (after_sb->last_deep_scrub_timestamp > leader_deep_before &&
+                after_sb->last_shallow_scrub_timestamp > leader_shallow_before) {
+                caught_up = true;
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        }
+        EXPECT_TRUE(caught_up) << "Leader should catch up to follower's newer scrub superblk timestamps";
+    });
+
+    g_helper->sync();
+}
+
 // Test cancel scrub task
 TEST_F(HomeObjectFixture, CancelScrubTaskTest) {
     const pg_id_t pg_id = 1;

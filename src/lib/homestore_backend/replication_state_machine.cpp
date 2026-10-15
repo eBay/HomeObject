@@ -992,6 +992,8 @@ void ReplicationStateMachine::on_become_leader(const homestore::group_id_t& grou
     const auto pg_id = pg_id_opt.value();
     RELEASE_ASSERT(home_object_->pg_exists(pg_id), "pg={} should exist, but not! fatal error!", pg_id);
     // TODO:: add whatever acitons needed to be take.
+    auto& scrub_mgr = home_object_->scrub_manager();
+    if (scrub_mgr) scrub_mgr->push_scrub_timestamp_to_pg_followers(pg_id);
 }
 
 void ReplicationStateMachine::on_become_follower(const homestore::group_id_t& group_id) {

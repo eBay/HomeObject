@@ -13,8 +13,8 @@ SISL_LOGGING_DECL(gcmgr)
 #define RECOVERD_GC_TASK_ID 0
 
 #define GCLOG(level, gc_task_id, pg_id, shard_id, msg, ...)                                                            \
-    LOG##level##MOD(gcmgr, "[gc_task_id={}, pg_id={}, shard_id=0x{:x}] " msg, gc_task_id, pg_id, shard_id,             \
-                    ##__VA_ARGS__)
+    LOG##level##MOD(gcmgr, "[gc_task_id={}, pg_id={}, shard_id=0x{:x}] " msg, gc_task_id, pg_id,                       \
+                    shard_id, ##__VA_ARGS__)
 
 #define GCLOGT(gc_task_id, pg_id, shard_id, msg, ...) GCLOG(TRACE, gc_task_id, pg_id, shard_id, msg, ##__VA_ARGS__)
 #define GCLOGD(gc_task_id, pg_id, shard_id, msg, ...) GCLOG(DEBUG, gc_task_id, pg_id, shard_id, msg, ##__VA_ARGS__)
