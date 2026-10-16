@@ -1,144 +1,9 @@
 #include "homeobj_fixture.hpp"
-#include <homestore/blk.h>
-#include <homestore/btree/btree_req.hpp>
-#include <homestore/btree/btree_kv.hpp>
-#include <random>
+#include "homeobj_fixture_http.hpp"
 #include "lib/homestore_backend/hs_homeobject.hpp"
+#include "lib/homestore_backend/hs_debug_inject.hpp"
 
 using namespace homeobject;
-using BlobHeader = HSHomeObject::BlobHeader;
-
-// Helper function to delete a blob from index table
-static void delete_blob_from_index(shared< homestore::IndexTable< BlobRouteKey, BlobRouteValue > > pg_index_table,
-                                   shard_id_t shard_id, blob_id_t blob_id) {
-    LOGINFO("Deleting blob from index, shard_id={}, blob_id={}", shard_id, blob_id);
-    BlobRouteKey blob_key{BlobRoute{shard_id, blob_id}};
-    BlobRouteValue out_value;
-    homestore::BtreeSingleRemoveRequest remove_req{&blob_key, &out_value};
-    auto status = pg_index_table->remove(remove_req);
-    ASSERT_TRUE(status == homestore::btree_status_t::success)
-        << "Failed to remove blob key from index table, status=" << status;
-}
-
-static void delete_shard_from_index(shared< homestore::IndexTable< BlobRouteKey, BlobRouteValue > > pg_index_table,
-                                    shard_id_t missing_shard_id) {
-    LOGINFO("Deleting shard from index, shard_id={}", missing_shard_id);
-    auto start_key = BlobRouteKey{BlobRoute{missing_shard_id, 0}};
-    auto end_key = BlobRouteKey{BlobRoute{missing_shard_id, std::numeric_limits< uint64_t >::max()}};
-    homestore::BtreeRangeRemoveRequest< BlobRouteKey > range_remove_req{
-        homestore::BtreeKeyRange< BlobRouteKey >{
-            std::move(start_key), true /* inclusive */, std::move(end_key), true /* inclusive */
-        },
-        nullptr, std::numeric_limits< uint32_t >::max(),
-        [](homestore::BtreeKey const& key, homestore::BtreeValue const& value) -> bool { return true; }};
-
-    auto status = pg_index_table->remove(range_remove_req);
-    ASSERT_TRUE(status == homestore::btree_status_t::success || status == homestore::btree_status_t::not_found)
-        << "Failed to remove shard keys from index table, status=" << status;
-}
-
-// Helper function to corrupt a blob's data
-static void corrupt_blob_data(shared< homestore::IndexTable< BlobRouteKey, BlobRouteValue > > pg_index_table,
-                              shard_id_t shard_id, blob_id_t blob_id) {
-    auto& data_service = homestore::data_service();
-    const auto blk_size = data_service.get_blk_size();
-
-    BlobRouteKey blob_key{BlobRoute{shard_id, blob_id}};
-    BlobRouteValue out_value;
-    homestore::BtreeSingleGetRequest blob_get_req{&blob_key, &out_value};
-
-    auto status = pg_index_table->get(blob_get_req);
-    ASSERT_TRUE(status == homestore::btree_status_t::success)
-        << "Failed to get blob key from index table, status=" << status;
-
-    auto pbas = out_value.pbas();
-    auto total_size = pbas.blk_count() * blk_size;
-    sisl::sg_list data_sgs;
-    data_sgs.size = total_size;
-    data_sgs.iovs.emplace_back(iovec{.iov_base = iomanager.iobuf_alloc(blk_size, total_size), .iov_len = total_size});
-
-    data_service.async_read(pbas, data_sgs, total_size)
-        .thenValue([&](auto&& err) {
-            if (err) {
-                LOGE("Failed to read blob data, blob_id={}, err={}", blob_id, err.message());
-                iomanager.iobuf_free(reinterpret_cast< uint8_t* >(data_sgs.iovs[0].iov_base));
-                throw std::runtime_error(fmt::format("Failed to read blob data: {}", err.message()));
-            }
-
-            auto* data_ptr = reinterpret_cast< uint8_t* >(data_sgs.iovs[0].iov_base);
-            for (size_t i = 0; i < data_sgs.iovs[0].iov_len / 2; i++) {
-                data_ptr[i] ^= 0xFF; // Flip first half of data
-            }
-
-            return data_service.async_write(data_sgs, pbas).thenValue([data_sgs = std::move(data_sgs)](auto&& err) {
-                iomanager.iobuf_free(reinterpret_cast< uint8_t* >(data_sgs.iovs[0].iov_base));
-                ASSERT_FALSE(err) << "Failed to write corrupted blob data";
-            });
-        })
-        .get();
-}
-
-// Helper function to make a blob inconsistent (valid but different hash)
-static void make_blob_inconsistent(shared< homestore::IndexTable< BlobRouteKey, BlobRouteValue > > pg_index_table,
-                                   shard_id_t shard_id, blob_id_t blob_id, HSHomeObject* obj_inst) {
-    auto& data_service = homestore::data_service();
-    const auto blk_size = data_service.get_blk_size();
-
-    BlobRouteKey blob_key{BlobRoute{shard_id, blob_id}};
-    BlobRouteValue out_value;
-    homestore::BtreeSingleGetRequest blob_get_req{&blob_key, &out_value};
-
-    auto status = pg_index_table->get(blob_get_req);
-    ASSERT_TRUE(status == homestore::btree_status_t::success) << "Failed to get blob key from index table";
-
-    auto pbas = out_value.pbas();
-    auto total_size = pbas.blk_count() * blk_size;
-    sisl::sg_list data_sgs;
-    data_sgs.size = total_size;
-    data_sgs.iovs.emplace_back(iovec{.iov_base = iomanager.iobuf_alloc(blk_size, total_size), .iov_len = total_size});
-
-    data_service.async_read(pbas, data_sgs, total_size)
-        .thenValue([&](auto&& err) {
-            if (err) {
-                LOGE("Failed to read blob data, blob_id={}, err={}", blob_id, err.message());
-                iomanager.iobuf_free(reinterpret_cast< uint8_t* >(data_sgs.iovs[0].iov_base));
-                throw std::runtime_error(fmt::format("Failed to read blob data: {}", err.message()));
-            }
-
-            // Modify blob data and recompute valid hash
-            uint8_t* read_buf = r_cast< uint8_t* >(data_sgs.iovs[0].iov_base);
-            auto header = r_cast< BlobHeader* >(read_buf);
-            uint8_t* blob_bytes = read_buf + header->data_offset;
-
-            std::mt19937 rng{std::random_device{}()};
-            std::uniform_int_distribution< int > dist(0, 255);
-
-            for (size_t i = 0; i < header->blob_size / 2; i++) {
-                blob_bytes[i] ^= static_cast< uint8_t >(dist(rng));
-            }
-
-            uint8_t computed_hash[BlobHeader::blob_max_hash_len]{};
-            obj_inst->compute_blob_payload_hash(header->hash_algorithm, blob_bytes, header->blob_size, computed_hash,
-                                                BlobHeader::blob_max_hash_len);
-
-            std::memcpy(header->hash, computed_hash, BlobHeader::blob_max_hash_len);
-            std::memset(header->header_hash, 0, BlobHeader::blob_max_hash_len);
-            uint32_t computed_header_hash = crc32_ieee(0, (uint8_t*)header, sizeof(BlobHeader));
-            std::memcpy(header->header_hash, &computed_header_hash, sizeof(uint32_t));
-
-            if (!obj_inst->verify_blob(data_sgs.iovs[0].iov_base, header->shard_id, header->blob_id)) {
-                LOGE("Blob verification failed after modification, blob_id={}", blob_id);
-                iomanager.iobuf_free(reinterpret_cast< uint8_t* >(data_sgs.iovs[0].iov_base));
-                throw std::runtime_error(fmt::format("Blob verification failed for blob_id={}", blob_id));
-            }
-
-            return data_service.async_write(data_sgs, pbas).thenValue([data_sgs = std::move(data_sgs)](auto&& err) {
-                iomanager.iobuf_free(reinterpret_cast< uint8_t* >(data_sgs.iovs[0].iov_base));
-                ASSERT_FALSE(err) << "Failed to write inconsistent blob data";
-            });
-        })
-        .get();
-}
 
 // Helper function to verify missing blobs in scrub report
 // missing_blobs[blob_route] = set of peers that HAVE the blob; peer_id is missing it iff not in that set.
@@ -331,19 +196,17 @@ TEST_F(HomeObjectFixture, BasicScrubTest) {
 
     // Corrupt data on followers
     run_on_pg_follower(pg_id, [&]() {
-        auto& pg_index_table = hs_pg->index_table_;
-
         // 1. Remove missing_shard_id to simulate missing shard
-        delete_shard_from_index(pg_index_table, missing_shard_id);
+        ASSERT_TRUE(hs_debug_inject::delete_shard_from_index(*_obj_inst, pg_id, missing_shard_id));
 
         // 2. Delete missing_blob_id from blob_op_shard_id (different shard, still exists on follower)
-        delete_blob_from_index(pg_index_table, blob_op_shard_id, missing_blob_id);
+        ASSERT_TRUE(hs_debug_inject::delete_blob_from_index(*_obj_inst, pg_id, blob_op_shard_id, missing_blob_id));
 
         // 3. Make corrupted_blob_id corrupted
-        corrupt_blob_data(pg_index_table, blob_op_shard_id, corrupted_blob_id);
+        ASSERT_TRUE(hs_debug_inject::corrupt_blob_data(*_obj_inst, pg_id, blob_op_shard_id, corrupted_blob_id));
 
         // 4. Make inconsistent_blob_id inconsistent (valid but different hash)
-        make_blob_inconsistent(pg_index_table, blob_op_shard_id, inconsistent_blob_id, _obj_inst.get());
+        ASSERT_TRUE(hs_debug_inject::make_blob_inconsistent(*_obj_inst, pg_id, blob_op_shard_id, inconsistent_blob_id));
     });
 
     g_helper->sync();
@@ -478,18 +341,18 @@ TEST_F(HomeObjectFixture, BasicScrubTest) {
 
     // Corrupt data on leader
     run_on_pg_leader(pg_id, [&]() {
-        auto& pg_index_table = hs_pg->index_table_;
-
         // 1. Delete leader_missing_blob_id from pg_index table on leader
-        delete_blob_from_index(pg_index_table, blob_op_shard_id, leader_missing_blob_id);
+        ASSERT_TRUE(
+            hs_debug_inject::delete_blob_from_index(*_obj_inst, pg_id, blob_op_shard_id, leader_missing_blob_id));
         LOGINFO("Deleted blob {} from leader index table", leader_missing_blob_id);
 
         // 2. Make leader_corrupted_blob_id corrupted on leader
-        corrupt_blob_data(pg_index_table, blob_op_shard_id, leader_corrupted_blob_id);
+        ASSERT_TRUE(hs_debug_inject::corrupt_blob_data(*_obj_inst, pg_id, blob_op_shard_id, leader_corrupted_blob_id));
         LOGINFO("Corrupted blob {} on leader", leader_corrupted_blob_id);
 
         // 3. Make leader_inconsistent_blob_id inconsistent on leader
-        make_blob_inconsistent(pg_index_table, blob_op_shard_id, leader_inconsistent_blob_id, _obj_inst.get());
+        ASSERT_TRUE(
+            hs_debug_inject::make_blob_inconsistent(*_obj_inst, pg_id, blob_op_shard_id, leader_inconsistent_blob_id));
         LOGINFO("Made blob {} inconsistent on leader", leader_inconsistent_blob_id);
     });
 
@@ -631,7 +494,7 @@ TEST_F(HomeObjectFixture, LeaderMissingShardTest) {
     // Simulate leader losing the shard by removing it from the local B-tree index only.
     // Followers still have the shard, so scrub should detect the leader as missing it.
     run_on_pg_leader(pg_id, [&]() {
-        delete_shard_from_index(hs_pg->index_table_, leader_missing_shard_id);
+        ASSERT_TRUE(hs_debug_inject::delete_shard_from_index(*_obj_inst, pg_id, leader_missing_shard_id));
         LOGINFO("Deleted shard {} from leader index to simulate leader missing shard", leader_missing_shard_id);
     });
 
@@ -895,9 +758,8 @@ TEST_F(HomeObjectFixture, ReconcileScrubReportTest) {
 
     // Delete both blobs from index table to simulate missing blobs on followers
     run_on_pg_follower(pg_id, [&]() {
-        auto& pg_index_table = hs_pg->index_table_;
-        delete_blob_from_index(pg_index_table, shard_id, missing_blob_to_delete);
-        delete_blob_from_index(pg_index_table, shard_id, missing_blob_not_deleted);
+        ASSERT_TRUE(hs_debug_inject::delete_blob_from_index(*_obj_inst, pg_id, shard_id, missing_blob_to_delete));
+        ASSERT_TRUE(hs_debug_inject::delete_blob_from_index(*_obj_inst, pg_id, shard_id, missing_blob_not_deleted));
         LOGINFO("Deleted blobs {} and {} from follower index table", missing_blob_to_delete, missing_blob_not_deleted);
     });
 
@@ -1051,8 +913,7 @@ TEST_F(HomeObjectFixture, LocalScrubMethodsTest) {
 
     // corrupt one blob's data in the index table to simulate a blob-level corruption that should be detected by local
     // blob scrub.
-    auto& pg_index_table = hs_pg->index_table_;
-    corrupt_blob_data(pg_index_table, shard_id, corrupted_blob_id);
+    ASSERT_TRUE(hs_debug_inject::corrupt_blob_data(*_obj_inst, pg_id, shard_id, corrupted_blob_id));
 
     auto my_uuid = _obj_inst->our_uuid();
     const int64_t scrub_lsn = hs_pg->repl_dev_->get_last_commit_lsn();
@@ -1247,4 +1108,62 @@ TEST_F(HomeObjectFixture, ScrubResultSerializationTest) {
         EXPECT_EQ(loaded->req_id, req_id + 3);
         EXPECT_TRUE(loaded->entries.empty()) << "Empty result should round-trip with no entries";
     }
+}
+
+// Registered as its own ctest (HomestoreTestScrubberHttpDebug, see CMakeLists.txt) with
+// --enable_http true and --gtest_filter limiting the binary to just this test. The shared
+// process-wide iomgr http_server's route table does not support being re-registered across
+// multiple HSHomeObject instances within one process (the first test to construct one "wins"
+// the route bindings, which then stay bound to its now-destroyed HSHomeObject for the rest of
+// the run), so this test must be the only one ever constructing an HSHomeObject in its process.
+TEST_F(HomeObjectFixture, DebugInjectCorruptionHttpTest) {
+#ifndef _PRERELEASE
+    GTEST_SKIP() << "/api/v1/debug/inject_corruption only exists in _PRERELEASE builds; this test is a no-op here "
+                    "(registered as its own ctest, HomestoreTestScrubberHttpDebug, which Release CI also runs)";
+#else
+    const pg_id_t pg_id = 11;
+    create_pg(pg_id);
+
+    const uint64_t shard_size = 64 * Mi;
+    auto shard_info = create_shard(pg_id, shard_size, "shard meta");
+
+    std::map< pg_id_t, std::vector< shard_id_t > > pg_shard_id_vec;
+    std::map< pg_id_t, blob_id_t > pg_blob_id;
+    pg_shard_id_vec[pg_id].push_back(shard_info.id);
+    pg_blob_id[pg_id] = 0;
+
+    const uint64_t num_blobs = 3;
+    auto shard_blob_ids_map = put_blobs(pg_shard_id_vec, num_blobs, pg_blob_id);
+    const auto shard_id = shard_info.id;
+    auto& shard_blobs = shard_blob_ids_map[shard_id];
+    const auto corrupted_blob_id = shard_blobs.begin()->first;
+
+    HttpHelper http_helper("127.0.0.1", 5000 + g_helper->replica_num());
+
+    // Diagnostic: crashSystem is an existing _PRERELEASE-only route. An unrecognized `type` value
+    // returns 200 without crashing, so this is a safe way to confirm _PRERELEASE routes are
+    // registered at all in this build before blaming the new inject_corruption route specifically.
+    auto probe = http_helper.post("/api/v1/crashSystem?type=diagnostic_probe", "");
+    ASSERT_EQ(probe.code(), Pistache::Http::Code::Ok)
+        << "_PRERELEASE route probe (crashSystem) failed, so _PRERELEASE routes are not registered in this build "
+        << "at all -- actual_code=" << static_cast< int >(probe.code()) << " body=[" << probe.body() << "]";
+
+    auto resource = fmt::format("/api/v1/debug/inject_corruption?pg_id={}&shard_id={}&blob_id={}&mode=corrupt_data",
+                                pg_id, shard_id, corrupted_blob_id);
+    auto r = http_helper.post(resource, "");
+    ASSERT_EQ(r.code(), Pistache::Http::Code::Ok)
+        << "inject_corruption resource=" << resource << " actual_code=" << static_cast< int >(r.code())
+        << " body_len=" << r.body().size() << " body=[" << r.body() << "]";
+
+    auto scrub_report = submit_scrub_with_retry(pg_id, true /* is_deep */);
+    ASSERT_NE(scrub_report, nullptr) << "Deep scrub report should not be null";
+    auto deep_scrub_report = std::dynamic_pointer_cast< ScrubManager::DeepScrubReport >(scrub_report);
+    ASSERT_NE(deep_scrub_report, nullptr) << "Should be DeepScrubReport";
+
+    const auto& corrupted_blobs = deep_scrub_report->get_corrupted_blobs();
+    auto it = corrupted_blobs.find(_obj_inst->our_uuid());
+    ASSERT_TRUE(it != corrupted_blobs.end()) << "Corrupted blob should be reported for this peer";
+    EXPECT_TRUE(it->second.count(BlobRoute{shard_id, corrupted_blob_id}) == 1)
+        << "Blob corrupted via HTTP endpoint should be in the scrub report";
+#endif // _PRERELEASE
 }

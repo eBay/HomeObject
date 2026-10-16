@@ -31,6 +31,7 @@ target_sources("${PROJECT_NAME}_homestore" PRIVATE
     hs_http_manager.cpp
     gc_manager.cpp
     scrub_manager.cpp
+    hs_debug_inject.cpp
     MPMCPriorityQueue.hpp
     $<TARGET_OBJECTS:${PROJECT_NAME}_core>
 )
@@ -186,7 +187,19 @@ target_sources(homestore_test_scrubber PRIVATE $<TARGET_OBJECTS:homestore_tests_
 target_link_libraries(homestore_test_scrubber PUBLIC homeobject_homestore ${COMMON_TEST_DEPS})
 add_test(NAME HomestoreTestScrubber COMMAND homestore_test_scrubber -csv error --executor immediate --config_path ./
         --override_config hs_backend_config.enable_scrubber=true
-        --override_config nuraft_mesg_config.mesg_factory_config.data_request_deadline_secs:10)
+        --override_config nuraft_mesg_config.mesg_factory_config.data_request_deadline_secs:10
+        --gtest_filter=-HomeObjectFixture.DebugInjectCorruptionHttpTest)
+
+# DebugInjectCorruptionHttpTest needs a live HTTP server (--enable_http true), which starts/stops the
+# shared process-wide iomgr http_server in every TEST_F's SetUp/TearDown. That router does not support
+# being re-registered across multiple HSHomeObject instances within one process (the first test's route
+# bindings "win" and stay bound to its now-destroyed HSHomeObject for the rest of the run), so this test
+# runs alone, as the only test in its own process invocation.
+add_test(NAME HomestoreTestScrubberHttpDebug COMMAND homestore_test_scrubber -csv error --executor immediate
+        --config_path ./ --enable_http true
+        --override_config hs_backend_config.enable_scrubber=true
+        --override_config nuraft_mesg_config.mesg_factory_config.data_request_deadline_secs:10
+        --gtest_filter=HomeObjectFixture.DebugInjectCorruptionHttpTest)
 
 # All tests share disk, port, and shared-memory resources, so run them serially to avoid parallel conflicts.
 set_tests_properties(
@@ -201,6 +214,7 @@ set_tests_properties(
     HomestoreTestGC
     HomestoreTestGC_ShardRaceTests
     HomestoreTestScrubber
+    HomestoreTestScrubberHttpDebug
     PROPERTIES RUN_SERIAL TRUE)
 
 

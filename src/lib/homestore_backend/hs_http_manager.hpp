@@ -56,6 +56,7 @@ private:
 
 #ifdef _PRERELEASE
     void crash_system(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response);
+    void inject_corruption(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response);
 #endif
 
 private:

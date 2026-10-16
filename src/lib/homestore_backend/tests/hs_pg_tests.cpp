@@ -382,8 +382,8 @@ TEST_F(HomeObjectFixture, CreatePGRetryWhileInflight) {
         auto info = homeobject::PGInfo(pg_id);
         info.size = pg_size;
         for (const auto& member : members) {
-            info.members.insert(homeobject::PGMember{member.first, name + std::to_string(member.second),
-                                                     member.second == 0 ? 1 : 0});
+            info.members.insert(
+                homeobject::PGMember{member.first, name + std::to_string(member.second), member.second == 0 ? 1 : 0});
         }
         return info;
     };
