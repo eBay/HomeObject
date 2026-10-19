@@ -1022,6 +1022,34 @@ TEST_F(HomeObjectFixture, AddRemovePGScrubTest) {
     LOGINFO("PG deleted, scrub superblock correctly cleaned up");
 }
 
+// Test that add_missing_pg_scrub_superblks backfills a scrub superblock for a pg that still exists but has no
+// entry in the scrub manager (e.g. a pg created before scrub manager tracked scrub superblocks, or one that
+// crashed between create_pg and add_pg).
+TEST_F(HomeObjectFixture, AddMissingPgScrubSuperblksTest) {
+    const pg_id_t pg_id = 1;
+    create_pg(pg_id);
+    auto scrub_mgr = _obj_inst->scrub_manager();
+
+    run_on_pg_leader(pg_id, [&]() {
+        ASSERT_TRUE(scrub_mgr->get_scrub_superblk(pg_id).has_value())
+            << "Scrub superblock should exist after PG creation";
+
+        // Simulate a pg that is missing its scrub superblock: remove_pg erases the scrub manager's tracking of the
+        // pg's superblock without removing the pg itself.
+        scrub_mgr->remove_pg(pg_id);
+        ASSERT_FALSE(scrub_mgr->get_scrub_superblk(pg_id).has_value())
+            << "Scrub superblock should be absent after remove_pg";
+
+        scrub_mgr->add_missing_pg_scrub_superblks();
+
+        auto sb = scrub_mgr->get_scrub_superblk(pg_id);
+        EXPECT_TRUE(sb.has_value()) << "add_missing_pg_scrub_superblks should backfill a scrub superblock for pgs "
+                                       "that exist but have none";
+    });
+
+    g_helper->sync();
+}
+
 // Test local scrub methods
 TEST_F(HomeObjectFixture, LocalScrubMethodsTest) {
     const pg_id_t pg_id = 1;
