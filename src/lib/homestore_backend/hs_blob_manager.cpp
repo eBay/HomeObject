@@ -650,8 +650,11 @@ void HSHomeObject::on_blob_del_commit(int64_t lsn, sisl::blob const& header, sis
         BLOGE(tid, msg_header->shard_id, *r_cast< blob_id_t const* >(key.cbytes()),
               "replication message header is corrupted with crc error, lsn={} header={}", lsn, msg_header->to_string());
         if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(BlobError(BlobErrorCode::CHECKSUM_MISMATCH))); }
-        RELEASE_ASSERT(false, "replication message header is corrupted with crc error, lsn={}, header={}", lsn,
-                       msg_header->to_string());
+
+        // TODO:: add RELEASE_ASSERT or proper error handling for corrupted replication message header
+        // RELEASE_ASSERT(false, "replication message header is corrupted with crc error, lsn={}, header={}",
+        // lsn,msg_header->to_string());
+
         return;
     }
 
