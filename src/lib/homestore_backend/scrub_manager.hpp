@@ -281,6 +281,9 @@ public:
     std::optional< pg_scrub_superblk > get_scrub_superblk(const pg_id_t pg_id) const;
     void save_scrub_superblk(const pg_id_t pg_id, const bool is_deep_scrub, bool force_update = true);
     void add_scrub_req(std::shared_ptr< scrub_req > req);
+    // backfill a scrub superblock for any existing pg that is missing one, e.g. a pg created before scrub manager
+    // tracked scrub superblocks, or one that crashed between create_pg and add_pg.
+    void add_missing_pg_scrub_superblks();
 
     // local scrub
     std::shared_ptr< scrub_result > local_scrub_blob(std::shared_ptr< scrub_req > req);
