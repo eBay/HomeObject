@@ -351,6 +351,7 @@ private:
         }
     };
 
+    void add_missing_pg_scrub_superblks();
     void scan_pg_for_scrub();
     void handle_pg_scrub_task(scrub_task task);
     bool is_eligible_for_deep_scrub(const pg_id_t& pg_id);
