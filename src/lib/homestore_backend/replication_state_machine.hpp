@@ -277,7 +277,7 @@ private:
 
     std::pair< homestore::repl_lsn_t, homestore::chunk_num_t > get_no_space_left_error_info() const;
 
-    void handle_no_space_left(homestore ::repl_lsn_t lsn, homestore ::chunk_num_t chunk_id);
+    void handle_no_space_left(homestore::repl_lsn_t lsn, homestore::chunk_num_t chunk_id);
 };
 
 } // namespace homeobject

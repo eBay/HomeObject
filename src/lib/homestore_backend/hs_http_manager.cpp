@@ -24,6 +24,7 @@
 
 #include "hs_http_manager.hpp"
 #include "hs_homeobject.hpp"
+#include "hs_debug_inject.hpp"
 
 namespace homeobject {
 
@@ -73,6 +74,8 @@ HttpManager::HttpManager(HSHomeObject& ho) : ho_(ho) {
 #ifdef _PRERELEASE
         {Pistache::Http::Method::Post, "/api/v1/crashSystem",
          Pistache::Rest::Routes::bind(&HttpManager::crash_system, this)},
+        {Pistache::Http::Method::Post, "/api/v1/debug/inject_corruption",
+         Pistache::Rest::Routes::bind(&HttpManager::inject_corruption, this)},
 #endif
         {Pistache::Http::Method::Get, "/api/v1/pg", Pistache::Rest::Routes::bind(&HttpManager::get_pg, this)},
         {Pistache::Http::Method::Get, "/api/v1/chunks",
@@ -1265,6 +1268,79 @@ void HttpManager::crash_system(const Pistache::Rest::Request& request, Pistache:
         resp = "crash type " + crash_type + " not supported yet";
     }
     response.send(Pistache::Http::Code::Ok, resp);
+}
+
+void HttpManager::inject_corruption(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response) {
+    LOGINFO("inject_corruption handler invoked, raw query resource={}", request.resource());
+    const auto pg_id_param = request.query().get("pg_id");
+    const auto shard_id_param = request.query().get("shard_id");
+    const auto blob_id_param = request.query().get("blob_id");
+    const auto mode_param = request.query().get("mode");
+
+    if (!pg_id_param || !shard_id_param || !blob_id_param || !mode_param) {
+        LOGWARN("inject_corruption missing param(s): pg_id={} shard_id={} blob_id={} mode={}", pg_id_param.has_value(),
+                shard_id_param.has_value(), blob_id_param.has_value(), mode_param.has_value());
+        nlohmann::json error;
+        error["error"] = "Missing required parameter(s)";
+        error["usage"] = "POST /api/v1/debug/inject_corruption?pg_id=<id>&shard_id=<id>&blob_id=<id>"
+                         "&mode=<corrupt_data|inconsistent|delete_blob|delete_shard>";
+        response.send(Pistache::Http::Code::Bad_Request, error.dump());
+        return;
+    }
+
+    uint16_t pg_id;
+    shard_id_t shard_id;
+    blob_id_t blob_id;
+    try {
+        auto pg_val = std::stoul(pg_id_param.value());
+        if (pg_val > std::numeric_limits< uint16_t >::max()) { throw std::out_of_range("pg_id"); }
+        pg_id = static_cast< uint16_t >(pg_val);
+        shard_id = std::stoull(shard_id_param.value(), nullptr, 0);
+        blob_id = std::stoull(blob_id_param.value(), nullptr, 0);
+    } catch (const std::exception& e) {
+        LOGWARN("inject_corruption invalid numeric parameter: {}", e.what());
+        nlohmann::json error;
+        error["error"] = fmt::format("Invalid numeric parameter: {}", e.what());
+        response.send(Pistache::Http::Code::Bad_Request, error.dump());
+        return;
+    }
+
+    const auto& mode = mode_param.value();
+    LOGINFO("inject_corruption pg_id={} shard_id={} blob_id={} mode={}", pg_id, shard_id, blob_id, mode);
+    hs_debug_inject::InjectResult result;
+    if (mode == "corrupt_data") {
+        result = hs_debug_inject::corrupt_blob_data(ho_, pg_id, shard_id, blob_id);
+    } else if (mode == "inconsistent") {
+        result = hs_debug_inject::make_blob_inconsistent(ho_, pg_id, shard_id, blob_id);
+    } else if (mode == "delete_blob") {
+        result = hs_debug_inject::delete_blob_from_index(ho_, pg_id, shard_id, blob_id);
+    } else if (mode == "delete_shard") {
+        result = hs_debug_inject::delete_shard_from_index(ho_, pg_id, shard_id);
+    } else {
+        LOGWARN("inject_corruption unknown mode: {}", mode);
+        nlohmann::json error;
+        error["error"] = "Unknown mode: " + mode;
+        error["usage"] = "mode must be one of corrupt_data|inconsistent|delete_blob|delete_shard";
+        response.send(Pistache::Http::Code::Bad_Request, error.dump());
+        return;
+    }
+
+    if (!result) {
+        LOGWARN("inject_corruption failed: {}", result.error());
+        nlohmann::json error;
+        error["error"] = result.error();
+        response.send(Pistache::Http::Code::Not_Found, error.dump());
+        return;
+    }
+
+    LOGINFO("inject_corruption succeeded for pg_id={} shard_id={} blob_id={} mode={}", pg_id, shard_id, blob_id, mode);
+    nlohmann::json ok;
+    ok["pg_id"] = pg_id;
+    ok["shard_id"] = shard_id;
+    ok["blob_id"] = blob_id;
+    ok["mode"] = mode;
+    ok["message"] = "Corruption injected";
+    response.send(Pistache::Http::Code::Ok, ok.dump());
 }
 #endif
 
