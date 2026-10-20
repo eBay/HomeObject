@@ -230,7 +230,23 @@ bool ScrubManager::is_eligible_for_shallow_scrub(const pg_id_t& pg_id) {
     return false;
 }
 
+void ScrubManager::add_missing_pg_scrub_superblks() {
+    // pgs created before scrub manager tracked scrub superblocks (or that otherwise missed getting one, e.g. a crash
+    // between create_pg and add_pg) won't have an entry in m_pg_scrub_sb_map. Backfill those here.
+    std::vector< pg_id_t > pg_ids;
+    m_hs_home_object->get_pg_ids(pg_ids);
+    for (auto const& pg_id : pg_ids) {
+        if (m_pg_scrub_sb_map.find(pg_id) == m_pg_scrub_sb_map.end()) {
+            LOGINFOMOD(scrubmgr, "pg={} has no scrub superblock, backfilling one", pg_id);
+            add_pg(pg_id);
+        }
+    }
+}
+
 void ScrubManager::start() {
+    // backfill scrub superblocks for any pre-existing pgs that don't have one yet.
+    add_missing_pg_scrub_superblks();
+
     // 1 set scrub task handling threads.
     // TODO :: make thread count configurable, thread number is the most concurrent scrub tasks that can be handled
     // concurrently. Too many concurrent scrub tasks may bring too much pressure to the node

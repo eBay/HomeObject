@@ -14,8 +14,8 @@ SISL_LOGGING_DECL(blobmgr)
 
 #define BLOG(level, trace_id, shard_id, blob_id, msg, ...)                                                             \
     LOG##level##MOD(blobmgr, "[traceID={},shardID=0x{:x},pg={},shard=0x{:x},blob={}] " msg, trace_id, shard_id,        \
-                    (shard_id >> homeobject::shard_width), (shard_id & homeobject::shard_mask), blob_id,               \
-                    ##__VA_ARGS__)
+                    (shard_id >> homeobject::shard_width), (shard_id & homeobject::shard_mask),                        \
+                    blob_id, ##__VA_ARGS__)
 
 #define BLOGT(trace_id, shard_id, blob_id, msg, ...) BLOG(TRACE, trace_id, shard_id, blob_id, msg, ##__VA_ARGS__)
 #define BLOGD(trace_id, shard_id, blob_id, msg, ...) BLOG(DEBUG, trace_id, shard_id, blob_id, msg, ##__VA_ARGS__)
@@ -650,6 +650,11 @@ void HSHomeObject::on_blob_del_commit(int64_t lsn, sisl::blob const& header, sis
         BLOGE(tid, msg_header->shard_id, *r_cast< blob_id_t const* >(key.cbytes()),
               "replication message header is corrupted with crc error, lsn={} header={}", lsn, msg_header->to_string());
         if (ctx) { ctx->promise_.setValue(folly::makeUnexpected(BlobError(BlobErrorCode::CHECKSUM_MISMATCH))); }
+
+        // TODO:: add RELEASE_ASSERT or proper error handling for corrupted replication message header
+        // RELEASE_ASSERT(false, "replication message header is corrupted with crc error, lsn={}, header={}",
+        // lsn,msg_header->to_string());
+
         return;
     }
 

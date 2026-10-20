@@ -174,19 +174,19 @@ PGManager::NullAsyncResult HSHomeObject::_create_pg(PGInfo&& pg_info, std::set< 
                 // if don't have repl dev, it will return ReplServiceError::SERVER_NOT_FOUND
                 return hs_repl_service()
                     .remove_repl_dev(repl_dev_group_id)
-                    .deferValue([r, repl_dev_group_id, tid, this,
-                                 finish_creating_pg](auto&& e) -> PGManager::NullAsyncResult {
-                        if (e != ReplServiceError::OK) {
-                            LOGW("Failed to remove repl device which group_id={}, error={}, trace_id={}",
-                                 repl_dev_group_id, e, tid);
-                        }
-                        // Drop the inflight mark only after chunk/repldev cleanup, so a retry cannot
-                        // select the same chunks while they are being returned.
-                        finish_creating_pg();
-                        decr_pending_request_num();
-                        // still return the original error
-                        return folly::makeUnexpected(r.error());
-                    });
+                    .deferValue(
+                        [r, repl_dev_group_id, tid, this, finish_creating_pg](auto&& e) -> PGManager::NullAsyncResult {
+                            if (e != ReplServiceError::OK) {
+                                LOGW("Failed to remove repl device which group_id={}, error={}, trace_id={}",
+                                     repl_dev_group_id, e, tid);
+                            }
+                            // Drop the inflight mark only after chunk/repldev cleanup, so a retry cannot
+                            // select the same chunks while they are being returned.
+                            finish_creating_pg();
+                            decr_pending_request_num();
+                            // still return the original error
+                            return folly::makeUnexpected(r.error());
+                        });
             }
             finish_creating_pg();
             decr_pending_request_num();

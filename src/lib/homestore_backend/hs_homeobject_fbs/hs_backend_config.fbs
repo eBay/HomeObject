@@ -27,7 +27,7 @@ table HSBackendSettings {
 
     //Enable scrubber
     //TODO: make this hotswap after scrubber is well tested
-    enable_scrubber: bool = false;
+    enable_scrubber: bool = true;
 
     //thread number for normal gc. 
     //the upper limit is reserved_chunk_num_per_pdev - reserved_chunk_num_per_pdev_for_egc
