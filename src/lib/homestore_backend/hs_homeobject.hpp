@@ -3,6 +3,7 @@
 #include <memory>
 #include <mutex>
 #include <unordered_set>
+#include <folly/Expected.h>
 
 #include <homestore/homestore.hpp>
 #include <homestore/index/index_table.hpp>
@@ -48,6 +49,7 @@ ENUM(PGState, uint8_t, ALIVE = 0, DESTROYED);
 
 class HSHomeObject : public HomeObjectImpl {
 private:
+    friend class GCManager;
     /// NOTE: Be wary to change these as they effect on-disk format!
     inline static auto const _svc_meta_name = std::string("HomeObject");
     inline static auto const _pg_meta_name = std::string("PGManager");
@@ -1089,6 +1091,9 @@ public:
     shard_id_t get_last_shard_id_in_pg(pg_id_t pg_id) const;
 
 private:
+    folly::Expected< uint64_t, homestore::btree_status_t >
+    scan_pg_tombstones(pg_id_t pg_id, const std::shared_ptr< BlobIndexTable >& index) const;
+
     BlobManager::Result< std::string > do_verify_blob(const void* blob, shard_id_t expected_shard_id,
                                                       blob_id_t expected_blob_id = 0) const;
     std::shared_ptr< BlobIndexTable > create_pg_index_table();

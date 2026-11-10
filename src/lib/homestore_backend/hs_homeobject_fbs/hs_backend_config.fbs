@@ -81,6 +81,9 @@ table HSBackendSettings {
     replication_dev_type: HSDevTypeOverride = AUTO;
     replication_size_pct: float = -1.0;
 
+    // Best-effort coalescing window and retry delay for GC-triggered tombstone hints.
+    gc_tombstone_refresh_interval_sec: uint32 = 300;
+
 }
 
 root_type HSBackendSettings;

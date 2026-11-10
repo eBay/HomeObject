@@ -1,5 +1,8 @@
 #include <algorithm>
+#include <new>
 #include <queue>
+#include <stdexcept>
+#include <folly/ScopeGuard.h>
 
 #include <homestore/btree/btree_req.hpp>
 #include <homestore/btree/btree_kv.hpp>
@@ -121,6 +124,7 @@ void GCManager::on_reserved_chunk_meta_blk_found(sisl::byte_view const& buf, voi
 GCManager::~GCManager() { stop(); }
 
 void GCManager::start() {
+    start_tombstone_refresh();
     for (const auto& [pdev_id, gc_actor] : m_pdev_gc_actors) {
         gc_actor->start();
         LOGINFOMOD(gcmgr, "start gc actor for pdev={}", pdev_id);
@@ -146,7 +150,10 @@ void GCManager::start_gc_scan_timer() {
     iomanager.run_on_wait(iomgr::reactor_regex::random_worker, [&]() {
         m_gc_timer_fiber = iomanager.iofiber_self();
         m_gc_timer_hdl = iomanager.schedule_thread_timer(gc_scan_interval_sec * 1000 * 1000 * 1000, true,
-                                                         nullptr /*cookie*/, [this](void*) { scan_chunks_for_gc(); });
+                                                         nullptr /*cookie*/, [this](void*) {
+                                                             scan_chunks_for_gc();
+                                                             dispatch_tombstone_refresh();
+                                                         });
     });
 
     LOGINFOMOD(gcmgr, "gc scheduler timer has started, interval is set to {} seconds", gc_scan_interval_sec);
@@ -169,12 +176,197 @@ void GCManager::stop_gc_scan_timer() {
 }
 
 void GCManager::stop() {
+    std::shared_ptr< folly::IOThreadPoolExecutor > refresh_executor;
+    {
+        std::lock_guard lock(m_tombstone_refresh_mtx);
+        m_tombstone_refresh_stopped = true;
+        for (auto& [pg_id, state] : m_tombstone_refresh) {
+            state->valid = false;
+        }
+        refresh_executor = std::move(m_tombstone_refresh_executor);
+        m_tombstone_refresh_cv.notify_all();
+    }
     stop_gc_scan_timer();
 
     for (const auto& [pdev_id, gc_actor] : m_pdev_gc_actors) {
         gc_actor->stop();
         LOGINFOMOD(gcmgr, "stop gc actor for pdev={}", pdev_id);
     }
+    if (refresh_executor) { refresh_executor->join(); }
+    {
+        std::lock_guard lock(m_tombstone_refresh_mtx);
+        m_tombstone_refresh.clear();
+        m_tombstone_refresh_work.reset();
+    }
+}
+
+void GCManager::start_tombstone_refresh() {
+    std::lock_guard lock(m_tombstone_refresh_mtx);
+    RELEASE_ASSERT(!m_tombstone_refresh_stopped && !m_tombstone_refresh_executor,
+                   "Tombstone refresh worker cannot be started twice or after shutdown");
+    RELEASE_ASSERT(HS_BACKEND_DYNAMIC_CONFIG(gc_tombstone_refresh_interval_sec) > 0,
+                   "gc_tombstone_refresh_interval_sec must be positive");
+    m_tombstone_refresh_executor = std::make_shared< folly::IOThreadPoolExecutor >(1);
+    // Submit once. PG selection uses the map/condition variable, not the executor's task queue.
+    m_tombstone_refresh_executor->add([this]() { run_tombstone_refresh_worker(); });
+}
+
+void GCManager::mark_pg_tombstone_refresh(pg_id_t pg_id, RefreshClock::time_point now) {
+    std::shared_lock pg_lock(m_hs_home_object->_pg_lock);
+    auto pg = m_hs_home_object->_get_hs_pg_unlocked(pg_id);
+    if (!pg || pg->pg_sb_->state != PGState::ALIVE) { return; }
+    if (!pg->index_table_) {
+        LOGERRORMOD(gcmgr, "Cannot mark tombstone refresh: index missing for pg={}", pg_id);
+        return;
+    }
+    std::lock_guard lock(m_tombstone_refresh_mtx);
+    if (m_tombstone_refresh_stopped) { return; }
+    auto& state = m_tombstone_refresh[pg_id];
+    if (!state) {
+        state = std::make_shared< PgTombstoneRefresh >();
+        state->index_uuid = pg->index_table_->uuid();
+    }
+    if (!state->pending_since) {
+        state->pending_since = now;
+        state->eligible_at = now + std::chrono::seconds(HS_BACKEND_DYNAMIC_CONFIG(gc_tombstone_refresh_interval_sec));
+    }
+}
+
+void GCManager::dispatch_tombstone_refresh(RefreshClock::time_point now) {
+    std::lock_guard lock(m_tombstone_refresh_mtx);
+    select_tombstone_refresh_locked(now);
+}
+
+void GCManager::select_tombstone_refresh_locked(RefreshClock::time_point now) {
+    if (m_tombstone_refresh_stopped || !m_tombstone_refresh_executor || m_tombstone_refresh_work) { return; }
+    auto next = m_tombstone_refresh.end();
+    for (auto it = m_tombstone_refresh.begin(); it != m_tombstone_refresh.end(); ++it) {
+        auto& state = *it->second;
+        if (!state.valid || !state.pending_since || state.eligible_at > now) { continue; }
+        if (next == m_tombstone_refresh.end() || state.eligible_at < next->second->eligible_at) { next = it; }
+    }
+    if (next == m_tombstone_refresh.end()) { return; }
+    auto& state = next->second;
+    m_tombstone_refresh_work = TombstoneRefreshWork{next->first, state, *state->pending_since, RefreshClock::now()};
+    state->pending_since.reset();
+    m_tombstone_refresh_cv.notify_all();
+}
+
+void GCManager::run_tombstone_refresh_worker() {
+    while (true) {
+        std::optional< TombstoneRefreshWork > work;
+        {
+            std::unique_lock lock(m_tombstone_refresh_mtx);
+            m_tombstone_refresh_cv.wait(lock, [this]() {
+                return m_tombstone_refresh_stopped || m_tombstone_refresh_work.has_value();
+            });
+            if (m_tombstone_refresh_stopped) { return; }
+            work = m_tombstone_refresh_work;
+        }
+        try {
+            refresh_pg_tombstones(*work);
+        } catch (const std::runtime_error& error) {
+            // The per-work guard already released active access and restored retry demand.
+            LOGERRORMOD(gcmgr, "Tombstone refresh exception for pg={}: {}", work->pg_id, error.what());
+        } catch (const std::bad_alloc& error) {
+            LOGERRORMOD(gcmgr, "Tombstone refresh allocation failed for pg={}: {}", work->pg_id, error.what());
+        }
+    }
+}
+
+void GCManager::refresh_pg_tombstones(const TombstoneRefreshWork& work) {
+    bool retry{true};
+    SCOPE_EXIT { finish_tombstone_refresh(work, retry); };
+#ifdef _PRERELEASE
+    iomgr_flip::instance()->callback_flip("pause_tombstone_refresh_before_admission");
+#endif
+    std::shared_ptr< BlobIndexTable > index;
+    {
+        std::shared_lock pg_lock(m_hs_home_object->_pg_lock);
+        std::lock_guard lock(m_tombstone_refresh_mtx);
+        auto pg = m_hs_home_object->_get_hs_pg_unlocked(work.pg_id);
+        if (m_tombstone_refresh_stopped || !work.state->valid || !pg || pg->pg_sb_->state != PGState::ALIVE) {
+            LOGDEBUGMOD(gcmgr, "Skipping cancelled tombstone refresh for pg={}", work.pg_id);
+            retry = false;
+            return;
+        }
+        if (!pg->index_table_) {
+            LOGERRORMOD(gcmgr, "Cannot scan tombstones: index missing for pg={}, retaining previous hint", work.pg_id);
+            return;
+        }
+        if (pg->index_table_->uuid() != work.state->index_uuid) {
+            LOGWARNMOD(gcmgr, "Skipping stale tombstone refresh: index identity changed for pg={}", work.pg_id);
+            retry = false;
+            return;
+        }
+        index = pg->index_table_;
+        work.state->active = true;
+    }
+#ifdef _PRERELEASE
+    iomgr_flip::instance()->callback_flip("pause_tombstone_refresh_scan");
+    // iomgr_flip swallows exceptions thrown by a callback, so a throwing callback cannot exercise the unwind path.
+    if (iomgr_flip::instance()->test_flip("tombstone_refresh_scan_exception")) {
+        throw std::runtime_error("Injected tombstone refresh scan exception");
+    }
+#endif
+    const auto started = RefreshClock::now();
+    auto count = m_hs_home_object->scan_pg_tombstones(work.pg_id, index);
+    const auto finished = RefreshClock::now();
+    if (!count) {
+        LOGERRORMOD(gcmgr, "Tombstone refresh failed for pg={}, status={}, retaining previous hint",
+                    work.pg_id, count.error());
+        return;
+    }
+    {
+        std::shared_lock pg_lock(m_hs_home_object->_pg_lock);
+        std::lock_guard lock(m_tombstone_refresh_mtx);
+        auto pg = const_cast< HSHomeObject::HS_PG* >(m_hs_home_object->_get_hs_pg_unlocked(work.pg_id));
+        if (m_tombstone_refresh_stopped || !work.state->valid || !pg || pg->pg_sb_->state != PGState::ALIVE ||
+            pg->index_table_ != index) {
+            LOGDEBUGMOD(gcmgr, "Discarding tombstone scan result for cancelled or changed pg={}", work.pg_id);
+            retry = false;
+            return;
+        }
+        pg->durable_entities_update([&count](auto& de) {
+            de.tombstone_blob_count.store(*count, std::memory_order_relaxed);
+        });
+        work.state->last_success = finished;
+    }
+    retry = false;
+    LOGINFOMOD(gcmgr, "Tombstone refresh pg={} count={} scan_us={} dispatch_wait_us={} pending_age_us={}",
+               work.pg_id, *count,
+               std::chrono::duration_cast< std::chrono::microseconds >(finished - started).count(),
+               std::chrono::duration_cast< std::chrono::microseconds >(started - work.selected_at).count(),
+               std::chrono::duration_cast< std::chrono::microseconds >(started - work.pending_since).count());
+}
+
+void GCManager::finish_tombstone_refresh(const TombstoneRefreshWork& work, bool retry) {
+    std::lock_guard lock(m_tombstone_refresh_mtx);
+    work.state->active = false;
+    if (retry && work.state->valid && !m_tombstone_refresh_stopped) {
+        const auto now = RefreshClock::now();
+        if (!work.state->pending_since || work.pending_since < *work.state->pending_since) {
+            work.state->pending_since = work.pending_since;
+        }
+        work.state->eligible_at =
+            std::max(work.state->eligible_at,
+                     now + std::chrono::seconds(HS_BACKEND_DYNAMIC_CONFIG(gc_tombstone_refresh_interval_sec)));
+    }
+    m_tombstone_refresh_work.reset();
+    select_tombstone_refresh_locked(RefreshClock::now());
+    m_tombstone_refresh_cv.notify_all();
+}
+
+void GCManager::stop_pg_tombstone_refresh(pg_id_t pg_id) {
+    std::unique_lock lock(m_tombstone_refresh_mtx);
+    auto it = m_tombstone_refresh.find(pg_id);
+    if (it == m_tombstone_refresh.end()) { return; }
+    auto state = it->second;
+    state->valid = false;
+    m_tombstone_refresh_cv.notify_all();
+    m_tombstone_refresh_cv.wait(lock, [&state]() { return !state->active; });
+    it = m_tombstone_refresh.find(pg_id);
+    if (it != m_tombstone_refresh.end() && it->second == state) { m_tombstone_refresh.erase(it); }
 }
 
 folly::SemiFuture< bool > GCManager::submit_gc_task(task_priority priority, chunk_id_t chunk_id) {
@@ -1286,6 +1478,7 @@ void GCManager::pdev_gc_actor::on_gc_task_completed(uint8_t priority, pg_id_t pg
         GCLOGE(task_id, pg_id, NO_SHARD_ID, "move_from_chunk={} to move_to_chunk={} with priority={} failed!",
                move_from_chunk, move_to_chunk, priority);
     }
+    m_hs_home_object->gc_manager()->mark_pg_tombstone_refresh(pg_id);
 }
 
 void GCManager::pdev_gc_actor::process_gc_task(chunk_id_t move_from_chunk, uint8_t priority,
@@ -1330,6 +1523,9 @@ void GCManager::pdev_gc_actor::process_gc_task(chunk_id_t move_from_chunk, uint8
         return;
     }
 
+#ifdef _PRERELEASE
+    if (iomgr_flip::instance()->test_flip("fail_gc_copy_for_tombstone_refresh_test")) { return; }
+#endif
     folly::ConcurrentHashMap< BlobRouteByChunk, BlobRouteValue > copied_blobs;
     if (!copy_valid_data(move_from_chunk, move_to_chunk, copied_blobs, priority, task_id)) {
         GCLOGW(task_id, pg_id, NO_SHARD_ID,
