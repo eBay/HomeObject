@@ -28,7 +28,8 @@ target_link_libraries(test_heap_chunk_selector homestore::homestore ${COMMON_TES
 add_test(NAME HeapChunkSelectorTest COMMAND test_heap_chunk_selector)
 
 add_library(homestore_tests_gc OBJECT)
-target_sources(homestore_tests_gc PRIVATE test_homestore_backend.cpp hs_gc_tests.cpp)
+target_sources(homestore_tests_gc PRIVATE test_homestore_backend.cpp hs_gc_tests.cpp hs_gc_scan_benchmark.cpp
+                                          hs_gc_multi_pg_scan_benchmark.cpp hs_gc_tombstone_refresh_tests.cpp)
 target_link_libraries(homestore_tests_gc homeobject_homestore ${COMMON_TEST_DEPS})
 
 add_library(homestore_tests_scrubber OBJECT)

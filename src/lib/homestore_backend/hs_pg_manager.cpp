@@ -762,6 +762,7 @@ bool HSHomeObject::pg_destroy(pg_id_t pg_id, bool need_to_pause_pg_state_machine
     // we have the assumption that after pg is marked as destroyed, it will not be marked as alive again.
     // TODO:: if this assumption is broken, we need to handle it.
     if (gc_mgr_) gc_mgr_->drain_pg_pending_gc_task(pg_id);
+    if (gc_mgr_) gc_mgr_->stop_pg_tombstone_refresh(pg_id);
     if (scrub_mgr_) scrub_mgr_->remove_pg(pg_id);
     destroy_pg_resource(pg_id);
     return true;
@@ -1466,7 +1467,21 @@ uint32_t HSHomeObject::get_pg_tombstone_blob_count(pg_id_t pg_id) const {
         return 0;
     }
 
-    uint32_t tombstone_blob_count{0};
+    auto result = scan_pg_tombstones(pg_id, pg_index_table);
+    if (!result) { return 0; }
+    RELEASE_ASSERT(*result <= std::numeric_limits< uint32_t >::max(), "Tombstone count exceeds uint32_t for pg={}", pg_id);
+    return static_cast< uint32_t >(*result);
+}
+
+folly::Expected< uint64_t, homestore::btree_status_t >
+HSHomeObject::scan_pg_tombstones(pg_id_t pg_id, const std::shared_ptr< BlobIndexTable >& index) const {
+#ifdef _PRERELEASE
+    if (iomgr_flip::instance()->test_flip("tombstone_refresh_scan_failure")) {
+        LOGE("Injected tombstone scan failure for pg={}", pg_id);
+        return folly::makeUnexpected(homestore::btree_status_t::stopping);
+    }
+#endif
+    uint64_t tombstone_blob_count{0};
 
     auto start_key =
         BlobRouteKey{BlobRoute{uint64_t(pg_id) << homeobject::shard_width, std::numeric_limits< uint64_t >::min()}};
@@ -1486,10 +1501,11 @@ uint32_t HSHomeObject::get_pg_tombstone_blob_count(pg_id_t pg_id) const {
 
     std::vector< std::pair< BlobRouteKey, BlobRouteValue > > valid_blob_indexes;
 
-    auto const status = pg_index_table->query(query_req, valid_blob_indexes);
-    if (status != homestore::btree_status_t::success && status != homestore::btree_status_t::has_more) {
-        LOGERROR("Failed to query blobs in index table for pg={}", pg_id);
-        return 0;
+    auto const status = index->query(query_req, valid_blob_indexes);
+    // The filter counts entries but returns no matches, so it cannot exhaust the result batch.
+    if (status != homestore::btree_status_t::success) {
+        LOGERROR("Failed to complete tombstone scan for pg={}, status={}", pg_id, status);
+        return folly::makeUnexpected(status);
     }
     // we should not have any valid blob indexes in tombstone query
     RELEASE_ASSERT(valid_blob_indexes.empty(), "we only query tombstone in pg={}, but got vaild blob in return value",
@@ -1614,12 +1630,6 @@ void HSHomeObject::update_pg_meta_after_gc(const pg_id_t pg_id, const homestore:
         hs_pg->durable_entities_update(
             [this, move_from_v_chunk, &move_to_chunk, &move_from_chunk, &pg_id, &task_id](auto& de) {
                 // active_blob_count is updated by put/delete blob, not change it here.
-
-                // considering the complexity of gc crash recovery for tombstone_blob_count, we get it directly from
-                // index table , which is the most accurate.
-
-                // TODO::do we need this as durable entity? remove it and get all the from pg index in real time.
-                de.tombstone_blob_count = get_pg_tombstone_blob_count(pg_id);
 
                 auto move_to_v_chunk = chunk_selector()->get_extend_vchunk(move_to_chunk);
 

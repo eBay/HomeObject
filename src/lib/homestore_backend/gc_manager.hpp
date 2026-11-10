@@ -1,5 +1,9 @@
 #pragma once
 #include <array>
+#include <chrono>
+#include <condition_variable>
+#include <map>
+#include <optional>
 #include <string>
 
 #include <fmt/format.h>
@@ -481,10 +485,35 @@ public:
     void drain_pg_pending_gc_task(const pg_id_t pg_id);
     void decr_pg_pending_gc_task(const pg_id_t pg_id);
     void incr_pg_pending_gc_task(const pg_id_t pg_id);
+    void stop_pg_tombstone_refresh(pg_id_t pg_id);
     auto& get_gc_actor_superblks() { return m_gc_actor_sbs; }
     std::shared_ptr< pdev_gc_actor > get_pdev_gc_actor(uint32_t pdev_id);
 
 private:
+    using RefreshClock = std::chrono::steady_clock;
+    struct PgTombstoneRefresh {
+        homestore::uuid_t index_uuid;
+        std::optional< RefreshClock::time_point > pending_since;
+        RefreshClock::time_point eligible_at;
+        std::optional< RefreshClock::time_point > last_success;
+        bool valid{true};
+        bool active{false};
+    };
+    struct TombstoneRefreshWork {
+        pg_id_t pg_id;
+        std::shared_ptr< PgTombstoneRefresh > state;
+        RefreshClock::time_point pending_since;
+        RefreshClock::time_point selected_at;
+    };
+
+    void mark_pg_tombstone_refresh(pg_id_t pg_id, RefreshClock::time_point now = RefreshClock::now());
+    void start_tombstone_refresh();
+    void dispatch_tombstone_refresh(RefreshClock::time_point now = RefreshClock::now());
+    void select_tombstone_refresh_locked(RefreshClock::time_point now);
+    void run_tombstone_refresh_worker();
+    void refresh_pg_tombstones(const TombstoneRefreshWork& work);
+    void finish_tombstone_refresh(const TombstoneRefreshWork& work, bool retry);
+
     void on_gc_task_meta_blk_found(sisl::byte_view const& buf, void* meta_cookie);
     void on_gc_actor_meta_blk_found(sisl::byte_view const& buf, void* meta_cookie);
     void on_reserved_chunk_meta_blk_found(sisl::byte_view const& buf, void* meta_cookie);
@@ -499,6 +528,13 @@ private:
     std::unordered_map< pg_id_t, atomic_uint64_t > m_pending_gc_task_num_per_pg;
     std::mutex m_pending_gc_task_mtx;
     std::vector< homestore::superblk< GCManager::gc_actor_superblk > > m_gc_actor_sbs;
+    // When nested, acquire _pg_lock before this mutex; never hold either across a scan or join.
+    std::mutex m_tombstone_refresh_mtx;
+    std::condition_variable m_tombstone_refresh_cv;
+    std::map< pg_id_t, std::shared_ptr< PgTombstoneRefresh > > m_tombstone_refresh;
+    std::optional< TombstoneRefreshWork > m_tombstone_refresh_work;
+    std::shared_ptr< folly::IOThreadPoolExecutor > m_tombstone_refresh_executor;
+    bool m_tombstone_refresh_stopped{false};
 };
 
 } // namespace homeobject
