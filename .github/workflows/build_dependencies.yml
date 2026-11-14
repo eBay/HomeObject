@@ -158,7 +158,7 @@ jobs:
 
     - name: Export Recipes
       run: |
-        sudo apt-get install -y python3-pyelftools libaio-dev
+        sudo apt-get -o Acquire::Retries=3 install -y python3-pyelftools libaio-dev
         python -m pip install pyelftools
         conan export import/homestore
         conan export import/nuraft_mesg
