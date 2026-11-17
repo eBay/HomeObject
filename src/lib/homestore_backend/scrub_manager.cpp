@@ -783,8 +783,8 @@ ScrubManager::submit_scrub_task(const pg_id_t& pg_id, const bool is_deep, SCRUB_
         return folly::makeSemiFuture(std::shared_ptr< ScrubManager::ShallowScrubReport >(nullptr));
     }
 
-    const auto ps_scrub_super_blk_it = m_pg_scrub_sb_map.find(pg_id);
-    if (ps_scrub_super_blk_it == m_pg_scrub_sb_map.end()) {
+    const auto pg_scrub_super_blk = get_scrub_superblk(pg_id);
+    if (!pg_scrub_super_blk) {
         LOGERRORMOD(scrubmgr, "cannot find scrub superblk for pg={}, fail to submit scrub task!", pg_id);
         return folly::makeSemiFuture(std::shared_ptr< ScrubManager::ShallowScrubReport >(nullptr));
     }
@@ -813,9 +813,8 @@ ScrubManager::submit_scrub_task(const pg_id_t& pg_id, const bool is_deep, SCRUB_
         return folly::makeSemiFuture(std::shared_ptr< ScrubManager::ShallowScrubReport >(nullptr));
     }
 
-    const auto& pg_scrub_sb = *(ps_scrub_super_blk_it->second);
     const auto last_scrub_time =
-        is_deep ? pg_scrub_sb->last_deep_scrub_timestamp : pg_scrub_sb->last_shallow_scrub_timestamp;
+        is_deep ? pg_scrub_super_blk->last_deep_scrub_timestamp : pg_scrub_super_blk->last_shallow_scrub_timestamp;
 
     auto [promise, future] = folly::makePromiseContract< std::shared_ptr< ShallowScrubReport > >();
     ScrubManager::scrub_task task(last_scrub_time, pg_id, is_deep, trigger_type, std::move(promise));
@@ -998,22 +997,23 @@ void ScrubManager::handle_pg_scrub_task(scrub_task task) {
 }
 
 void ScrubManager::add_pg(const pg_id_t pg_id) {
-    // TODO:: make this thread safe.
     LOGINFOMOD(scrubmgr, "added new scrub superblock for pg={}", pg_id);
-    if (nullptr == m_hs_home_object->get_hs_pg(pg_id)) {
-        LOGINFOMOD(scrubmgr, "cannot find pg={}!", pg_id);
+    std::lock_guard lock{m_pg_scrub_sb_mutex};
+    if (!m_hs_home_object->is_pg_alive(pg_id)) {
+        LOGINFOMOD(scrubmgr, "cannot find alive pg={}!", pg_id);
         return;
     }
 
     // to avoid create-pg log replay overriding existing scrub superblock, we only create new superblock when there is
     // no existing one
-    save_scrub_superblk(pg_id, false, false);
+    save_scrub_superblk_locked(pg_id, false, false);
 }
 
 void ScrubManager::remove_pg(const pg_id_t pg_id) {
     cancel_scrub_task(pg_id);
     m_pg_scrub_ctx_map.erase(pg_id);
 
+    std::lock_guard lock{m_pg_scrub_sb_mutex};
     auto it = m_pg_scrub_sb_map.find(pg_id);
     if (it == m_pg_scrub_sb_map.end()) {
         LOGINFOMOD(scrubmgr, "no scrub superblock found for pg={}, no need to remove", pg_id);
@@ -1043,12 +1043,18 @@ void ScrubManager::on_pg_scrub_meta_blk_found(
     const auto last_deep_scrub_time = (*sb)->last_deep_scrub_timestamp;
     const auto last_shallow_scrub_time = (*sb)->last_shallow_scrub_timestamp;
 
+    std::lock_guard lock{m_pg_scrub_sb_mutex};
     m_pg_scrub_sb_map.emplace(pg_id, std::move(sb));
     LOGINFOMOD(scrubmgr, "loaded scrub superblock for pg={}, last_deep_scrub_time={}, last_shallow_scrub_time={}",
                pg_id, last_deep_scrub_time, last_shallow_scrub_time);
 }
 
 void ScrubManager::save_scrub_superblk(const pg_id_t pg_id, const bool is_deep_scrub, bool force_update) {
+    std::lock_guard lock{m_pg_scrub_sb_mutex};
+    save_scrub_superblk_locked(pg_id, is_deep_scrub, force_update);
+}
+
+void ScrubManager::save_scrub_superblk_locked(const pg_id_t pg_id, const bool is_deep_scrub, bool force_update) {
     const auto current_time =
         std::chrono::duration_cast< std::chrono::seconds >(std::chrono::system_clock::now().time_since_epoch()).count();
 
@@ -1078,11 +1084,18 @@ void ScrubManager::save_scrub_superblk(const pg_id_t pg_id, const bool is_deep_s
     }
 }
 
-std::optional< ScrubManager::pg_scrub_superblk > ScrubManager::get_scrub_superblk(const pg_id_t pg_id) const {
+std::optional< ScrubManager::pg_scrub_superblk > ScrubManager::get_scrub_superblk(const pg_id_t pg_id) {
+    std::lock_guard lock{m_pg_scrub_sb_mutex};
     auto it = m_pg_scrub_sb_map.find(pg_id);
     if (it == m_pg_scrub_sb_map.end()) {
-        LOGWARNMOD(scrubmgr, "scrub superblk not found for pg {}", pg_id);
-        return std::nullopt;
+        if (!m_hs_home_object->is_pg_alive(pg_id)) {
+            LOGWARNMOD(scrubmgr, "scrub superblk not found for non-alive pg {}", pg_id);
+            return std::nullopt;
+        }
+
+        LOGINFOMOD(scrubmgr, "scrub superblk not found for pg {}, creating one", pg_id);
+        save_scrub_superblk_locked(pg_id, false, false);
+        it = m_pg_scrub_sb_map.find(pg_id);
     }
 
     return *(*(it->second));

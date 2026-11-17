@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <mutex>
 
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wuninitialized"
@@ -278,7 +279,8 @@ public:
     void add_pg(const pg_id_t pg_id);
     // new pg permanently removed
     void remove_pg(const pg_id_t pg_id);
-    std::optional< pg_scrub_superblk > get_scrub_superblk(const pg_id_t pg_id) const;
+    // Returns the scrub superblock, creating it when the PG is alive but its superblock is missing.
+    std::optional< pg_scrub_superblk > get_scrub_superblk(const pg_id_t pg_id);
     void save_scrub_superblk(const pg_id_t pg_id, const bool is_deep_scrub, bool force_update = true);
     void add_scrub_req(std::shared_ptr< scrub_req > req);
     // backfill a scrub superblock for any existing pg that is missing one, e.g. a pg created before scrub manager
@@ -360,6 +362,7 @@ private:
     bool is_eligible_for_shallow_scrub(const pg_id_t& pg_id);
     void on_pg_scrub_meta_blk_found(sisl::byte_view const& buf, void* meta_cookie,
                                     std::vector< homestore::superblk< pg_scrub_superblk > >& stale_pg_scrub_sbs);
+    void save_scrub_superblk_locked(const pg_id_t pg_id, const bool is_deep_scrub, bool force_update);
     void handle_deep_pg_scrub_report(std::shared_ptr< DeepScrubReport > report);
     void handle_shallow_pg_scrub_report(std::shared_ptr< ShallowScrubReport > report);
     void handle_scrub_req(std::shared_ptr< scrub_req > req);
@@ -375,6 +378,7 @@ private:
     std::shared_ptr< folly::IOThreadPoolExecutor > m_scrub_executor;
     folly::ConcurrentHashMap< pg_id_t, std::shared_ptr< PGScrubContext > > m_pg_scrub_ctx_map;
     folly::ConcurrentHashMap< pg_id_t, std::shared_ptr< homestore::superblk< pg_scrub_superblk > > > m_pg_scrub_sb_map;
+    std::mutex m_pg_scrub_sb_mutex;
 
     std::shared_ptr< folly::IOThreadPoolExecutor > m_scrub_req_executor;
 };
