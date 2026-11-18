@@ -39,6 +39,7 @@ private:
     void dump_chunk(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response);
     void dump_shard(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response);
     void get_shard(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response);
+    void get_blob(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response);
     void flip_learner_flag(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response);
     void remove_member(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response);
     void clean_replace_member_task(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response);

@@ -1,7 +1,208 @@
 #include "homeobj_fixture.hpp"
+#include "homeobj_fixture_http.hpp"
 
 #include "lib/homestore_backend/index_kv.hpp"
 #include <homestore/replication_service.hpp>
+#include <limits>
+
+TEST_F(HomeObjectFixture, HttpGetBlobChecksumBypass) {
+    if (!SISL_OPTIONS["enable_http"].as< bool >()) { GTEST_SKIP() << "Requires --enable_http=true"; }
+
+    create_pg(1);
+    auto shard = create_shard(1, 64 * Mi, "shard meta");
+    // Include embedded NUL and non-UTF-8 bytes to verify that HTTP returns the payload without text conversion.
+    const std::string payload{"blob\0bytes\xff", 11};
+    sisl::io_blob_safe body(payload.size());
+    std::memcpy(body.bytes(), payload.data(), payload.size());
+    put_blob(shard.id, Blob(std::move(body), "test-key", 123));
+    const auto blob_id = g_helper->get_uint64_id();
+
+    auto missing_pg_shard = shard;
+    missing_pg_shard.placement_group = std::numeric_limits< pg_id_t >::max();
+    auto missing_pg = _obj_inst->_get_blob(missing_pg_shard, blob_id, 0, 0, false, 0, true).get();
+    ASSERT_FALSE(missing_pg);
+    EXPECT_EQ(missing_pg.error().getCode(), BlobErrorCode::UNKNOWN_PG);
+
+    HttpHelper http("127.0.0.1", 5000 + g_helper->replica_num());
+    const auto resource = fmt::format("/api/v1/blob?shard_id={:#x}&blob_id={}", shard.id, blob_id);
+    auto response = http.get(resource);
+    ASSERT_EQ(response.code(), Pistache::Http::Code::Ok);
+    EXPECT_EQ(response.body(), payload);
+    response = http.get(resource + "&debug_skip_verify=false");
+    ASSERT_EQ(response.code(), Pistache::Http::Code::Ok);
+    EXPECT_EQ(response.body(), payload);
+    response = http.get(resource + "&debug_skip_verify=true");
+    ASSERT_EQ(response.code(), Pistache::Http::Code::Ok);
+    EXPECT_EQ(response.body(), payload);
+    response = http.get(fmt::format("/api/v1/blob?shard_id={}&blob_id={:#x}", shard.id, blob_id));
+    ASSERT_EQ(response.code(), Pistache::Http::Code::Ok);
+    EXPECT_EQ(response.body(), payload);
+    EXPECT_EQ(http.get(fmt::format("/api/v1/blob?shard_id={}&blob_id=18446744073709551615", shard.id)).code(),
+              Pistache::Http::Code::Not_Found);
+
+#ifdef _PRERELEASE
+    if (HS_BACKEND_DYNAMIC_CONFIG(check_traffic_ready_before_get)) {
+        // The normal read must honor readiness; a debug read may inspect the local replica without quorum.
+        set_basic_flip("get_blob_not_ready_for_traffic", 2);
+        EXPECT_EQ(http.get(resource).code(), Pistache::Http::Code::Service_Unavailable);
+        response = http.get(resource + "&debug_skip_verify=true");
+        EXPECT_EQ(response.code(), Pistache::Http::Code::Ok);
+        EXPECT_EQ(response.body(), payload);
+        remove_flip("get_blob_not_ready_for_traffic");
+    }
+#endif
+
+    auto hs_pg = _obj_inst->get_hs_pg(1);
+    auto pbas = _obj_inst->get_blob_from_index_table(hs_pg->index_table_, shard.id, blob_id);
+    ASSERT_TRUE(pbas);
+    const auto size = pbas.value().blk_count() * hs_pg->repl_dev_->get_blk_size();
+    sisl::io_blob_safe read_buf(size, 4096);
+    sisl::sg_list sgs;
+    sgs.size = size;
+    sgs.iovs.emplace_back(iovec{.iov_base = read_buf.bytes(), .iov_len = size});
+    ASSERT_FALSE(homestore::data_service().async_read(pbas.value(), sgs, size).get());
+    auto* header = reinterpret_cast< HSHomeObject::BlobHeader* >(read_buf.bytes());
+    ASSERT_TRUE(header->valid());
+    ASSERT_LT(header->data_offset, size);
+    const auto original_header = *header;
+    const auto data_offset = header->data_offset;
+    // Corrupt only the payload, leaving the header and its checksum intact.
+    read_buf.bytes()[header->data_offset] ^= 0xff;
+    ASSERT_FALSE(homestore::data_service().async_write(sgs, pbas.value()).get());
+
+    auto verified = _obj_inst->blob_manager()->get(shard.id, blob_id).get();
+    ASSERT_FALSE(verified);
+    EXPECT_EQ(verified.error().getCode(), BlobErrorCode::CHECKSUM_MISMATCH);
+    EXPECT_NE(verified.error().message.find("Hash mismatch"), std::string::npos);
+    auto allow_partial_skip = _obj_inst->blob_manager()->get(shard.id, blob_id, 0, 0, true).get();
+    // allow_skip_verify permits an optimized partial read; it must not skip verification for a full read.
+    ASSERT_FALSE(allow_partial_skip);
+    EXPECT_EQ(allow_partial_skip.error().getCode(), BlobErrorCode::CHECKSUM_MISMATCH);
+
+    EXPECT_EQ(http.get(resource).code(), Pistache::Http::Code::Internal_Server_Error);
+    response = http.get(resource + "&debug_skip_verify=false");
+    EXPECT_EQ(response.code(), Pistache::Http::Code::Internal_Server_Error);
+    EXPECT_NE(response.body().find("CHECKSUM_MISMATCH"), std::string::npos);
+    response = http.get(resource + "&debug_skip_verify=true");
+    ASSERT_EQ(response.code(), Pistache::Http::Code::Ok);
+    auto corrupted_payload = payload;
+    corrupted_payload[0] = static_cast< char >(static_cast< unsigned char >(corrupted_payload[0]) ^ 0xff);
+    EXPECT_EQ(response.body(), corrupted_payload);
+
+    auto expect_debug_body = [&](const std::string& expected) {
+        ASSERT_FALSE(homestore::data_service().async_write(sgs, pbas.value()).get());
+        EXPECT_EQ(http.get(resource).code(), Pistache::Http::Code::Internal_Server_Error);
+        auto debug_response = http.get(resource + "&debug_skip_verify=true");
+        ASSERT_EQ(debug_response.code(), Pistache::Http::Code::Ok);
+        EXPECT_EQ(debug_response.body(), expected);
+    };
+    auto raw_allocation = [&] {
+        return std::string(reinterpret_cast< const char* >(read_buf.cbytes()), read_buf.size());
+    };
+
+    // Exercise the post-verification range check directly: HTTP requests always ask for the entire blob.
+    auto invalid_range = _obj_inst->_get_blob(shard, blob_id, payload.size() + 1, 0, false, 0, false).get();
+    ASSERT_FALSE(invalid_range);
+    EXPECT_EQ(invalid_range.error().getCode(), BlobErrorCode::CHECKSUM_MISMATCH);
+    auto debug_range = _obj_inst->_get_blob(shard, blob_id, payload.size() + 1, 0, false, 0, true).get();
+    ASSERT_TRUE(debug_range);
+    EXPECT_EQ(std::string(reinterpret_cast< const char* >(debug_range.value().body.cbytes()),
+                          debug_range.value().body.size()),
+              raw_allocation());
+
+    read_buf.bytes()[data_offset] ^= 0xff;
+    ASSERT_FALSE(homestore::data_service().async_write(sgs, pbas.value()).get());
+    invalid_range = _obj_inst->_get_blob(shard, blob_id, payload.size() + 1, 0, false, 0, false).get();
+    ASSERT_FALSE(invalid_range);
+    EXPECT_EQ(invalid_range.error().getCode(), BlobErrorCode::INVALID_ARG);
+    debug_range = _obj_inst->_get_blob(shard, blob_id, payload.size() - 1, 2, false, 0, true).get();
+    ASSERT_TRUE(debug_range);
+    EXPECT_EQ(std::string(reinterpret_cast< const char* >(debug_range.value().body.cbytes()),
+                          debug_range.value().body.size()),
+              raw_allocation());
+    read_buf.bytes()[data_offset] ^= 0xff;
+
+    // Invalid payload bounds must return the entire allocation, not attempt an out-of-bounds copy.
+    header->data_offset = size;
+    header->seal();
+    expect_debug_body(raw_allocation());
+
+    *header = original_header;
+    header->blob_size = 0;
+    header->seal();
+    expect_debug_body(raw_allocation());
+
+    *header = original_header;
+    header->blob_size = std::numeric_limits< uint32_t >::max();
+    header->seal();
+    expect_debug_body(raw_allocation());
+
+    *header = original_header;
+    header->data_offset = sizeof(HSHomeObject::BlobHeader) - 1;
+    header->seal();
+    expect_debug_body(raw_allocation());
+
+    // With safe payload bounds, even a bad header checksum or identity should not suppress the debug payload.
+    *header = original_header;
+    header->header_hash[0] ^= 1;
+    expect_debug_body(corrupted_payload);
+
+    *header = original_header;
+    header->blob_id ^= 1;
+    header->seal();
+    expect_debug_body(corrupted_payload);
+
+    *header = original_header;
+    header->shard_id ^= 1;
+    header->seal();
+    expect_debug_body(corrupted_payload);
+
+    *header = original_header;
+    header->user_key_size = HSHomeObject::BlobHeader::max_user_key_length + 1;
+    header->seal();
+    expect_debug_body(corrupted_payload);
+
+    *header = original_header;
+    header->hash_algorithm = static_cast< HSHomeObject::BlobHeader::HashAlgorithm >(0xff);
+    expect_debug_body(corrupted_payload);
+
+    // Exercise several simultaneous failures to ensure debug validation continues after the first one.
+    *header = original_header;
+    header->shard_id ^= 1;
+    header->blob_id ^= 1;
+    header->header_hash[0] ^= 1;
+    expect_debug_body(corrupted_payload);
+
+    // A truncated allocation cannot safely be interpreted as a BlobHeader.
+    auto short_header = _obj_inst->do_verify_blob(read_buf.cbytes(), shard.id, blob_id, false, sizeof(*header) - 1);
+    ASSERT_FALSE(short_header);
+    auto debug_short_header =
+        _obj_inst->do_verify_blob(read_buf.cbytes(), shard.id, blob_id, true, sizeof(*header) - 1);
+    ASSERT_TRUE(debug_short_header);
+    EXPECT_FALSE(debug_short_header->payload_bounds_valid);
+
+    // Restore the original bytes before deleting so the fixture can observe the blob during deletion.
+    *header = original_header;
+    read_buf.bytes()[data_offset] ^= 0xff;
+    ASSERT_FALSE(homestore::data_service().async_write(sgs, pbas.value()).get());
+    del_blob(1, shard.id, blob_id);
+    EXPECT_EQ(http.get(resource + "&debug_skip_verify=true").code(), Pistache::Http::Code::Not_Found);
+}
+
+TEST_F(HomeObjectFixture, HttpGetBlobInvalidRequest) {
+    if (!SISL_OPTIONS["enable_http"].as< bool >()) { GTEST_SKIP() << "Requires --enable_http=true"; }
+
+    HttpHelper http("127.0.0.1", 5000 + g_helper->replica_num());
+    for (const auto& query :
+         {"", "?shard_id=1", "?blob_id=0", "?shard_id=&blob_id=0", "?shard_id=-1&blob_id=0", "?shard_id=1&blob_id=-1",
+          "?shard_id=1junk&blob_id=0", "?shard_id=0x&blob_id=0", "?shard_id=1&blob_id=18446744073709551616",
+          "?shard_id=1&blob_id=0&debug_skip_verify=1", "?shard_id=1&blob_id=0&debug_skip_verify="}) {
+        EXPECT_EQ(http.get(std::string("/api/v1/blob") + query).code(), Pistache::Http::Code::Bad_Request) << query;
+    }
+    EXPECT_EQ(http.get("/api/v1/blob?shard_id=0&blob_id=0").code(), Pistache::Http::Code::Not_Found);
+    EXPECT_EQ(http.get("/api/v1/blob?shard_id=0&blob_id=0&debug_skip_verify=true").code(),
+              Pistache::Http::Code::Not_Found);
+}
 
 TEST_F(HomeObjectFixture, BasicEquivalence) {
     auto shard_mgr = _obj_inst->shard_manager();

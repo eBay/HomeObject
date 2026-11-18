@@ -81,6 +81,36 @@ $ conan install --build missing <path_to_homeobject>
 $ conan build <path_to_homeobject>
 ```
 
+## HTTP blob diagnostics
+
+The HomeStore backend exposes `GET /api/v1/blob?shard_id=<id>&blob_id=<id>` on the application's
+HTTP server. IDs accept decimal or `0x`-prefixed hexadecimal values. The response is the full blob
+payload as `application/octet-stream`, read from the local replica; the request is not forwarded
+to the leader.
+
+Validation failures reject the read by default. To download corrupted bytes for diagnosis:
+
+```sh
+curl --fail 'http://localhost:5000/api/v1/blob?shard_id=0x1000000000001&blob_id=0&debug_skip_verify=true' \
+  --output blob.bin
+```
+
+`debug_skip_verify` accepts only `true` or `false`. With `true`, header validity, header checksum,
+blob identity, and payload checksum checks still run, but validation failures are logged as errors
+instead of rejecting the read. This is separate from the client API's `allow_skip_verify`,
+which permits skipping checksum verification for optimized partial reads.
+
+If an empty payload, corrupted payload bounds, or a truncated header prevent safe access to the payload, the debug
+read returns the **entire raw allocation**, including header and padding, rather than a blob
+payload. The logs identify this fallback and any checks that cannot be performed safely (including
+an unsupported checksum algorithm). Invalid user-key metadata is logged and omitted.
+
+This option is diagnostic only: a successful response does not imply intact data, and no data is
+repaired or modified. Without debug mode, validation failures return HTTP 500. Actual storage read
+failures still return HTTP 500 in debug mode; missing shards/blobs return HTTP 404; malformed
+parameters return HTTP 400; and a shutting-down replica returns HTTP 503. Debug reads may proceed
+when the replica is not ready for traffic, as long as the local index and data are readable.
+
 ## Contributing to This Project
 We welcome contributions. If you find any bugs, potential flaws and edge cases, improvements, new feature suggestions or
 discussions, please submit issues or pull requests.
