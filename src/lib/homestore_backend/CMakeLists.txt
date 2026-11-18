@@ -78,6 +78,13 @@ target_link_libraries(homestore_test_blob PUBLIC homeobject_homestore ${COMMON_T
 add_test(NAME HomestoreTestBlob COMMAND homestore_test_blob --executor immediate --config_path ./
         --override_config homestore_config.consensus.snapshot_freq_distance:0
         --override_config homestore_config.consensus.max_grpc_message_size:138412032)
+# The iomgr http server is a process-wide singleton whose registered routes are never torn down, so
+# running more than one HttpGetBlob* test in the same process trips "route already exist"/"address
+# already in use" on the second test's SetUp. Run each in its own process instead of a shared wildcard filter.
+add_test(NAME HomestoreTestBlobHttpChecksumBypass COMMAND homestore_test_blob --executor immediate --config_path ./
+        --enable_http=true --gtest_filter=HomeObjectFixture.HttpGetBlobChecksumBypass)
+add_test(NAME HomestoreTestBlobHttpInvalidRequest COMMAND homestore_test_blob --executor immediate --config_path ./
+        --enable_http=true --gtest_filter=HomeObjectFixture.HttpGetBlobInvalidRequest)
 
 add_executable(homestore_test_misc)
 target_sources(homestore_test_misc PRIVATE $<TARGET_OBJECTS:homestore_tests_misc>)
@@ -191,6 +198,8 @@ add_test(NAME HomestoreTestScrubber COMMAND homestore_test_scrubber -csv error -
 # All tests share disk, port, and shared-memory resources, so run them serially to avoid parallel conflicts.
 set_tests_properties(
     HomestoreTestBlob
+    HomestoreTestBlobHttpChecksumBypass
+    HomestoreTestBlobHttpInvalidRequest
     HomestoreTestMisc
     HomestoreTestReplaceMember
     HomestoreTestReplaceMemberWithBaselineResync
@@ -202,7 +211,6 @@ set_tests_properties(
     HomestoreTestGC_ShardRaceTests
     HomestoreTestScrubber
     PROPERTIES RUN_SERIAL TRUE)
-
 
 
 

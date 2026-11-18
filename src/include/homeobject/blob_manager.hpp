@@ -14,14 +14,13 @@ ENUM(BlobErrorCode, uint16_t, UNKNOWN = 1, TIMEOUT, INVALID_ARG, UNSUPPORTED_OP,
      SHUTTING_DOWN, ROLL_BACK, NO_SPACE_LEFT);
 struct BlobError {
     BlobErrorCode code;
+    std::string message;
     // set when we are not the current leader of the PG.
     std::optional< peer_id_t > current_leader{std::nullopt};
-    BlobError(BlobErrorCode _code) { code = _code; }
+    BlobError(BlobErrorCode _code) : code(_code) {}
 
-    BlobError(BlobErrorCode _code, peer_id_t _leader) {
-        code = _code;
-        current_leader = _leader;
-    }
+    BlobError(BlobErrorCode _code, peer_id_t _leader) : code(_code), current_leader(_leader) {}
+    BlobError(BlobErrorCode _code, std::string _message) : code(_code), message(std::move(_message)) {}
     BlobErrorCode getCode() const { return code; }
 };
 
@@ -42,6 +41,7 @@ struct Blob {
 class BlobManager : public Manager< BlobError > {
 public:
     virtual AsyncResult< blob_id_t > put(shard_id_t shard, Blob&&, trace_id_t tid = 0) = 0;
+    // allow_skip_verify permits skipping checksum verification for optimized partial reads.
     virtual AsyncResult< Blob > get(shard_id_t shard, blob_id_t const& blob, uint64_t off = 0, uint64_t len = 0,
                                     bool allow_skip_verify = false, trace_id_t tid = 0) const = 0;
     virtual NullAsyncResult del(shard_id_t shard, blob_id_t const& blob, trace_id_t tid = 0) = 0;
@@ -58,6 +58,13 @@ struct formatter< homeobject::BlobError > {
     }
     template < typename FormatContext >
     auto format(homeobject::BlobError const& err, FormatContext& ctx) {
+        if (!err.message.empty()) {
+            if (err.current_leader.has_value()) {
+                return fmt::format_to(ctx.out(), "Code={}, Leader={}, Message={}", err.code, err.current_leader.value(),
+                                      err.message);
+            }
+            return fmt::format_to(ctx.out(), "Code={}, Message={}", err.code, err.message);
+        }
         if (err.current_leader.has_value()) {
             return fmt::format_to(ctx.out(), "Code={}, Leader={}", err.code, err.current_leader.value());
         } else {

@@ -50,6 +50,7 @@ ENUM(PGState, uint8_t, ALIVE = 0, DESTROYED);
 class HSHomeObject : public HomeObjectImpl {
 private:
     friend class GCManager;
+    friend class HttpManager;
     /// NOTE: Be wary to change these as they effect on-disk format!
     inline static auto const _svc_meta_name = std::string("HomeObject");
     inline static auto const _pg_meta_name = std::string("PGManager");
@@ -70,6 +71,8 @@ private:
     BlobManager::AsyncResult< blob_id_t > _put_blob(ShardInfo const&, Blob&&, trace_id_t tid) override;
     BlobManager::AsyncResult< Blob > _get_blob(ShardInfo const&, blob_id_t, uint64_t off, uint64_t len,
                                                bool allow_skip_verify, trace_id_t tid) const override;
+    BlobManager::AsyncResult< Blob > _get_blob(ShardInfo const&, blob_id_t, uint64_t off, uint64_t len,
+                                               bool allow_skip_verify, trace_id_t tid, bool debug_skip_verify) const;
     BlobManager::NullAsyncResult _del_blob(ShardInfo const&, blob_id_t, trace_id_t tid) override;
 
     PGManager::NullAsyncResult _create_pg(PGInfo&& pg_info, std::set< peer_id_t > const& peers,
@@ -794,7 +797,8 @@ private:
     BlobManager::AsyncResult< Blob > _get_blob_data(const shared< homestore::ReplDev >& repl_dev, shard_id_t shard_id,
                                                     blob_id_t blob_id, uint64_t req_offset, uint64_t req_len,
                                                     const homestore::MultiBlkId& blkid, trace_id_t tid,
-                                                    bool allow_skip_verify = false) const;
+                                                    bool allow_skip_verify = false,
+                                                    bool debug_skip_verify = false) const;
 
     BlobManager::AsyncResult< Blob > _get_blob_data_partial(const shared< homestore::ReplDev >& repl_dev,
                                                             shard_id_t shard_id, blob_id_t blob_id, uint64_t req_offset,
@@ -1094,8 +1098,15 @@ private:
     folly::Expected< uint64_t, homestore::btree_status_t >
     scan_pg_tombstones(pg_id_t pg_id, const std::shared_ptr< BlobIndexTable >& index) const;
 
-    BlobManager::Result< std::string > do_verify_blob(const void* blob, shard_id_t expected_shard_id,
-                                                      blob_id_t expected_blob_id = 0) const;
+    struct BlobVerificationResult {
+        std::string user_key;
+        bool payload_bounds_valid{true};
+    };
+
+    BlobManager::Result< BlobVerificationResult >
+    do_verify_blob(const void* blob, shard_id_t expected_shard_id,
+                   std::optional< blob_id_t > expected_blob_id = std::nullopt, bool debug_skip_verify = false,
+                   std::optional< size_t > buffer_size = std::nullopt) const;
     std::shared_ptr< BlobIndexTable > create_pg_index_table();
     std::shared_ptr< GCBlobIndexTable > create_gc_index_table();
 

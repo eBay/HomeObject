@@ -18,6 +18,7 @@
 #include <sisl/settings/settings.hpp>
 #include <boost/uuid/string_generator.hpp>
 #include <boost/uuid/uuid_io.hpp>
+#include <charconv>
 #include <ctime>
 #include <limits>
 #include <string>
@@ -78,6 +79,7 @@ HttpManager::HttpManager(HSHomeObject& ho) : ho_(ho) {
         {Pistache::Http::Method::Get, "/api/v1/chunks",
          Pistache::Rest::Routes::bind(&HttpManager::get_pg_chunks, this)},
         {Pistache::Http::Method::Get, "/api/v1/shard", Pistache::Rest::Routes::bind(&HttpManager::get_shard, this)},
+        {Pistache::Http::Method::Get, "/api/v1/blob", Pistache::Rest::Routes::bind(&HttpManager::get_blob, this)},
         {Pistache::Http::Method::Get, "/api/v1/chunk/dump",
          Pistache::Rest::Routes::bind(&HttpManager::dump_chunk, this)},
         {Pistache::Http::Method::Get, "/api/v1/shard/dump",
@@ -299,6 +301,75 @@ void HttpManager::get_shard(const Pistache::Rest::Request& request, Pistache::Ht
     j["total_blob_count"] = blobs.value().size();
 
     response.send(Pistache::Http::Code::Ok, j.dump());
+}
+
+void HttpManager::get_blob(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response) {
+    const auto shard_str = request.query().get("shard_id");
+    const auto blob_str = request.query().get("blob_id");
+    if (!shard_str || !blob_str) {
+        response.send(Pistache::Http::Code::Bad_Request, "shard_id and blob_id are required");
+        return;
+    }
+
+    auto parse_id = [](const std::string& value, uint64_t& id) {
+        auto first = value.data();
+        auto last = first + value.size();
+        int base = 10;
+        if (value.starts_with("0x") || value.starts_with("0X")) {
+            first += 2;
+            base = 16;
+        }
+        auto [end, error] = std::from_chars(first, last, id, base);
+        return error == std::errc{} && end == last;
+    };
+    shard_id_t shard_id;
+    blob_id_t blob_id;
+    if (!parse_id(*shard_str, shard_id) || !parse_id(*blob_str, blob_id)) {
+        response.send(Pistache::Http::Code::Bad_Request, "shard_id and blob_id must be unsigned decimal or hex IDs");
+        return;
+    }
+
+    const auto skip_verify = request.query().get("debug_skip_verify").value_or("false");
+    if (skip_verify != "true" && skip_verify != "false") {
+        response.send(Pistache::Http::Code::Bad_Request, "debug_skip_verify must be 'true' or 'false'");
+        return;
+    }
+    const bool debug_skip_verify = skip_verify == "true";
+    if (debug_skip_verify) {
+        LOGWARN("HTTP get blob returning data despite validation failures: shard_id={:#x}, blob_id={}", shard_id,
+                blob_id);
+    }
+
+    auto result = ho_.shard_manager()
+                      ->get_shard(shard_id)
+                      .deferValue([this, blob_id, debug_skip_verify](const auto& shard) -> BlobManager::AsyncResult< Blob > {
+                          if (!shard) { return folly::makeUnexpected(BlobError(BlobErrorCode::UNKNOWN_SHARD)); }
+                          return ho_._get_blob(shard.value(), blob_id, 0, 0, false, 0, debug_skip_verify);
+                      })
+                      .get();
+    if (!result) {
+        auto code = Pistache::Http::Code::Internal_Server_Error;
+        switch (result.error().getCode()) {
+        case BlobErrorCode::UNKNOWN_SHARD:
+        case BlobErrorCode::UNKNOWN_BLOB:
+        case BlobErrorCode::UNKNOWN_PG:
+            code = Pistache::Http::Code::Not_Found;
+            break;
+        case BlobErrorCode::RETRY_REQUEST:
+        case BlobErrorCode::SHUTTING_DOWN:
+            code = Pistache::Http::Code::Service_Unavailable;
+            break;
+        default:
+            break;
+        }
+        response.send(code, fmt::format("Failed to get blob: {}", result.error()));
+        return;
+    }
+
+    const auto& body = result.value().body;
+    response.send(Pistache::Http::Code::Ok,
+                  std::string(reinterpret_cast< const char* >(body.cbytes()), body.size()),
+                  MIME(Application, OctetStream));
 }
 
 void HttpManager::dump_chunk(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response) {

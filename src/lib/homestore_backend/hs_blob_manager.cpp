@@ -344,6 +344,12 @@ void HSHomeObject::on_blob_put_commit(int64_t lsn, sisl::blob const& header, sis
 BlobManager::AsyncResult< Blob > HSHomeObject::_get_blob(ShardInfo const& shard, blob_id_t blob_id, uint64_t req_offset,
                                                          uint64_t req_len, bool allow_skip_verify,
                                                          trace_id_t tid) const {
+    return _get_blob(shard, blob_id, req_offset, req_len, allow_skip_verify, tid, false);
+}
+
+BlobManager::AsyncResult< Blob > HSHomeObject::_get_blob(ShardInfo const& shard, blob_id_t blob_id, uint64_t req_offset,
+                                                         uint64_t req_len, bool allow_skip_verify, trace_id_t tid,
+                                                         bool debug_skip_verify) const {
     if (is_shutting_down()) {
         LOGI("service is being shutdown");
         return folly::makeUnexpected(BlobErrorCode::SHUTTING_DOWN);
@@ -351,12 +357,20 @@ BlobManager::AsyncResult< Blob > HSHomeObject::_get_blob(ShardInfo const& shard,
     incr_pending_request_num();
     auto& pg_id = shard.placement_group;
     auto hs_pg = get_hs_pg(pg_id);
-    RELEASE_ASSERT(hs_pg, "PG not found");
+    if (!hs_pg) {
+        BLOGE(tid, shard.id, blob_id, "Cannot read blob: PG {} not found", pg_id);
+        decr_pending_request_num();
+        return folly::makeUnexpected(BlobError(BlobErrorCode::UNKNOWN_PG, "PG not found"));
+    }
     auto repl_dev = hs_pg->repl_dev_;
     auto index_table = hs_pg->index_table_;
 
-    RELEASE_ASSERT(repl_dev != nullptr, "Repl dev instance null");
-    RELEASE_ASSERT(index_table != nullptr, "Index table instance null");
+    if (!repl_dev || !index_table) {
+        const auto* reason = !repl_dev ? "Replication device is unavailable" : "Blob index is unavailable";
+        BLOGE(tid, shard.id, blob_id, "Cannot read blob: {}", reason);
+        decr_pending_request_num();
+        return folly::makeUnexpected(BlobError(BlobErrorCode::READ_FAILED, reason));
+    }
 
     // In scenarios where a member becomes the leader but all followers are down, the leader may be unable to commit
     // new config logs, making it unready for traffic. To address this, a config is introduced to define
@@ -370,11 +384,20 @@ BlobManager::AsyncResult< Blob > HSHomeObject::_get_blob(ShardInfo const& shard,
     // T2: The member initiates `become_leader` with gate=100.
     // T3: One follower goes offline, and another is stuck at appending log LSN50 (e.g., due to no space left),
     // preventing the leader from committing log LSN100 due to no member accepting the append request.
-    if (HS_BACKEND_DYNAMIC_CONFIG(check_traffic_ready_before_get) && !repl_dev->is_ready_for_traffic()) {
-        LOGW("failed to get blob for pg={}, shardID=0x{:x},pg={},shard=0x{:x}, not ready for traffic", pg_id, shard.id,
-             (shard.id >> homeobject::shard_width), (shard.id & homeobject::shard_mask));
-        decr_pending_request_num();
-        return folly::makeUnexpected(BlobError(BlobErrorCode::RETRY_REQUEST));
+    if (HS_BACKEND_DYNAMIC_CONFIG(check_traffic_ready_before_get)) {
+        bool ready_for_traffic = repl_dev->is_ready_for_traffic();
+#ifdef _PRERELEASE
+        if (iomgr_flip::instance()->test_flip("get_blob_not_ready_for_traffic")) { ready_for_traffic = false; }
+#endif
+        if (!ready_for_traffic) {
+            LOGW("get blob for pg={}, shardID=0x{:x},pg={},shard=0x{:x}: not ready for traffic, debug_skip_verify={}",
+                 pg_id, shard.id, (shard.id >> homeobject::shard_width), (shard.id & homeobject::shard_mask),
+                 debug_skip_verify);
+            if (!debug_skip_verify) {
+                decr_pending_request_num();
+                return folly::makeUnexpected(BlobError(BlobErrorCode::RETRY_REQUEST));
+            }
+        }
     }
 
     BLOGD(tid, shard.id, blob_id, "Blob Get request: pg={}, group={}, shard=0x{:x}, blob={}, offset={}, len={}", pg_id,
@@ -387,7 +410,7 @@ BlobManager::AsyncResult< Blob > HSHomeObject::_get_blob(ShardInfo const& shard,
     }
 
     return _get_blob_data(repl_dev, shard.id, blob_id, req_offset, req_len, r.value() /* blkid*/, tid,
-                          allow_skip_verify)
+                          allow_skip_verify, debug_skip_verify)
         .deferValue([this](auto&& result) {
             decr_pending_request_num();
             return std::forward< decltype(result) >(result);
@@ -398,13 +421,13 @@ BlobManager::AsyncResult< Blob > HSHomeObject::_get_blob_data(const shared< home
                                                               shard_id_t shard_id, blob_id_t blob_id,
                                                               uint64_t req_offset, uint64_t req_len,
                                                               const homestore::MultiBlkId& blkid, trace_id_t tid,
-                                                              bool allow_skip_verify) const {
+                                                              bool allow_skip_verify, bool debug_skip_verify) const {
     auto const blk_size = repl_dev->get_blk_size();
     auto const total_size = blkid.blk_count() * blk_size;
 
     // Use partial read path only when we can skip at least 1 data block (in addition to header)
     // to make the optimization worthwhile. This requires req_len > 0 (known exact length).
-    if (allow_skip_verify && req_len > 0 &&
+    if (allow_skip_verify && req_len > 0 && total_size >= _data_block_size &&
         (req_offset >= blk_size || req_offset + req_len + blk_size <= total_size - _data_block_size)) {
         return _get_blob_data_partial(repl_dev, shard_id, blob_id, req_offset, req_len, blkid, tid);
     }
@@ -417,21 +440,37 @@ BlobManager::AsyncResult< Blob > HSHomeObject::_get_blob_data(const shared< home
 
     BLOGD(tid, shard_id, blob_id, "Reading from blkid={} to buf={}", blkid.to_string(), (void*)read_buf.bytes());
     return repl_dev->async_read(blkid, sgs, total_size)
-        .thenValue([this, tid, blob_id, shard_id, req_len, req_offset, blkid, repl_dev,
+        .thenValue([this, tid, blob_id, shard_id, req_len, req_offset, blkid, repl_dev, debug_skip_verify,
                     read_buf = std::move(read_buf)](auto&& result) mutable -> BlobManager::AsyncResult< Blob > {
             if (result) {
-                BLOGE(tid, shard_id, blob_id, "Failed to get blob: err={}", blob_id, shard_id, result.value());
-                return folly::makeUnexpected(BlobError(BlobErrorCode::READ_FAILED));
+                BLOGE(tid, shard_id, blob_id, "Failed to get blob: err={}", result.message());
+                return folly::makeUnexpected(BlobError(BlobErrorCode::READ_FAILED, result.message()));
             }
 
-            auto verify_result = do_verify_blob(read_buf.cbytes(), shard_id, blob_id);
-            if (!verify_result.hasValue()) { return folly::makeUnexpected(verify_result.error()); }
-            std::string user_key = std::move(verify_result.value());
+            auto verify_result =
+                do_verify_blob(read_buf.cbytes(), shard_id, blob_id, debug_skip_verify, read_buf.size());
+            if (!verify_result.hasValue()) {
+                if (!debug_skip_verify) { return folly::makeUnexpected(verify_result.error()); }
+                BLOGE(tid, shard_id, blob_id, "Debug verification failed unexpectedly: {}; returning raw allocation",
+                      verify_result.error());
+                return Blob(std::move(read_buf), std::string{}, 0, repl_dev->get_leader_id());
+            }
+            if (!verify_result->payload_bounds_valid) {
+                BLOGW(tid, shard_id, blob_id,
+                      "Debug get returning raw allocation including header and padding: size={}", read_buf.size());
+                return Blob(std::move(read_buf), std::string{}, 0, repl_dev->get_leader_id());
+            }
 
             BlobHeader const* header = r_cast< BlobHeader const* >(read_buf.cbytes());
-            if (req_offset + req_len > header->blob_size) {
+            if (req_offset > header->blob_size || req_len > header->blob_size - req_offset) {
                 BLOGE(tid, shard_id, blob_id, "Invalid offset length requested in get blob offset={} len={} size={}",
                       req_offset, req_len, header->blob_size);
+                if (debug_skip_verify) {
+                    BLOGW(tid, shard_id, blob_id,
+                          "Debug get returning raw allocation because the requested range is invalid: size={}",
+                          read_buf.size());
+                    return Blob(std::move(read_buf), std::string{}, 0, repl_dev->get_leader_id());
+                }
                 return folly::makeUnexpected(BlobError(BlobErrorCode::INVALID_ARG));
             }
 
@@ -443,7 +482,8 @@ BlobManager::AsyncResult< Blob > HSHomeObject::_get_blob_data(const shared< home
             std::memcpy(body.bytes(), blob_bytes + req_offset, res_len);
 
             BLOGD(tid, shard_id, blob_id, "Blob get success: blkid={}", blkid.to_string());
-            return Blob(std::move(body), std::move(user_key), header->object_offset, repl_dev->get_leader_id());
+            return Blob(std::move(body), std::move(verify_result->user_key), header->object_offset,
+                        repl_dev->get_leader_id());
         });
 }
 
@@ -754,42 +794,96 @@ void HSHomeObject::on_blob_message_rollback(int64_t lsn, sisl::blob const& heade
     }
 }
 
-BlobManager::Result< std::string > HSHomeObject::do_verify_blob(const void* blob, shard_id_t expected_shard_id,
-                                                                blob_id_t expected_blob_id) const {
+BlobManager::Result< HSHomeObject::BlobVerificationResult >
+HSHomeObject::do_verify_blob(const void* blob, shard_id_t expected_shard_id,
+                             std::optional< blob_id_t > expected_blob_id, bool debug_skip_verify,
+                             std::optional< size_t > buffer_size) const {
+    auto report_failure = [debug_skip_verify, expected_shard_id, expected_blob_id](const std::string& message,
+                                                                                   BlobErrorCode error_code) {
+        LOGE("Blob verification: shard_id={:#x}, blob_id={}, {}", expected_shard_id, expected_blob_id.value_or(0),
+             message);
+        if (debug_skip_verify) { return std::optional< BlobError >{}; }
+        return std::make_optional(BlobError(error_code, message));
+    };
+
+    if (buffer_size && *buffer_size < sizeof(BlobHeader)) {
+        if (auto error = report_failure("Blob allocation is smaller than its header; cannot validate header or payload "
+                                        "checksum",
+                                        BlobErrorCode::READ_FAILED)) {
+            return folly::makeUnexpected(std::move(*error));
+        }
+        return BlobVerificationResult{std::string{}, false};
+    }
+
     uint8_t const* blob_data = static_cast< uint8_t const* >(blob);
     BlobHeader const* header = r_cast< BlobHeader const* >(blob_data);
+    BlobVerificationResult verification;
 
-    // Check if header is valid
     if (!header->valid()) {
-        LOGE("Invalid header found: [header={}]", header->to_string());
-        return folly::makeUnexpected(BlobError(BlobErrorCode::READ_FAILED));
+        if (auto error = report_failure(fmt::format("Invalid header found: [header={}]", header->to_string()),
+                                        BlobErrorCode::READ_FAILED)) {
+            return folly::makeUnexpected(std::move(*error));
+        }
     }
 
-    // Check if shard_id matches
     if (header->shard_id != expected_shard_id) {
-        LOGE("Invalid shard_id in header: [header={}]", header->to_string());
-        return folly::makeUnexpected(BlobError(BlobErrorCode::READ_FAILED));
+        if (auto error = report_failure(fmt::format("Invalid shard_id in header: [header={}]", header->to_string()),
+                                        BlobErrorCode::READ_FAILED)) {
+            return folly::makeUnexpected(std::move(*error));
+        }
     }
 
-    // Check if blob_id matches (only if expected_blob_id != 0)
-    if (expected_blob_id != 0 && header->blob_id != expected_blob_id) {
-        LOGE("Invalid blob_id in header: [header={}]", header->to_string());
-        return folly::makeUnexpected(BlobError(BlobErrorCode::READ_FAILED));
+    if (expected_blob_id && header->blob_id != *expected_blob_id) {
+        if (auto error = report_failure(fmt::format("Invalid blob_id in header: [header={}]", header->to_string()),
+                                        BlobErrorCode::READ_FAILED)) {
+            return folly::makeUnexpected(std::move(*error));
+        }
     }
 
-    // Verify hash
-    uint8_t const* blob_bytes = blob_data + header->data_offset;
-    uint8_t computed_hash[BlobHeader::blob_max_hash_len]{};
-    compute_blob_payload_hash(header->hash_algorithm, blob_bytes, header->blob_size, computed_hash,
-                              BlobHeader::blob_max_hash_len);
-
-    if (std::memcmp(computed_hash, header->hash, BlobHeader::blob_max_hash_len) != 0) {
-        LOGE("Hash mismatch header, [header={}] [computed={:np}]", header->to_string(),
-             spdlog::to_hex(computed_hash, computed_hash + BlobHeader::blob_max_hash_len));
-        return folly::makeUnexpected(BlobError(BlobErrorCode::CHECKSUM_MISMATCH));
+    if (header->blob_size == 0 || header->data_offset < sizeof(BlobHeader) ||
+        (buffer_size && (header->data_offset > *buffer_size || header->blob_size > *buffer_size - header->data_offset))) {
+        if (auto error =
+                report_failure("Blob header describes an empty payload or data outside its allocation; "
+                               "cannot validate payload checksum",
+                               BlobErrorCode::READ_FAILED)) {
+            return folly::makeUnexpected(std::move(*error));
+        }
+        verification.payload_bounds_valid = false;
     }
 
-    return header->get_user_key().value(); // Must have a value as header verified above
+    auto user_key = header->get_user_key();
+    if (!user_key) {
+        if (auto error = report_failure("Invalid user key size in header; omitting user key", BlobErrorCode::READ_FAILED)) {
+            return folly::makeUnexpected(std::move(*error));
+        }
+    } else {
+        verification.user_key = std::move(*user_key);
+    }
+
+    if (header->hash_algorithm != BlobHeader::HashAlgorithm::NONE &&
+        header->hash_algorithm != BlobHeader::HashAlgorithm::CRC32) {
+        if (auto error = report_failure("Unsupported hash algorithm in header; cannot validate payload checksum",
+                                        BlobErrorCode::READ_FAILED)) {
+            return folly::makeUnexpected(std::move(*error));
+        }
+    } else if (verification.payload_bounds_valid) {
+        uint8_t const* blob_bytes = blob_data + header->data_offset;
+        uint8_t computed_hash[BlobHeader::blob_max_hash_len]{};
+        compute_blob_payload_hash(header->hash_algorithm, blob_bytes, header->blob_size, computed_hash,
+                                  BlobHeader::blob_max_hash_len);
+
+        if (std::memcmp(computed_hash, header->hash, BlobHeader::blob_max_hash_len) != 0) {
+            if (auto error =
+                    report_failure(fmt::format("Hash mismatch header, [header={}] [computed={:np}]", header->to_string(),
+                                               spdlog::to_hex(computed_hash,
+                                                              computed_hash + BlobHeader::blob_max_hash_len)),
+                                   BlobErrorCode::CHECKSUM_MISMATCH)) {
+                return folly::makeUnexpected(std::move(*error));
+            }
+        }
+    }
+
+    return verification;
 }
 
 bool HSHomeObject::verify_blob(const void* blob, const shard_id_t shard_id, const blob_id_t blob_id,
@@ -800,8 +894,7 @@ bool HSHomeObject::verify_blob(const void* blob, const shard_id_t shard_id, cons
         return allow_delete_marker;
     }
 
-    // Use the new _verify_blob method
-    auto result = do_verify_blob(blob, shard_id, blob_id);
+    auto result = do_verify_blob(blob, shard_id, blob_id == 0 ? std::nullopt : std::make_optional(blob_id));
     return result.hasValue();
 }
 } // namespace homeobject
